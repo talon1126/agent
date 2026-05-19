@@ -1,0 +1,8 @@
+{
+  "message_id": "msg_order_status_audio_qwen_missing_config",
+  "source": "internal_test",
+  "message_type": "audio",
+  "audio_url": "https://example.com/customer-message.mp3",
+  "mime_type": "audio/mpeg",
+  "created_at": "2026-05-19T10:02:00Z"
+}

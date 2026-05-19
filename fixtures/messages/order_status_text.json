@@ -1,0 +1,7 @@
+{
+  "message_id": "msg_order_status_text",
+  "source": "internal_test",
+  "message_type": "text",
+  "text": "Can you check order ord_100 for me?",
+  "created_at": "2026-05-19T10:00:00Z"
+}

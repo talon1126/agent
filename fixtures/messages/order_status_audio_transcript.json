@@ -1,0 +1,8 @@
+{
+  "message_id": "msg_order_status_audio_transcript",
+  "source": "internal_test",
+  "message_type": "audio",
+  "transcript": "Can you check order ord_100 for me?",
+  "mime_type": "audio/mpeg",
+  "created_at": "2026-05-19T10:01:00Z"
+}

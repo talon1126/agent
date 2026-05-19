@@ -1,0 +1,137 @@
+{
+  "id": "wf_message_agent",
+  "name": "Message Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "message-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f0e48f36-ec75-4303-a4f5-ae422d1437f1",
+      "name": "Message Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "message-agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.body ?? $input.first().json;\nreturn [{ json: { ...raw, started_at: Date.now() } }];"
+      },
+      "id": "e30ccb50-0f3a-43fd-a43a-6781cb2323f0",
+      "name": "Extract Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ai-service:8000/message/handle",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "51790ffa-eb97-4a8a-87d7-ce6e7d9eecf7",
+      "name": "Handle Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const message = $('Extract Message').first().json;\nconst result = $input.first().json;\nconst runLogBody = {\n  event_id: result.message_id,\n  workflow_id: 'wf_message_agent',\n  status: result.error ? 'failed' : 'succeeded',\n  latency_ms: Date.now() - message.started_at,\n  model: result.transcription?.model ?? 'deterministic-message-agent',\n  estimated_tokens: 0,\n  error: result.error ?? null,\n  intent: result.intent,\n  requires_human: result.requires_human,\n};\nreturn [{ json: { message, result, run_log_body: runLogBody } }];"
+      },
+      "id": "ff7eebbd-b5f0-4095-84cd-78f6e2927941",
+      "name": "Build Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mock-api:8000/run-logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.run_log_body }}",
+        "options": {}
+      },
+      "id": "16dc32d0-865e-4f30-974d-2e8f33f7c32d",
+      "name": "Create Run Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $('Build Run Log').first().json;\nconst runLog = $input.first().json;\nreturn [{ json: { ...payload.result, run_log: runLog } }];"
+      },
+      "id": "f6fa655c-f612-4d63-b315-a29acace3571",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "b7f39d42-72c2-4104-bd72-b97f89795358",
+      "name": "Respond with Agent Answer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1320, 0]
+    }
+  ],
+  "connections": {
+    "Message Webhook": {
+      "main": [[{"node": "Extract Message", "type": "main", "index": 0}]]
+    },
+    "Extract Message": {
+      "main": [[{"node": "Handle Message", "type": "main", "index": 0}]]
+    },
+    "Handle Message": {
+      "main": [[{"node": "Build Run Log", "type": "main", "index": 0}]]
+    },
+    "Build Run Log": {
+      "main": [[{"node": "Create Run Log", "type": "main", "index": 0}]]
+    },
+    "Create Run Log": {
+      "main": [[{"node": "Build Response", "type": "main", "index": 0}]]
+    },
+    "Build Response": {
+      "main": [[{"node": "Respond with Agent Answer", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {}
+}
