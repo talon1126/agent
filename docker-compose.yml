@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agent_ops
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_ops"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ai-service:
+    build:
+      context: ./services/ai-service
+    environment:
+      AI_MODE: fake
+      POLICY_PATH: /app/fixtures/policies/after_sales_policy.md
+    volumes:
+      - ./fixtures:/app/fixtures:ro
+    ports:
+      - "8001:8000"
+
+  mock-api:
+    build:
+      context: ./services/mock-api
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agent_ops
+      FIXTURE_DIR: /app/fixtures
+    volumes:
+      - ./fixtures:/app/fixtures:ro
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  n8n:
+    image: n8nio/n8n:1.95.3
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_SECURE_COOKIE: "false"
+      AI_SERVICE_URL: http://ai-service:8000
+      MOCK_API_URL: http://mock-api:8000
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+    depends_on:
+      - ai-service
+      - mock-api
+
+volumes:
+  postgres_data:
+  n8n_data:
