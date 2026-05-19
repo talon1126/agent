@@ -1,0 +1,4 @@
+[
+  {"customer_id":"cus_100","tier":"standard","region":"US","lifetime_value":340},
+  {"customer_id":"cus_200","tier":"vip","region":"US","lifetime_value":4200}
+]

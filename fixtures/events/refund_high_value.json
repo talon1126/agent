@@ -1,0 +1,11 @@
+{
+  "event_id":"evt_refund_high_value",
+  "event_type":"refund_request",
+  "source":"support_inbox",
+  "customer_id":"cus_200",
+  "order_id":"ord_200",
+  "sku":"sku_bag_1",
+  "shipment_id":"ship_200",
+  "message":"The premium bag arrived with a broken zipper. I want a full refund.",
+  "created_at":"2026-05-19T05:00:00Z"
+}

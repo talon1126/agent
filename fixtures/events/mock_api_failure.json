@@ -1,0 +1,11 @@
+{
+  "event_id":"evt_mock_api_failure",
+  "event_type":"logistics_delay",
+  "source":"logistics_webhook",
+  "customer_id":"cus_100",
+  "order_id":"ord_300",
+  "sku":"sku_lamp_1",
+  "shipment_id":"ship_missing",
+  "message":"Simulate a logistics provider timeout or missing shipment record.",
+  "created_at":"2026-05-19T05:00:00Z"
+}

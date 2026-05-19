@@ -1,0 +1,5 @@
+[
+  {"order_id":"ord_100","customer_id":"cus_100","sku":"sku_bottle_1","value":45,"status":"delivered","shipment_id":"ship_100"},
+  {"order_id":"ord_200","customer_id":"cus_200","sku":"sku_bag_1","value":240,"status":"delivered","shipment_id":"ship_200"},
+  {"order_id":"ord_300","customer_id":"cus_100","sku":"sku_lamp_1","value":80,"status":"in_transit","shipment_id":"ship_300"}
+]

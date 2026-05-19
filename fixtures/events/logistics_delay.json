@@ -1,0 +1,11 @@
+{
+  "event_id":"evt_logistics_delay",
+  "event_type":"logistics_delay",
+  "source":"logistics_webhook",
+  "customer_id":"cus_100",
+  "order_id":"ord_300",
+  "sku":"sku_lamp_1",
+  "shipment_id":"ship_300",
+  "message":"Shipment ship_300 has been delayed for 7 days.",
+  "created_at":"2026-05-19T05:00:00Z"
+}

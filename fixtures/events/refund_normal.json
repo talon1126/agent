@@ -1,0 +1,11 @@
+{
+  "event_id":"evt_refund_normal",
+  "event_type":"refund_request",
+  "source":"support_inbox",
+  "customer_id":"cus_100",
+  "order_id":"ord_100",
+  "sku":"sku_bottle_1",
+  "shipment_id":"ship_100",
+  "message":"The water bottle arrived dented. I want a refund.",
+  "created_at":"2026-05-19T05:00:00Z"
+}

@@ -1,0 +1,5 @@
+[
+  {"shipment_id":"ship_100","carrier":"UPS","status":"delivered","delay_days":0},
+  {"shipment_id":"ship_200","carrier":"FedEx","status":"delivered","delay_days":0},
+  {"shipment_id":"ship_300","carrier":"DHL","status":"delayed","delay_days":7}
+]

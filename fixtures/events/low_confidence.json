@@ -1,0 +1,11 @@
+{
+  "event_id":"evt_low_confidence",
+  "event_type":"refund_request",
+  "source":"support_inbox",
+  "customer_id":"cus_100",
+  "order_id":"ord_100",
+  "sku":"sku_bottle_1",
+  "shipment_id":"ship_100",
+  "message":"I am not sure what happened, but something feels wrong with my order.",
+  "created_at":"2026-05-19T05:00:00Z"
+}
