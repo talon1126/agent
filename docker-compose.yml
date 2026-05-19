@@ -21,6 +21,9 @@ services:
     environment:
       AI_MODE: fake
       POLICY_PATH: /app/fixtures/policies/after_sales_policy.md
+      MOCK_API_URL: http://mock-api:8000
+      TRANSCRIPTION_PROVIDER: mock
+      TRANSCRIPTION_MODEL: qwen3.6plus
     volumes:
       - ./fixtures:/app/fixtures:ro
     ports:
