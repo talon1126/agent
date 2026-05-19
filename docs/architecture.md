@@ -1,0 +1,100 @@
+# Architecture
+
+## System Goal
+
+This project models an internal ecommerce after-sales workflow. The workflow receives operational events, gathers context from enterprise systems, asks an AI decision service for a structured recommendation, applies guardrails, and records operational results.
+
+It is intentionally built as a local, Docker-first demo so the system can be shown without external SaaS accounts or paid model calls.
+
+## Components
+
+### n8n Orchestration Layer
+
+n8n owns workflow sequencing:
+
+1. Receive an after-sales event through `POST /webhook/after-sales-event`.
+2. Fetch order, customer, shipment, and inventory context from `mock-api`.
+3. Build an `EventContext` payload.
+4. Call `ai-service /decide`.
+5. Create an approval request, support ticket, or internal notification.
+6. Write a run log.
+
+The workflow uses n8n HTTP Request nodes for service calls. Code nodes only reshape JSON payloads, which keeps the flow compatible with n8n v2 where Code nodes cannot make direct HTTP requests.
+
+### ai-service
+
+`services/ai-service` is the model-facing logic boundary. It exposes:
+
+- `GET /health`
+- `POST /decide`
+
+The service validates input and output through Pydantic schemas. The first implementation uses deterministic fake AI logic so tests and demos are repeatable. In production, this service is the right place to add model provider calls, prompt templates, retrieval, tracing, token accounting, and fallback behavior.
+
+### mock-api
+
+`services/mock-api` simulates replaceable enterprise systems:
+
+- Orders
+- Customers
+- Shipments
+- Inventory
+- Approval requests
+- Support tickets
+- Internal notifications
+- Run logs
+- Dead-letter records
+- Replay requests
+
+Fixture data lives in `fixtures/data`, and scripted events live in `fixtures/events`.
+
+### Postgres
+
+Postgres runs in Docker Compose as the operational store target. The current lightweight demo stores action records in memory inside `mock-api`, while keeping the Postgres container available for the next phase: persistent approvals, run logs, dead letters, and replay history.
+
+## Decision Flow
+
+```mermaid
+sequenceDiagram
+    participant User as Demo script
+    participant N8N as n8n
+    participant Mock as mock-api
+    participant AI as ai-service
+
+    User->>N8N: POST after-sales event
+    N8N->>Mock: GET order, customer, shipment, inventory
+    Mock-->>N8N: Business context
+    N8N->>AI: POST EventContext
+    AI-->>N8N: DecisionOutput
+    alt requires approval
+        N8N->>Mock: POST approval request
+    else no approval
+        N8N->>Mock: POST ticket or internal notification
+    end
+    N8N->>Mock: POST run log
+    N8N-->>User: Decision, action result, run log
+```
+
+## AI Ops Patterns
+
+- Schema validation at the AI boundary through `EventContext` and `DecisionOutput`.
+- Deterministic fake AI mode for repeatable tests and demos.
+- Approval guardrails for high-value refunds, VIP cases, and public review risk.
+- Run logs with event id, workflow id, status, latency, model, token estimate, and error.
+- Dead-letter endpoint for unrecoverable events.
+- Replay endpoint for failed-event recovery workflows.
+
+## SaaS Replacement Points
+
+The mock components are intentionally easy to replace:
+
+- Shopify or custom commerce backend replaces order and inventory reads.
+- Zendesk, Intercom, or Freshdesk replaces support tickets.
+- Slack, Teams, or email replaces internal notifications.
+- ERP or warehouse system replaces procurement alerts.
+- Logistics provider APIs replace shipment status.
+- Approval platform, Jira, Linear, or internal admin system replaces approval requests.
+- OpenAI, Azure OpenAI, Anthropic, or a local model gateway replaces deterministic AI mode inside `ai-service`.
+
+## Operational Boundaries
+
+The main boundary is between n8n and `ai-service`. n8n should coordinate systems and retries; `ai-service` should own model prompting, model selection, schema validation, and policy-aware decisioning. This keeps workflow logic readable and makes the AI layer deployable as normal backend software.
