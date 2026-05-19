@@ -79,10 +79,37 @@ powershell -ExecutionPolicy Bypass -File .\scripts\replay_failed_event.ps1 -Even
 
 预期结果：`queued_for_replay`。
 
+## Message Agent Demo
+
+第二个 workflow 是 `n8n/workflows/message-agent.json`。它暴露：
+
+```text
+POST /webhook/message-agent
+```
+
+它接收文本或音频形态的 message payload，调用 `ai-service /message/handle`，并让 agent 调用第一个工具：`get_order_status`。
+
+导入命令：
+
+```powershell
+docker compose exec -T n8n n8n import:workflow --input=/workflows/message-agent.json
+docker compose exec -T n8n n8n publish:workflow --id=wf_message_agent
+docker compose restart n8n
+```
+
+发送文本消息：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile fixtures\messages\order_status_text.json
+```
+
+音频支持通过 adapter 接入。当前默认是 `TRANSCRIPTION_PROVIDER=mock`。如果要接入 Qwen，需要你提供 `QWEN_API_ENDPOINT`、`QWEN_API_KEY`、确认后的模型名、API 期望的音频输入格式，以及返回 JSON 示例。
+
 ## 常用端点
 
 - `GET http://localhost:8001/health`
 - `POST http://localhost:8001/decide`
+- `POST http://localhost:8001/message/handle`
 - `GET http://localhost:8002/orders/{order_id}`
 - `GET http://localhost:8002/customers/{customer_id}`
 - `GET http://localhost:8002/shipments/{shipment_id}`

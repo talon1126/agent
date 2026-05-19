@@ -35,6 +35,14 @@ docker compose exec -T n8n n8n update:workflow --id=wf_ecommerce_after_sales --a
 docker compose restart n8n
 ```
 
+To also import the message-agent workflow:
+
+```powershell
+docker compose exec -T n8n n8n import:workflow --input=/workflows/message-agent.json
+docker compose exec -T n8n n8n publish:workflow --id=wf_message_agent
+docker compose restart n8n
+```
+
 ## Send Demo Event
 
 ```powershell
@@ -45,6 +53,24 @@ If local PowerShell script execution is disabled:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\send_event.ps1 -EventFile fixtures/events/refund_high_value.json
+```
+
+## Send Demo Message
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile fixtures\messages\order_status_text.json
+```
+
+For a direct AI service call without n8n:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://localhost:8001/message/handle -MessageFile fixtures\messages\order_status_text.json
+```
+
+Audio-shaped messages can be tested with a transcript:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://localhost:8001/message/handle -MessageFile fixtures\messages\order_status_audio_transcript.json
 ```
 
 ## Replay Failed Event

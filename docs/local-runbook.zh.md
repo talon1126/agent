@@ -35,6 +35,14 @@ docker compose exec -T n8n n8n update:workflow --id=wf_ecommerce_after_sales --a
 docker compose restart n8n
 ```
 
+如果还要导入 message-agent workflow：
+
+```powershell
+docker compose exec -T n8n n8n import:workflow --input=/workflows/message-agent.json
+docker compose exec -T n8n n8n publish:workflow --id=wf_message_agent
+docker compose restart n8n
+```
+
 ## 发送 Demo 事件
 
 ```powershell
@@ -45,6 +53,24 @@ docker compose restart n8n
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\send_event.ps1 -EventFile fixtures/events/refund_high_value.json
+```
+
+## 发送 Demo 消息
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile fixtures\messages\order_status_text.json
+```
+
+如果想绕过 n8n，直接调用 AI service：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://localhost:8001/message/handle -MessageFile fixtures\messages\order_status_text.json
+```
+
+带 transcript 的音频形态消息可以这样测试：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://localhost:8001/message/handle -MessageFile fixtures\messages\order_status_audio_transcript.json
 ```
 
 ## Replay 失败事件
