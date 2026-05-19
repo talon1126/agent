@@ -3,7 +3,17 @@ import os
 from pathlib import Path
 from typing import Any
 
-FIXTURE_DIR = Path(os.getenv("FIXTURE_DIR", "../../fixtures")).resolve()
+
+def find_default_fixture_dir() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "fixtures"
+        if candidate.exists():
+            return candidate
+    return Path.cwd() / "fixtures"
+
+
+DEFAULT_FIXTURE_DIR = find_default_fixture_dir()
+FIXTURE_DIR = Path(os.getenv("FIXTURE_DIR", DEFAULT_FIXTURE_DIR)).resolve()
 
 
 def load_json(name: str) -> list[dict[str, Any]]:

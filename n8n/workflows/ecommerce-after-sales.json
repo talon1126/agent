@@ -1,8 +1,247 @@
 {
+  "id": "wf_ecommerce_after_sales",
   "name": "Ecommerce After-sales Agent Workflow",
-  "nodes": [],
-  "connections": {},
-  "settings": {},
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "after-sales-event",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b4ec5c1b-4c3b-4b5f-b507-b24311fe3c5a",
+      "name": "After-sales Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "after-sales-event"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.body ?? $input.first().json;\nreturn [{ json: raw }];"
+      },
+      "id": "b24743e4-0e8c-4f78-b7ad-3f9ea07dfb61",
+      "name": "Extract Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://mock-api:8000/orders/' + $json.order_id }}",
+        "options": {}
+      },
+      "id": "79864ca9-cbb8-4891-9d08-159d1ddf9051",
+      "name": "Get Order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://mock-api:8000/customers/' + $('Extract Event').first().json.customer_id }}",
+        "options": {}
+      },
+      "id": "e63284f0-8e54-4d20-8bbf-bac2d5ab3ea5",
+      "name": "Get Customer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://mock-api:8000/shipments/' + $('Extract Event').first().json.shipment_id }}",
+        "options": {}
+      },
+      "id": "34f303f2-5b39-4ceb-930c-2f975ad0c186",
+      "name": "Get Shipment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://mock-api:8000/inventory/' + $('Extract Event').first().json.sku }}",
+        "options": {}
+      },
+      "id": "88ea65dd-a42c-4938-9e89-713d9267ab0b",
+      "name": "Get Inventory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $('Extract Event').first().json;\nreturn [{\n  json: {\n    event_id: event.event_id,\n    event_type: event.event_type,\n    source: event.source,\n    customer: $('Get Customer').first().json,\n    order: $('Get Order').first().json,\n    inventory: $('Get Inventory').first().json,\n    shipment: $('Get Shipment').first().json,\n    message: event.message,\n    created_at: event.created_at,\n  },\n}];"
+      },
+      "id": "65909071-bacd-4027-b088-4add2e53d5c4",
+      "name": "Build AI Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ai-service:8000/decide",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "720a6474-e46c-45e2-aa6c-9a172d72e83d",
+      "name": "Decide Action",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $('Extract Event').first().json;\nconst decision = $input.first().json;\nconst requiresApproval = Boolean(decision.requires_approval);\nconst isLowStock = decision.category === 'low_stock';\nconst actionUrl = requiresApproval\n  ? 'http://mock-api:8000/approval-requests'\n  : isLowStock\n    ? 'http://mock-api:8000/internal-notifications'\n    : 'http://mock-api:8000/tickets';\nconst actionBody = requiresApproval\n  ? {\n      event_id: event.event_id,\n      recommended_action: decision.recommended_action,\n      explanation: decision.explanation,\n    }\n  : {\n      event_id: event.event_id,\n      summary: decision.internal_task_summary,\n      team: isLowStock ? 'procurement' : 'support',\n    };\nreturn [{ json: { event, decision, action_url: actionUrl, action_body: actionBody, started_at: Date.now() } }];"
+      },
+      "id": "2f2dc35d-217d-493e-b954-51e064ed6a4b",
+      "name": "Build Action Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.action_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.action_body }}",
+        "options": {}
+      },
+      "id": "10d7713b-01a2-4561-8e93-16fe73f9c9a9",
+      "name": "Create Business Action",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1980, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const action = $('Build Action Request').first().json;\nconst actionResult = $input.first().json;\nconst runLogBody = {\n  event_id: action.event.event_id,\n  workflow_id: 'wf_after_sales',\n  status: 'succeeded',\n  latency_ms: Date.now() - action.started_at,\n  model: 'fake',\n  estimated_tokens: 0,\n  error: null,\n};\nreturn [{ json: { event: action.event, decision: action.decision, action_result: actionResult, run_log_body: runLogBody } }];"
+      },
+      "id": "0064971d-7b90-45b0-a5ca-685363a38576",
+      "name": "Build Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mock-api:8000/run-logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.run_log_body }}",
+        "options": {}
+      },
+      "id": "c4d8fd2a-af7a-4730-bc59-23ed3fb03e6d",
+      "name": "Create Run Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2420, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $('Build Run Log').first().json;\nconst runLog = $input.first().json;\nreturn [{\n  json: {\n    event: payload.event,\n    decision: payload.decision,\n    action_result: payload.action_result,\n    run_log: runLog,\n  },\n}];"
+      },
+      "id": "407114c1-7d97-4a79-b86c-799b69c6b23f",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "a20a1da8-b73f-4fef-8ef4-936e7a477e04",
+      "name": "Respond with Decision",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2860, 0]
+    }
+  ],
+  "connections": {
+    "After-sales Event Webhook": {
+      "main": [[{"node": "Extract Event", "type": "main", "index": 0}]]
+    },
+    "Extract Event": {
+      "main": [[{"node": "Get Order", "type": "main", "index": 0}]]
+    },
+    "Get Order": {
+      "main": [[{"node": "Get Customer", "type": "main", "index": 0}]]
+    },
+    "Get Customer": {
+      "main": [[{"node": "Get Shipment", "type": "main", "index": 0}]]
+    },
+    "Get Shipment": {
+      "main": [[{"node": "Get Inventory", "type": "main", "index": 0}]]
+    },
+    "Get Inventory": {
+      "main": [[{"node": "Build AI Context", "type": "main", "index": 0}]]
+    },
+    "Build AI Context": {
+      "main": [[{"node": "Decide Action", "type": "main", "index": 0}]]
+    },
+    "Decide Action": {
+      "main": [[{"node": "Build Action Request", "type": "main", "index": 0}]]
+    },
+    "Build Action Request": {
+      "main": [[{"node": "Create Business Action", "type": "main", "index": 0}]]
+    },
+    "Create Business Action": {
+      "main": [[{"node": "Build Run Log", "type": "main", "index": 0}]]
+    },
+    "Build Run Log": {
+      "main": [[{"node": "Create Run Log", "type": "main", "index": 0}]]
+    },
+    "Create Run Log": {
+      "main": [[{"node": "Build Response", "type": "main", "index": 0}]]
+    },
+    "Build Response": {
+      "main": [[{"node": "Respond with Decision", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
   "staticData": null,
   "pinData": {}
 }

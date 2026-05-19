@@ -41,13 +41,14 @@ services:
         condition: service_healthy
 
   n8n:
-    image: n8nio/n8n:1.95.3
+    image: docker.n8n.io/n8nio/n8n:stable
     environment:
       N8N_HOST: localhost
       N8N_PORT: 5678
       N8N_PROTOCOL: http
       WEBHOOK_URL: http://localhost:5678/
       N8N_SECURE_COOKIE: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
       AI_SERVICE_URL: http://ai-service:8000
       MOCK_API_URL: http://mock-api:8000
     ports:

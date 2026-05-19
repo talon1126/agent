@@ -10,6 +10,7 @@ TICKETS: list[dict] = []
 RUN_LOGS: list[dict] = []
 DEAD_LETTERS: list[dict] = []
 REPLAYS: list[dict] = []
+INTERNAL_NOTIFICATIONS: list[dict] = []
 
 
 class ApprovalRequest(BaseModel):
@@ -62,6 +63,11 @@ def create_approval(request: ApprovalRequest) -> dict:
     return record
 
 
+@app.get("/approval-requests")
+def list_approvals() -> list[dict]:
+    return APPROVALS
+
+
 @app.post("/tickets")
 def create_ticket(payload: dict) -> dict:
     record = payload | {"status": "open"}
@@ -69,15 +75,32 @@ def create_ticket(payload: dict) -> dict:
     return record
 
 
+@app.get("/tickets")
+def list_tickets() -> list[dict]:
+    return TICKETS
+
+
 @app.post("/internal-notifications")
 def create_notification(payload: dict) -> dict:
-    return payload | {"status": "sent"}
+    record = payload | {"status": "sent"}
+    INTERNAL_NOTIFICATIONS.append(record)
+    return record
+
+
+@app.get("/internal-notifications")
+def list_notifications() -> list[dict]:
+    return INTERNAL_NOTIFICATIONS
 
 
 @app.post("/run-logs")
 def create_run_log(payload: dict) -> dict:
     RUN_LOGS.append(payload)
     return payload
+
+
+@app.get("/run-logs")
+def list_run_logs() -> list[dict]:
+    return RUN_LOGS
 
 
 @app.post("/dead-letter")
@@ -87,8 +110,18 @@ def create_dead_letter(payload: dict) -> dict:
     return record
 
 
+@app.get("/dead-letter")
+def list_dead_letters() -> list[dict]:
+    return DEAD_LETTERS
+
+
 @app.post("/replay/{event_id}")
 def replay_event(event_id: str) -> dict:
     record = {"event_id": event_id, "status": "queued_for_replay"}
     REPLAYS.append(record)
     return record
+
+
+@app.get("/replay")
+def list_replays() -> list[dict]:
+    return REPLAYS
