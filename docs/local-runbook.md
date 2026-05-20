@@ -104,7 +104,7 @@ Test the parent/son after-sales route through n8n directly:
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/chat-agent-inbound
 ```
 
-Expected local result: the reply includes `订单 ord_100 查询成功。`, order status `delivered`, carrier `UPS`, shipment status `delivered`, and `延迟天数：0`. This `ord_*` path is deterministic and calls `mock-api` directly before the LLM fallback so Feishu tests are repeatable.
+Expected local result: the reply includes order status `delivered`, carrier `UPS`, shipment status `delivered`, and no delay. The response `raw_agent_output.intermediateSteps` should show `AI Agent` calling `after_sales_agent`, and the son agent observation should show `order_status_tool` being called.
 
 ## Replay Failed Event
 

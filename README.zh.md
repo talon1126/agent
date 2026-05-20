@@ -135,7 +135,7 @@ http://n8n:5678/webhook/chat-agent-inbound
 
 售后 son agent 会调用 `order_status_tool`，读取 `mock-api /orders/{order_id}` 和 `/shipments/{shipment_id}`。飞书用户可以发送 `帮我查一下订单 ord_100`，结果会通过 `feishu-adapter` 返回飞书。
 
-为了让本地 demo 稳定可验，包含 `ord_*` 订单号和售后关键词的消息会先走 n8n 的确定性 API 分支。没有明确订单号的更宽泛售后问题，仍然会由 parent agent 分发给 `after_sales_agent` son agent。
+所有聊天消息都会先进入 parent agent。对于 `ord_*` 订单问题，parent agent 会调用 `after_sales_agent`，再由这个 son agent 调用 `order_status_tool` 查询后端 API，最后返回适合飞书展示的结果。
 
 导入并发布：
 

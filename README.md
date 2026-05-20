@@ -135,7 +135,7 @@ The versioned n8n chat workflow is `n8n/workflows/chat-parent-son-agent.json`. I
 
 The after-sales son agent calls `order_status_tool`, which reads from `mock-api /orders/{order_id}` and `/shipments/{shipment_id}`. Feishu users can ask messages such as `帮我查一下订单 ord_100`, and the result is returned through `feishu-adapter`.
 
-For reliability in the local demo, messages that include an `ord_*` order id and after-sales keywords use a deterministic n8n API branch before the LLM path. Broader after-sales questions without a concrete order id still go through the parent agent to the `after_sales_agent` son agent.
+All chat messages enter the parent agent first. For `ord_*` order questions, the parent agent calls `after_sales_agent`, and that son agent calls `order_status_tool` to query the backend API before returning a Feishu-ready answer.
 
 Import and publish:
 

@@ -19,6 +19,7 @@ function removeNode(name) {
 [
   "after_sales_agent",
   "order_status_tool",
+  "shipment_status_tool",
   "After-sales Qwen Chat Model",
   "Sticky Note - After-sales Agent",
   "Detect After-sales Order",
@@ -39,9 +40,11 @@ parent.parameters.options.systemMessage = `你是 Parent Agent，通过飞书等
 派发规则：
 1. 天气相关请求必须交给 weather_agent，不要自己编造天气结果。
 2. 售后、订单、物流、退款、退货、换货、投诉相关请求必须交给 after_sales_agent，不要自己编造订单或物流结果。
-3. 非上述请求如果只是普通聊天，可以直接简短回复。
-4. 需要后续接入表单、总结、待办或其他内部系统时，先说明当前尚未接入对应执行工具，不要声称已经完成外部操作。
-5. 回复用户时使用中文，保留子 Agent 返回的关键数据；如果子 Agent 返回表格或结构化内容，尽量保持格式。`;
+3. 只要用户消息里出现 ord_ 开头的订单号，就必须调用 after_sales_agent，并把用户原文作为工具输入。
+4. 非上述请求如果只是普通聊天，可以直接简短回复。
+5. 需要后续接入表单、总结、待办或其他内部系统时，先说明当前尚未接入对应执行工具，不要声称已经完成外部操作。
+6. 回复用户时使用中文，保留子 Agent 返回的关键数据；如果子 Agent 返回表格或结构化内容，尽量保持格式。`;
+parent.parameters.options.returnIntermediateSteps = true;
 
 const qwenNode =
   workflow.nodes.find((node) => node.name === "Alibaba Cloud Chat Model") ||
@@ -67,7 +70,7 @@ const afterSalesAgent = {
 5. 只有当工具明确返回 missing_order_id、lookup_failed 或 runtime_error 时，才说明无法查询该订单，并要求人工跟进，不要编造数据。
 6. 回复必须简洁，适合直接发回飞书。`,
       maxIterations: 5,
-      returnIntermediateSteps: false,
+      returnIntermediateSteps: true,
     },
   },
   type: "@n8n/n8n-nodes-langchain.agentTool",
@@ -106,7 +109,7 @@ function first(...values) {
 }
 
 function extractOrderId(input) {
-  const text = String(first(input.order_id, input.orderId, input.query, input.text, '')).trim();
+  const text = String(first(input.order_id, input.orderId, input.input, input.query, input.text, '')).trim();
   const match = text.match(/\\bord_[0-9A-Za-z]+\\b/i);
   return match ? match[0].toLowerCase() : '';
 }
@@ -119,23 +122,21 @@ try {
   }
 
   const orderUrl = 'http://mock-api:8000/orders/' + encodeURIComponent(orderId);
-  const orderResponse = await fetch(orderUrl);
-  if (!orderResponse.ok) {
-    return JSON.stringify({ ok: false, error: 'order_lookup_failed', step: 'fetch_order', status: orderResponse.status, order_id: orderId });
-  }
-  const orderText = await orderResponse.text();
-  const order = JSON.parse(orderText);
+  const order = await helpers.httpRequest({
+    method: 'GET',
+    url: orderUrl,
+    json: true
+  });
   if (!order.shipment_id) {
     return JSON.stringify({ ok: false, error: 'missing_shipment_id', step: 'parse_order', order_id: orderId, order });
   }
 
   const shipmentUrl = 'http://mock-api:8000/shipments/' + encodeURIComponent(order.shipment_id);
-  const shipmentResponse = await fetch(shipmentUrl);
-  if (!shipmentResponse.ok) {
-    return JSON.stringify({ ok: false, error: 'shipment_lookup_failed', step: 'fetch_shipment', status: shipmentResponse.status, order_id: orderId, shipment_id: order.shipment_id });
-  }
-  const shipmentText = await shipmentResponse.text();
-  const shipment = JSON.parse(shipmentText);
+  const shipment = await helpers.httpRequest({
+    method: 'GET',
+    url: shipmentUrl,
+    json: true
+  });
 
   const suggestion = Number(shipment.delay_days || 0) > 0 || shipment.status === 'delayed'
     ? '建议客服主动安抚客户，并跟进物流延迟原因。'
@@ -166,7 +167,7 @@ const orderStatusTool = {
   position: [432, 816],
   parameters: {
     description:
-      "Use this backend API tool for ecommerce after-sales order status and shipment status lookup. Input can be a natural language order question or JSON with order_id/query/text.",
+      "Use this backend API tool for ecommerce after-sales order status and shipment status lookup. Input can be a natural language order question or JSON with order_id/query/text/input.",
     jsCode: orderStatusCode,
   },
 };
@@ -180,200 +181,14 @@ const sticky = {
   name: "Sticky Note - After-sales Agent",
 };
 
-const detectAfterSalesOrder = {
-  parameters: {
-    jsCode: `function extractOrderId(text) {
-  const match = String(text || '').match(/\\bord_[0-9A-Za-z]+\\b/i);
-  return match ? match[0].toLowerCase() : '';
-}
-
-function hasAfterSalesKeyword(text) {
-  const value = String(text || '').toLowerCase();
-  return [
-    '订单',
-    '物流',
-    '售后',
-    '退款',
-    '退货',
-    '换货',
-    '发货',
-    '配送',
-    '投诉',
-    'order',
-    'shipment',
-    'delivery',
-    'refund',
-    'return'
-  ].some((keyword) => value.includes(keyword));
-}
-
-return $input.all().map((item) => {
-  const text = item.json.input_text || '';
-  const orderId = extractOrderId(text);
-  return {
-    json: {
-      ...item.json,
-      order_id: orderId,
-      is_after_sales_order: Boolean(orderId && hasAfterSalesKeyword(text))
-    }
-  };
-});`,
-  },
-  type: "n8n-nodes-base.code",
-  typeVersion: 2,
-  position: [-288, 80],
-  id: "detect-after-sales-order-node",
-  name: "Detect After-sales Order",
-};
-
-const isAfterSalesOrder = {
-  parameters: {
-    conditions: {
-      options: {
-        caseSensitive: true,
-        leftValue: "",
-        typeValidation: "strict",
-        version: 3,
-      },
-      conditions: [
-        {
-          id: "is-after-sales-order-condition",
-          leftValue: "={{ $json.is_after_sales_order }}",
-          rightValue: true,
-          operator: {
-            type: "boolean",
-            operation: "true",
-            singleValue: true,
-          },
-        },
-      ],
-      combinator: "and",
-    },
-    options: {},
-  },
-  type: "n8n-nodes-base.if",
-  typeVersion: 2.3,
-  position: [-64, 80],
-  id: "is-after-sales-order-node",
-  name: "Is After-sales Order?",
-};
-
-const runAfterSalesApiTool = {
-  parameters: {
-    jsCode: `function afterSalesSuggestion(shipment) {
-  const delayDays = Number(shipment.delay_days || 0);
-  if (delayDays > 0 || shipment.status === 'delayed') {
-    return '建议客服主动安抚客户，并跟进物流延迟原因。';
-  }
-  return '建议告知客户订单状态正常，无需人工介入。';
-}
-
-function sourcePayload(item) {
-  return {
-    platform: item.platform,
-    chat_id: item.chat_id,
-    sender_id: item.sender_id,
-    message_id: item.message_id
-  };
-}
-
-return await Promise.all($input.all().map(async (item) => {
-  const source = item.json;
-  const orderId = source.order_id;
-  try {
-    if (!orderId) {
-      return {
-        json: {
-          ok: true,
-          ...sourcePayload(source),
-          reply: '请提供订单号，例如 ord_100。',
-          raw_agent_output: { deterministic_after_sales_tool: true, ok: false, error: 'missing_order_id' }
-        }
-      };
-    }
-
-    const orderUrl = 'http://mock-api:8000/orders/' + encodeURIComponent(orderId);
-    const order = await this.helpers.httpRequest({
-      method: 'GET',
-      url: orderUrl,
-      json: true
-    });
-
-    const shipmentUrl = 'http://mock-api:8000/shipments/' + encodeURIComponent(order.shipment_id);
-    const shipment = await this.helpers.httpRequest({
-      method: 'GET',
-      url: shipmentUrl,
-      json: true
-    });
-    const reply = [
-      '订单 ' + order.order_id + ' 查询成功。',
-      '订单状态：' + order.status,
-      '物流商：' + shipment.carrier,
-      '物流状态：' + shipment.status,
-      '延迟天数：' + shipment.delay_days,
-      '行动建议：' + afterSalesSuggestion(shipment)
-    ].join('\\n');
-
-    return {
-      json: {
-        ok: true,
-        ...sourcePayload(source),
-        reply,
-        raw_agent_output: {
-          deterministic_after_sales_tool: true,
-          ok: true,
-          order,
-          shipment
-        }
-      }
-    };
-  } catch (error) {
-    return {
-      json: {
-        ok: true,
-        ...sourcePayload(source),
-        reply: '订单 ' + (orderId || '') + ' 查询时出现系统异常，请人工跟进。',
-        raw_agent_output: {
-          deterministic_after_sales_tool: true,
-          ok: false,
-          error: 'runtime_error',
-          message: error && error.message ? error.message : String(error)
-        }
-      }
-    };
-  }
-}));`,
-  },
-  type: "n8n-nodes-base.code",
-  typeVersion: 2,
-  position: [208, -112],
-  id: "run-after-sales-api-tool-node",
-  name: "Run After-sales API Tool",
-};
-
 workflow.nodes.push(
-  detectAfterSalesOrder,
-  isAfterSalesOrder,
-  runAfterSalesApiTool,
   afterSalesAgent,
   afterSalesModel,
   orderStatusTool,
   sticky,
 );
 workflow.connections["Normalize Inbound Message"] = {
-  main: [[{ node: "Detect After-sales Order", type: "main", index: 0 }]],
-};
-workflow.connections["Detect After-sales Order"] = {
-  main: [[{ node: "Is After-sales Order?", type: "main", index: 0 }]],
-};
-workflow.connections["Is After-sales Order?"] = {
-  main: [
-    [{ node: "Run After-sales API Tool", type: "main", index: 0 }],
-    [{ node: "Has Text Or Recognition?", type: "main", index: 0 }],
-  ],
-};
-workflow.connections["Run After-sales API Tool"] = {
-  main: [[{ node: "Respond to Webhook", type: "main", index: 0 }]],
+  main: [[{ node: "Has Text Or Recognition?", type: "main", index: 0 }]],
 };
 workflow.connections.after_sales_agent = {
   ai_tool: [[{ node: "AI Agent", type: "ai_tool", index: 0 }]],

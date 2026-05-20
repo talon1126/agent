@@ -104,7 +104,7 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"u
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/chat-agent-inbound
 ```
 
-预期本地结果：回复中包含 `订单 ord_100 查询成功。`、订单状态 `delivered`、物流商 `UPS`、物流状态 `delivered` 和 `延迟天数：0`。这条 `ord_*` 路径是确定性分支，会在 LLM fallback 前直接调用 `mock-api`，方便稳定验证飞书链路。
+预期本地结果：回复中包含订单状态 `delivered`、物流商 `UPS`、物流状态 `delivered`，并说明没有延迟。响应里的 `raw_agent_output.intermediateSteps` 应显示 `AI Agent` 调用了 `after_sales_agent`，son agent 的 observation 中应显示调用了 `order_status_tool`。
 
 ## Replay 失败事件
 
