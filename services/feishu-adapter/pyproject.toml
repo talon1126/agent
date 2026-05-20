@@ -7,6 +7,7 @@ dependencies = [
     "uvicorn[standard]==0.34.2",
     "pydantic==2.11.4",
     "httpx==0.28.1",
+    "lark-oapi==1.6.4",
 ]
 
 [project.optional-dependencies]

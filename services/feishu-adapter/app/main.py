@@ -1,5 +1,6 @@
 import os
 import logging
+import threading
 from typing import Any
 
 import httpx
@@ -7,6 +8,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from app.feishu_client import FEISHU_API_BASE_URL, get_tenant_access_token, reply_text_message
 from app.feishu_events import normalize_feishu_event, to_n8n_payload
+from app.feishu_long_connection import start_long_connection_listener
 
 DEFAULT_N8N_WEBHOOK_URL = "http://n8n:5678/webhook/chat-agent-inbound"
 logger = logging.getLogger("feishu_adapter")
@@ -24,6 +26,8 @@ def create_app(
     feishu_app_id: str | None = None,
     feishu_app_secret: str | None = None,
     feishu_api_base_url: str | None = None,
+    feishu_event_mode: str | None = None,
+    long_connection_starter: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Feishu Adapter")
     timeout_seconds = float(os.getenv("FEISHU_ADAPTER_HTTP_TIMEOUT_SECONDS", "90"))
@@ -34,6 +38,10 @@ def create_app(
         feishu_app_secret if feishu_app_secret is not None else os.getenv("FEISHU_APP_SECRET", "")
     )
     api_base_url = feishu_api_base_url or os.getenv("FEISHU_API_BASE_URL", FEISHU_API_BASE_URL)
+    event_mode = feishu_event_mode or os.getenv("FEISHU_EVENT_MODE", "http")
+    start_listener = long_connection_starter or start_long_connection_listener
+    processed_message_ids: set[str] = set()
+    processed_message_ids_lock = threading.Lock()
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -85,6 +93,35 @@ def create_app(
                 error,
             )
 
+    def handle_feishu_event(payload: dict[str, Any]) -> None:
+        message = normalize_feishu_event(payload)
+        with processed_message_ids_lock:
+            if message.message_id in processed_message_ids:
+                logger.info("skipping duplicate feishu message_id=%s", message.message_id)
+                return
+            processed_message_ids.add(message.message_id)
+
+        logger.info(
+            "received feishu event message_id=%s chat_id=%s type=%s",
+            message.message_id,
+            message.chat_id,
+            message.message_type,
+        )
+        process_message(message)
+
+    @app.on_event("startup")
+    def startup_long_connection() -> None:
+        if event_mode != "long_connection":
+            return
+        if not app_id or not app_secret:
+            logger.warning("FEISHU_EVENT_MODE=long_connection but app credentials are missing")
+            return
+        app.state.feishu_long_connection_client = start_listener(
+            app_id=app_id,
+            app_secret=app_secret,
+            on_event=handle_feishu_event,
+        )
+
     @app.post("/feishu/events")
     def receive_event(payload: dict[str, Any], background_tasks: BackgroundTasks) -> dict[str, Any]:
         if payload.get("type") == "url_verification":
@@ -94,13 +131,18 @@ def create_app(
             return {"challenge": challenge}
 
         message = normalize_feishu_event(payload)
-        logger.info(
-            "received feishu event message_id=%s chat_id=%s type=%s",
-            message.message_id,
-            message.chat_id,
-            message.message_type,
-        )
-        background_tasks.add_task(process_message, message)
+        with processed_message_ids_lock:
+            if message.message_id in processed_message_ids:
+                logger.info("skipping duplicate feishu message_id=%s", message.message_id)
+            else:
+                processed_message_ids.add(message.message_id)
+                logger.info(
+                    "received feishu event message_id=%s chat_id=%s type=%s",
+                    message.message_id,
+                    message.chat_id,
+                    message.message_type,
+                )
+                background_tasks.add_task(process_message, message)
         return {
             "ok": True,
             "platform": "feishu",

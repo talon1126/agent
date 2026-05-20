@@ -235,3 +235,85 @@ def test_event_callback_still_acknowledges_when_feishu_reply_fails() -> None:
         "accepted": True,
     }
     assert str(requests[0].url) == "http://n8n.local/webhook/chat-agent-inbound"
+
+
+def test_long_connection_event_forwards_message_to_n8n() -> None:
+    requests: list[httpx.Request] = []
+    captured_listener: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "http://n8n.local/webhook/chat-agent-inbound":
+            return httpx.Response(200, json={"reply": "Order ord_100 is delivered."})
+        return httpx.Response(404, json={"error": "unexpected url"})
+
+    def fake_long_connection_starter(**kwargs: object) -> object:
+        captured_listener.update(kwargs)
+        return object()
+
+    transport = httpx.MockTransport(handler)
+    app = create_app(
+        http_client=httpx.Client(transport=transport),
+        n8n_webhook_url="http://n8n.local/webhook/chat-agent-inbound",
+        feishu_app_id="cli_test",
+        feishu_app_secret="secret_test",
+        feishu_event_mode="long_connection",
+        long_connection_starter=fake_long_connection_starter,
+    )
+
+    with TestClient(app):
+        assert captured_listener["app_id"] == "cli_test"
+        assert captured_listener["app_secret"] == "secret_test"
+        on_event = captured_listener["on_event"]
+        assert callable(on_event)
+        on_event(
+            {
+                "schema": "2.0",
+                "header": {
+                    "event_id": "evt_ws_001",
+                    "event_type": "im.message.receive_v1",
+                },
+                "event": {
+                    "sender": {"sender_id": {"open_id": "ou_sender"}},
+                    "message": {
+                        "message_id": "om_ws_001",
+                        "chat_id": "oc_chat",
+                        "message_type": "text",
+                        "content": '{"text":"帮我查一下订单 ord_100"}',
+                    },
+                },
+            }
+        )
+        on_event(
+            {
+                "schema": "2.0",
+                "header": {
+                    "event_id": "evt_ws_001_retry",
+                    "event_type": "im.message.receive_v1",
+                },
+                "event": {
+                    "sender": {"sender_id": {"open_id": "ou_sender"}},
+                    "message": {
+                        "message_id": "om_ws_001",
+                        "chat_id": "oc_chat",
+                        "message_type": "text",
+                        "content": '{"text":"帮我查一下订单 ord_100"}',
+                    },
+                },
+            }
+        )
+
+    n8n_requests = [
+        request for request in requests if str(request.url) == "http://n8n.local/webhook/chat-agent-inbound"
+    ]
+    assert len(n8n_requests) == 1
+    assert json.loads(n8n_requests[0].content) == {
+        "platform": "feishu",
+        "message_type": "text",
+        "sender_id": "ou_sender",
+        "chat_id": "oc_chat",
+        "message_id": "om_ws_001",
+        "text": "帮我查一下订单 ord_100",
+        "audio_url": "",
+        "media_id": "",
+    }

@@ -109,9 +109,9 @@ Audio support is adapter-based. The current default is `TRANSCRIPTION_PROVIDER=m
 
 ## Feishu Adapter
 
-`feishu-adapter` is a dedicated container for Feishu/Lark protocol handling. It receives Feishu event callbacks, handles URL verification, normalizes chat messages, forwards them to the n8n chat gateway, and replies to Feishu when `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are configured.
+`feishu-adapter` is a dedicated container for Feishu/Lark protocol handling. By default it uses Feishu long connection mode through `lark-oapi`, normalizes chat messages, forwards them to the n8n chat gateway, deduplicates repeated message pushes, and replies to Feishu when `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are configured. The HTTP callback endpoint remains available for local simulation or fallback callback mode.
 
-Local endpoint:
+Local simulation endpoint:
 
 ```text
 POST http://localhost:8010/feishu/events
@@ -123,7 +123,7 @@ Default internal n8n target:
 http://n8n:5678/webhook/chat-agent-inbound
 ```
 
-For real Feishu event subscriptions, expose `http://localhost:8010/feishu/events` through a public HTTPS tunnel or server URL, then use that public URL in Feishu Developer Console.
+For real Feishu long connection subscriptions, keep `FEISHU_EVENT_MODE=long_connection`, enable the app's event subscription for `im.message.receive_v1`, install the bot in the target chat, and start Docker. The adapter logs `connected to wss://msg-frontier.feishu.cn/...` when the long connection is live.
 
 ## Chat Parent/Son Agent Workflow
 

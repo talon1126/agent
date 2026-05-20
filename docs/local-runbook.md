@@ -84,7 +84,29 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://
 
 ## Feishu Adapter
 
-The adapter endpoint is:
+The default real Feishu integration uses long connection mode:
+
+```text
+FEISHU_EVENT_MODE=long_connection
+```
+
+Start or rebuild the adapter:
+
+```powershell
+docker compose up -d --build feishu-adapter
+docker compose logs -f feishu-adapter
+```
+
+Expected startup log:
+
+```text
+started feishu long connection listener
+connected to wss://msg-frontier.feishu.cn/ws/v2...
+```
+
+When a real bot message arrives, the adapter logs `received feishu long connection event`, then `forwarded ... to n8n`, and finally `replied to feishu`. The adapter deduplicates repeated pushes for the same `message_id`.
+
+The local simulation endpoint is:
 
 ```text
 POST http://localhost:8010/feishu/events
@@ -96,15 +118,9 @@ Verify Feishu URL challenge handling:
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"url_verification","challenge":"challenge-code"}' http://localhost:8010/feishu/events
 ```
 
-For a real Feishu subscription, expose this endpoint through public HTTPS and configure the public URL in Feishu Developer Console. When `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are present, the adapter forwards messages to `N8N_CHAT_WEBHOOK_URL` and posts the agent reply back to Feishu.
+HTTP callback mode remains available for local simulation or fallback deployments. When `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are present, the adapter forwards messages to `N8N_CHAT_WEBHOOK_URL` and posts the agent reply back to Feishu.
 
-Watch adapter callbacks while sending a real Feishu bot message:
-
-```powershell
-docker compose logs -f feishu-adapter
-```
-
-If no new `POST /feishu/events` appears after sending a Feishu message, the request is not reaching Docker. Check that the Feishu Developer Console event subscription request URL is a public HTTPS URL that forwards to `http://localhost:8010/feishu/events`, that the app subscribes to `im.message.receive_v1`, and that the bot is installed in the target chat.
+If long connection is connected but no `received feishu long connection event` appears after sending a bot message, check that the Feishu app subscribes to `im.message.receive_v1`, the app version has been published, and the bot is installed in the target chat.
 
 The adapter returns `accepted=true` before the agent finishes, then forwards the message to n8n in the background. If the logs show `received feishu event` but not `forwarded ... to n8n`, check `N8N_CHAT_WEBHOOK_URL` and n8n workflow availability. If the logs show `forwarded ... has_reply=True` followed by `failed to reply to feishu`, the workflow ran but Feishu rejected the reply API call. Check app permissions and whether the message ID is from a real Feishu callback.
 

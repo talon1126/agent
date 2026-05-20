@@ -84,7 +84,29 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://
 
 ## 飞书 Adapter
 
-adapter 端点是：
+默认真实飞书接入使用长连接模式：
+
+```text
+FEISHU_EVENT_MODE=long_connection
+```
+
+启动或重建 adapter：
+
+```powershell
+docker compose up -d --build feishu-adapter
+docker compose logs -f feishu-adapter
+```
+
+预期启动日志：
+
+```text
+started feishu long connection listener
+connected to wss://msg-frontier.feishu.cn/ws/v2...
+```
+
+真实机器人消息到达时，adapter 会依次输出 `received feishu long connection event`、`forwarded ... to n8n`、`replied to feishu`。adapter 会按 `message_id` 对重复推送做去重。
+
+本地模拟端点是：
 
 ```text
 POST http://localhost:8010/feishu/events
@@ -96,15 +118,9 @@ POST http://localhost:8010/feishu/events
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"url_verification","challenge":"challenge-code"}' http://localhost:8010/feishu/events
 ```
 
-真实接入飞书事件订阅时，需要通过公网 HTTPS 暴露该端点，并在飞书开发者后台配置公网 URL。当 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 存在时，adapter 会把消息转发到 `N8N_CHAT_WEBHOOK_URL`，再把 agent 回复发送回飞书。
+HTTP callback 模式仍保留，用于本地模拟或备用 callback 部署。当 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 存在时，adapter 会把消息转发到 `N8N_CHAT_WEBHOOK_URL`，再把 agent 回复发送回飞书。
 
-发送真实飞书机器人消息时，可以实时观察 adapter 回调：
-
-```powershell
-docker compose logs -f feishu-adapter
-```
-
-如果发送飞书消息后没有新的 `POST /feishu/events`，说明请求没有到达 Docker。需要检查飞书开发者后台的事件订阅 Request URL 是否是公网 HTTPS，并且能转发到 `http://localhost:8010/feishu/events`；同时确认应用已订阅 `im.message.receive_v1`，机器人也已经安装到目标聊天里。
+如果长连接已经 `connected`，但发送机器人消息后没有 `received feishu long connection event`，需要检查飞书应用是否订阅 `im.message.receive_v1`、应用版本是否已发布、机器人是否安装到目标会话。
 
 adapter 会先返回 `accepted=true`，再在后台把消息转发到 n8n，agent 完成后才尝试回复飞书。如果日志里有 `received feishu event` 但没有 `forwarded ... to n8n`，检查 `N8N_CHAT_WEBHOOK_URL` 和 n8n workflow 是否可用。如果日志里有 `forwarded ... has_reply=True`，随后出现 `failed to reply to feishu`，说明 workflow 已经运行，但飞书回复 API 拒绝了回包。需要检查应用权限，以及 message ID 是否来自真实飞书回调。
 
