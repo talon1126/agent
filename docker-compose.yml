@@ -25,12 +25,16 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       POLICY_PATH: /app/fixtures/policies/after_sales_policy.md
       MOCK_API_URL: http://mock-api:8000
+      DATABASE_URL: postgresql://agent:agent@postgres:5432/agent_ops
       TRANSCRIPTION_PROVIDER: mock
       TRANSCRIPTION_MODEL: qwen3.6plus
     volumes:
       - ./fixtures:/app/fixtures:ro
     ports:
       - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   mock-api:
     build:

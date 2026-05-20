@@ -18,6 +18,7 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - `ai-service` owns backend AI logic that should be testable without n8n. It currently exposes deterministic decisioning and a message handling endpoint.
 - `mock-api` simulates enterprise systems: orders, customers, shipments, inventory, approvals, tickets, internal notifications, run logs, dead letters, and replay.
 - `postgres` exists as the operational store target. Current demo state is still mostly in fixtures or in-memory mock endpoints.
+- `ai-service` creates `session_state` and `user_profile` in Postgres when `DATABASE_URL` is configured. Fast path stores `last_order_id` in `session_state` and mirrors it into `user_profile.profile` when `sender_id` is available.
 - The chat workflow now uses n8n Postgres Chat Memory for Feishu-scoped conversation history and a `policy_search_tool` for policy lookup with clause metadata.
 - The chat workflow also has a deterministic after-sales fast path before the Parent Agent for clear order/refund messages. This avoids extra LLM calls for common order status and refund-policy questions.
 
@@ -73,6 +74,8 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - Keep model-facing logic and deterministic testable behavior in `ai-service`.
 - Keep enterprise API simulations in `mock-api`.
 - Use n8n Postgres Chat Memory for conversational references such as "this order".
+- Use `session_state` for durable short-term backend state that must survive `ai-service` restarts, such as the fast path `last_order_id`.
+- Use `user_profile` for durable user-level facts and future summaries/preferences; keep it compact and avoid storing full chat transcripts there.
 - Use the fast path for clear order/refund questions first; keep Parent -> son Agent for ambiguous or complex tasks.
 - The fast path may handle refund-only follow-ups like "How do I refund?" only when the same session already has a remembered `last_order_id`; otherwise it must decline so the workflow falls back to the Parent Agent.
 - Use `policy_search_tool` and `/policies/search` for company-policy answers that require `source_file`, `section`, and `clause_id` metadata.

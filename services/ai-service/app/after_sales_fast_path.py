@@ -11,6 +11,7 @@ from app.message_schemas import (
     ToolCall,
 )
 from app.order_status_tool import get_order_status
+from app.session_store import InMemorySessionStore, SessionStateStore
 
 ORDER_ID_PATTERN = re.compile(r"\bord_[0-9A-Za-z]+\b", re.IGNORECASE)
 REFUND_KEYWORDS = ("退款", "退货", "换货", "refund", "return", "exchange")
@@ -24,7 +25,7 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
     logger.addHandler(handler)
 _STATE_LOCK = threading.Lock()
-_SESSION_STATE: dict[str, dict[str, str]] = {}
+_SESSION_STATE = InMemorySessionStore()
 
 
 def extract_order_id(text: str) -> str | None:
@@ -49,12 +50,30 @@ def is_after_sales_fast_path(
     )
 
 
-def _remember_order(session_id: str, order_id: str, state_store: dict[str, dict[str, str]]) -> None:
+def _remember_order(
+    request: AfterSalesFastPathRequest,
+    order_id: str,
+    state_store: SessionStateStore | dict[str, dict[str, str]],
+) -> None:
+    if hasattr(state_store, "remember_order"):
+        state_store.remember_order(
+            request.session_id,
+            order_id,
+            source="feishu",
+            chat_id=request.chat_id,
+            sender_id=request.sender_id,
+        )
+        return
     with _STATE_LOCK:
-        state_store.setdefault(session_id, {})["last_order_id"] = order_id
+        state_store.setdefault(request.session_id, {})["last_order_id"] = order_id
 
 
-def _last_order_id(session_id: str, state_store: dict[str, dict[str, str]]) -> str | None:
+def _last_order_id(
+    session_id: str,
+    state_store: SessionStateStore | dict[str, dict[str, str]],
+) -> str | None:
+    if hasattr(state_store, "get_last_order_id"):
+        return state_store.get_last_order_id(session_id)
     with _STATE_LOCK:
         return state_store.get(session_id, {}).get("last_order_id")
 
@@ -78,7 +97,7 @@ def handle_after_sales_fast_path(
     *,
     mock_api_url: str,
     http_client: httpx.Client | None = None,
-    state_store: dict[str, dict[str, str]] | None = None,
+    state_store: SessionStateStore | dict[str, dict[str, str]] | None = None,
 ) -> AfterSalesFastPathResponse:
     total_started = perf_counter()
     order_ms = 0.0
@@ -112,7 +131,7 @@ def handle_after_sales_fast_path(
         )
 
     if order_id:
-        _remember_order(request.session_id, order_id, state)
+        _remember_order(request, order_id, state)
     else:
         order_id = remembered_order_id
 

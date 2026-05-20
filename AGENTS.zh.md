@@ -18,6 +18,7 @@
 - `ai-service` 负责后端 AI 逻辑，要求可以脱离 n8n 单独测试。当前包含确定性决策和消息处理入口。
 - `mock-api` 模拟企业内部系统：订单、客户、物流、库存、审批、工单、内部通知、运行日志、dead letter 和 replay。
 - `postgres` 是运维存储目标。当前 demo 状态主要仍在 fixtures 或 mock endpoint 内存中。
+- 配置 `DATABASE_URL` 后，`ai-service` 会在 Postgres 中创建 `session_state` 和 `user_profile`。fast path 会把 `last_order_id` 存到 `session_state`，如果有 `sender_id`，也会同步到 `user_profile.profile`。
 - chat workflow 现在使用 n8n Postgres Chat Memory 保存按飞书会话隔离的上下文，并使用 `policy_search_tool` 检索带条款元数据的政策。
 - chat workflow 还在 Parent Agent 前增加了确定性售后 fast path，用于明确的订单/退款消息，避免高频订单状态和退款政策问题产生额外 LLM 调用。
 
@@ -73,6 +74,8 @@
 - 模型相关逻辑和确定性可测试行为保留在 `ai-service`。
 - 企业 API 模拟保留在 `mock-api`。
 - 使用 n8n Postgres Chat Memory 处理“这个订单”这类对话指代。
+- 使用 `session_state` 保存需要跨 `ai-service` 重启保留的短期后端状态，例如 fast path 的 `last_order_id`。
+- 使用 `user_profile` 保存长期用户级事实、未来摘要和偏好；保持精简，不要把完整聊天记录放进去。
 - 明确的订单/退款问题优先走 fast path；含糊或复杂任务继续走 Parent -> son Agent。
 - fast path 只有在同一 session 已经记住 `last_order_id` 时，才可以处理“我怎么退款”这类没有显式订单引用的追问；否则必须拒绝处理并回退到 Parent Agent。
 - 使用 `policy_search_tool` 和 `/policies/search` 处理需要 `source_file`、`section`、`clause_id` 元数据的公司政策回答。
