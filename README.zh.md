@@ -125,6 +125,26 @@ http://n8n:5678/webhook/chat-agent-inbound
 
 真实接入飞书事件订阅时，需要把 `http://localhost:8010/feishu/events` 通过公网 HTTPS tunnel 或服务器地址暴露出去，然后在飞书开发者后台填写该公网 URL。
 
+## Chat Parent/Son Agent Workflow
+
+版本化的 n8n chat workflow 是 `n8n/workflows/chat-parent-son-agent.json`。它使用 parent agent 分发任务：
+
+- `weather_agent` 处理天气问题。
+- `after_sales_agent` 处理电商售后、订单、物流、退款、退货和投诉问题。
+- `echo_task_tool` 处理明确的测试或回显请求。
+
+售后 son agent 会调用 `order_status_tool`，读取 `mock-api /orders/{order_id}` 和 `/shipments/{shipment_id}`。飞书用户可以发送 `帮我查一下订单 ord_100`，结果会通过 `feishu-adapter` 返回飞书。
+
+为了让本地 demo 稳定可验，包含 `ord_*` 订单号和售后关键词的消息会先走 n8n 的确定性 API 分支。没有明确订单号的更宽泛售后问题，仍然会由 parent agent 分发给 `after_sales_agent` son agent。
+
+导入并发布：
+
+```powershell
+docker compose exec -T n8n n8n import:workflow --input=/workflows/chat-parent-son-agent.json
+docker compose exec -T n8n n8n publish:workflow --id=wechat-qwen-agent-template
+docker compose restart n8n
+```
+
 ## 常用端点
 
 - `GET http://localhost:8001/health`
@@ -150,6 +170,7 @@ http://n8n:5678/webhook/chat-agent-inbound
 pytest services\ai-service\tests
 pytest services\mock-api\tests
 pytest services\feishu-adapter\tests
+pytest tests\test_chat_parent_son_workflow.py
 ```
 
 ## 项目文档

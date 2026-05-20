@@ -125,6 +125,26 @@ http://n8n:5678/webhook/chat-agent-inbound
 
 For real Feishu event subscriptions, expose `http://localhost:8010/feishu/events` through a public HTTPS tunnel or server URL, then use that public URL in Feishu Developer Console.
 
+## Chat Parent/Son Agent Workflow
+
+The versioned n8n chat workflow is `n8n/workflows/chat-parent-son-agent.json`. It uses a parent agent to dispatch tasks:
+
+- `weather_agent` handles weather questions.
+- `after_sales_agent` handles ecommerce after-sales, order, logistics, refund, return, and complaint questions.
+- `echo_task_tool` handles explicit test or echo requests.
+
+The after-sales son agent calls `order_status_tool`, which reads from `mock-api /orders/{order_id}` and `/shipments/{shipment_id}`. Feishu users can ask messages such as `帮我查一下订单 ord_100`, and the result is returned through `feishu-adapter`.
+
+For reliability in the local demo, messages that include an `ord_*` order id and after-sales keywords use a deterministic n8n API branch before the LLM path. Broader after-sales questions without a concrete order id still go through the parent agent to the `after_sales_agent` son agent.
+
+Import and publish:
+
+```powershell
+docker compose exec -T n8n n8n import:workflow --input=/workflows/chat-parent-son-agent.json
+docker compose exec -T n8n n8n publish:workflow --id=wechat-qwen-agent-template
+docker compose restart n8n
+```
+
 ## Useful Endpoints
 
 - `GET http://localhost:8001/health`
@@ -150,6 +170,7 @@ Run service tests separately to avoid duplicate `test_api.py` import names acros
 pytest services\ai-service\tests
 pytest services\mock-api\tests
 pytest services\feishu-adapter\tests
+pytest tests\test_chat_parent_son_workflow.py
 ```
 
 ## Project Documents

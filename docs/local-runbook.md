@@ -44,6 +44,14 @@ docker compose exec -T n8n n8n publish:workflow --id=wf_message_agent
 docker compose restart n8n
 ```
 
+To import the parent/son chat gateway workflow used by Feishu:
+
+```powershell
+docker compose exec -T n8n n8n import:workflow --input=/workflows/chat-parent-son-agent.json
+docker compose exec -T n8n n8n publish:workflow --id=wechat-qwen-agent-template
+docker compose restart n8n
+```
+
 ## Send Demo Event
 
 ```powershell
@@ -89,6 +97,14 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"u
 ```
 
 For a real Feishu subscription, expose this endpoint through public HTTPS and configure the public URL in Feishu Developer Console. When `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are present, the adapter forwards messages to `N8N_CHAT_WEBHOOK_URL` and posts the agent reply back to Feishu.
+
+Test the parent/son after-sales route through n8n directly:
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/chat-agent-inbound
+```
+
+Expected local result: the reply includes `订单 ord_100 查询成功。`, order status `delivered`, carrier `UPS`, shipment status `delivered`, and `延迟天数：0`. This `ord_*` path is deterministic and calls `mock-api` directly before the LLM fallback so Feishu tests are repeatable.
 
 ## Replay Failed Event
 
