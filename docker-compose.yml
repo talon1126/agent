@@ -20,6 +20,9 @@ services:
       context: ./services/ai-service
     environment:
       AI_MODE: fake
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-qwen3.6plus}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       POLICY_PATH: /app/fixtures/policies/after_sales_policy.md
       MOCK_API_URL: http://mock-api:8000
       TRANSCRIPTION_PROVIDER: mock
@@ -43,6 +46,21 @@ services:
       postgres:
         condition: service_healthy
 
+  feishu-adapter:
+    build:
+      context: ./services/feishu-adapter
+    environment:
+      N8N_CHAT_WEBHOOK_URL: ${N8N_CHAT_WEBHOOK_URL:-http://n8n:5678/webhook/chat-agent-inbound}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_API_BASE_URL: ${FEISHU_API_BASE_URL:-https://open.feishu.cn}
+      FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:-}
+      FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
+    ports:
+      - "8010:8000"
+    depends_on:
+      - n8n
+
   n8n:
     image: docker.n8n.io/n8nio/n8n:stable
     environment:
@@ -54,6 +72,13 @@ services:
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
       AI_SERVICE_URL: http://ai-service:8000
       MOCK_API_URL: http://mock-api:8000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-qwen3.6plus}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:-}
+      FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
     ports:
       - "5678:5678"
     volumes:

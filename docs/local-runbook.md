@@ -11,6 +11,7 @@ docker compose up --build -d
 ```powershell
 Invoke-RestMethod http://localhost:8001/health
 Invoke-RestMethod http://localhost:8002/health
+Invoke-RestMethod http://localhost:8010/health
 Invoke-RestMethod http://localhost:8002/orders/ord_100
 ```
 
@@ -72,6 +73,22 @@ Audio-shaped messages can be tested with a transcript:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://localhost:8001/message/handle -MessageFile fixtures\messages\order_status_audio_transcript.json
 ```
+
+## Feishu Adapter
+
+The adapter endpoint is:
+
+```text
+POST http://localhost:8010/feishu/events
+```
+
+Verify Feishu URL challenge handling:
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"url_verification","challenge":"challenge-code"}' http://localhost:8010/feishu/events
+```
+
+For a real Feishu subscription, expose this endpoint through public HTTPS and configure the public URL in Feishu Developer Console. When `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are present, the adapter forwards messages to `N8N_CHAT_WEBHOOK_URL` and posts the agent reply back to Feishu.
 
 ## Replay Failed Event
 

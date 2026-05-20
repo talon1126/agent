@@ -15,6 +15,8 @@ Docker-first portfolio project for an enterprise-style ecommerce after-sales wor
 ```mermaid
 flowchart LR
     Event["Demo event JSON"] --> N8N["n8n workflow"]
+    Feishu["Feishu event"] --> Adapter["feishu-adapter"]
+    Adapter --> N8N
     N8N --> MockRead["mock-api read endpoints"]
     MockRead --> N8N
     N8N --> AI["ai-service /decide"]
@@ -105,11 +107,31 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile
 
 Audio support is adapter-based. The current default is `TRANSCRIPTION_PROVIDER=mock`. To connect Qwen, provide `QWEN_API_ENDPOINT`, `QWEN_API_KEY`, the confirmed model name, the expected audio input format, and an example response JSON.
 
+## Feishu Adapter
+
+`feishu-adapter` is a dedicated container for Feishu/Lark protocol handling. It receives Feishu event callbacks, handles URL verification, normalizes chat messages, forwards them to the n8n chat gateway, and replies to Feishu when `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are configured.
+
+Local endpoint:
+
+```text
+POST http://localhost:8010/feishu/events
+```
+
+Default internal n8n target:
+
+```text
+http://n8n:5678/webhook/chat-agent-inbound
+```
+
+For real Feishu event subscriptions, expose `http://localhost:8010/feishu/events` through a public HTTPS tunnel or server URL, then use that public URL in Feishu Developer Console.
+
 ## Useful Endpoints
 
 - `GET http://localhost:8001/health`
 - `POST http://localhost:8001/decide`
 - `POST http://localhost:8001/message/handle`
+- `GET http://localhost:8010/health`
+- `POST http://localhost:8010/feishu/events`
 - `GET http://localhost:8002/orders/{order_id}`
 - `GET http://localhost:8002/customers/{customer_id}`
 - `GET http://localhost:8002/shipments/{shipment_id}`
@@ -127,6 +149,7 @@ Run service tests separately to avoid duplicate `test_api.py` import names acros
 ```powershell
 pytest services\ai-service\tests
 pytest services\mock-api\tests
+pytest services\feishu-adapter\tests
 ```
 
 ## Project Documents

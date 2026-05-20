@@ -15,6 +15,8 @@
 ```mermaid
 flowchart LR
     Event["Demo event JSON"] --> N8N["n8n workflow"]
+    Feishu["Feishu event"] --> Adapter["feishu-adapter"]
+    Adapter --> N8N
     N8N --> MockRead["mock-api read endpoints"]
     MockRead --> N8N
     N8N --> AI["ai-service /decide"]
@@ -105,11 +107,31 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile
 
 音频支持通过 adapter 接入。当前默认是 `TRANSCRIPTION_PROVIDER=mock`。如果要接入 Qwen，需要你提供 `QWEN_API_ENDPOINT`、`QWEN_API_KEY`、确认后的模型名、API 期望的音频输入格式，以及返回 JSON 示例。
 
+## 飞书 Adapter
+
+`feishu-adapter` 是专门处理飞书/Lark 协议的容器。它接收飞书事件回调，处理 URL verification，把聊天消息归一化后转发到 n8n chat gateway，并在配置了 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 后把 agent 回复发送回飞书。
+
+本地端点：
+
+```text
+POST http://localhost:8010/feishu/events
+```
+
+默认转发到容器内 n8n：
+
+```text
+http://n8n:5678/webhook/chat-agent-inbound
+```
+
+真实接入飞书事件订阅时，需要把 `http://localhost:8010/feishu/events` 通过公网 HTTPS tunnel 或服务器地址暴露出去，然后在飞书开发者后台填写该公网 URL。
+
 ## 常用端点
 
 - `GET http://localhost:8001/health`
 - `POST http://localhost:8001/decide`
 - `POST http://localhost:8001/message/handle`
+- `GET http://localhost:8010/health`
+- `POST http://localhost:8010/feishu/events`
 - `GET http://localhost:8002/orders/{order_id}`
 - `GET http://localhost:8002/customers/{customer_id}`
 - `GET http://localhost:8002/shipments/{shipment_id}`
@@ -127,6 +149,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile
 ```powershell
 pytest services\ai-service\tests
 pytest services\mock-api\tests
+pytest services\feishu-adapter\tests
 ```
 
 ## 项目文档

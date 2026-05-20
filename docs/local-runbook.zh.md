@@ -11,6 +11,7 @@ docker compose up --build -d
 ```powershell
 Invoke-RestMethod http://localhost:8001/health
 Invoke-RestMethod http://localhost:8002/health
+Invoke-RestMethod http://localhost:8010/health
 Invoke-RestMethod http://localhost:8002/orders/ord_100
 ```
 
@@ -72,6 +73,22 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://localhost:8001/message/handle -MessageFile fixtures\messages\order_status_audio_transcript.json
 ```
+
+## 飞书 Adapter
+
+adapter 端点是：
+
+```text
+POST http://localhost:8010/feishu/events
+```
+
+验证飞书 URL challenge：
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"url_verification","challenge":"challenge-code"}' http://localhost:8010/feishu/events
+```
+
+真实接入飞书事件订阅时，需要通过公网 HTTPS 暴露该端点，并在飞书开发者后台配置公网 URL。当 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 存在时，adapter 会把消息转发到 `N8N_CHAT_WEBHOOK_URL`，再把 agent 回复发送回飞书。
 
 ## Replay 失败事件
 
