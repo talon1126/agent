@@ -104,8 +104,7 @@ def test_event_callback_forwards_normalized_message_to_n8n() -> None:
         "ok": True,
         "platform": "feishu",
         "message_id": "om_001",
-        "forwarded": True,
-        "replied": False,
+        "accepted": True,
     }
     assert len(requests) == 1
     assert requests[0].url == "http://n8n.local/webhook/chat-agent-inbound"
@@ -170,8 +169,7 @@ def test_event_callback_replies_to_feishu_when_credentials_are_configured() -> N
         "ok": True,
         "platform": "feishu",
         "message_id": "om_001",
-        "forwarded": True,
-        "replied": True,
+        "accepted": True,
     }
     token_request = requests[1]
     assert json.loads(token_request.content) == {
@@ -184,3 +182,56 @@ def test_event_callback_replies_to_feishu_when_credentials_are_configured() -> N
         "msg_type": "text",
         "content": '{"text": "Order ord_100 is delivered."}',
     }
+
+
+def test_event_callback_still_acknowledges_when_feishu_reply_fails() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "http://n8n.local/webhook/chat-agent-inbound":
+            return httpx.Response(200, json={"reply": "Order ord_100 is delivered."})
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/im/v1/messages/om_001/reply":
+            return httpx.Response(400, json={"code": 230001, "msg": "invalid message id"})
+        return httpx.Response(404, json={"error": "unexpected url"})
+
+    transport = httpx.MockTransport(handler)
+    app = create_app(
+        http_client=httpx.Client(transport=transport),
+        n8n_webhook_url="http://n8n.local/webhook/chat-agent-inbound",
+        feishu_app_id="cli_test",
+        feishu_app_secret="secret_test",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/feishu/events",
+        json={
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt_001",
+                "event_type": "im.message.receive_v1",
+                "token": "verify-token",
+            },
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou_sender"}},
+                "message": {
+                    "message_id": "om_001",
+                    "chat_id": "oc_chat",
+                    "message_type": "text",
+                    "content": '{"text":"帮我查一下订单 ord_100"}',
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "platform": "feishu",
+        "message_id": "om_001",
+        "accepted": True,
+    }
+    assert str(requests[0].url) == "http://n8n.local/webhook/chat-agent-inbound"

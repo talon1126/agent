@@ -98,6 +98,22 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"u
 
 For a real Feishu subscription, expose this endpoint through public HTTPS and configure the public URL in Feishu Developer Console. When `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are present, the adapter forwards messages to `N8N_CHAT_WEBHOOK_URL` and posts the agent reply back to Feishu.
 
+Watch adapter callbacks while sending a real Feishu bot message:
+
+```powershell
+docker compose logs -f feishu-adapter
+```
+
+If no new `POST /feishu/events` appears after sending a Feishu message, the request is not reaching Docker. Check that the Feishu Developer Console event subscription request URL is a public HTTPS URL that forwards to `http://localhost:8010/feishu/events`, that the app subscribes to `im.message.receive_v1`, and that the bot is installed in the target chat.
+
+The adapter returns `accepted=true` before the agent finishes, then forwards the message to n8n in the background. If the logs show `received feishu event` but not `forwarded ... to n8n`, check `N8N_CHAT_WEBHOOK_URL` and n8n workflow availability. If the logs show `forwarded ... has_reply=True` followed by `failed to reply to feishu`, the workflow ran but Feishu rejected the reply API call. Check app permissions and whether the message ID is from a real Feishu callback.
+
+Simulate the Feishu event locally:
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"schema":"2.0","header":{"event_id":"evt_local_probe","event_type":"im.message.receive_v1","token":"verify-token"},"event":{"sender":{"sender_id":{"open_id":"ou_local_probe"}},"message":{"message_id":"om_local_probe","chat_id":"oc_local_probe","message_type":"text","content":"{\"text\":\"帮我查一下订单 ord_100\"}"}}}' http://localhost:8010/feishu/events
+```
+
 Test the parent/son after-sales route through n8n directly:
 
 ```powershell

@@ -98,6 +98,22 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"u
 
 真实接入飞书事件订阅时，需要通过公网 HTTPS 暴露该端点，并在飞书开发者后台配置公网 URL。当 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 存在时，adapter 会把消息转发到 `N8N_CHAT_WEBHOOK_URL`，再把 agent 回复发送回飞书。
 
+发送真实飞书机器人消息时，可以实时观察 adapter 回调：
+
+```powershell
+docker compose logs -f feishu-adapter
+```
+
+如果发送飞书消息后没有新的 `POST /feishu/events`，说明请求没有到达 Docker。需要检查飞书开发者后台的事件订阅 Request URL 是否是公网 HTTPS，并且能转发到 `http://localhost:8010/feishu/events`；同时确认应用已订阅 `im.message.receive_v1`，机器人也已经安装到目标聊天里。
+
+adapter 会先返回 `accepted=true`，再在后台把消息转发到 n8n，agent 完成后才尝试回复飞书。如果日志里有 `received feishu event` 但没有 `forwarded ... to n8n`，检查 `N8N_CHAT_WEBHOOK_URL` 和 n8n workflow 是否可用。如果日志里有 `forwarded ... has_reply=True`，随后出现 `failed to reply to feishu`，说明 workflow 已经运行，但飞书回复 API 拒绝了回包。需要检查应用权限，以及 message ID 是否来自真实飞书回调。
+
+本地模拟飞书事件：
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"schema":"2.0","header":{"event_id":"evt_local_probe","event_type":"im.message.receive_v1","token":"verify-token"},"event":{"sender":{"sender_id":{"open_id":"ou_local_probe"}},"message":{"message_id":"om_local_probe","chat_id":"oc_local_probe","message_type":"text","content":"{\"text\":\"帮我查一下订单 ord_100\"}"}}}' http://localhost:8010/feishu/events
+```
+
 直接通过 n8n 测试 parent/son 售后路由：
 
 ```powershell
