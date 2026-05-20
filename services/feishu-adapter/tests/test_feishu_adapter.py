@@ -1,4 +1,5 @@
 import json
+import logging
 
 import httpx
 from fastapi.testclient import TestClient
@@ -119,6 +120,44 @@ def test_event_callback_forwards_normalized_message_to_n8n() -> None:
         "audio_url": "",
         "media_id": "",
     }
+
+
+def test_event_callback_logs_n8n_and_total_latency(caplog) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"reply": "Order ord_100 is delivered."})
+
+    transport = httpx.MockTransport(handler)
+    app = create_app(
+        http_client=httpx.Client(transport=transport),
+        n8n_webhook_url="http://n8n.local/webhook/chat-agent-inbound",
+    )
+    client = TestClient(app)
+
+    with caplog.at_level(logging.INFO, logger="feishu_adapter"):
+        response = client.post(
+            "/feishu/events",
+            json={
+                "schema": "2.0",
+                "header": {
+                    "event_id": "evt_001",
+                    "event_type": "im.message.receive_v1",
+                    "token": "verify-token",
+                },
+                "event": {
+                    "sender": {"sender_id": {"open_id": "ou_sender"}},
+                    "message": {
+                        "message_id": "om_001",
+                        "chat_id": "oc_chat",
+                        "message_type": "text",
+                        "content": '{"text":"帮我查一下订单 ord_100"}',
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert "n8n_ms=" in caplog.text
+    assert "total_ms=" in caplog.text
 
 
 def test_event_callback_replies_to_feishu_when_credentials_are_configured() -> None:

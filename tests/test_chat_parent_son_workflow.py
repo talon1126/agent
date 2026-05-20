@@ -64,14 +64,30 @@ def test_chat_messages_must_go_through_parent_before_son_agent() -> None:
     workflow = load_workflow()
     node_names = {node["name"] for node in workflow["nodes"]}
 
-    assert "Detect After-sales Order" not in node_names
-    assert "Is After-sales Order?" not in node_names
-    assert "Run After-sales API Tool" not in node_names
+    assert "Detect Fast After-sales Path" in node_names
+    assert "Is Fast After-sales Path?" in node_names
+    assert "Run After-sales Fast Path" in node_names
     normalize_connections = workflow["connections"]["Normalize Inbound Message"]["main"]
     assert normalize_connections == [[{"node": "Has Text Or Recognition?", "type": "main", "index": 0}]]
 
     has_text_connections = workflow["connections"]["Has Text Or Recognition?"]["main"]
-    assert has_text_connections[0] == [{"node": "AI Agent", "type": "main", "index": 0}]
+    assert has_text_connections[0] == [
+        {"node": "Detect Fast After-sales Path", "type": "main", "index": 0}
+    ]
+    fast_path_connections = workflow["connections"]["Is Fast After-sales Path?"]["main"]
+    assert fast_path_connections[0] == [
+        {"node": "Run After-sales Fast Path", "type": "main", "index": 0}
+    ]
+    assert fast_path_connections[1] == [{"node": "AI Agent", "type": "main", "index": 0}]
+
+    fast_path_http = node_by_name(workflow, "Run After-sales Fast Path")
+    assert fast_path_http["parameters"]["url"] == "http://ai-service:8000/after-sales/fast-path"
+
+    handled_connections = workflow["connections"]["Is Fast Path Handled?"]["main"]
+    assert handled_connections[0] == [
+        {"node": "Format Webhook Reply", "type": "main", "index": 0}
+    ]
+    assert handled_connections[1] == [{"node": "AI Agent", "type": "main", "index": 0}]
 
 
 def test_parent_and_son_agents_return_intermediate_steps_for_runtime_verification() -> None:
@@ -81,6 +97,8 @@ def test_parent_and_son_agents_return_intermediate_steps_for_runtime_verificatio
 
     assert parent["parameters"]["options"]["returnIntermediateSteps"] is True
     assert after_sales_agent["parameters"]["options"]["returnIntermediateSteps"] is True
+    assert parent["parameters"]["options"]["maxIterations"] == 3
+    assert after_sales_agent["parameters"]["options"]["maxIterations"] == 3
 
 
 def test_chat_agents_use_postgres_memory_scoped_by_feishu_user() -> None:
@@ -97,6 +115,10 @@ def test_chat_agents_use_postgres_memory_scoped_by_feishu_user() -> None:
         assert "chat_id" in memory_node["parameters"]["sessionKey"]
         assert "sender_id" in memory_node["parameters"]["sessionKey"]
         assert memory_node["parameters"]["tableName"] == "n8n_chat_histories"
+
+    assert parent_memory["parameters"]["sessionKey"].startswith("={{ 'parent:'")
+    assert after_sales_memory["parameters"]["sessionKey"].startswith("={{ 'after_sales:'")
+    assert parent_memory["parameters"]["sessionKey"] != after_sales_memory["parameters"]["sessionKey"]
 
     assert workflow["connections"]["Parent Postgres Chat Memory"]["ai_memory"] == [
         [{"node": "AI Agent", "type": "ai_memory", "index": 0}]

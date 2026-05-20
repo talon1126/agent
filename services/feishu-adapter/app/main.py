@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+from time import perf_counter
 from typing import Any
 
 import httpx
@@ -48,8 +49,14 @@ def create_app(
         return {"status": "ok"}
 
     def process_message(message: Any) -> None:
+        total_started = perf_counter()
+        n8n_ms = 0.0
+        token_ms = 0.0
+        reply_ms = 0.0
         try:
+            n8n_started = perf_counter()
             n8n_response = client.post(webhook_url, json=to_n8n_payload(message))
+            n8n_ms = (perf_counter() - n8n_started) * 1000
             n8n_response.raise_for_status()
             n8n_payload = n8n_response.json()
         except httpx.HTTPError as error:
@@ -62,22 +69,34 @@ def create_app(
 
         reply = n8n_payload.get("reply") or n8n_payload.get("answer")
         logger.info(
-            "forwarded feishu message_id=%s to n8n status=%s has_reply=%s",
+            "forwarded feishu message_id=%s to n8n status=%s has_reply=%s n8n_ms=%.1f",
             message.message_id,
             n8n_response.status_code,
             bool(reply),
+            n8n_ms,
         )
 
         if not app_id or not app_secret or not reply:
+            logger.info(
+                "feishu message_id=%s completed total_ms=%.1f n8n_ms=%.1f token_ms=%.1f reply_ms=%.1f",
+                message.message_id,
+                (perf_counter() - total_started) * 1000,
+                n8n_ms,
+                token_ms,
+                reply_ms,
+            )
             return
 
         try:
+            token_started = perf_counter()
             tenant_access_token = get_tenant_access_token(
                 client=client,
                 app_id=app_id,
                 app_secret=app_secret,
                 api_base_url=api_base_url,
             )
+            token_ms = (perf_counter() - token_started) * 1000
+            reply_started = perf_counter()
             reply_text_message(
                 client=client,
                 tenant_access_token=tenant_access_token,
@@ -85,12 +104,26 @@ def create_app(
                 text=str(reply),
                 api_base_url=api_base_url,
             )
-            logger.info("replied to feishu message_id=%s", message.message_id)
+            reply_ms = (perf_counter() - reply_started) * 1000
+            logger.info(
+                "replied to feishu message_id=%s reply_ms=%.1f",
+                message.message_id,
+                reply_ms,
+            )
         except httpx.HTTPError as error:
             logger.warning(
                 "failed to reply to feishu message_id=%s error=%s",
                 message.message_id,
                 error,
+            )
+        finally:
+            logger.info(
+                "feishu message_id=%s completed total_ms=%.1f n8n_ms=%.1f token_ms=%.1f reply_ms=%.1f",
+                message.message_id,
+                (perf_counter() - total_started) * 1000,
+                n8n_ms,
+                token_ms,
+                reply_ms,
             )
 
     def handle_feishu_event(payload: dict[str, Any]) -> None:

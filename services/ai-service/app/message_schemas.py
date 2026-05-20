@@ -47,3 +47,26 @@ class MessageAgentResponse(BaseModel):
     confidence: float = Field(ge=0, le=1)
     transcription: TranscriptionResult | None = None
     error: str | None = None
+
+
+class AfterSalesFastPathRequest(BaseModel):
+    message_id: str
+    session_id: str
+    text: str
+    order_id: str | None = None
+    chat_id: str | None = None
+    sender_id: str | None = None
+
+
+class AfterSalesFastPathResponse(BaseModel):
+    message_id: str
+    session_id: str
+    input_text: str
+    handled: bool
+    reason: str
+    answer: str
+    order_id: str | None = None
+    chat_id: str | None = None
+    sender_id: str | None = None
+    confidence: float = Field(ge=0, le=1)
+    tool_calls: list[ToolCall] = Field(default_factory=list)

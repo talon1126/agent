@@ -19,10 +19,12 @@
 - `mock-api` 模拟企业内部系统：订单、客户、物流、库存、审批、工单、内部通知、运行日志、dead letter 和 replay。
 - `postgres` 是运维存储目标。当前 demo 状态主要仍在 fixtures 或 mock endpoint 内存中。
 - chat workflow 现在使用 n8n Postgres Chat Memory 保存按飞书会话隔离的上下文，并使用 `policy_search_tool` 检索带条款元数据的政策。
+- chat workflow 还在 Parent Agent 前增加了确定性售后 fast path，用于明确的订单/退款消息，避免高频订单状态和退款政策问题产生额外 LLM 调用。
 
 ## 关键入口
 
 - 飞书聊天链路：飞书 -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> Parent Agent -> son agent -> tool/API -> 飞书回复。
+- fast path 链路：飞书 -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> 飞书回复。如果 fast path 拒绝处理，workflow 会回退到 Parent Agent。
 - Parent/son workflow 导出：`n8n/workflows/chat-parent-son-agent.json`
 - Message-agent workflow 导出：`n8n/workflows/message-agent.json`
 - Event workflow 导出：`n8n/workflows/ecommerce-after-sales.json`
@@ -31,6 +33,7 @@
 - 订单状态工具代码：`services/ai-service/app/order_status_tool.py`
 - n8n 售后 son agent 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `order_status_tool`
 - n8n memory 节点：`Parent Postgres Chat Memory` 和 `After-sales Postgres Chat Memory`
+- Parent 和 son memory 可以共用同一张物理表，但 `sessionKey` 必须分别加命名空间（`parent:` 和 `after_sales:`），避免跨 Agent 上下文污染。
 - n8n 政策 RAG 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `policy_search_tool`
 - 政策检索 API：`services/mock-api/app/main.py` 中的 `POST /policies/search`
 
@@ -70,6 +73,7 @@
 - 模型相关逻辑和确定性可测试行为保留在 `ai-service`。
 - 企业 API 模拟保留在 `mock-api`。
 - 使用 n8n Postgres Chat Memory 处理“这个订单”这类对话指代。
+- 明确的订单/退款问题优先走 fast path；含糊或复杂任务继续走 Parent -> son Agent。
 - 使用 `policy_search_tool` 和 `/policies/search` 处理需要 `source_file`、`section`、`clause_id` 元数据的公司政策回答。
 - 不要提交 `.env`，不要打印 secrets。
 - 每新增一份英文 Markdown 文档，都要同时新增中文 `.zh.md` 版本。
