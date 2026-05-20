@@ -74,6 +74,7 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - Keep enterprise API simulations in `mock-api`.
 - Use n8n Postgres Chat Memory for conversational references such as "this order".
 - Use the fast path for clear order/refund questions first; keep Parent -> son Agent for ambiguous or complex tasks.
+- The fast path may handle refund-only follow-ups like "How do I refund?" only when the same session already has a remembered `last_order_id`; otherwise it must decline so the workflow falls back to the Parent Agent.
 - Use `policy_search_tool` and `/policies/search` for company-policy answers that require `source_file`, `section`, and `clause_id` metadata.
 - Do not commit `.env` or print secrets.
 - When adding an English Markdown document, add the Chinese `.zh.md` counterpart.

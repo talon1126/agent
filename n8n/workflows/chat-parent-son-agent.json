@@ -331,7 +331,7 @@
           "sessionIdType": "customKey",
           "sessionKey": "={{ 'parent:' + ($json.session_id || 'feishu:' + $json.chat_id + ':' + $json.sender_id) }}",
           "tableName": "n8n_chat_histories",
-          "contextWindowLength": 8
+          "contextWindowLength": 6
         },
         "credentials": {
           "postgres": {
@@ -353,7 +353,7 @@
           "sessionIdType": "customKey",
           "sessionKey": "={{ 'after_sales:' + ($json.session_id || 'feishu:' + $json.chat_id + ':' + $json.sender_id) }}",
           "tableName": "n8n_chat_histories",
-          "contextWindowLength": 8
+          "contextWindowLength": 6
         },
         "credentials": {
           "postgres": {
@@ -386,7 +386,7 @@
           80
         ],
         "parameters": {
-          "jsCode": "const orderPattern = /\\bord_[0-9A-Za-z]+\\b/i;\nconst refundKeywords = ['退款', '退货', '换货', 'refund', 'return', 'exchange'];\nconst orderKeywords = ['订单', '物流', '发货', '配送', 'order', 'shipment', 'delivery'];\nconst referenceKeywords = ['这个订单', '该订单', '刚才那个订单', '上一单', 'this order'];\n\nreturn $input.all().map((item) => {\n  const text = String(item.json.input_text || '').trim();\n  const lowered = text.toLowerCase();\n  const match = text.match(orderPattern);\n  const orderId = match ? match[0].toLowerCase() : '';\n  const hasAfterSalesIntent = refundKeywords.concat(orderKeywords).some((keyword) => lowered.includes(keyword));\n  const hasOrderReference = referenceKeywords.some((keyword) => lowered.includes(keyword));\n  const fastPathCandidate = Boolean((orderId && hasAfterSalesIntent) || (hasOrderReference && hasAfterSalesIntent));\n\n  return {\n    json: {\n      ...item.json,\n      order_id: orderId,\n      fast_path_candidate: fastPathCandidate,\n      fast_path_body: {\n        message_id: item.json.message_id,\n        session_id: item.json.session_id,\n        text,\n        order_id: orderId || undefined,\n        chat_id: item.json.chat_id,\n        sender_id: item.json.sender_id\n      }\n    }\n  };\n});"
+          "jsCode": "const orderPattern = /\\bord_[0-9A-Za-z]+\\b/i;\nconst refundKeywords = ['退款', '退货', '换货', 'refund', 'return', 'exchange'];\nconst orderKeywords = ['订单', '物流', '发货', '配送', 'order', 'shipment', 'delivery'];\nconst referenceKeywords = ['这个订单', '该订单', '刚才那个订单', '上一单', 'this order'];\n\nreturn $input.all().map((item) => {\n  const text = String(item.json.input_text || '').trim();\n  const lowered = text.toLowerCase();\n  const match = text.match(orderPattern);\n  const orderId = match ? match[0].toLowerCase() : '';\n  const hasRefundIntent = refundKeywords.some((keyword) => lowered.includes(keyword));\n  const hasAfterSalesIntent = refundKeywords.concat(orderKeywords).some((keyword) => lowered.includes(keyword));\n  const hasOrderReference = referenceKeywords.some((keyword) => lowered.includes(keyword));\n  const fastPathCandidate = Boolean((orderId && hasAfterSalesIntent) || hasRefundIntent || (hasOrderReference && hasAfterSalesIntent));\n\n  return {\n    json: {\n      ...item.json,\n      order_id: orderId,\n      fast_path_candidate: fastPathCandidate,\n      fast_path_body: {\n        message_id: item.json.message_id,\n        session_id: item.json.session_id,\n        text,\n        order_id: orderId || undefined,\n        chat_id: item.json.chat_id,\n        sender_id: item.json.sender_id\n      }\n    }\n  };\n});"
         }
       },
       {

@@ -83,6 +83,11 @@ def test_chat_messages_must_go_through_parent_before_son_agent() -> None:
     fast_path_http = node_by_name(workflow, "Run After-sales Fast Path")
     assert fast_path_http["parameters"]["url"] == "http://ai-service:8000/after-sales/fast-path"
 
+    fast_path_detector = node_by_name(workflow, "Detect Fast After-sales Path")
+    detector_code = fast_path_detector["parameters"]["jsCode"]
+    assert "hasRefundIntent" in detector_code
+    assert "fastPathCandidate = Boolean((orderId && hasAfterSalesIntent) || hasRefundIntent" in detector_code
+
     handled_connections = workflow["connections"]["Is Fast Path Handled?"]["main"]
     assert handled_connections[0] == [
         {"node": "Format Webhook Reply", "type": "main", "index": 0}
@@ -115,6 +120,7 @@ def test_chat_agents_use_postgres_memory_scoped_by_feishu_user() -> None:
         assert "chat_id" in memory_node["parameters"]["sessionKey"]
         assert "sender_id" in memory_node["parameters"]["sessionKey"]
         assert memory_node["parameters"]["tableName"] == "n8n_chat_histories"
+        assert memory_node["parameters"]["contextWindowLength"] == 6
 
     assert parent_memory["parameters"]["sessionKey"].startswith("={{ 'parent:'")
     assert after_sales_memory["parameters"]["sessionKey"].startswith("={{ 'after_sales:'")

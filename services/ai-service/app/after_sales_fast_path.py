@@ -1,5 +1,7 @@
 import re
 import threading
+import logging
+from time import perf_counter
 
 import httpx
 
@@ -15,6 +17,12 @@ REFUND_KEYWORDS = ("退款", "退货", "换货", "refund", "return", "exchange")
 ORDER_KEYWORDS = ("订单", "物流", "发货", "配送", "order", "shipment", "delivery")
 ORDER_REFERENCE_KEYWORDS = ("这个订单", "该订单", "刚才那个订单", "上一单", "this order")
 
+logger = logging.getLogger("ai_service.fast_path")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(handler)
 _STATE_LOCK = threading.Lock()
 _SESSION_STATE: dict[str, dict[str, str]] = {}
 
@@ -24,11 +32,21 @@ def extract_order_id(text: str) -> str | None:
     return match.group(0).lower() if match else None
 
 
-def is_after_sales_fast_path(text: str, order_id: str | None) -> bool:
+def is_after_sales_fast_path(
+    text: str,
+    order_id: str | None,
+    *,
+    has_remembered_order: bool = False,
+) -> bool:
     lowered = text.lower()
+    has_refund_intent = any(keyword in lowered for keyword in REFUND_KEYWORDS)
     has_after_sales_intent = any(keyword in lowered for keyword in REFUND_KEYWORDS + ORDER_KEYWORDS)
     has_order_reference = any(keyword in lowered for keyword in ORDER_REFERENCE_KEYWORDS)
-    return bool((order_id and has_after_sales_intent) or (has_order_reference and has_after_sales_intent))
+    return bool(
+        (order_id and has_after_sales_intent)
+        or (has_order_reference and has_after_sales_intent)
+        or (has_refund_intent and has_remembered_order)
+    )
 
 
 def _remember_order(session_id: str, order_id: str, state_store: dict[str, dict[str, str]]) -> None:
@@ -62,12 +80,25 @@ def handle_after_sales_fast_path(
     http_client: httpx.Client | None = None,
     state_store: dict[str, dict[str, str]] | None = None,
 ) -> AfterSalesFastPathResponse:
+    total_started = perf_counter()
+    order_ms = 0.0
+    policy_ms = 0.0
     text = request.text.strip()
     state = state_store if state_store is not None else _SESSION_STATE
     order_id = request.order_id or extract_order_id(text)
     is_refund = any(keyword in text.lower() for keyword in REFUND_KEYWORDS)
+    remembered_order_id = _last_order_id(request.session_id, state)
 
-    if not is_after_sales_fast_path(text, order_id):
+    if not is_after_sales_fast_path(
+        text,
+        order_id,
+        has_remembered_order=bool(remembered_order_id),
+    ):
+        logger.info(
+            "after_sales_fast_path message_id=%s handled=false reason=not_fast_path total_ms=%.1f",
+            request.message_id,
+            (perf_counter() - total_started) * 1000,
+        )
         return AfterSalesFastPathResponse(
             message_id=request.message_id,
             session_id=request.session_id,
@@ -83,9 +114,14 @@ def handle_after_sales_fast_path(
     if order_id:
         _remember_order(request.session_id, order_id, state)
     else:
-        order_id = _last_order_id(request.session_id, state)
+        order_id = remembered_order_id
 
     if not order_id:
+        logger.info(
+            "after_sales_fast_path message_id=%s handled=false reason=missing_order_context total_ms=%.1f",
+            request.message_id,
+            (perf_counter() - total_started) * 1000,
+        )
         return AfterSalesFastPathResponse(
             message_id=request.message_id,
             session_id=request.session_id,
@@ -101,11 +137,13 @@ def handle_after_sales_fast_path(
     owns_client = http_client is None
     client = http_client or httpx.Client(base_url=mock_api_url, timeout=5)
     try:
+        order_started = perf_counter()
         order_status = get_order_status(
             order_id=order_id,
             mock_api_url=mock_api_url,
             http_client=client,
         )
+        order_ms = (perf_counter() - order_started) * 1000
         tool_calls = [
             ToolCall(
                 tool_name="get_order_status",
@@ -121,12 +159,14 @@ def handle_after_sales_fast_path(
         )
 
         if is_refund:
+            policy_started = perf_counter()
             policy_response = client.post(
                 "/policies/search",
                 json={"query": text, "locale": "zh", "limit": 5},
             )
             policy_response.raise_for_status()
             policy_result = policy_response.json()
+            policy_ms = (perf_counter() - policy_started) * 1000
             matches = policy_result.get("matches", [])
             tool_calls.append(
                 ToolCall(
@@ -138,6 +178,13 @@ def handle_after_sales_fast_path(
             )
             answer += "\n退款政策引用：\n" + _format_policy_sources(matches)
 
+        logger.info(
+            "after_sales_fast_path message_id=%s handled=true reason=after_sales_fast_path total_ms=%.1f order_ms=%.1f policy_ms=%.1f",
+            request.message_id,
+            (perf_counter() - total_started) * 1000,
+            order_ms,
+            policy_ms,
+        )
         return AfterSalesFastPathResponse(
             message_id=request.message_id,
             session_id=request.session_id,

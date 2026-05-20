@@ -74,6 +74,7 @@
 - 企业 API 模拟保留在 `mock-api`。
 - 使用 n8n Postgres Chat Memory 处理“这个订单”这类对话指代。
 - 明确的订单/退款问题优先走 fast path；含糊或复杂任务继续走 Parent -> son Agent。
+- fast path 只有在同一 session 已经记住 `last_order_id` 时，才可以处理“我怎么退款”这类没有显式订单引用的追问；否则必须拒绝处理并回退到 Parent Agent。
 - 使用 `policy_search_tool` 和 `/policies/search` 处理需要 `source_file`、`section`、`clause_id` 元数据的公司政策回答。
 - 不要提交 `.env`，不要打印 secrets。
 - 每新增一份英文 Markdown 文档，都要同时新增中文 `.zh.md` 版本。
