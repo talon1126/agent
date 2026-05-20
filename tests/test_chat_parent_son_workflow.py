@@ -81,3 +81,46 @@ def test_parent_and_son_agents_return_intermediate_steps_for_runtime_verificatio
 
     assert parent["parameters"]["options"]["returnIntermediateSteps"] is True
     assert after_sales_agent["parameters"]["options"]["returnIntermediateSteps"] is True
+
+
+def test_chat_agents_use_postgres_memory_scoped_by_feishu_user() -> None:
+    workflow = load_workflow()
+
+    parent_memory = node_by_name(workflow, "Parent Postgres Chat Memory")
+    after_sales_memory = node_by_name(workflow, "After-sales Postgres Chat Memory")
+
+    for memory_node in (parent_memory, after_sales_memory):
+        assert memory_node["type"] == "@n8n/n8n-nodes-langchain.memoryPostgresChat"
+        assert memory_node["typeVersion"] == 1.4
+        assert memory_node["parameters"]["sessionIdType"] == "customKey"
+        assert "feishu:" in memory_node["parameters"]["sessionKey"]
+        assert "chat_id" in memory_node["parameters"]["sessionKey"]
+        assert "sender_id" in memory_node["parameters"]["sessionKey"]
+        assert memory_node["parameters"]["tableName"] == "n8n_chat_histories"
+
+    assert workflow["connections"]["Parent Postgres Chat Memory"]["ai_memory"] == [
+        [{"node": "AI Agent", "type": "ai_memory", "index": 0}]
+    ]
+    assert workflow["connections"]["After-sales Postgres Chat Memory"]["ai_memory"] == [
+        [{"node": "after_sales_agent", "type": "ai_memory", "index": 0}]
+    ]
+
+
+def test_after_sales_agent_uses_policy_search_tool_for_refunds() -> None:
+    workflow = load_workflow()
+    agent = node_by_name(workflow, "after_sales_agent")
+    policy_tool = node_by_name(workflow, "policy_search_tool")
+    system_message = agent["parameters"]["options"]["systemMessage"]
+    tool_code = policy_tool["parameters"]["jsCode"]
+
+    assert policy_tool["type"] == "@n8n/n8n-nodes-langchain.toolCode"
+    assert "policy_search_tool" in system_message
+    assert "退款" in system_message
+    assert "clause_id" in system_message
+    assert "source_file" in system_message
+    assert "http://mock-api:8000/policies/search" in tool_code
+    assert "helpers.httpRequest" in tool_code
+
+    assert workflow["connections"]["policy_search_tool"]["ai_tool"] == [
+        [{"node": "after_sales_agent", "type": "ai_tool", "index": 0}]
+    ]

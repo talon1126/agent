@@ -11,6 +11,24 @@ def test_get_order_fixture():
     assert response.json()["order_id"] == "ord_100"
 
 
+def test_search_policy_returns_refund_clause_metadata():
+    response = client.post("/policies/search", json={"query": "ord_100 这个订单怎么退款"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["query"] == "ord_100 这个订单怎么退款"
+    assert body["matches"]
+
+    first_match = body["matches"][0]
+    assert first_match["source_file"] == "fixtures/policies/after_sales_policy.zh.md"
+    assert first_match["document_title"] == "售后政策"
+    assert first_match["section"] == "退款"
+    assert first_match["clause_id"].startswith("REFUND-")
+    assert first_match["clause_title"]
+    assert first_match["text"]
+
+
 def test_create_approval_request():
     payload = {
         "event_id": "evt_refund_high_value",

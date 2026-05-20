@@ -10,7 +10,7 @@
     "nodes": [
       {
         "parameters": {
-          "jsCode": "function first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction parseMaybeJson(value) {\n  if (typeof value !== 'string') return value;\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return value;\n  }\n}\n\nfunction xmlTag(xml, tag) {\n  if (typeof xml !== 'string') return undefined;\n  const re = new RegExp(`<${tag}>(?:<!\\\\[CDATA\\\\[([\\\\s\\\\S]*?)\\\\]\\\\]>|([\\\\s\\\\S]*?))</${tag}>`, 'i');\n  const match = xml.match(re);\n  return match ? (match[1] ?? match[2]) : undefined;\n}\n\nfunction normalize(raw) {\n  let body = raw.body ?? raw;\n  body = parseMaybeJson(body);\n\n  const isXml = typeof body === 'string' && body.trim().startsWith('<');\n  const feishuContent = parseMaybeJson(body?.event?.message?.content ?? body?.message?.content);\n\n  const platform = first(\n    raw.query?.platform,\n    body?.platform,\n    isXml ? 'wechat' : undefined,\n    body?.FromUserName ? 'wechat' : undefined,\n    body?.update_id ? 'telegram' : undefined,\n    body?.event ? 'feishu' : undefined,\n    'wechat'\n  );\n\n  const rawType = first(\n    body?.message_type,\n    body?.type,\n    body?.MsgType,\n    body?.message?.voice ? 'voice' : undefined,\n    body?.message?.text ? 'text' : undefined,\n    isXml ? xmlTag(body, 'MsgType') : undefined,\n    'text'\n  );\n\n  const text = first(\n    body?.text,\n    body?.content,\n    body?.Content,\n    body?.message?.text,\n    body?.message?.text?.text,\n    feishuContent?.text,\n    body?.event?.message?.text,\n    isXml ? xmlTag(body, 'Content') : undefined\n  );\n\n  const recognition = first(\n    body?.recognition,\n    body?.Recognition,\n    body?.speech_text,\n    body?.transcript,\n    body?.asr_text,\n    isXml ? xmlTag(body, 'Recognition') : undefined\n  );\n\n  const audioUrl = first(\n    body?.audio_url,\n    body?.voice_url,\n    body?.media_url,\n    body?.file_url,\n    body?.audio?.url,\n    body?.voice?.url,\n    body?.message?.voice?.file_url\n  );\n\n  const mediaId = first(\n    body?.media_id,\n    body?.MediaId,\n    isXml ? xmlTag(body, 'MediaId') : undefined,\n    body?.message?.voice?.file_id\n  );\n\n  const senderId = first(\n    body?.sender_id,\n    body?.from_user,\n    body?.FromUserName,\n    isXml ? xmlTag(body, 'FromUserName') : undefined,\n    body?.message?.from?.id,\n    body?.event?.sender?.sender_id?.open_id,\n    'unknown-sender'\n  );\n\n  const chatId = first(\n    body?.chat_id,\n    body?.conversation_id,\n    body?.chat?.id,\n    body?.message?.chat?.id,\n    body?.event?.message?.chat_id,\n    senderId\n  );\n\n  const messageId = first(\n    body?.message_id,\n    body?.MsgId,\n    isXml ? xmlTag(body, 'MsgId') : undefined,\n    body?.message?.message_id,\n    body?.event?.message?.message_id,\n    `${Date.now()}`\n  );\n\n  const inputText = first(text, recognition);\n  const messageType = String(rawType).toLowerCase().includes('voice') || audioUrl || mediaId ? 'voice' : 'text';\n\n  return {\n    platform,\n    message_type: messageType,\n    sender_id: String(senderId),\n    chat_id: String(chatId),\n    message_id: String(messageId),\n    input_text: inputText ? String(inputText).trim() : '',\n    audio_url: audioUrl ? String(audioUrl).trim() : '',\n    media_id: mediaId ? String(mediaId).trim() : '',\n    raw_payload: body\n  };\n}\n\nreturn $input.all().map((item) => ({ json: normalize(item.json) }));"
+          "jsCode": "function first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction parseMaybeJson(value) {\n  if (typeof value !== 'string') return value;\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return value;\n  }\n}\n\nfunction xmlTag(xml, tag) {\n  if (typeof xml !== 'string') return undefined;\n  const re = new RegExp(`<${tag}>(?:<!\\\\[CDATA\\\\[([\\\\s\\\\S]*?)\\\\]\\\\]>|([\\\\s\\\\S]*?))</${tag}>`, 'i');\n  const match = xml.match(re);\n  return match ? (match[1] ?? match[2]) : undefined;\n}\n\nfunction normalize(raw) {\n  let body = raw.body ?? raw;\n  body = parseMaybeJson(body);\n\n  const isXml = typeof body === 'string' && body.trim().startsWith('<');\n  const feishuContent = parseMaybeJson(body?.event?.message?.content ?? body?.message?.content);\n\n  const platform = first(\n    raw.query?.platform,\n    body?.platform,\n    isXml ? 'wechat' : undefined,\n    body?.FromUserName ? 'wechat' : undefined,\n    body?.update_id ? 'telegram' : undefined,\n    body?.event ? 'feishu' : undefined,\n    'wechat'\n  );\n\n  const rawType = first(\n    body?.message_type,\n    body?.type,\n    body?.MsgType,\n    body?.message?.voice ? 'voice' : undefined,\n    body?.message?.text ? 'text' : undefined,\n    isXml ? xmlTag(body, 'MsgType') : undefined,\n    'text'\n  );\n\n  const text = first(\n    body?.text,\n    body?.content,\n    body?.Content,\n    body?.message?.text,\n    body?.message?.text?.text,\n    feishuContent?.text,\n    body?.event?.message?.text,\n    isXml ? xmlTag(body, 'Content') : undefined\n  );\n\n  const recognition = first(\n    body?.recognition,\n    body?.Recognition,\n    body?.speech_text,\n    body?.transcript,\n    body?.asr_text,\n    isXml ? xmlTag(body, 'Recognition') : undefined\n  );\n\n  const audioUrl = first(\n    body?.audio_url,\n    body?.voice_url,\n    body?.media_url,\n    body?.file_url,\n    body?.audio?.url,\n    body?.voice?.url,\n    body?.message?.voice?.file_url\n  );\n\n  const mediaId = first(\n    body?.media_id,\n    body?.MediaId,\n    isXml ? xmlTag(body, 'MediaId') : undefined,\n    body?.message?.voice?.file_id\n  );\n\n  const senderId = first(\n    body?.sender_id,\n    body?.from_user,\n    body?.FromUserName,\n    isXml ? xmlTag(body, 'FromUserName') : undefined,\n    body?.message?.from?.id,\n    body?.event?.sender?.sender_id?.open_id,\n    'unknown-sender'\n  );\n\n  const chatId = first(\n    body?.chat_id,\n    body?.conversation_id,\n    body?.chat?.id,\n    body?.message?.chat?.id,\n    body?.event?.message?.chat_id,\n    senderId\n  );\n\n  const messageId = first(\n    body?.message_id,\n    body?.MsgId,\n    isXml ? xmlTag(body, 'MsgId') : undefined,\n    body?.message?.message_id,\n    body?.event?.message?.message_id,\n    `${Date.now()}`\n  );\n\n  const inputText = first(text, recognition);\n  const messageType = String(rawType).toLowerCase().includes('voice') || audioUrl || mediaId ? 'voice' : 'text';\n\n  return {\n    platform,\n    message_type: messageType,\n    sender_id: String(senderId),\n    chat_id: String(chatId),\n    message_id: String(messageId),\n    input_text: inputText ? String(inputText).trim() : '',\n    audio_url: audioUrl ? String(audioUrl).trim() : '',\n    media_id: mediaId ? String(mediaId).trim() : '',\n    raw_payload: body,\n    session_id: 'feishu:' + String(chatId) + ':' + String(senderId)\n  };\n}\n\nreturn $input.all().map((item) => ({ json: normalize(item.json) }));"
         },
         "id": "d2ed8fd4-e3dc-470c-9d3c-5dc7898d608d",
         "name": "Normalize Inbound Message",
@@ -60,7 +60,7 @@
           "promptType": "define",
           "text": "={{ $json.input_text }}",
           "options": {
-            "systemMessage": "你是 Parent Agent，通过飞书等聊天软件接收用户任务。\n\n你的职责是只负责判断任务类型和派发，不直接执行专业任务，不要自己编造天气、订单、物流、退款或内部系统结果。\n\n可用工具：\n- weather_agent：天气专员。凡是用户询问天气、温度、降雨概率、未来预报、是否下雨、是否需要带伞，都必须调用它。\n- after_sales_agent：电商售后专员。凡是用户询问订单状态、物流、发货、配送延迟、退款、退货、换货、售后投诉、订单异常，都必须调用它。\n- echo_task_tool：测试工具。只有在用户明确要求测试、回显、记录任务、验证链路时才调用。\n\n派发规则：\n1. 天气相关请求必须交给 weather_agent，不要自己编造天气结果。\n2. 售后、订单、物流、退款、退货、换货、投诉相关请求必须交给 after_sales_agent，不要自己编造订单或物流结果。\n3. 只要用户消息里出现 ord_ 开头的订单号，就必须调用 after_sales_agent，并把用户原文作为工具输入。\n4. 非上述请求如果只是普通聊天，可以直接简短回复。\n5. 需要后续接入表单、总结、待办或其他内部系统时，先说明当前尚未接入对应执行工具，不要声称已经完成外部操作。\n6. 回复用户时使用中文，保留子 Agent 返回的关键数据；如果子 Agent 返回表格或结构化内容，尽量保持格式。",
+            "systemMessage": "你是 Parent Agent，通过飞书等聊天软件接收用户任务。\n\n你的职责是只负责判断任务类型和派发，不直接执行专业任务，不要自己编造天气、订单、物流、退款或内部系统结果。\n\n可用工具：\n- weather_agent：天气专员。凡是用户询问天气、温度、降雨概率、未来预报、是否下雨、是否需要带伞，都必须调用它。\n- after_sales_agent：电商售后专员。凡是用户询问订单状态、物流、发货、配送延迟、退款、退货、换货、售后投诉、订单异常，都必须调用它。\n- echo_task_tool：测试工具。只有在用户明确要求测试、回显、记录任务、验证链路时才调用。\n\n派发规则：\n1. 天气相关请求必须交给 weather_agent，不要自己编造天气结果。\n2. 售后、订单、物流、退款、退货、换货、投诉相关请求必须交给 after_sales_agent，不要自己编造订单或物流结果。\n3. 只要用户消息里出现 ord_ 开头的订单号，就必须调用 after_sales_agent，并把用户原文作为工具输入。\n4. 非上述请求如果只是普通聊天，可以直接简短回复。\n5. 需要后续接入表单、总结、待办或其他内部系统时，先说明当前尚未接入对应执行工具，不要声称已经完成外部操作。\n6. 回复用户时使用中文，保留子 Agent 返回的关键数据；如果子 Agent 返回表格或结构化内容，尽量保持格式。\n7. 你连接了会话记忆；如果用户使用“这个订单”等指代，仍然要把售后问题交给 after_sales_agent，由售后专员根据记忆和工具处理。",
             "maxIterations": 6,
             "returnIntermediateSteps": true
           }
@@ -251,8 +251,8 @@
           "text": "={{ $json.input_text }}",
           "hasOutputParser": false,
           "options": {
-            "systemMessage": "你是 After-sales Agent，专门处理电商售后、订单和物流问题。\n\n你必须使用 order_status_tool 查询订单和物流状态，不要凭经验猜测。\n\n处理规则：\n1. 如果用户提供了 ord_ 开头的订单号，必须调用 order_status_tool。\n2. 如果用户没有提供订单号，回复用户：请提供订单号，例如 ord_100。\n3. 如果 order_status_tool 返回“查询成功”，必须直接转述工具返回的订单状态、物流商、物流状态、延迟天数和行动建议，不要改写成系统异常。\n4. 如果 shipment_status 是 delayed 或 delay_days 大于 0，要明确说明延迟情况，并建议客服跟进或安抚客户。\n5. 只有当工具明确返回 missing_order_id、lookup_failed 或 runtime_error 时，才说明无法查询该订单，并要求人工跟进，不要编造数据。\n6. 回复必须简洁，适合直接发回飞书。",
-            "maxIterations": 5,
+            "systemMessage": "你是 After-sales Agent，专门处理电商售后、订单、物流、退款、退货、换货和投诉问题。\n\n你有短期会话记忆。用户说“这个订单”“该订单”“刚才那个订单”时，先从最近对话中找到 ord_ 开头的订单号；如果记忆中没有订单号，再请用户提供订单号，例如 ord_100。\n\n可用工具：\n- order_status_tool：查询订单和物流状态。涉及订单状态、物流、配送延迟、退款资格判断时必须调用，不要凭经验猜测。\n- policy_search_tool：检索公司售后政策。涉及退款、退货、换货、审批、补偿、物流赔偿、差评处理时必须调用，不要凭常识编造政策。\n\n处理规则：\n1. 如果用户提供了 ord_ 开头的订单号，必须调用 order_status_tool。\n2. 如果用户没有提供订单号，但上下文记忆里有最近订单号，可以使用该订单号继续处理，并在回复中说明“我按上一单 <订单号> 处理”。\n3. 退款、退货、换货、审批和补偿问题必须调用 policy_search_tool，并在回复中明确引用 source_file、section、clause_id 和 clause_title。\n4. 如果 policy_search_tool 没有返回 matches，回复“未找到对应公司政策，需要人工确认”，不要编造条款。\n5. 如果 order_status_tool 返回查询成功，必须直接转述并保留订单状态、物流商、物流状态、延迟天数和行动建议；如果工具返回结构化 JSON，优先使用其中的 summary、order 和 shipment 字段。\n6. 如果 shipment_status 是 delayed 或 delay_days 大于 0，要明确说明延迟情况，并建议客服跟进或安抚客户。\n7. 只有当工具明确返回 missing_order_id、lookup_failed 或 runtime_error 时，才说明无法查询该订单，并要求人工跟进。\n8. 回复必须简洁，适合直接发回飞书。",
+            "maxIterations": 7,
             "returnIntermediateSteps": true
           }
         },
@@ -300,7 +300,7 @@
         ],
         "parameters": {
           "description": "Use this backend API tool for ecommerce after-sales order status and shipment status lookup. Input can be a natural language order question or JSON with order_id/query/text/input.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractOrderId(input) {\n  const text = String(first(input.order_id, input.orderId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bord_[0-9A-Za-z]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const orderId = extractOrderId(input);\n  if (!orderId) {\n    return JSON.stringify({ ok: false, error: 'missing_order_id', message: '请提供订单号，例如 ord_100。' });\n  }\n\n  const orderUrl = 'http://mock-api:8000/orders/' + encodeURIComponent(orderId);\n  const order = await helpers.httpRequest({\n    method: 'GET',\n    url: orderUrl,\n    json: true\n  });\n  if (!order.shipment_id) {\n    return JSON.stringify({ ok: false, error: 'missing_shipment_id', step: 'parse_order', order_id: orderId, order });\n  }\n\n  const shipmentUrl = 'http://mock-api:8000/shipments/' + encodeURIComponent(order.shipment_id);\n  const shipment = await helpers.httpRequest({\n    method: 'GET',\n    url: shipmentUrl,\n    json: true\n  });\n\n  const suggestion = Number(shipment.delay_days || 0) > 0 || shipment.status === 'delayed'\n    ? '建议客服主动安抚客户，并跟进物流延迟原因。'\n    : '建议告知客户订单状态正常，无需人工介入。';\n  return [\n    '查询成功。',\n    '订单号：' + order.order_id,\n    '订单状态：' + order.status,\n    '物流商：' + shipment.carrier,\n    '物流状态：' + shipment.status,\n    '延迟天数：' + shipment.delay_days,\n    '行动建议：' + suggestion\n  ].join('\\n');\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'tool_runtime_error',\n    step: 'unexpected_exception',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractOrderId(input) {\n  const text = String(first(input.order_id, input.orderId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bord_[0-9A-Za-z]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const orderId = extractOrderId(input);\n  if (!orderId) {\n    return JSON.stringify({ ok: false, error: 'missing_order_id', message: '请提供订单号，例如 ord_100。' });\n  }\n\n  const orderUrl = 'http://mock-api:8000/orders/' + encodeURIComponent(orderId);\n  const order = await helpers.httpRequest({\n    method: 'GET',\n    url: orderUrl,\n    json: true\n  });\n  if (!order.shipment_id) {\n    return JSON.stringify({ ok: false, error: 'missing_shipment_id', step: 'parse_order', order_id: orderId, order });\n  }\n\n  const shipmentUrl = 'http://mock-api:8000/shipments/' + encodeURIComponent(order.shipment_id);\n  const shipment = await helpers.httpRequest({\n    method: 'GET',\n    url: shipmentUrl,\n    json: true\n  });\n\n  const suggestion = Number(shipment.delay_days || 0) > 0 || shipment.status === 'delayed'\n    ? '建议客服主动安抚客户，并跟进物流延迟原因。'\n    : '建议告知客户订单状态正常，无需人工介入。';\n  return [\n    '查询成功。',\n    '订单号：' + order.order_id,\n    '订单状态：' + order.status,\n    '订单金额：' + order.value,\n    '物流商：' + shipment.carrier,\n    '物流状态：' + shipment.status,\n    '延迟天数：' + shipment.delay_days,\n    '行动建议：' + suggestion\n  ].join('\\n');\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'tool_runtime_error',\n    step: 'unexpected_exception',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
         }
       },
       {
@@ -317,6 +317,64 @@
         ],
         "id": "after-sales-sticky-note-node",
         "name": "Sticky Note - After-sales Agent"
+      },
+      {
+        "id": "parent-postgres-chat-memory-node",
+        "name": "Parent Postgres Chat Memory",
+        "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+        "typeVersion": 1.4,
+        "position": [
+          112,
+          288
+        ],
+        "parameters": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ $json.session_id || 'feishu:' + $json.chat_id + ':' + $json.sender_id }}",
+          "tableName": "n8n_chat_histories",
+          "contextWindowLength": 8
+        },
+        "credentials": {
+          "postgres": {
+            "id": "postgres-memory",
+            "name": "Postgres Memory"
+          }
+        }
+      },
+      {
+        "id": "after-sales-postgres-chat-memory-node",
+        "name": "After-sales Postgres Chat Memory",
+        "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+        "typeVersion": 1.4,
+        "position": [
+          256,
+          752
+        ],
+        "parameters": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ $json.session_id || 'feishu:' + $json.chat_id + ':' + $json.sender_id }}",
+          "tableName": "n8n_chat_histories",
+          "contextWindowLength": 8
+        },
+        "credentials": {
+          "postgres": {
+            "id": "postgres-memory",
+            "name": "Postgres Memory"
+          }
+        }
+      },
+      {
+        "id": "policy-search-tool-node",
+        "name": "policy_search_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [
+          608,
+          816
+        ],
+        "parameters": {
+          "description": "Use this policy search tool for refund, return, exchange, logistics compensation, review, inventory, and approval policy lookup. It returns source_file, document_title, section, clause_id, clause_title, and text. Input should be the user question or JSON with query/text/input.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const text = String(first(input.query, input.text, input.input, query, '')).trim();\n  if (!text) {\n    return JSON.stringify({ ok: false, error: 'missing_query', message: '请提供要检索的售后政策问题。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/policies/search',\n    body: {\n      query: text,\n      locale: 'zh',\n      limit: 5\n    },\n    json: true\n  });\n\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'policy_search_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+        }
       }
     ],
     "connections": {
@@ -454,6 +512,39 @@
         ]
       },
       "order_status_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "after_sales_agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parent Postgres Chat Memory": {
+        "ai_memory": [
+          [
+            {
+              "node": "AI Agent",
+              "type": "ai_memory",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "After-sales Postgres Chat Memory": {
+        "ai_memory": [
+          [
+            {
+              "node": "after_sales_agent",
+              "type": "ai_memory",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "policy_search_tool": {
         "ai_tool": [
           [
             {

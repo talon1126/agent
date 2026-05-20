@@ -1,7 +1,11 @@
+import re
+from pathlib import Path
+from typing import Any
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from app.store import find_by_id
+from app.store import FIXTURE_DIR, find_by_id
 
 app = FastAPI(title="Ecommerce Mock Enterprise API")
 
@@ -17,6 +21,86 @@ class ApprovalRequest(BaseModel):
     event_id: str
     recommended_action: str
     explanation: str
+
+
+class PolicySearchRequest(BaseModel):
+    query: str
+    locale: str = "zh"
+    limit: int = 5
+
+
+def parse_policy_markdown(path: Path) -> list[dict[str, str]]:
+    document_title = ""
+    section = ""
+    current_clause: dict[str, str] | None = None
+    clauses: list[dict[str, str]] = []
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("# "):
+            document_title = line.removeprefix("# ").strip()
+            continue
+        if line.startswith("## "):
+            section = line.removeprefix("## ").strip()
+            continue
+        if line.startswith("### "):
+            match = re.match(r"###\s+([A-Z]+-\d+)\s+(.+)", line)
+            if not match:
+                current_clause = None
+                continue
+            current_clause = {
+                "source_file": f"fixtures/policies/{path.name}",
+                "document_title": document_title,
+                "section": section,
+                "clause_id": match.group(1),
+                "clause_title": match.group(2),
+                "text": "",
+            }
+            clauses.append(current_clause)
+            continue
+        if current_clause:
+            current_clause["text"] = (current_clause["text"] + " " + line).strip()
+
+    return clauses
+
+
+def policy_keywords(query: str) -> set[str]:
+    lowered = query.lower()
+    keywords: set[str] = set()
+    if any(token in lowered for token in ("退款", "refund", "退钱", "赔偿")):
+        keywords.add("refund")
+    if any(token in lowered for token in ("物流", "配送", "延迟", "shipment", "delivery", "package")):
+        keywords.add("logistics")
+    if any(token in lowered for token in ("差评", "评论", "review", "rating")):
+        keywords.add("review")
+    if any(token in lowered for token in ("库存", "补货", "inventory", "stock")):
+        keywords.add("inventory")
+    return keywords or {word for word in re.split(r"\W+", lowered) if len(word) >= 3}
+
+
+def score_clause(clause: dict[str, str], keywords: set[str]) -> int:
+    haystack = " ".join(
+        [
+            clause["section"],
+            clause["clause_id"],
+            clause["clause_title"],
+            clause["text"],
+        ]
+    ).lower()
+    aliases = {
+        "refund": ("refund", "退款", "退钱", "赔偿"),
+        "logistics": ("logistics", "shipment", "delivery", "物流", "配送", "包裹", "延迟"),
+        "review": ("review", "rating", "评论", "差评"),
+        "inventory": ("inventory", "stock", "库存", "补货"),
+    }
+    score = 0
+    for keyword in keywords:
+        terms = aliases.get(keyword, (keyword,))
+        if any(term in haystack for term in terms):
+            score += 2 if clause["clause_id"].lower().startswith(keyword) else 1
+    return score
 
 
 @app.get("/health")
@@ -54,6 +138,32 @@ def get_inventory(sku: str) -> dict:
     if not inventory:
         raise HTTPException(status_code=404, detail="inventory not found")
     return inventory
+
+
+@app.post("/policies/search")
+def search_policies(request: PolicySearchRequest) -> dict[str, Any]:
+    filename = "after_sales_policy.zh.md" if request.locale.startswith("zh") else "after_sales_policy.md"
+    policy_path = FIXTURE_DIR / "policies" / filename
+    if not policy_path.exists():
+        raise HTTPException(status_code=404, detail="policy document not found")
+
+    keywords = policy_keywords(request.query)
+    scored = [
+        (score_clause(clause, keywords), clause)
+        for clause in parse_policy_markdown(policy_path)
+    ]
+    matches = [
+        clause
+        for score, clause in sorted(scored, key=lambda item: item[0], reverse=True)
+        if score > 0
+    ][: request.limit]
+
+    return {
+        "ok": True,
+        "query": request.query,
+        "source": f"fixtures/policies/{filename}",
+        "matches": matches,
+    }
 
 
 @app.post("/approval-requests")
