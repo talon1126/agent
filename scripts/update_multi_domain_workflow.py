@@ -211,6 +211,18 @@ try {
 }"""
 
 
+SON_AGENT_Y = 688
+MODEL_Y = 864
+TOOL_Y = 928
+NOTE_Y = 544
+LANES = {
+    "customer_support": {"x": 400, "note_x": 288, "tool_x": 720, "extra_tool_x": 896, "color": 4},
+    "warehouse": {"x": 1120, "note_x": 1008, "tool_x": 1440, "color": 5},
+    "procurement": {"x": 1840, "note_x": 1728, "tool_x": 2160, "color": 6},
+    "operations": {"x": 2560, "note_x": 2448, "tool_x": 2880, "color": 7},
+}
+
+
 def load_workflow() -> tuple[dict, bool]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
     return (data[0], True) if isinstance(data, list) else (data, False)
@@ -301,6 +313,22 @@ def make_tool(name: str, node_id: str, description: str, js_code: str, position:
     }
 
 
+def make_note(name: str, content: str, position: list[int], color: int) -> dict:
+    return {
+        "parameters": {
+            "content": content,
+            "height": 592,
+            "width": 704,
+            "color": color,
+        },
+        "id": name.lower().replace(" ", "-"),
+        "name": name,
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": position,
+    }
+
+
 def update_prompts(workflow: dict) -> None:
     parent = find_node(workflow, "Parent Agent")
     parent["parameters"]["options"]["systemMessage"] = PARENT_PROMPT
@@ -346,12 +374,35 @@ def main() -> None:
 
     customer_sticky = find_node(workflow, "Sticky Note - Customer Support Agent")
     customer_sticky["parameters"]["content"] = "# Customer Support Agent\n"
+    customer_sticky["parameters"]["height"] = 592
+    customer_sticky["parameters"]["width"] = 704
+    customer_sticky["parameters"]["color"] = LANES["customer_support"]["color"]
+    customer_sticky["position"] = [LANES["customer_support"]["note_x"], NOTE_Y]
 
     parent_sticky = find_node(workflow, "Sticky Note")
     parent_sticky["parameters"]["content"] = "# Parent Agent\n"
+    parent_sticky["parameters"]["color"] = 3
     parent_sticky["name"] = "Sticky Note - Parent Agent"
 
     update_prompts(workflow)
+
+    find_node(workflow, "Customer Support Agent")["position"] = [LANES["customer_support"]["x"], SON_AGENT_Y]
+    find_node(workflow, "Customer Support Qwen Chat Model")["position"] = [
+        LANES["customer_support"]["x"] - 16,
+        MODEL_Y,
+    ]
+    find_node(workflow, "Customer Support Postgres Chat Memory")["position"] = [
+        LANES["customer_support"]["x"] + 144,
+        MODEL_Y,
+    ]
+    find_node(workflow, "order_status_tool")["position"] = [
+        LANES["customer_support"]["tool_x"],
+        TOOL_Y,
+    ]
+    find_node(workflow, "policy_search_tool")["position"] = [
+        LANES["customer_support"]["extra_tool_x"],
+        TOOL_Y,
+    ]
 
     model_template = find_node(workflow, "Customer Support Qwen Chat Model")
     workflow["nodes"].extend(
@@ -361,45 +412,78 @@ def main() -> None:
                 "warehouse-agent-node",
                 "Warehouse specialist for inventory, stock, fulfillment, shipment operations, and warehouse exceptions.",
                 WAREHOUSE_PROMPT,
-                [400, 1120],
+                [LANES["warehouse"]["x"], SON_AGENT_Y],
             ),
-            make_model(model_template, "Warehouse Qwen Chat Model", "warehouse-qwen-chat-model-node", [384, 1296]),
+            make_model(
+                model_template,
+                "Warehouse Qwen Chat Model",
+                "warehouse-qwen-chat-model-node",
+                [LANES["warehouse"]["x"] - 16, MODEL_Y],
+            ),
             make_tool(
                 "inventory_status_tool",
                 "inventory-status-tool-node",
                 "Use this backend API tool for SKU inventory, pending orders, reorder threshold, and fulfillment risk lookup.",
                 INVENTORY_TOOL_CODE,
-                [720, 1360],
+                [LANES["warehouse"]["tool_x"], TOOL_Y],
+            ),
+            make_note(
+                "Sticky Note - Warehouse Agent",
+                "# Warehouse Agent\n",
+                [LANES["warehouse"]["note_x"], NOTE_Y],
+                LANES["warehouse"]["color"],
             ),
             make_agent(
                 "Procurement Agent",
                 "procurement-agent-node",
                 "Procurement specialist for replenishment, purchase recommendations, suppliers, purchase orders, and lead time questions.",
                 PROCUREMENT_PROMPT,
-                [400, 1552],
+                [LANES["procurement"]["x"], SON_AGENT_Y],
             ),
-            make_model(model_template, "Procurement Qwen Chat Model", "procurement-qwen-chat-model-node", [384, 1728]),
+            make_model(
+                model_template,
+                "Procurement Qwen Chat Model",
+                "procurement-qwen-chat-model-node",
+                [LANES["procurement"]["x"] - 16, MODEL_Y],
+            ),
             make_tool(
                 "procurement_mock_tool",
                 "procurement-mock-tool-node",
                 "Use this mock procurement API tool for SKU replenishment and purchase request recommendations.",
                 PROCUREMENT_TOOL_CODE,
-                [720, 1792],
+                [LANES["procurement"]["tool_x"], TOOL_Y],
+            ),
+            make_note(
+                "Sticky Note - Procurement Agent",
+                "# Procurement Agent\n",
+                [LANES["procurement"]["note_x"], NOTE_Y],
+                LANES["procurement"]["color"],
             ),
             make_agent(
                 "Operations Agent",
                 "operations-agent-node",
                 "Operations specialist for daily summaries, incident summaries, metrics, and cross-domain operational analysis.",
                 OPERATIONS_PROMPT,
-                [400, 1984],
+                [LANES["operations"]["x"], SON_AGENT_Y],
             ),
-            make_model(model_template, "Operations Qwen Chat Model", "operations-qwen-chat-model-node", [384, 2160]),
+            make_model(
+                model_template,
+                "Operations Qwen Chat Model",
+                "operations-qwen-chat-model-node",
+                [LANES["operations"]["x"] - 16, MODEL_Y],
+            ),
             make_tool(
                 "operations_mock_tool",
                 "operations-mock-tool-node",
                 "Use this mock operations API tool for operational summaries, incident lists, and next actions.",
                 OPERATIONS_TOOL_CODE,
-                [720, 2224],
+                [LANES["operations"]["tool_x"], TOOL_Y],
+            ),
+            make_note(
+                "Sticky Note - Operations Agent",
+                "# Operations Agent\n",
+                [LANES["operations"]["note_x"], NOTE_Y],
+                LANES["operations"]["color"],
             ),
         ]
     )

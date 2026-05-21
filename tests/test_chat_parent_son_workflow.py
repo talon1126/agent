@@ -187,3 +187,46 @@ def test_chat_agents_use_scoped_postgres_memory() -> None:
     assert workflow["connections"]["Customer Support Postgres Chat Memory"]["ai_memory"] == [
         [{"node": "Customer Support Agent", "type": "ai_memory", "index": 0}]
     ]
+
+
+def test_son_agents_are_aligned_on_one_horizontal_line() -> None:
+    workflow = load_workflow()
+    son_agent_names = [
+        "Customer Support Agent",
+        "Warehouse Agent",
+        "Procurement Agent",
+        "Operations Agent",
+    ]
+
+    positions = [node_by_name(workflow, name)["position"] for name in son_agent_names]
+    y_positions = {position[1] for position in positions}
+    x_positions = [position[0] for position in positions]
+
+    assert y_positions == {688}
+    assert x_positions == sorted(x_positions)
+    assert min(
+        right - left
+        for left, right in zip(x_positions, x_positions[1:])
+    ) >= 640
+
+
+def test_each_business_agent_has_a_distinct_colored_note() -> None:
+    workflow = load_workflow()
+    expected_notes = {
+        "Sticky Note - Parent Agent": 3,
+        "Sticky Note - Customer Support Agent": 4,
+        "Sticky Note - Warehouse Agent": 5,
+        "Sticky Note - Procurement Agent": 6,
+        "Sticky Note - Operations Agent": 7,
+    }
+
+    for note_name, color in expected_notes.items():
+        note = node_by_name(workflow, note_name)
+        assert note["type"] == "n8n-nodes-base.stickyNote"
+        assert note["parameters"]["color"] == color
+
+    note_colors = [
+        node_by_name(workflow, note_name)["parameters"]["color"]
+        for note_name in expected_notes
+    ]
+    assert len(note_colors) == len(set(note_colors))
