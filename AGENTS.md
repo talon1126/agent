@@ -16,7 +16,7 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - `n8n` owns workflow orchestration, webhook routing, parent/son agent layout, and calls between services.
 - `feishu-adapter` owns Feishu/Lark protocol handling. It uses long connection mode by default, normalizes inbound messages, forwards them to n8n, deduplicates repeated Feishu message pushes, and replies to Feishu.
 - `ai-service` owns backend AI logic that should be testable without n8n. It currently exposes deterministic decisioning and a message handling endpoint.
-- `mock-api` simulates enterprise systems: orders, customers, shipments, inventory, approvals, tickets, internal notifications, run logs, dead letters, and replay.
+- `mock-api` simulates enterprise systems: orders, customers, shipments, inventory, warehouse operations, approvals, tickets, internal notifications, run logs, dead letters, and replay.
 - `postgres` exists as the operational store target. Current demo state is still mostly in fixtures or in-memory mock endpoints.
 - `ai-service` creates `session_state` and `user_profile` in Postgres when `DATABASE_URL` is configured. Fast path stores `last_order_id` in `session_state` and mirrors it into `user_profile.profile` when `sender_id` is available.
 - The chat workflow now uses n8n Postgres Chat Memory for Feishu-scoped conversation history and a `policy_search_tool` for policy lookup with clause metadata.
@@ -34,7 +34,7 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - AI decision endpoint: `POST /decide` in `services/ai-service/app/main.py`
 - Order status tool code: `services/ai-service/app/order_status_tool.py`
 - n8n customer-support son agent tools: `order_status_tool` and `policy_search_tool` inside `n8n/workflows/chat-parent-son-agent.json`
-- n8n warehouse son agent tool: `inventory_status_tool` inside `n8n/workflows/chat-parent-son-agent.json`
+- n8n warehouse son agent tools: `warehouse_inventory_tool`, `warehouse_exception_tool`, and `warehouse_fulfillment_tool` inside `n8n/workflows/chat-parent-son-agent.json`
 - n8n placeholder business tools: `procurement_mock_tool` and `operations_mock_tool` inside `n8n/workflows/chat-parent-son-agent.json`
 - n8n memory nodes: `Parent Postgres Chat Memory` and `Customer Support Postgres Chat Memory`
 - Parent and son memory may share the same physical table, but their `sessionKey` values must be namespaced separately (`parent:` and `customer_support:`) to avoid cross-agent context pollution.
@@ -59,6 +59,8 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - `fixtures/data/customers.json`: customer fixture data.
 - `fixtures/data/shipments.json`: shipment fixture data.
 - `fixtures/data/inventory.json`: inventory fixture data.
+- `fixtures/data/warehouse_locations.json`: warehouse location-level stock fixture data.
+- `fixtures/data/warehouse_exceptions.json`: warehouse exception fixture data.
 - `fixtures/policies/after_sales_policy.md` and `fixtures/policies/after_sales_policy.zh.md`: current after-sales policy documents with stable clause IDs such as `REFUND-001`.
 
 ## Docs Structure
@@ -82,7 +84,10 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - Use the fast path for clear order/refund questions first; keep Parent -> son Agent for ambiguous or complex tasks.
 - The fast path may handle refund-only follow-ups like "How do I refund?" only when the same session already has a remembered `last_order_id`; otherwise it must decline so the workflow falls back to the Parent Agent.
 - Use `policy_search_tool` and `/policies/search` for company-policy answers that require `source_file`, `section`, and `clause_id` metadata.
-- Use `inventory_status_tool` and `/inventory/{sku}` for warehouse stock questions.
+- Warehouse Agent owns inventory availability, warehouse locations, warehouse exceptions, and fulfillment-risk questions.
+- Use `warehouse_inventory_tool` and `/warehouse/inventory/{sku}` for SKU stock, reserved stock, location, exception, and risk lookup.
+- Use `warehouse_exception_tool` and `/warehouse/exceptions/search` for stock mismatch, pending putaway, damage, missing-location, and picking-delay questions.
+- Use `warehouse_fulfillment_tool` and `/warehouse/fulfillment/check` for shipping eligibility, fulfillment blockers, and next warehouse actions.
 - `Procurement Agent` and `Operations Agent` are currently routed placeholders backed by deterministic mock endpoints.
 - Do not commit `.env` or print secrets.
 - When adding an English Markdown document, add the Chinese `.zh.md` counterpart.

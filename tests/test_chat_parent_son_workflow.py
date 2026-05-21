@@ -29,7 +29,9 @@ def test_workflow_contains_english_business_agents_and_tools() -> None:
         "Operations Agent",
         "order_status_tool",
         "policy_search_tool",
-        "inventory_status_tool",
+        "warehouse_inventory_tool",
+        "warehouse_exception_tool",
+        "warehouse_fulfillment_tool",
         "procurement_mock_tool",
         "operations_mock_tool",
     }
@@ -90,18 +92,39 @@ def test_new_business_agents_have_tools_and_parent_connections() -> None:
     warehouse = node_by_name(workflow, "Warehouse Agent")
     procurement = node_by_name(workflow, "Procurement Agent")
     operations = node_by_name(workflow, "Operations Agent")
-    inventory_tool = node_by_name(workflow, "inventory_status_tool")
+    warehouse_inventory_tool = node_by_name(workflow, "warehouse_inventory_tool")
+    warehouse_exception_tool = node_by_name(workflow, "warehouse_exception_tool")
+    warehouse_fulfillment_tool = node_by_name(workflow, "warehouse_fulfillment_tool")
     procurement_tool = node_by_name(workflow, "procurement_mock_tool")
     operations_tool = node_by_name(workflow, "operations_mock_tool")
+    node_names = {node["name"] for node in workflow["nodes"]}
 
-    assert "inventory_status_tool" in warehouse["parameters"]["options"]["systemMessage"]
+    system_message = warehouse["parameters"]["options"]["systemMessage"]
+    assert "warehouse_inventory_tool" in system_message
+    assert "warehouse_exception_tool" in system_message
+    assert "warehouse_fulfillment_tool" in system_message
+    assert "inventory_status_tool" not in node_names
     assert "procurement_mock_tool" in procurement["parameters"]["options"]["systemMessage"]
     assert "operations_mock_tool" in operations["parameters"]["options"]["systemMessage"]
-    assert "http://mock-api:8000/inventory/" in inventory_tool["parameters"]["jsCode"]
+    assert "http://mock-api:8000/warehouse/inventory/" in warehouse_inventory_tool["parameters"]["jsCode"]
+    assert (
+        "http://mock-api:8000/warehouse/exceptions/search"
+        in warehouse_exception_tool["parameters"]["jsCode"]
+    )
+    assert (
+        "http://mock-api:8000/warehouse/fulfillment/check"
+        in warehouse_fulfillment_tool["parameters"]["jsCode"]
+    )
     assert "http://mock-api:8000/procurement/mock" in procurement_tool["parameters"]["jsCode"]
     assert "http://mock-api:8000/operations/summary/mock" in operations_tool["parameters"]["jsCode"]
 
-    assert workflow["connections"]["inventory_status_tool"]["ai_tool"] == [
+    assert workflow["connections"]["warehouse_inventory_tool"]["ai_tool"] == [
+        [{"node": "Warehouse Agent", "type": "ai_tool", "index": 0}]
+    ]
+    assert workflow["connections"]["warehouse_exception_tool"]["ai_tool"] == [
+        [{"node": "Warehouse Agent", "type": "ai_tool", "index": 0}]
+    ]
+    assert workflow["connections"]["warehouse_fulfillment_tool"]["ai_tool"] == [
         [{"node": "Warehouse Agent", "type": "ai_tool", "index": 0}]
     ]
     assert workflow["connections"]["procurement_mock_tool"]["ai_tool"] == [

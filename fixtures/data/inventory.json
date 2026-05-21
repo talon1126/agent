@@ -1,5 +1,5 @@
 [
-  {"sku":"sku_bottle_1","available":42,"pending_orders":8,"reorder_threshold":20},
-  {"sku":"sku_bag_1","available":5,"pending_orders":9,"reorder_threshold":15},
-  {"sku":"sku_lamp_1","available":2,"pending_orders":6,"reorder_threshold":10}
+  {"sku":"sku_bottle_1","available":42,"reserved":4,"pending_orders":8,"reorder_threshold":20},
+  {"sku":"sku_bag_1","available":5,"reserved":3,"pending_orders":9,"reorder_threshold":15},
+  {"sku":"sku_lamp_1","available":2,"reserved":1,"pending_orders":6,"reorder_threshold":10}
 ]

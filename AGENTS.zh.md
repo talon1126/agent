@@ -16,7 +16,7 @@
 - `n8n` 负责 workflow 编排、webhook 路由、parent/son agent 布局，以及服务之间的调用。
 - `feishu-adapter` 负责飞书/Lark 协议处理。默认使用长连接模式，归一化收到的消息，转发到 n8n，对重复推送做去重，并把回复发回飞书。
 - `ai-service` 负责后端 AI 逻辑，要求可以脱离 n8n 单独测试。当前包含确定性决策和消息处理入口。
-- `mock-api` 模拟企业内部系统：订单、客户、物流、库存、审批、工单、内部通知、运行日志、dead letter 和 replay。
+- `mock-api` 模拟企业内部系统：订单、客户、物流、库存、仓储作业、审批、工单、内部通知、运行日志、dead letter 和 replay。
 - `postgres` 是运维存储目标。当前 demo 状态主要仍在 fixtures 或 mock endpoint 内存中。
 - 配置 `DATABASE_URL` 后，`ai-service` 会在 Postgres 中创建 `session_state` 和 `user_profile`。fast path 会把 `last_order_id` 存到 `session_state`，如果有 `sender_id`，也会同步到 `user_profile.profile`。
 - chat workflow 现在使用 n8n Postgres Chat Memory 保存按飞书会话隔离的上下文，并使用 `policy_search_tool` 检索带条款元数据的政策。
@@ -34,7 +34,7 @@
 - AI 决策入口：`services/ai-service/app/main.py` 中的 `POST /decide`
 - 订单状态工具代码：`services/ai-service/app/order_status_tool.py`
 - n8n 客服 son agent 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `order_status_tool` 和 `policy_search_tool`
-- n8n 仓储 son agent 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `inventory_status_tool`
+- n8n 仓储 son agent 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `warehouse_inventory_tool`、`warehouse_exception_tool` 和 `warehouse_fulfillment_tool`
 - n8n 占位业务工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `procurement_mock_tool` 和 `operations_mock_tool`
 - n8n memory 节点：`Parent Postgres Chat Memory` 和 `Customer Support Postgres Chat Memory`
 - Parent 和 son memory 可以共用同一张物理表，但 `sessionKey` 必须分别加命名空间（`parent:` 和 `customer_support:`），避免跨 Agent 上下文污染。
@@ -59,6 +59,8 @@
 - `fixtures/data/customers.json`：客户 fixture 数据。
 - `fixtures/data/shipments.json`：物流 fixture 数据。
 - `fixtures/data/inventory.json`：库存 fixture 数据。
+- `fixtures/data/warehouse_locations.json`：仓库库位级库存 fixture 数据。
+- `fixtures/data/warehouse_exceptions.json`：仓储异常 fixture 数据。
 - `fixtures/policies/after_sales_policy.md` 和 `fixtures/policies/after_sales_policy.zh.md`：当前售后政策文档，包含 `REFUND-001` 等稳定条款 ID。
 
 ## 文档结构
@@ -82,7 +84,10 @@
 - 明确的订单/退款问题优先走 fast path；含糊或复杂任务继续走 Parent -> son Agent。
 - fast path 只有在同一 session 已经记住 `last_order_id` 时，才可以处理“我怎么退款”这类没有显式订单引用的追问；否则必须拒绝处理并回退到 Parent Agent。
 - 使用 `policy_search_tool` 和 `/policies/search` 处理需要 `source_file`、`section`、`clause_id` 元数据的公司政策回答。
-- 使用 `inventory_status_tool` 和 `/inventory/{sku}` 处理仓储库存问题。
+- Warehouse Agent 负责库存可用性、仓库库位、仓储异常和履约风险问题。
+- 使用 `warehouse_inventory_tool` 和 `/warehouse/inventory/{sku}` 查询 SKU 库存、已预留库存、库位、异常和风险。
+- 使用 `warehouse_exception_tool` 和 `/warehouse/exceptions/search` 处理库存差异、待上架、破损、找不到库位和拣货延迟问题。
+- 使用 `warehouse_fulfillment_tool` 和 `/warehouse/fulfillment/check` 判断能否发货、履约阻塞原因和下一步仓储动作。
 - `Procurement Agent` 和 `Operations Agent` 当前是已接入路由的占位 agent，后端使用确定性 mock endpoint。
 - 不要提交 `.env`，不要打印 secrets。
 - 每新增一份英文 Markdown 文档，都要同时新增中文 `.zh.md` 版本。

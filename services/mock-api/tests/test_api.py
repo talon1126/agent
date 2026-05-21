@@ -82,3 +82,61 @@ def test_operations_summary_mock_returns_cross_domain_summary():
     assert body["system"] == "mock-operations"
     assert body["summary"]
     assert any(item["domain"] == "warehouse" for item in body["incidents"])
+
+
+def test_warehouse_inventory_returns_locations_and_risk():
+    response = client.get("/warehouse/inventory/sku_bag_1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["sku"] == "sku_bag_1"
+    assert body["available"] == 5
+    assert body["reserved"] == 3
+    assert body["risk_level"] == "high"
+    assert body["locations"][0]["warehouse_id"] == "wh_hk_1"
+    assert body["recommendation"]
+
+
+def test_warehouse_exception_search_returns_open_sku_exceptions():
+    response = client.post(
+        "/warehouse/exceptions/search",
+        json={"sku": "sku_bag_1", "status": "open"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["matches"]
+    assert body["matches"][0]["sku"] == "sku_bag_1"
+    assert body["matches"][0]["status"] == "open"
+
+
+def test_warehouse_fulfillment_check_blocks_low_stock_sku():
+    response = client.post(
+        "/warehouse/fulfillment/check",
+        json={"sku": "sku_bag_1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["sku"] == "sku_bag_1"
+    assert body["can_ship"] is False
+    assert "insufficient_available_stock" in body["blockers"]
+    assert body["next_action"] == "notify_procurement"
+
+
+def test_warehouse_fulfillment_check_allows_healthy_sku():
+    response = client.post(
+        "/warehouse/fulfillment/check",
+        json={"sku": "sku_bottle_1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["sku"] == "sku_bottle_1"
+    assert body["can_ship"] is True
+    assert body["blockers"] == []
+    assert body["next_action"] == "release_to_pick"

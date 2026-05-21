@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from app.store import FIXTURE_DIR, find_by_id
+from app.store import FIXTURE_DIR, find_by_id, load_json
 
 app = FastAPI(title="Ecommerce Mock Enterprise API")
 
@@ -138,6 +138,120 @@ def get_inventory(sku: str) -> dict:
     if not inventory:
         raise HTTPException(status_code=404, detail="inventory not found")
     return inventory
+
+
+def load_locations_for_sku(sku: str) -> list[dict[str, Any]]:
+    return [item for item in load_json("warehouse_locations.json") if item.get("sku") == sku]
+
+
+def load_exceptions_for_sku(sku: str, status: str | None = None) -> list[dict[str, Any]]:
+    records = [item for item in load_json("warehouse_exceptions.json") if item.get("sku") == sku]
+    if status:
+        records = [item for item in records if item.get("status") == status]
+    return records
+
+
+def warehouse_risk_level(inventory: dict, open_exceptions: list[dict[str, Any]]) -> str:
+    available = int(inventory.get("available", 0))
+    reserved = int(inventory.get("reserved", 0))
+    pending_orders = int(inventory.get("pending_orders", 0))
+    reorder_threshold = int(inventory.get("reorder_threshold", 0))
+    if any(item.get("severity") == "high" for item in open_exceptions):
+        return "high"
+    if available - reserved < pending_orders or available < reorder_threshold:
+        return "high"
+    if open_exceptions:
+        return "medium"
+    return "low"
+
+
+@app.get("/warehouse/inventory/{sku}")
+def get_warehouse_inventory(sku: str) -> dict:
+    inventory = find_by_id("inventory.json", "sku", sku)
+    if not inventory:
+        raise HTTPException(status_code=404, detail="inventory not found")
+    locations = load_locations_for_sku(sku)
+    open_exceptions = load_exceptions_for_sku(sku, "open")
+    risk_level = warehouse_risk_level(inventory, open_exceptions)
+    return {
+        "ok": True,
+        **inventory,
+        "locations": locations,
+        "open_exceptions": open_exceptions,
+        "risk_level": risk_level,
+        "recommendation": (
+            "库存或异常存在履约风险，建议仓库复核并通知采购。"
+            if risk_level == "high"
+            else "库存状态正常，可继续履约。"
+        ),
+    }
+
+
+@app.post("/warehouse/exceptions/search")
+def search_warehouse_exceptions(payload: dict) -> dict:
+    sku = str(payload.get("sku") or "").strip()
+    status = str(payload.get("status") or "").strip() or None
+    if not sku:
+        return {"ok": False, "error": "missing_sku", "matches": []}
+    matches = load_exceptions_for_sku(sku, status)
+    return {"ok": True, "sku": sku, "status": status, "matches": matches}
+
+
+@app.post("/warehouse/fulfillment/check")
+def check_warehouse_fulfillment(payload: dict) -> dict:
+    sku = str(payload.get("sku") or "").strip()
+    if not sku:
+        return {
+            "ok": False,
+            "error": "missing_sku",
+            "can_ship": False,
+            "blockers": ["missing_sku"],
+        }
+
+    inventory = find_by_id("inventory.json", "sku", sku)
+    if not inventory:
+        return {
+            "ok": False,
+            "error": "inventory_not_found",
+            "sku": sku,
+            "can_ship": False,
+            "blockers": ["inventory_not_found"],
+        }
+
+    locations = load_locations_for_sku(sku)
+    open_exceptions = load_exceptions_for_sku(sku, "open")
+    available = int(inventory.get("available", 0))
+    reserved = int(inventory.get("reserved", 0))
+    pending_orders = int(inventory.get("pending_orders", 0))
+    blockers: list[str] = []
+    if available - reserved < pending_orders:
+        blockers.append("insufficient_available_stock")
+    if not any(
+        item.get("status") == "available" and int(item.get("quantity", 0)) > 0
+        for item in locations
+    ):
+        blockers.append("missing_available_location")
+    if any(item.get("severity") in {"high", "medium"} for item in open_exceptions):
+        blockers.append("open_exception")
+
+    can_ship = not blockers
+    next_action = (
+        "release_to_pick"
+        if can_ship
+        else ("notify_procurement" if "insufficient_available_stock" in blockers else "manual_review")
+    )
+    return {
+        "ok": True,
+        "sku": sku,
+        "can_ship": can_ship,
+        "blockers": blockers,
+        "available": available,
+        "reserved": reserved,
+        "pending_orders": pending_orders,
+        "locations": locations,
+        "open_exceptions": open_exceptions,
+        "next_action": next_action,
+    }
 
 
 @app.post("/procurement/mock")

@@ -417,7 +417,7 @@
           "toolDescription": "Warehouse specialist for inventory, stock, fulfillment, shipment operations, and warehouse exceptions.",
           "text": "={{ $json.input_text }}",
           "options": {
-            "systemMessage": "你是 Warehouse Agent，专门处理仓储、库存、履约和发货作业问题。\n\n可用工具：\n- inventory_status_tool：按 SKU 查询库存、待处理订单和补货阈值。涉及库存、现货、缺货、仓储异常或履约风险时必须调用。\n\n处理规则：\n1. 如果用户提供了 sku_ 开头的 SKU，必须调用 inventory_status_tool。\n2. 如果用户没有提供 SKU，请要求用户提供 SKU，例如 sku_bag_1。\n3. 回复必须包含 SKU、可用库存、待处理订单、补货阈值和行动建议。\n4. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。\n5. 回复必须简洁，适合直接发回飞书。",
+            "systemMessage": "你是 Warehouse Agent，专门处理仓储、库存、履约和发货作业问题。\n\n可用工具：\n- warehouse_inventory_tool：查询 SKU 库存、已预留库存、待处理订单、补货阈值和库位。\n- warehouse_exception_tool：查询库存差异、破损、待上架、找不到库位、拣货延迟等仓储异常。\n- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。\n\n处理规则：\n1. 如果用户询问 SKU 库存、现货、库位、缺货或补货阈值，必须调用 warehouse_inventory_tool。\n2. 如果用户询问库存差异、破损、待上架、找不到库位、拣货延迟或仓储异常，必须调用 warehouse_exception_tool。\n3. 如果用户询问能否发货、履约风险、出库阻塞或发货作业状态，必须调用 warehouse_fulfillment_tool。\n4. 如果用户提供了 sku_ 开头的 SKU，结合问题类型调用对应工具；必要时可以连续调用多个工具。\n5. 如果用户没有提供 SKU，请要求用户提供 SKU，例如 sku_bag_1。\n6. 回复必须保留工具返回的 SKU、可用库存、已预留库存、库位、异常、风险等级和行动建议等关键字段。\n7. 不要创建采购单；采购归 Procurement Agent 处理。\n8. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。\n9. 回复必须简洁，适合直接发回飞书。",
             "maxIterations": 3,
             "returnIntermediateSteps": true
           }
@@ -457,15 +457,43 @@
       },
       {
         "parameters": {
-          "description": "Use this backend API tool for SKU inventory, pending orders, reorder threshold, and fulfillment risk lookup.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractSku(input) {\n  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bsku_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const sku = extractSku(input);\n  if (!sku) {\n    return JSON.stringify({ ok: false, error: 'missing_sku', message: '请提供 SKU，例如 sku_bag_1。' });\n  }\n\n  const inventory = await helpers.httpRequest({\n    method: 'GET',\n    url: 'http://mock-api:8000/inventory/' + encodeURIComponent(sku),\n    json: true\n  });\n\n  const available = Number(inventory.available || 0);\n  const pendingOrders = Number(inventory.pending_orders || 0);\n  const reorderThreshold = Number(inventory.reorder_threshold || 0);\n  const risk = available < reorderThreshold || available < pendingOrders;\n  return JSON.stringify({\n    ok: true,\n    system: 'mock-warehouse',\n    sku,\n    available,\n    pending_orders: pendingOrders,\n    reorder_threshold: reorderThreshold,\n    risk_level: risk ? 'medium' : 'low',\n    recommendation: risk ? '库存偏低，建议通知采购并关注待履约订单。' : '库存状态正常。'\n  });\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'inventory_status_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "description": "Use this backend API tool for SKU inventory, reserved stock, warehouse locations, exceptions, and stock risk lookup.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractSku(input) {\n  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bsku_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const sku = extractSku(input);\n  if (!sku) {\n    return JSON.stringify({ ok: false, error: 'missing_sku', message: '请提供 SKU，例如 sku_bag_1。' });\n  }\n\n  const inventory = await helpers.httpRequest({\n    method: 'GET',\n    url: 'http://mock-api:8000/warehouse/inventory/' + encodeURIComponent(sku),\n    json: true\n  });\n\n  return JSON.stringify({\n    ok: true,\n    system: 'mock-warehouse',\n    sku,\n    ...inventory\n  });\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'warehouse_inventory_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
         },
-        "id": "inventory-status-tool-node",
-        "name": "inventory_status_tool",
+        "id": "warehouse-inventory-tool-node",
+        "name": "warehouse_inventory_tool",
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
-          1440,
+          1328,
+          928
+        ]
+      },
+      {
+        "parameters": {
+          "description": "Use this backend API tool for warehouse exception lookup, including stock mismatch, pending putaway, damage, and picking delays.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractSku(input) {\n  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bsku_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const sku = extractSku(input);\n  if (!sku) {\n    return JSON.stringify({ ok: false, error: 'missing_sku', message: '请提供 SKU，例如 sku_bag_1。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/warehouse/exceptions/search',\n    body: { sku, status: 'open' },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'warehouse_exception_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+        },
+        "id": "warehouse-exception-tool-node",
+        "name": "warehouse_exception_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [
+          1504,
+          928
+        ]
+      },
+      {
+        "parameters": {
+          "description": "Use this backend API tool to check whether an SKU can ship and return blockers and next actions.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractSku(input) {\n  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bsku_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const sku = extractSku(input);\n  if (!sku) {\n    return JSON.stringify({ ok: false, error: 'missing_sku', message: '请提供 SKU，例如 sku_bag_1。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/warehouse/fulfillment/check',\n    body: { sku },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'warehouse_fulfillment_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+        },
+        "id": "warehouse-fulfillment-tool-node",
+        "name": "warehouse_fulfillment_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [
+          1680,
           928
         ]
       },
@@ -901,7 +929,29 @@
           ]
         ]
       },
-      "inventory_status_tool": {
+      "warehouse_inventory_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Warehouse Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "warehouse_exception_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Warehouse Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "warehouse_fulfillment_tool": {
         "ai_tool": [
           [
             {

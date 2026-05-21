@@ -52,14 +52,20 @@ CUSTOMER_SUPPORT_PROMPT = """你是 Customer Support Agent，专门处理电商�
 WAREHOUSE_PROMPT = """你是 Warehouse Agent，专门处理仓储、库存、履约和发货作业问题。
 
 可用工具：
-- inventory_status_tool：按 SKU 查询库存、待处理订单和补货阈值。涉及库存、现货、缺货、仓储异常或履约风险时必须调用。
+- warehouse_inventory_tool：查询 SKU 库存、已预留库存、待处理订单、补货阈值和库位。
+- warehouse_exception_tool：查询库存差异、破损、待上架、找不到库位、拣货延迟等仓储异常。
+- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。
 
 处理规则：
-1. 如果用户提供了 sku_ 开头的 SKU，必须调用 inventory_status_tool。
-2. 如果用户没有提供 SKU，请要求用户提供 SKU，例如 sku_bag_1。
-3. 回复必须包含 SKU、可用库存、待处理订单、补货阈值和行动建议。
-4. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。
-5. 回复必须简洁，适合直接发回飞书。"""
+1. 如果用户询问 SKU 库存、现货、库位、缺货或补货阈值，必须调用 warehouse_inventory_tool。
+2. 如果用户询问库存差异、破损、待上架、找不到库位、拣货延迟或仓储异常，必须调用 warehouse_exception_tool。
+3. 如果用户询问能否发货、履约风险、出库阻塞或发货作业状态，必须调用 warehouse_fulfillment_tool。
+4. 如果用户提供了 sku_ 开头的 SKU，结合问题类型调用对应工具；必要时可以连续调用多个工具。
+5. 如果用户没有提供 SKU，请要求用户提供 SKU，例如 sku_bag_1。
+6. 回复必须保留工具返回的 SKU、可用库存、已预留库存、库位、异常、风险等级和行动建议等关键字段。
+7. 不要创建采购单；采购归 Procurement Agent 处理。
+8. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。
+9. 回复必须简洁，适合直接发回飞书。"""
 
 
 PROCUREMENT_PROMPT = """你是 Procurement Agent，专门处理采购、补货、供应商和采购单问题。
@@ -86,7 +92,7 @@ OPERATIONS_PROMPT = """你是 Operations Agent，专门处理运营异常、日�
 4. 回复必须简洁，适合直接发回飞书。"""
 
 
-INVENTORY_TOOL_CODE = r"""function parseMaybeJson(value) {
+WAREHOUSE_INVENTORY_TOOL_CODE = r"""function parseMaybeJson(value) {
   if (typeof value !== 'string') return value || {};
   try {
     return JSON.parse(value);
@@ -114,28 +120,104 @@ try {
 
   const inventory = await helpers.httpRequest({
     method: 'GET',
-    url: 'http://mock-api:8000/inventory/' + encodeURIComponent(sku),
+    url: 'http://mock-api:8000/warehouse/inventory/' + encodeURIComponent(sku),
     json: true
   });
 
-  const available = Number(inventory.available || 0);
-  const pendingOrders = Number(inventory.pending_orders || 0);
-  const reorderThreshold = Number(inventory.reorder_threshold || 0);
-  const risk = available < reorderThreshold || available < pendingOrders;
   return JSON.stringify({
     ok: true,
     system: 'mock-warehouse',
     sku,
-    available,
-    pending_orders: pendingOrders,
-    reorder_threshold: reorderThreshold,
-    risk_level: risk ? 'medium' : 'low',
-    recommendation: risk ? '库存偏低，建议通知采购并关注待履约订单。' : '库存状态正常。'
+    ...inventory
   });
 } catch (error) {
   return JSON.stringify({
     ok: false,
-    error: 'inventory_status_runtime_error',
+    error: 'warehouse_inventory_runtime_error',
+    message: error && error.message ? error.message : String(error)
+  });
+}"""
+
+
+WAREHOUSE_EXCEPTION_TOOL_CODE = r"""function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value || {};
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return { query: value };
+  }
+}
+
+function first(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function extractSku(input) {
+  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();
+  const match = text.match(/\bsku_[0-9A-Za-z_]+\b/i);
+  return match ? match[0].toLowerCase() : '';
+}
+
+try {
+  const input = parseMaybeJson(query);
+  const sku = extractSku(input);
+  if (!sku) {
+    return JSON.stringify({ ok: false, error: 'missing_sku', message: '请提供 SKU，例如 sku_bag_1。' });
+  }
+
+  const result = await helpers.httpRequest({
+    method: 'POST',
+    url: 'http://mock-api:8000/warehouse/exceptions/search',
+    body: { sku, status: 'open' },
+    json: true
+  });
+  return JSON.stringify(result);
+} catch (error) {
+  return JSON.stringify({
+    ok: false,
+    error: 'warehouse_exception_runtime_error',
+    message: error && error.message ? error.message : String(error)
+  });
+}"""
+
+
+WAREHOUSE_FULFILLMENT_TOOL_CODE = r"""function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value || {};
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return { query: value };
+  }
+}
+
+function first(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function extractSku(input) {
+  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();
+  const match = text.match(/\bsku_[0-9A-Za-z_]+\b/i);
+  return match ? match[0].toLowerCase() : '';
+}
+
+try {
+  const input = parseMaybeJson(query);
+  const sku = extractSku(input);
+  if (!sku) {
+    return JSON.stringify({ ok: false, error: 'missing_sku', message: '请提供 SKU，例如 sku_bag_1。' });
+  }
+
+  const result = await helpers.httpRequest({
+    method: 'POST',
+    url: 'http://mock-api:8000/warehouse/fulfillment/check',
+    body: { sku },
+    json: true
+  });
+  return JSON.stringify(result);
+} catch (error) {
+  return JSON.stringify({
+    ok: false,
+    error: 'warehouse_fulfillment_runtime_error',
     message: error && error.message ? error.message : String(error)
   });
 }"""
@@ -217,7 +299,7 @@ TOOL_Y = 928
 NOTE_Y = 544
 LANES = {
     "customer_support": {"x": 400, "note_x": 288, "tool_x": 720, "extra_tool_x": 896, "color": 4},
-    "warehouse": {"x": 1120, "note_x": 1008, "tool_x": 1440, "color": 5},
+    "warehouse": {"x": 1120, "note_x": 1008, "tool_x": 1328, "extra_tool_x": 1504, "fulfillment_tool_x": 1680, "color": 5},
     "procurement": {"x": 1840, "note_x": 1728, "tool_x": 2160, "color": 6},
     "operations": {"x": 2560, "note_x": 2448, "tool_x": 2880, "color": 7},
 }
@@ -421,11 +503,25 @@ def main() -> None:
                 [LANES["warehouse"]["x"] - 16, MODEL_Y],
             ),
             make_tool(
-                "inventory_status_tool",
-                "inventory-status-tool-node",
-                "Use this backend API tool for SKU inventory, pending orders, reorder threshold, and fulfillment risk lookup.",
-                INVENTORY_TOOL_CODE,
+                "warehouse_inventory_tool",
+                "warehouse-inventory-tool-node",
+                "Use this backend API tool for SKU inventory, reserved stock, warehouse locations, exceptions, and stock risk lookup.",
+                WAREHOUSE_INVENTORY_TOOL_CODE,
                 [LANES["warehouse"]["tool_x"], TOOL_Y],
+            ),
+            make_tool(
+                "warehouse_exception_tool",
+                "warehouse-exception-tool-node",
+                "Use this backend API tool for warehouse exception lookup, including stock mismatch, pending putaway, damage, and picking delays.",
+                WAREHOUSE_EXCEPTION_TOOL_CODE,
+                [LANES["warehouse"]["extra_tool_x"], TOOL_Y],
+            ),
+            make_tool(
+                "warehouse_fulfillment_tool",
+                "warehouse-fulfillment-tool-node",
+                "Use this backend API tool to check whether an SKU can ship and return blockers and next actions.",
+                WAREHOUSE_FULFILLMENT_TOOL_CODE,
+                [LANES["warehouse"]["fulfillment_tool_x"], TOOL_Y],
             ),
             make_note(
                 "Sticky Note - Warehouse Agent",
@@ -496,7 +592,9 @@ def main() -> None:
     add_connection(workflow, "Procurement Qwen Chat Model", "ai_languageModel", "Procurement Agent")
     add_connection(workflow, "Operations Qwen Chat Model", "ai_languageModel", "Operations Agent")
 
-    add_connection(workflow, "inventory_status_tool", "ai_tool", "Warehouse Agent")
+    add_connection(workflow, "warehouse_inventory_tool", "ai_tool", "Warehouse Agent")
+    add_connection(workflow, "warehouse_exception_tool", "ai_tool", "Warehouse Agent")
+    add_connection(workflow, "warehouse_fulfillment_tool", "ai_tool", "Warehouse Agent")
     add_connection(workflow, "procurement_mock_tool", "ai_tool", "Procurement Agent")
     add_connection(workflow, "operations_mock_tool", "ai_tool", "Operations Agent")
 
