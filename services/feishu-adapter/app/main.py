@@ -29,6 +29,7 @@ class BotConfig:
     app_secret: str
     n8n_webhook_url: str
     api_base_url: str
+    bot_open_id: str = ""
     enabled: bool = True
 
 
@@ -86,6 +87,7 @@ def parse_bot_configs(
                 app_secret=app_secret,
                 n8n_webhook_url=webhook_url,
                 api_base_url=str(raw_bot.get("api_base_url") or api_base_url).strip(),
+                bot_open_id=str(raw_bot.get("bot_open_id") or "").strip(),
             )
         )
     if not bots:
@@ -216,6 +218,30 @@ def create_app(
 
     def handle_feishu_event(bot: BotConfig, payload: dict[str, Any]) -> None:
         message = normalize_feishu_event(payload)
+        if message.chat_type == "group":
+            if not message.mention_open_ids:
+                logger.info(
+                    "skipping unmentioned group feishu event bot=%s message_id=%s chat_id=%s",
+                    bot.name,
+                    message.message_id,
+                    message.chat_id,
+                )
+                return
+            if not bot.bot_open_id:
+                logger.warning(
+                    "skipping mentioned group feishu event bot=%s message_id=%s because bot_open_id is not configured",
+                    bot.name,
+                    message.message_id,
+                )
+                return
+            if bot.bot_open_id not in message.mention_open_ids:
+                logger.info(
+                    "skipping group feishu event bot=%s message_id=%s because bot was not mentioned",
+                    bot.name,
+                    message.message_id,
+                )
+                return
+
         message_key = f"{bot.name}:{message.message_id}"
         with processed_message_ids_lock:
             if message_key in processed_message_ids:

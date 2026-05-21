@@ -101,10 +101,12 @@ FEISHU_EVENT_MODE=long_connection
 多个部门机器人使用一个 gateway adapter，通过 `FEISHU_BOTS_JSON` 配置：
 
 ```text
-FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"}]
+FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","bot_open_id":"ou_customer_bot","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","bot_open_id":"ou_warehouse_bot","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","bot_open_id":"ou_procurement_bot","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","bot_open_id":"ou_operations_bot","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"}]
 ```
 
 `FEISHU_BOTS_JSON` 留空时，adapter 会继续使用旧的单机器人 fallback：`FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `N8N_CHAT_WEBHOOK_URL`。
+
+如果多个部门机器人安装在同一个飞书群里，发消息时需要 @ 目标机器人。adapter 会用 `bot_open_id` 和事件里的 `mentions` 列表做过滤，避免一条群消息触发所有部门 workflow。多 bot 模式下，没有 @ 的群消息会被忽略；单独私聊某个机器人仍然不需要 @。
 
 启动或重建 adapter：
 
@@ -120,7 +122,7 @@ started feishu long connection listener bot=<bot_name>
 connected to wss://msg-frontier.feishu.cn/ws/v2...
 ```
 
-真实机器人消息到达时，adapter 会依次输出 `received feishu long connection event`、`forwarded ... bot=<bot_name> ... to n8n`、`replied to feishu`。adapter 会按 `bot_name + message_id` 对重复推送做去重。
+真实机器人消息到达时，adapter 会依次输出 `received feishu long connection event`、`forwarded ... bot=<bot_name> ... to n8n`、`replied to feishu`。群聊里被跳过的消息会记录为 `skipping group feishu event ... because bot was not mentioned` 或 `skipping unmentioned group feishu event ...`。adapter 会按 `bot_name + message_id` 对重复推送做去重。
 
 本地模拟端点是：
 

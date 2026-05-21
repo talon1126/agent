@@ -101,10 +101,12 @@ FEISHU_EVENT_MODE=long_connection
 For multiple department bots, configure one gateway adapter with `FEISHU_BOTS_JSON`:
 
 ```text
-FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"}]
+FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","bot_open_id":"ou_customer_bot","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","bot_open_id":"ou_warehouse_bot","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","bot_open_id":"ou_procurement_bot","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","bot_open_id":"ou_operations_bot","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"}]
 ```
 
 Leave `FEISHU_BOTS_JSON` empty to use the legacy single-bot fallback with `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, and `N8N_CHAT_WEBHOOK_URL`.
+
+If multiple department bots are installed in the same Feishu group, send messages by mentioning the target bot. The adapter uses `bot_open_id` and the event `mentions` list to prevent one group message from triggering every department workflow. Unmentioned group messages are ignored in multi-bot mode; direct bot chats continue to work without mentions.
 
 Start or rebuild the adapter:
 
@@ -120,7 +122,7 @@ started feishu long connection listener bot=<bot_name>
 connected to wss://msg-frontier.feishu.cn/ws/v2...
 ```
 
-When a real bot message arrives, the adapter logs `received feishu long connection event`, then `forwarded ... bot=<bot_name> ... to n8n`, and finally `replied to feishu`. The adapter deduplicates repeated pushes by `bot_name + message_id`.
+When a real bot message arrives, the adapter logs `received feishu long connection event`, then `forwarded ... bot=<bot_name> ... to n8n`, and finally `replied to feishu`. In group chats, skipped messages are logged as `skipping group feishu event ... because bot was not mentioned` or `skipping unmentioned group feishu event ...`. The adapter deduplicates repeated pushes by `bot_name + message_id`.
 
 The local simulation endpoint is:
 

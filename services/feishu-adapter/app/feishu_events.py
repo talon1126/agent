@@ -9,10 +9,12 @@ class FeishuMessage(BaseModel):
     message_type: str
     sender_id: str
     chat_id: str
+    chat_type: str = ""
     message_id: str
     text: str = ""
     audio_url: str = ""
     media_id: str = ""
+    mention_open_ids: list[str] = []
     raw_payload: dict[str, Any]
 
 
@@ -36,6 +38,23 @@ def _first(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _extract_mention_open_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    mention_open_ids: list[str] = []
+    for mention in value:
+        if not isinstance(mention, dict):
+            continue
+        mention_id = mention.get("id") or {}
+        open_id = _first(
+            mention_id.get("open_id") if isinstance(mention_id, dict) else None,
+            mention.get("open_id"),
+        )
+        if open_id:
+            mention_open_ids.append(open_id)
+    return mention_open_ids
 
 
 def normalize_feishu_event(payload: dict[str, Any]) -> FeishuMessage:
@@ -68,10 +87,12 @@ def normalize_feishu_event(payload: dict[str, Any]) -> FeishuMessage:
             "unknown-sender",
         ),
         chat_id=_first(message.get("chat_id"), "unknown-chat"),
+        chat_type=_first(message.get("chat_type")),
         message_id=_first(message.get("message_id"), payload.get("uuid"), "unknown-message"),
         text=text,
         audio_url=_first(content.get("audio_url"), content.get("file_url")),
         media_id=media_id,
+        mention_open_ids=_extract_mention_open_ids(message.get("mentions")),
         raw_payload=payload,
     )
 
