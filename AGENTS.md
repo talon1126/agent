@@ -20,7 +20,8 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - `postgres` exists as the operational store target. Current demo state is still mostly in fixtures or in-memory mock endpoints.
 - `ai-service` creates `session_state` and `user_profile` in Postgres when `DATABASE_URL` is configured. Fast path stores `last_order_id` in `session_state` and mirrors it into `user_profile.profile` when `sender_id` is available.
 - The chat workflow now uses n8n Postgres Chat Memory for Feishu-scoped conversation history and a `policy_search_tool` for policy lookup with clause metadata.
-- The chat workflow also has a deterministic after-sales fast path before the Parent Agent for clear order/refund messages. This avoids extra LLM calls for common order status and refund-policy questions.
+- The chat workflow is moving to English-named business agents: `Parent Agent`, `Customer Support Agent`, `Warehouse Agent`, `Procurement Agent`, and `Operations Agent`. `Weather Agent` is no longer part of the business workflow.
+- The chat workflow also has a deterministic customer-support fast path before the Parent Agent for clear order/refund messages. It still calls the compatibility endpoint `/after-sales/fast-path`.
 
 ## Key Entry Points
 
@@ -32,9 +33,11 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - AI message endpoint: `POST /message/handle` in `services/ai-service/app/main.py`
 - AI decision endpoint: `POST /decide` in `services/ai-service/app/main.py`
 - Order status tool code: `services/ai-service/app/order_status_tool.py`
-- n8n after-sales son agent tool: `order_status_tool` inside `n8n/workflows/chat-parent-son-agent.json`
-- n8n memory nodes: `Parent Postgres Chat Memory` and `After-sales Postgres Chat Memory`
-- Parent and son memory may share the same physical table, but their `sessionKey` values must be namespaced separately (`parent:` and `after_sales:`) to avoid cross-agent context pollution.
+- n8n customer-support son agent tools: `order_status_tool` and `policy_search_tool` inside `n8n/workflows/chat-parent-son-agent.json`
+- n8n warehouse son agent tool: `inventory_status_tool` inside `n8n/workflows/chat-parent-son-agent.json`
+- n8n placeholder business tools: `procurement_mock_tool` and `operations_mock_tool` inside `n8n/workflows/chat-parent-son-agent.json`
+- n8n memory nodes: `Parent Postgres Chat Memory` and `Customer Support Postgres Chat Memory`
+- Parent and son memory may share the same physical table, but their `sessionKey` values must be namespaced separately (`parent:` and `customer_support:`) to avoid cross-agent context pollution.
 - n8n policy RAG tool: `policy_search_tool` inside `n8n/workflows/chat-parent-son-agent.json`
 - Policy search API: `POST /policies/search` in `services/mock-api/app/main.py`
 
@@ -79,6 +82,8 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - Use the fast path for clear order/refund questions first; keep Parent -> son Agent for ambiguous or complex tasks.
 - The fast path may handle refund-only follow-ups like "How do I refund?" only when the same session already has a remembered `last_order_id`; otherwise it must decline so the workflow falls back to the Parent Agent.
 - Use `policy_search_tool` and `/policies/search` for company-policy answers that require `source_file`, `section`, and `clause_id` metadata.
+- Use `inventory_status_tool` and `/inventory/{sku}` for warehouse stock questions.
+- `Procurement Agent` and `Operations Agent` are currently routed placeholders backed by deterministic mock endpoints.
 - Do not commit `.env` or print secrets.
 - When adding an English Markdown document, add the Chinese `.zh.md` counterpart.
 - Prefer Docker-first verification before cloud deployment.

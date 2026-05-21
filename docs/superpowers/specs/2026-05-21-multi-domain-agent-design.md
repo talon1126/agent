@@ -36,7 +36,7 @@ Routing targets:
 - `Warehouse Agent`
 - `Procurement Agent`
 - `Operations Agent`
-- existing `Weather Agent`, if still present in the live workflow
+- no `Weather Agent`; weather is intentionally removed from this enterprise business workflow
 - simple test or echo tool, only for explicit test requests
 
 ### Customer Support Agent
@@ -182,6 +182,7 @@ Runtime smoke tests:
 - No multi-agent recursive chaining in this phase.
 - No large UI redesign beyond preserving the user's n8n layout and adding clear lanes.
 - No migration of Feishu adapter behavior.
+- No weather specialist in this business workflow phase.
 
 ## Implementation Recommendation
 

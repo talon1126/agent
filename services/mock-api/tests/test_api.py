@@ -60,3 +60,25 @@ def test_records_internal_notifications_and_run_logs():
 
     assert client.get("/internal-notifications").json()[-1]["event_id"] == "evt_low_stock"
     assert client.get("/run-logs").json()[-1]["status"] == "succeeded"
+
+
+def test_procurement_mock_recommends_replenishment_for_low_stock():
+    response = client.post("/procurement/mock", json={"sku": "sku_bag_1"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["sku"] == "sku_bag_1"
+    assert body["recommendation"] == "create_purchase_request"
+    assert body["system"] == "mock-procurement"
+
+
+def test_operations_summary_mock_returns_cross_domain_summary():
+    response = client.post("/operations/summary/mock", json={"query": "帮我总结今天的运营异常"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["system"] == "mock-operations"
+    assert body["summary"]
+    assert any(item["domain"] == "warehouse" for item in body["incidents"])

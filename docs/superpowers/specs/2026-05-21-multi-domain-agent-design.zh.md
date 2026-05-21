@@ -36,7 +36,7 @@ Parent Agent 判断应该调用哪个专业 agent，不直接回答需要内部�
 - `Warehouse Agent`
 - `Procurement Agent`
 - `Operations Agent`
-- 如果 live workflow 中仍保留天气能力，则继续保留 `Weather Agent`
+- 不保留 `Weather Agent`；天气能力从当前企业业务 workflow 中移除
 - 简单测试或 echo 工具只在用户明确要求测试链路时调用
 
 ### Customer Support Agent
@@ -182,6 +182,7 @@ Parent prompt：
 - 本阶段不做递归式 multi-agent chaining。
 - 不做大规模 UI 重设计，只保护你已有布局，并新增清晰 lane。
 - 不迁移 Feishu adapter 行为。
+- 本阶段不保留天气专员。
 
 ## 实现建议
 

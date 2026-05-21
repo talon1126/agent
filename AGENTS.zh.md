@@ -20,7 +20,8 @@
 - `postgres` 是运维存储目标。当前 demo 状态主要仍在 fixtures 或 mock endpoint 内存中。
 - 配置 `DATABASE_URL` 后，`ai-service` 会在 Postgres 中创建 `session_state` 和 `user_profile`。fast path 会把 `last_order_id` 存到 `session_state`，如果有 `sender_id`，也会同步到 `user_profile.profile`。
 - chat workflow 现在使用 n8n Postgres Chat Memory 保存按飞书会话隔离的上下文，并使用 `policy_search_tool` 检索带条款元数据的政策。
-- chat workflow 还在 Parent Agent 前增加了确定性售后 fast path，用于明确的订单/退款消息，避免高频订单状态和退款政策问题产生额外 LLM 调用。
+- chat workflow 正在迁移为英文命名的业务 agent：`Parent Agent`、`Customer Support Agent`、`Warehouse Agent`、`Procurement Agent`、`Operations Agent`。`Weather Agent` 不再属于当前业务 workflow。
+- chat workflow 还在 Parent Agent 前保留确定性客服 fast path，用于明确的订单/退款消息。内部暂时继续调用兼容 endpoint `/after-sales/fast-path`。
 
 ## 关键入口
 
@@ -32,9 +33,11 @@
 - AI 消息入口：`services/ai-service/app/main.py` 中的 `POST /message/handle`
 - AI 决策入口：`services/ai-service/app/main.py` 中的 `POST /decide`
 - 订单状态工具代码：`services/ai-service/app/order_status_tool.py`
-- n8n 售后 son agent 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `order_status_tool`
-- n8n memory 节点：`Parent Postgres Chat Memory` 和 `After-sales Postgres Chat Memory`
-- Parent 和 son memory 可以共用同一张物理表，但 `sessionKey` 必须分别加命名空间（`parent:` 和 `after_sales:`），避免跨 Agent 上下文污染。
+- n8n 客服 son agent 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `order_status_tool` 和 `policy_search_tool`
+- n8n 仓储 son agent 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `inventory_status_tool`
+- n8n 占位业务工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `procurement_mock_tool` 和 `operations_mock_tool`
+- n8n memory 节点：`Parent Postgres Chat Memory` 和 `Customer Support Postgres Chat Memory`
+- Parent 和 son memory 可以共用同一张物理表，但 `sessionKey` 必须分别加命名空间（`parent:` 和 `customer_support:`），避免跨 Agent 上下文污染。
 - n8n 政策 RAG 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `policy_search_tool`
 - 政策检索 API：`services/mock-api/app/main.py` 中的 `POST /policies/search`
 
@@ -79,6 +82,8 @@
 - 明确的订单/退款问题优先走 fast path；含糊或复杂任务继续走 Parent -> son Agent。
 - fast path 只有在同一 session 已经记住 `last_order_id` 时，才可以处理“我怎么退款”这类没有显式订单引用的追问；否则必须拒绝处理并回退到 Parent Agent。
 - 使用 `policy_search_tool` 和 `/policies/search` 处理需要 `source_file`、`section`、`clause_id` 元数据的公司政策回答。
+- 使用 `inventory_status_tool` 和 `/inventory/{sku}` 处理仓储库存问题。
+- `Procurement Agent` 和 `Operations Agent` 当前是已接入路由的占位 agent，后端使用确定性 mock endpoint。
 - 不要提交 `.env`，不要打印 secrets。
 - 每新增一份英文 Markdown 文档，都要同时新增中文 `.zh.md` 版本。
 - 优先完成 Docker-first 本地验证，再考虑云端部署。

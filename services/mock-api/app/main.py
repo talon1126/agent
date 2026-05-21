@@ -140,6 +140,59 @@ def get_inventory(sku: str) -> dict:
     return inventory
 
 
+@app.post("/procurement/mock")
+def procurement_mock(payload: dict) -> dict:
+    sku = str(payload.get("sku") or "").strip()
+    inventory = find_by_id("inventory.json", "sku", sku) if sku else None
+    if not inventory:
+        return {
+            "ok": False,
+            "system": "mock-procurement",
+            "sku": sku,
+            "recommendation": "request_valid_sku",
+            "message": "未找到 SKU，需要提供有效 SKU。",
+        }
+
+    available = int(inventory.get("available", 0))
+    pending_orders = int(inventory.get("pending_orders", 0))
+    reorder_threshold = int(inventory.get("reorder_threshold", 0))
+    should_replenish = available < reorder_threshold or available < pending_orders
+    return {
+        "ok": True,
+        "system": "mock-procurement",
+        "sku": sku,
+        "available": available,
+        "pending_orders": pending_orders,
+        "reorder_threshold": reorder_threshold,
+        "recommendation": "create_purchase_request" if should_replenish else "no_action",
+        "message": "库存低于阈值，建议创建采购申请。" if should_replenish else "当前库存无需补货。",
+    }
+
+
+@app.post("/operations/summary/mock")
+def operations_summary_mock(payload: dict) -> dict:
+    query = str(payload.get("query") or payload.get("text") or "").strip()
+    return {
+        "ok": True,
+        "system": "mock-operations",
+        "query": query,
+        "summary": "今日主要运营异常集中在低库存 SKU 和待跟进售后订单。",
+        "incidents": [
+            {
+                "domain": "warehouse",
+                "severity": "medium",
+                "message": "sku_bag_1 可用库存低于补货阈值。",
+            },
+            {
+                "domain": "customer_support",
+                "severity": "low",
+                "message": "退款咨询需要引用售后政策。",
+            },
+        ],
+        "next_actions": ["检查低库存 SKU", "汇总客服退款问题", "确认采购补货计划"],
+    }
+
+
 @app.post("/policies/search")
 def search_policies(request: PolicySearchRequest) -> dict[str, Any]:
     filename = "after_sales_policy.zh.md" if request.locale.startswith("zh") else "after_sales_policy.md"
