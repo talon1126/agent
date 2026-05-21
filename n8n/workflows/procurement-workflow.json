@@ -1,0 +1,246 @@
+[
+  {
+    "updatedAt": "2026-05-20T15:21:39.714Z",
+    "createdAt": "2026-05-19T15:41:13.387Z",
+    "id": "procurement-workflow",
+    "name": "Procurement Workflow",
+    "description": "Independent department workflow for Procurement Workflow.",
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "procurement-inbound",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "3f71a91f-e109-4915-a59e-43fa238b38c0",
+        "name": "When Chat Message Received",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          -720,
+          80
+        ],
+        "webhookId": "chat-agent-inbound"
+      },
+      {
+        "parameters": {
+          "jsCode": "function first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction parseMaybeJson(value) {\n  if (typeof value !== 'string') return value;\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return value;\n  }\n}\n\nfunction xmlTag(xml, tag) {\n  if (typeof xml !== 'string') return undefined;\n  const re = new RegExp(`<${tag}>(?:<!\\\\[CDATA\\\\[([\\\\s\\\\S]*?)\\\\]\\\\]>|([\\\\s\\\\S]*?))</${tag}>`, 'i');\n  const match = xml.match(re);\n  return match ? (match[1] ?? match[2]) : undefined;\n}\n\nfunction normalize(raw) {\n  let body = raw.body ?? raw;\n  body = parseMaybeJson(body);\n\n  const isXml = typeof body === 'string' && body.trim().startsWith('<');\n  const feishuContent = parseMaybeJson(body?.event?.message?.content ?? body?.message?.content);\n\n  const platform = first(\n    raw.query?.platform,\n    body?.platform,\n    isXml ? 'wechat' : undefined,\n    body?.FromUserName ? 'wechat' : undefined,\n    body?.update_id ? 'telegram' : undefined,\n    body?.event ? 'feishu' : undefined,\n    'wechat'\n  );\n\n  const rawType = first(\n    body?.message_type,\n    body?.type,\n    body?.MsgType,\n    body?.message?.voice ? 'voice' : undefined,\n    body?.message?.text ? 'text' : undefined,\n    isXml ? xmlTag(body, 'MsgType') : undefined,\n    'text'\n  );\n\n  const text = first(\n    body?.text,\n    body?.content,\n    body?.Content,\n    body?.message?.text,\n    body?.message?.text?.text,\n    feishuContent?.text,\n    body?.event?.message?.text,\n    isXml ? xmlTag(body, 'Content') : undefined\n  );\n\n  const recognition = first(\n    body?.recognition,\n    body?.Recognition,\n    body?.speech_text,\n    body?.transcript,\n    body?.asr_text,\n    isXml ? xmlTag(body, 'Recognition') : undefined\n  );\n\n  const audioUrl = first(\n    body?.audio_url,\n    body?.voice_url,\n    body?.media_url,\n    body?.file_url,\n    body?.audio?.url,\n    body?.voice?.url,\n    body?.message?.voice?.file_url\n  );\n\n  const mediaId = first(\n    body?.media_id,\n    body?.MediaId,\n    isXml ? xmlTag(body, 'MediaId') : undefined,\n    body?.message?.voice?.file_id\n  );\n\n  const senderId = first(\n    body?.sender_id,\n    body?.from_user,\n    body?.FromUserName,\n    isXml ? xmlTag(body, 'FromUserName') : undefined,\n    body?.message?.from?.id,\n    body?.event?.sender?.sender_id?.open_id,\n    'unknown-sender'\n  );\n\n  const chatId = first(\n    body?.chat_id,\n    body?.conversation_id,\n    body?.chat?.id,\n    body?.message?.chat?.id,\n    body?.event?.message?.chat_id,\n    senderId\n  );\n\n  const messageId = first(\n    body?.message_id,\n    body?.MsgId,\n    isXml ? xmlTag(body, 'MsgId') : undefined,\n    body?.message?.message_id,\n    body?.event?.message?.message_id,\n    `${Date.now()}`\n  );\n\n  const inputText = first(text, recognition);\n  const messageType = String(rawType).toLowerCase().includes('voice') || audioUrl || mediaId ? 'voice' : 'text';\n\n  return {\n    platform,\n    message_type: messageType,\n    sender_id: String(senderId),\n    chat_id: String(chatId),\n    message_id: String(messageId),\n    input_text: inputText ? String(inputText).trim() : '',\n    audio_url: audioUrl ? String(audioUrl).trim() : '',\n    media_id: mediaId ? String(mediaId).trim() : '',\n    raw_payload: body,\n    session_id: 'feishu:' + String(chatId) + ':' + String(senderId)\n  };\n}\n\nreturn $input.all().map((item) => ({ json: normalize(item.json) }));"
+        },
+        "id": "d2ed8fd4-e3dc-470c-9d3c-5dc7898d608d",
+        "name": "Normalize Inbound Message",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -496,
+          80
+        ]
+      },
+      {
+        "parameters": {
+          "text": "={{ $json.input_text }}",
+          "options": {
+            "systemMessage": "你是 Procurement Agent，专门处理采购、补货、供应商和采购单问题。\n\n可用工具：\n- procurement_mock_tool：根据 SKU 和库存信号返回 mock 采购建议。涉及补货、采购建议、供应商、采购单或交期时必须调用。\n\n处理规则：\n1. 如果用户提供了 sku_ 开头的 SKU，必须调用 procurement_mock_tool。\n2. 如果用户没有提供 SKU，请要求用户提供 SKU，例如 sku_bag_1。\n3. 明确说明当前连接的是 mock-procurement，不是真实采购系统。\n4. 回复必须包含建议动作、库存依据和下一步。",
+            "maxIterations": 3,
+            "returnIntermediateSteps": true
+          },
+          "promptType": "define"
+        },
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 3,
+        "position": [
+          320,
+          120
+        ],
+        "id": "procurement-agent-node",
+        "name": "Procurement Agent"
+      },
+      {
+        "parameters": {
+          "model": "qwen3.6-plus",
+          "options": {
+            "maxTokens": 1200,
+            "temperature": 0.2,
+            "topP": 0.9
+          }
+        },
+        "type": "@n8n/n8n-nodes-langchain.lmChatAlibabaCloud",
+        "typeVersion": 1,
+        "position": [
+          256,
+          320
+        ],
+        "id": "procurement-qwen-chat-model-node",
+        "name": "Procurement Qwen Chat Model",
+        "credentials": {
+          "alibabaCloudApi": {
+            "id": "yYlfUgSYOWtyCELE",
+            "name": "Alibaba Cloud account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ 'procurement:' + ($json.session_id || 'feishu:' + $json.chat_id + ':' + $json.sender_id) }}",
+          "contextWindowLength": 6,
+          "tableName": "n8n_chat_histories"
+        },
+        "id": "procurement-postgres-chat-memory",
+        "name": "Procurement Postgres Chat Memory",
+        "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+        "typeVersion": 1.4,
+        "position": [
+          512,
+          320
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "postgres-memory",
+            "name": "Postgres Memory"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "description": "Use this mock procurement API tool for SKU replenishment and purchase request recommendations.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractSku(input) {\n  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bsku_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const sku = extractSku(input);\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/mock',\n    body: { sku, query: String(first(input.query, input.text, input.input, query, '')) },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_mock_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+        },
+        "id": "procurement-mock-tool-node",
+        "name": "procurement_mock_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [
+          720,
+          320
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\nreturn $input.all().map((item) => {\n  const reply = item.json.answer ?? item.json.output ?? item.json.text ?? item.json.response ?? JSON.stringify(item.json);\n  return {\n    json: {\n      ok: true,\n      platform: source.platform,\n      chat_id: source.chat_id,\n      sender_id: source.sender_id,\n      message_id: source.message_id,\n      reply,\n      raw_agent_output: item.json\n    }\n  };\n});"
+        },
+        "id": "b25f55b7-3df4-44ce-9809-e714eb4e9a62",
+        "name": "Format Webhook Reply",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          720,
+          80
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ $json }}",
+          "options": {}
+        },
+        "id": "946a7ca6-ee2f-4342-8d99-79f68cbd5aa4",
+        "name": "Respond to Webhook",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.5,
+        "position": [
+          944,
+          80
+        ]
+      }
+    ],
+    "connections": {
+      "When Chat Message Received": {
+        "main": [
+          [
+            {
+              "node": "Normalize Inbound Message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Normalize Inbound Message": {
+        "main": [
+          [
+            {
+              "node": "Procurement Agent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Procurement Agent": {
+        "main": [
+          [
+            {
+              "node": "Format Webhook Reply",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Webhook Reply": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Procurement Qwen Chat Model": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Procurement Agent",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Procurement Postgres Chat Memory": {
+        "ai_memory": [
+          [
+            {
+              "node": "Procurement Agent",
+              "type": "ai_memory",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "procurement_mock_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Procurement Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "binaryMode": "separate"
+    },
+    "staticData": null,
+    "meta": {
+      "templateCredsSetupCompleted": true
+    },
+    "pinData": {},
+    "versionCounter": 1,
+    "triggerCount": 0,
+    "tags": [],
+    "shared": [],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

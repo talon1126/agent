@@ -11,31 +11,31 @@ Use this file first when working in this repository. It is intentionally short s
 
 ## Runtime Shape
 
-The project is a Docker-first ecommerce after-sales multi-agent workflow.
+The project is a Docker-first internal ecommerce operations copilot.
 
-- `n8n` owns workflow orchestration, webhook routing, parent/son agent layout, and calls between services.
-- `feishu-adapter` owns Feishu/Lark protocol handling. It uses long connection mode by default, normalizes inbound messages, forwards them to n8n, deduplicates repeated Feishu message pushes, and replies to Feishu.
+- `n8n` owns workflow orchestration, department webhook routing, and calls between services.
+- `feishu-adapter` owns Feishu/Lark protocol handling. It supports a multi-bot gateway mode with `FEISHU_BOTS_JSON`, uses long connection mode by default, normalizes inbound messages, forwards each bot to its department n8n webhook, deduplicates by `bot_name + message_id`, and replies to Feishu.
 - `ai-service` owns backend AI logic that should be testable without n8n. It currently exposes deterministic decisioning and a message handling endpoint.
 - `mock-api` simulates enterprise systems: orders, customers, shipments, inventory, warehouse operations, approvals, tickets, internal notifications, run logs, dead letters, and replay.
 - `postgres` exists as the operational store target. Current demo state is still mostly in fixtures or in-memory mock endpoints.
 - `ai-service` creates `session_state` and `user_profile` in Postgres when `DATABASE_URL` is configured. Fast path stores `last_order_id` in `session_state` and mirrors it into `user_profile.profile` when `sender_id` is available.
-- The chat workflow now uses n8n Postgres Chat Memory for Feishu-scoped conversation history and a `policy_search_tool` for policy lookup with clause metadata.
-- The chat workflow is moving to English-named business agents: `Parent Agent`, `Customer Support Agent`, `Warehouse Agent`, `Procurement Agent`, and `Operations Agent`. `Weather Agent` is no longer part of the business workflow.
-- The chat workflow also has a deterministic customer-support fast path before the Parent Agent for clear order/refund messages. It still calls the compatibility endpoint `/after-sales/fast-path`.
+- The recommended chat architecture is now one Feishu Gateway Adapter plus independent department workflows: `Customer Support Workflow`, `Warehouse Workflow`, `Procurement Workflow`, and `Operations Workflow`.
+- `chat-parent-son-agent.json` remains as a legacy compatibility artifact, but the main internal chat path should use department workflows instead of Parent -> son dispatch.
 
 ## Key Entry Points
 
-- Feishu chat path: Feishu -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> Parent Agent -> son agent -> tool/API -> Feishu reply.
+- Feishu department chat path: department bot -> `feishu-adapter` -> department n8n webhook -> department Agent -> tool/API -> Feishu reply.
 - Fast path: Feishu -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> Feishu reply. If the fast path declines, the workflow falls back to Parent Agent.
-- Parent/son workflow export: `n8n/workflows/chat-parent-son-agent.json`
+- Department workflow exports: `n8n/workflows/customer-support-workflow.json`, `n8n/workflows/warehouse-workflow.json`, `n8n/workflows/procurement-workflow.json`, and `n8n/workflows/operations-workflow.json`
+- Parent/son workflow export: `n8n/workflows/chat-parent-son-agent.json` is legacy compatibility.
 - Message-agent workflow export: `n8n/workflows/message-agent.json`
 - Event workflow export: `n8n/workflows/ecommerce-after-sales.json`
 - AI message endpoint: `POST /message/handle` in `services/ai-service/app/main.py`
 - AI decision endpoint: `POST /decide` in `services/ai-service/app/main.py`
 - Order status tool code: `services/ai-service/app/order_status_tool.py`
-- n8n customer-support son agent tools: `order_status_tool` and `policy_search_tool` inside `n8n/workflows/chat-parent-son-agent.json`
-- n8n warehouse son agent tools: `warehouse_inventory_tool`, `warehouse_exception_tool`, and `warehouse_fulfillment_tool` inside `n8n/workflows/chat-parent-son-agent.json`
-- n8n placeholder business tools: `procurement_mock_tool` and `operations_mock_tool` inside `n8n/workflows/chat-parent-son-agent.json`
+- n8n customer-support tools: `order_status_tool` and `policy_search_tool` inside `n8n/workflows/customer-support-workflow.json`
+- n8n warehouse tools: `warehouse_inventory_tool`, `warehouse_exception_tool`, and `warehouse_fulfillment_tool` inside `n8n/workflows/warehouse-workflow.json`
+- n8n procurement and operations tools: `procurement_mock_tool` and `operations_mock_tool` inside their department workflows.
 - n8n memory nodes: `Parent Postgres Chat Memory` and `Customer Support Postgres Chat Memory`
 - Parent and son memory may share the same physical table, but their `sessionKey` values must be namespaced separately (`parent:` and `customer_support:`) to avoid cross-agent context pollution.
 - n8n policy RAG tool: `policy_search_tool` inside `n8n/workflows/chat-parent-son-agent.json`
@@ -81,14 +81,14 @@ The project is a Docker-first ecommerce after-sales multi-agent workflow.
 - Use n8n Postgres Chat Memory for conversational references such as "this order".
 - Use `session_state` for durable short-term backend state that must survive `ai-service` restarts, such as the fast path `last_order_id`.
 - Use `user_profile` for durable user-level facts and future summaries/preferences; keep it compact and avoid storing full chat transcripts there.
-- Use the fast path for clear order/refund questions first; keep Parent -> son Agent for ambiguous or complex tasks.
+- Use department Feishu bots and department workflows for the main internal chat path; do not add new business features to the legacy Parent/Son graph unless preserving compatibility.
 - The fast path may handle refund-only follow-ups like "How do I refund?" only when the same session already has a remembered `last_order_id`; otherwise it must decline so the workflow falls back to the Parent Agent.
 - Use `policy_search_tool` and `/policies/search` for company-policy answers that require `source_file`, `section`, and `clause_id` metadata.
 - Warehouse Agent owns inventory availability, warehouse locations, warehouse exceptions, and fulfillment-risk questions.
 - Use `warehouse_inventory_tool` and `/warehouse/inventory/{sku}` for SKU stock, reserved stock, location, exception, and risk lookup.
 - Use `warehouse_exception_tool` and `/warehouse/exceptions/search` for stock mismatch, pending putaway, damage, missing-location, and picking-delay questions.
 - Use `warehouse_fulfillment_tool` and `/warehouse/fulfillment/check` for shipping eligibility, fulfillment blockers, and next warehouse actions.
-- `Procurement Agent` and `Operations Agent` are currently routed placeholders backed by deterministic mock endpoints.
+- `Procurement Agent` and `Operations Agent` are backed by deterministic mock endpoints in their own department workflows.
 - Do not commit `.env` or print secrets.
 - When adding an English Markdown document, add the Chinese `.zh.md` counterpart.
 - Prefer Docker-first verification before cloud deployment.
@@ -101,6 +101,7 @@ Run from `D:\Project\agent\.worktrees\after-sales-implementation`:
 pytest services\ai-service\tests -v
 pytest services\mock-api\tests -v
 pytest services\feishu-adapter\tests -v
+pytest tests\test_department_workflows.py -v
 pytest tests\test_chat_parent_son_workflow.py -v
 docker compose config --quiet
 docker compose ps
@@ -108,7 +109,7 @@ docker compose ps
 
 Useful smoke paths:
 
-- n8n chat webhook: `http://localhost:5678/webhook/chat-agent-inbound`
+- n8n department chat webhooks: `http://localhost:5678/webhook/customer-support-inbound`, `http://localhost:5678/webhook/warehouse-inbound`, `http://localhost:5678/webhook/procurement-inbound`, and `http://localhost:5678/webhook/operations-inbound`
 - ai-service local port: `http://localhost:8001`
 - mock-api local port: `http://localhost:8002`
 - feishu-adapter local port: `http://localhost:8010`

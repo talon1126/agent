@@ -55,6 +55,7 @@ services:
       context: ./services/feishu-adapter
     environment:
       N8N_CHAT_WEBHOOK_URL: ${N8N_CHAT_WEBHOOK_URL:-http://n8n:5678/webhook/chat-agent-inbound}
+      FEISHU_BOTS_JSON: ${FEISHU_BOTS_JSON:-}
       FEISHU_APP_ID: ${FEISHU_APP_ID:-}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
       FEISHU_API_BASE_URL: ${FEISHU_API_BASE_URL:-https://open.feishu.cn}

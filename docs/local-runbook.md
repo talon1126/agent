@@ -44,13 +44,21 @@ docker compose exec -T n8n n8n publish:workflow --id=wf_message_agent
 docker compose restart n8n
 ```
 
-To import the parent/son chat gateway workflow used by Feishu:
+To import the recommended department chat workflows used by the Feishu Gateway Adapter:
 
 ```powershell
-docker compose exec -T n8n n8n import:workflow --input=/workflows/chat-parent-son-agent.json
-docker compose exec -T n8n n8n publish:workflow --id=wechat-qwen-agent-template
+docker compose exec -T n8n n8n import:workflow --input=/workflows/customer-support-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/warehouse-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/procurement-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/operations-workflow.json
+docker compose exec -T n8n n8n publish:workflow --id=customer-support-workflow
+docker compose exec -T n8n n8n publish:workflow --id=warehouse-workflow
+docker compose exec -T n8n n8n publish:workflow --id=procurement-workflow
+docker compose exec -T n8n n8n publish:workflow --id=operations-workflow
 docker compose restart n8n
 ```
+
+`n8n/workflows/chat-parent-son-agent.json` remains available as a legacy compatibility workflow, but new internal chat integrations should use the four department workflows.
 
 ## Send Demo Event
 
@@ -90,6 +98,14 @@ The default real Feishu integration uses long connection mode:
 FEISHU_EVENT_MODE=long_connection
 ```
 
+For multiple department bots, configure one gateway adapter with `FEISHU_BOTS_JSON`:
+
+```text
+FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"}]
+```
+
+Leave `FEISHU_BOTS_JSON` empty to use the legacy single-bot fallback with `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, and `N8N_CHAT_WEBHOOK_URL`.
+
 Start or rebuild the adapter:
 
 ```powershell
@@ -100,11 +116,11 @@ docker compose logs -f feishu-adapter
 Expected startup log:
 
 ```text
-started feishu long connection listener
+started feishu long connection listener bot=<bot_name>
 connected to wss://msg-frontier.feishu.cn/ws/v2...
 ```
 
-When a real bot message arrives, the adapter logs `received feishu long connection event`, then `forwarded ... to n8n`, and finally `replied to feishu`. The adapter deduplicates repeated pushes for the same `message_id`.
+When a real bot message arrives, the adapter logs `received feishu long connection event`, then `forwarded ... bot=<bot_name> ... to n8n`, and finally `replied to feishu`. The adapter deduplicates repeated pushes by `bot_name + message_id`.
 
 The local simulation endpoint is:
 
@@ -118,7 +134,7 @@ Verify Feishu URL challenge handling:
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"url_verification","challenge":"challenge-code"}' http://localhost:8010/feishu/events
 ```
 
-HTTP callback mode remains available for local simulation or fallback deployments. When `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are present, the adapter forwards messages to `N8N_CHAT_WEBHOOK_URL` and posts the agent reply back to Feishu.
+HTTP callback mode remains available for local simulation or fallback deployments. In callback mode the `/feishu/events` endpoint uses the first configured bot. When `FEISHU_BOTS_JSON` is empty, the adapter forwards messages to `N8N_CHAT_WEBHOOK_URL` and posts the agent reply back to Feishu with the legacy single-bot credentials.
 
 If long connection is connected but no `received feishu long connection event` appears after sending a bot message, check that the Feishu app subscribes to `im.message.receive_v1`, the app version has been published, and the bot is installed in the target chat.
 
@@ -130,13 +146,14 @@ Simulate the Feishu event locally:
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"schema":"2.0","header":{"event_id":"evt_local_probe","event_type":"im.message.receive_v1","token":"verify-token"},"event":{"sender":{"sender_id":{"open_id":"ou_local_probe"}},"message":{"message_id":"om_local_probe","chat_id":"oc_local_probe","message_type":"text","content":"{\"text\":\"帮我查一下订单 ord_100\"}"}}}' http://localhost:8010/feishu/events
 ```
 
-Test the parent/son after-sales route through n8n directly:
+Test department routes through n8n directly:
 
 ```powershell
-Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/chat-agent-inbound
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/customer-support-inbound
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_sku_bag_1","text":"sku_bag_1 今天能发货吗"}' http://localhost:5678/webhook/warehouse-inbound
 ```
 
-Expected local result: the reply includes order status `delivered`, carrier `UPS`, shipment status `delivered`, and no delay. The response `raw_agent_output.intermediateSteps` should show `AI Agent` calling `after_sales_agent`, and the son agent observation should show `order_status_tool` being called.
+Expected local result: the customer-support reply uses `order_status_tool`, and the warehouse reply uses the warehouse tools. These direct n8n checks may call the configured LLM; use mock-api endpoint checks when avoiding model quota.
 
 ## Replay Failed Event
 

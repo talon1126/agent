@@ -1,10 +1,11 @@
-# Ecommerce After-sales Multi-agent Workflow
+# Internal Ecommerce Operations Copilot
 
-Docker-first portfolio project for an enterprise-style ecommerce after-sales workflow. It uses n8n for orchestration, FastAPI services for AI decisioning and mock enterprise APIs, and scripted events for repeatable demos.
+Docker-first portfolio project for an internal ecommerce operations copilot. It uses one Feishu Gateway Adapter, multiple department-specific n8n workflows, FastAPI services for AI logic and mock enterprise APIs, and scripted events for repeatable demos.
 
 ## What This Demonstrates
 
 - n8n workflow orchestration for enterprise-style automation.
+- One Feishu gateway adapter that can connect multiple department bots to separate n8n workflows.
 - FastAPI AI service with structured outputs and deterministic test mode.
 - Mock enterprise APIs for orders, inventory, logistics, support, approvals, run logs, and replay.
 - Docker Compose local deployment.
@@ -15,8 +16,15 @@ Docker-first portfolio project for an enterprise-style ecommerce after-sales wor
 ```mermaid
 flowchart LR
     Event["Demo event JSON"] --> N8N["n8n workflow"]
-    Feishu["Feishu event"] --> Adapter["feishu-adapter"]
-    Adapter --> N8N
+    Feishu["Department Feishu bots"] --> Adapter["feishu-gateway-adapter"]
+    Adapter --> CS["customer-support workflow"]
+    Adapter --> WH["warehouse workflow"]
+    Adapter --> PR["procurement workflow"]
+    Adapter --> OPS["operations workflow"]
+    CS --> N8N["n8n"]
+    WH --> N8N
+    PR --> N8N
+    OPS --> N8N
     N8N --> MockRead["mock-api read endpoints"]
     MockRead --> N8N
     N8N --> AI["ai-service /decide"]
@@ -107,9 +115,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile
 
 Audio support is adapter-based. The current default is `TRANSCRIPTION_PROVIDER=mock`. To connect Qwen, provide `QWEN_API_ENDPOINT`, `QWEN_API_KEY`, the confirmed model name, the expected audio input format, and an example response JSON.
 
-## Feishu Adapter
+## Feishu Gateway Adapter
 
-`feishu-adapter` is a dedicated container for Feishu/Lark protocol handling. By default it uses Feishu long connection mode through `lark-oapi`, normalizes chat messages, forwards them to the n8n chat gateway, deduplicates repeated message pushes, and replies to Feishu when `FEISHU_APP_ID` and `FEISHU_APP_SECRET` are configured. The HTTP callback endpoint remains available for local simulation or fallback callback mode.
+`feishu-adapter` is a dedicated container for Feishu/Lark protocol handling. It can run as a gateway for multiple department bots through `FEISHU_BOTS_JSON`. Each configured bot opens its own Feishu long connection, forwards messages to its own n8n webhook, deduplicates by `bot_name + message_id`, and replies with that bot's own credentials.
+
+Leave `FEISHU_BOTS_JSON` empty to keep the legacy single-bot fallback with `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, and `N8N_CHAT_WEBHOOK_URL`.
 
 Local simulation endpoint:
 
@@ -117,31 +127,36 @@ Local simulation endpoint:
 POST http://localhost:8010/feishu/events
 ```
 
-Default internal n8n target:
+Department bot target example:
 
 ```text
-http://n8n:5678/webhook/chat-agent-inbound
+FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"}]
 ```
 
 For real Feishu long connection subscriptions, keep `FEISHU_EVENT_MODE=long_connection`, enable the app's event subscription for `im.message.receive_v1`, install the bot in the target chat, and start Docker. The adapter logs `connected to wss://msg-frontier.feishu.cn/...` when the long connection is live.
 
-## Chat Parent/Son Agent Workflow
+## Department Chat Workflows
 
-The versioned n8n chat workflow is `n8n/workflows/chat-parent-son-agent.json`. It uses a parent agent to dispatch tasks:
+The recommended internal chat architecture uses independent department workflows, not a parent/son dispatch graph:
 
-- `weather_agent` handles weather questions.
-- `after_sales_agent` handles ecommerce after-sales, order, logistics, refund, return, and complaint questions.
-- `echo_task_tool` handles explicit test or echo requests.
+- `n8n/workflows/customer-support-workflow.json` exposes `/webhook/customer-support-inbound`.
+- `n8n/workflows/warehouse-workflow.json` exposes `/webhook/warehouse-inbound`.
+- `n8n/workflows/procurement-workflow.json` exposes `/webhook/procurement-inbound`.
+- `n8n/workflows/operations-workflow.json` exposes `/webhook/operations-inbound`.
 
-The after-sales son agent calls `order_status_tool`, which reads from `mock-api /orders/{order_id}` and `/shipments/{shipment_id}`. Feishu users can ask messages such as `帮我查一下订单 ord_100`, and the result is returned through `feishu-adapter`.
-
-All chat messages enter the parent agent first. For `ord_*` order questions, the parent agent calls `after_sales_agent`, and that son agent calls `order_status_tool` to query the backend API before returning a Feishu-ready answer.
+`n8n/workflows/chat-parent-son-agent.json` remains in the repository as a compatibility artifact, but it is no longer the recommended primary chat path.
 
 Import and publish:
 
 ```powershell
-docker compose exec -T n8n n8n import:workflow --input=/workflows/chat-parent-son-agent.json
-docker compose exec -T n8n n8n publish:workflow --id=wechat-qwen-agent-template
+docker compose exec -T n8n n8n import:workflow --input=/workflows/customer-support-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/warehouse-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/procurement-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/operations-workflow.json
+docker compose exec -T n8n n8n publish:workflow --id=customer-support-workflow
+docker compose exec -T n8n n8n publish:workflow --id=warehouse-workflow
+docker compose exec -T n8n n8n publish:workflow --id=procurement-workflow
+docker compose exec -T n8n n8n publish:workflow --id=operations-workflow
 docker compose restart n8n
 ```
 
@@ -171,6 +186,7 @@ pytest services\ai-service\tests
 pytest services\mock-api\tests
 pytest services\feishu-adapter\tests
 pytest tests\test_chat_parent_son_workflow.py
+pytest tests\test_department_workflows.py
 ```
 
 ## Project Documents

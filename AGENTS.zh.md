@@ -11,31 +11,31 @@
 
 ## 运行结构
 
-这是一个 Docker-first 的电商售后 multi-agent workflow 项目。
+这是一个 Docker-first 的内部电商运营 Copilot 项目。
 
-- `n8n` 负责 workflow 编排、webhook 路由、parent/son agent 布局，以及服务之间的调用。
-- `feishu-adapter` 负责飞书/Lark 协议处理。默认使用长连接模式，归一化收到的消息，转发到 n8n，对重复推送做去重，并把回复发回飞书。
+- `n8n` 负责 workflow 编排、部门 webhook 路由，以及服务之间的调用。
+- `feishu-adapter` 负责飞书/Lark 协议处理。它支持 `FEISHU_BOTS_JSON` 多机器人网关模式，默认使用长连接模式，归一化收到的消息，把每个 bot 转发到对应部门 n8n webhook，按 `bot_name + message_id` 去重，并把回复发回飞书。
 - `ai-service` 负责后端 AI 逻辑，要求可以脱离 n8n 单独测试。当前包含确定性决策和消息处理入口。
 - `mock-api` 模拟企业内部系统：订单、客户、物流、库存、仓储作业、审批、工单、内部通知、运行日志、dead letter 和 replay。
 - `postgres` 是运维存储目标。当前 demo 状态主要仍在 fixtures 或 mock endpoint 内存中。
 - 配置 `DATABASE_URL` 后，`ai-service` 会在 Postgres 中创建 `session_state` 和 `user_profile`。fast path 会把 `last_order_id` 存到 `session_state`，如果有 `sender_id`，也会同步到 `user_profile.profile`。
-- chat workflow 现在使用 n8n Postgres Chat Memory 保存按飞书会话隔离的上下文，并使用 `policy_search_tool` 检索带条款元数据的政策。
-- chat workflow 正在迁移为英文命名的业务 agent：`Parent Agent`、`Customer Support Agent`、`Warehouse Agent`、`Procurement Agent`、`Operations Agent`。`Weather Agent` 不再属于当前业务 workflow。
-- chat workflow 还在 Parent Agent 前保留确定性客服 fast path，用于明确的订单/退款消息。内部暂时继续调用兼容 endpoint `/after-sales/fast-path`。
+- 当前推荐聊天架构是一个 Feishu Gateway Adapter 加多个独立部门 workflow：`Customer Support Workflow`、`Warehouse Workflow`、`Procurement Workflow` 和 `Operations Workflow`。
+- `chat-parent-son-agent.json` 仍作为历史兼容文件保留，但主内部聊天链路应使用部门 workflow，而不是 Parent -> son 分发。
 
 ## 关键入口
 
-- 飞书聊天链路：飞书 -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> Parent Agent -> son agent -> tool/API -> 飞书回复。
+- 飞书部门聊天链路：部门机器人 -> `feishu-adapter` -> 部门 n8n webhook -> 部门 Agent -> tool/API -> 飞书回复。
 - fast path 链路：飞书 -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> 飞书回复。如果 fast path 拒绝处理，workflow 会回退到 Parent Agent。
-- Parent/son workflow 导出：`n8n/workflows/chat-parent-son-agent.json`
+- 部门 workflow 导出：`n8n/workflows/customer-support-workflow.json`、`n8n/workflows/warehouse-workflow.json`、`n8n/workflows/procurement-workflow.json` 和 `n8n/workflows/operations-workflow.json`
+- Parent/son workflow 导出：`n8n/workflows/chat-parent-son-agent.json` 是历史兼容文件。
 - Message-agent workflow 导出：`n8n/workflows/message-agent.json`
 - Event workflow 导出：`n8n/workflows/ecommerce-after-sales.json`
 - AI 消息入口：`services/ai-service/app/main.py` 中的 `POST /message/handle`
 - AI 决策入口：`services/ai-service/app/main.py` 中的 `POST /decide`
 - 订单状态工具代码：`services/ai-service/app/order_status_tool.py`
-- n8n 客服 son agent 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `order_status_tool` 和 `policy_search_tool`
-- n8n 仓储 son agent 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `warehouse_inventory_tool`、`warehouse_exception_tool` 和 `warehouse_fulfillment_tool`
-- n8n 占位业务工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `procurement_mock_tool` 和 `operations_mock_tool`
+- n8n 客服工具：`n8n/workflows/customer-support-workflow.json` 中的 `order_status_tool` 和 `policy_search_tool`
+- n8n 仓储工具：`n8n/workflows/warehouse-workflow.json` 中的 `warehouse_inventory_tool`、`warehouse_exception_tool` 和 `warehouse_fulfillment_tool`
+- n8n 采购和运营工具：分别位于自己的部门 workflow 中的 `procurement_mock_tool` 和 `operations_mock_tool`
 - n8n memory 节点：`Parent Postgres Chat Memory` 和 `Customer Support Postgres Chat Memory`
 - Parent 和 son memory 可以共用同一张物理表，但 `sessionKey` 必须分别加命名空间（`parent:` 和 `customer_support:`），避免跨 Agent 上下文污染。
 - n8n 政策 RAG 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `policy_search_tool`
@@ -81,14 +81,14 @@
 - 使用 n8n Postgres Chat Memory 处理“这个订单”这类对话指代。
 - 使用 `session_state` 保存需要跨 `ai-service` 重启保留的短期后端状态，例如 fast path 的 `last_order_id`。
 - 使用 `user_profile` 保存长期用户级事实、未来摘要和偏好；保持精简，不要把完整聊天记录放进去。
-- 明确的订单/退款问题优先走 fast path；含糊或复杂任务继续走 Parent -> son Agent。
+- 主内部聊天链路使用部门飞书机器人和部门 workflow；除非为了兼容旧链路，不要把新业务功能继续加到 Parent/Son 图里。
 - fast path 只有在同一 session 已经记住 `last_order_id` 时，才可以处理“我怎么退款”这类没有显式订单引用的追问；否则必须拒绝处理并回退到 Parent Agent。
 - 使用 `policy_search_tool` 和 `/policies/search` 处理需要 `source_file`、`section`、`clause_id` 元数据的公司政策回答。
 - Warehouse Agent 负责库存可用性、仓库库位、仓储异常和履约风险问题。
 - 使用 `warehouse_inventory_tool` 和 `/warehouse/inventory/{sku}` 查询 SKU 库存、已预留库存、库位、异常和风险。
 - 使用 `warehouse_exception_tool` 和 `/warehouse/exceptions/search` 处理库存差异、待上架、破损、找不到库位和拣货延迟问题。
 - 使用 `warehouse_fulfillment_tool` 和 `/warehouse/fulfillment/check` 判断能否发货、履约阻塞原因和下一步仓储动作。
-- `Procurement Agent` 和 `Operations Agent` 当前是已接入路由的占位 agent，后端使用确定性 mock endpoint。
+- `Procurement Agent` 和 `Operations Agent` 在自己的部门 workflow 中使用确定性 mock endpoint。
 - 不要提交 `.env`，不要打印 secrets。
 - 每新增一份英文 Markdown 文档，都要同时新增中文 `.zh.md` 版本。
 - 优先完成 Docker-first 本地验证，再考虑云端部署。
@@ -101,6 +101,7 @@
 pytest services\ai-service\tests -v
 pytest services\mock-api\tests -v
 pytest services\feishu-adapter\tests -v
+pytest tests\test_department_workflows.py -v
 pytest tests\test_chat_parent_son_workflow.py -v
 docker compose config --quiet
 docker compose ps
@@ -108,7 +109,7 @@ docker compose ps
 
 常用 smoke 路径：
 
-- n8n chat webhook：`http://localhost:5678/webhook/chat-agent-inbound`
+- n8n 部门 chat webhook：`http://localhost:5678/webhook/customer-support-inbound`、`http://localhost:5678/webhook/warehouse-inbound`、`http://localhost:5678/webhook/procurement-inbound` 和 `http://localhost:5678/webhook/operations-inbound`
 - ai-service 本地端口：`http://localhost:8001`
 - mock-api 本地端口：`http://localhost:8002`
 - feishu-adapter 本地端口：`http://localhost:8010`

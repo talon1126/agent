@@ -44,13 +44,21 @@ docker compose exec -T n8n n8n publish:workflow --id=wf_message_agent
 docker compose restart n8n
 ```
 
-导入飞书使用的 parent/son chat gateway workflow：
+导入 Feishu Gateway Adapter 使用的部门 chat workflows：
 
 ```powershell
-docker compose exec -T n8n n8n import:workflow --input=/workflows/chat-parent-son-agent.json
-docker compose exec -T n8n n8n publish:workflow --id=wechat-qwen-agent-template
+docker compose exec -T n8n n8n import:workflow --input=/workflows/customer-support-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/warehouse-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/procurement-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/operations-workflow.json
+docker compose exec -T n8n n8n publish:workflow --id=customer-support-workflow
+docker compose exec -T n8n n8n publish:workflow --id=warehouse-workflow
+docker compose exec -T n8n n8n publish:workflow --id=procurement-workflow
+docker compose exec -T n8n n8n publish:workflow --id=operations-workflow
 docker compose restart n8n
 ```
+
+`n8n/workflows/chat-parent-son-agent.json` 仍保留为历史兼容 workflow，新内部聊天接入建议使用这 4 个部门 workflow。
 
 ## 发送 Demo 事件
 
@@ -90,6 +98,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -Url http://
 FEISHU_EVENT_MODE=long_connection
 ```
 
+多个部门机器人使用一个 gateway adapter，通过 `FEISHU_BOTS_JSON` 配置：
+
+```text
+FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"}]
+```
+
+`FEISHU_BOTS_JSON` 留空时，adapter 会继续使用旧的单机器人 fallback：`FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `N8N_CHAT_WEBHOOK_URL`。
+
 启动或重建 adapter：
 
 ```powershell
@@ -100,11 +116,11 @@ docker compose logs -f feishu-adapter
 预期启动日志：
 
 ```text
-started feishu long connection listener
+started feishu long connection listener bot=<bot_name>
 connected to wss://msg-frontier.feishu.cn/ws/v2...
 ```
 
-真实机器人消息到达时，adapter 会依次输出 `received feishu long connection event`、`forwarded ... to n8n`、`replied to feishu`。adapter 会按 `message_id` 对重复推送做去重。
+真实机器人消息到达时，adapter 会依次输出 `received feishu long connection event`、`forwarded ... bot=<bot_name> ... to n8n`、`replied to feishu`。adapter 会按 `bot_name + message_id` 对重复推送做去重。
 
 本地模拟端点是：
 
@@ -118,7 +134,7 @@ POST http://localhost:8010/feishu/events
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"type":"url_verification","challenge":"challenge-code"}' http://localhost:8010/feishu/events
 ```
 
-HTTP callback 模式仍保留，用于本地模拟或备用 callback 部署。当 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 存在时，adapter 会把消息转发到 `N8N_CHAT_WEBHOOK_URL`，再把 agent 回复发送回飞书。
+HTTP callback 模式仍保留，用于本地模拟或备用 callback 部署。callback 模式下 `/feishu/events` 会使用第一个 bot 配置；如果 `FEISHU_BOTS_JSON` 为空，则继续把消息转发到 `N8N_CHAT_WEBHOOK_URL`，并用旧单机器人凭证回复飞书。
 
 如果长连接已经 `connected`，但发送机器人消息后没有 `received feishu long connection event`，需要检查飞书应用是否订阅 `im.message.receive_v1`、应用版本是否已发布、机器人是否安装到目标会话。
 
@@ -130,13 +146,14 @@ adapter 会先返回 `accepted=true`，再在后台把消息转发到 n8n，agen
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"schema":"2.0","header":{"event_id":"evt_local_probe","event_type":"im.message.receive_v1","token":"verify-token"},"event":{"sender":{"sender_id":{"open_id":"ou_local_probe"}},"message":{"message_id":"om_local_probe","chat_id":"oc_local_probe","message_type":"text","content":"{\"text\":\"帮我查一下订单 ord_100\"}"}}}' http://localhost:8010/feishu/events
 ```
 
-直接通过 n8n 测试 parent/son 售后路由：
+直接通过 n8n 测试部门路由：
 
 ```powershell
-Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/chat-agent-inbound
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/customer-support-inbound
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_sku_bag_1","text":"sku_bag_1 今天能发货吗"}' http://localhost:5678/webhook/warehouse-inbound
 ```
 
-预期本地结果：回复中包含订单状态 `delivered`、物流商 `UPS`、物流状态 `delivered`，并说明没有延迟。响应里的 `raw_agent_output.intermediateSteps` 应显示 `AI Agent` 调用了 `after_sales_agent`，son agent 的 observation 中应显示调用了 `order_status_tool`。
+预期本地结果：客服 workflow 会调用 `order_status_tool`，仓储 workflow 会调用仓储工具。这类直接 n8n 检查可能调用已配置的 LLM；如果要避免模型额度，优先检查 mock-api endpoint。
 
 ## Replay 失败事件
 

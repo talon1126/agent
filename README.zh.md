@@ -1,10 +1,11 @@
-# 电商售后 Multi-agent Workflow
+# 内部电商运营 Copilot
 
-这是一个 Docker-first 的作品集项目，用企业内部电商售后流程来展示 AI workflow 落地能力。项目使用 n8n 做编排，FastAPI 做 AI 决策服务和 mock 企业 API，并通过脚本化事件支持可重复 demo。
+这是一个 Docker-first 的作品集项目，用企业内部电商运营流程来展示 AI workflow 落地能力。项目使用一个 Feishu Gateway Adapter 连接多个部门机器人，使用多个部门独立 n8n workflow，FastAPI 负责 AI 逻辑和 mock 企业 API，并通过脚本化事件支持可重复 demo。
 
 ## 这个项目展示什么
 
 - 使用 n8n 编排企业风格的自动化 workflow。
+- 使用一个 Feishu gateway adapter，把多个部门机器人连接到各自的 n8n workflow。
 - 使用 FastAPI 构建带结构化输出和 deterministic test mode 的 AI service。
 - 使用 mock enterprise APIs 模拟订单、库存、物流、客服、审批、运行日志和 replay。
 - 使用 Docker Compose 做本地部署。
@@ -15,8 +16,15 @@
 ```mermaid
 flowchart LR
     Event["Demo event JSON"] --> N8N["n8n workflow"]
-    Feishu["Feishu event"] --> Adapter["feishu-adapter"]
-    Adapter --> N8N
+    Feishu["Department Feishu bots"] --> Adapter["feishu-gateway-adapter"]
+    Adapter --> CS["customer-support workflow"]
+    Adapter --> WH["warehouse workflow"]
+    Adapter --> PR["procurement workflow"]
+    Adapter --> OPS["operations workflow"]
+    CS --> N8N["n8n"]
+    WH --> N8N
+    PR --> N8N
+    OPS --> N8N
     N8N --> MockRead["mock-api read endpoints"]
     MockRead --> N8N
     N8N --> AI["ai-service /decide"]
@@ -107,9 +115,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile
 
 音频支持通过 adapter 接入。当前默认是 `TRANSCRIPTION_PROVIDER=mock`。如果要接入 Qwen，需要你提供 `QWEN_API_ENDPOINT`、`QWEN_API_KEY`、确认后的模型名、API 期望的音频输入格式，以及返回 JSON 示例。
 
-## 飞书 Adapter
+## 飞书 Gateway Adapter
 
-`feishu-adapter` 是专门处理飞书/Lark 协议的容器。默认使用 `lark-oapi` 的飞书长连接模式，把聊天消息归一化后转发到 n8n chat gateway，对重复推送的 message 做去重，并在配置了 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 后把 agent 回复发送回飞书。HTTP callback 端点仍保留，用于本地模拟或备用 callback 模式。
+`feishu-adapter` 是专门处理飞书/Lark 协议的容器。现在它可以通过 `FEISHU_BOTS_JSON` 作为多部门机器人网关运行。每个 bot 会建立自己的飞书长连接，把消息转发到自己的 n8n webhook，按 `bot_name + message_id` 去重，并使用该 bot 自己的凭证回复飞书。
+
+如果 `FEISHU_BOTS_JSON` 留空，仍会使用旧的单机器人 fallback：`FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `N8N_CHAT_WEBHOOK_URL`。
 
 本地模拟端点：
 
@@ -117,31 +127,36 @@ powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile
 POST http://localhost:8010/feishu/events
 ```
 
-默认转发到容器内 n8n：
+部门机器人配置示例：
 
 ```text
-http://n8n:5678/webhook/chat-agent-inbound
+FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"}]
 ```
 
 真实接入飞书长连接事件订阅时，保持 `FEISHU_EVENT_MODE=long_connection`，在飞书开发者后台启用 `im.message.receive_v1` 事件订阅，把机器人安装到目标会话，然后启动 Docker。adapter 日志出现 `connected to wss://msg-frontier.feishu.cn/...` 表示长连接已建立。
 
-## Chat Parent/Son Agent Workflow
+## 部门 Chat Workflows
 
-版本化的 n8n chat workflow 是 `n8n/workflows/chat-parent-son-agent.json`。它使用 parent agent 分发任务：
+当前推荐的内部聊天架构是多个部门独立 workflow，不再用 parent/son 分发图作为主链路：
 
-- `weather_agent` 处理天气问题。
-- `after_sales_agent` 处理电商售后、订单、物流、退款、退货和投诉问题。
-- `echo_task_tool` 处理明确的测试或回显请求。
+- `n8n/workflows/customer-support-workflow.json` 暴露 `/webhook/customer-support-inbound`。
+- `n8n/workflows/warehouse-workflow.json` 暴露 `/webhook/warehouse-inbound`。
+- `n8n/workflows/procurement-workflow.json` 暴露 `/webhook/procurement-inbound`。
+- `n8n/workflows/operations-workflow.json` 暴露 `/webhook/operations-inbound`。
 
-售后 son agent 会调用 `order_status_tool`，读取 `mock-api /orders/{order_id}` 和 `/shipments/{shipment_id}`。飞书用户可以发送 `帮我查一下订单 ord_100`，结果会通过 `feishu-adapter` 返回飞书。
-
-所有聊天消息都会先进入 parent agent。对于 `ord_*` 订单问题，parent agent 会调用 `after_sales_agent`，再由这个 son agent 调用 `order_status_tool` 查询后端 API，最后返回适合飞书展示的结果。
+`n8n/workflows/chat-parent-son-agent.json` 仍保留在仓库中作为兼容历史文件，但不再推荐作为主要聊天链路。
 
 导入并发布：
 
 ```powershell
-docker compose exec -T n8n n8n import:workflow --input=/workflows/chat-parent-son-agent.json
-docker compose exec -T n8n n8n publish:workflow --id=wechat-qwen-agent-template
+docker compose exec -T n8n n8n import:workflow --input=/workflows/customer-support-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/warehouse-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/procurement-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/operations-workflow.json
+docker compose exec -T n8n n8n publish:workflow --id=customer-support-workflow
+docker compose exec -T n8n n8n publish:workflow --id=warehouse-workflow
+docker compose exec -T n8n n8n publish:workflow --id=procurement-workflow
+docker compose exec -T n8n n8n publish:workflow --id=operations-workflow
 docker compose restart n8n
 ```
 
@@ -171,6 +186,7 @@ pytest services\ai-service\tests
 pytest services\mock-api\tests
 pytest services\feishu-adapter\tests
 pytest tests\test_chat_parent_son_workflow.py
+pytest tests\test_department_workflows.py
 ```
 
 ## 项目文档

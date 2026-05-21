@@ -356,3 +356,173 @@ def test_long_connection_event_forwards_message_to_n8n() -> None:
         "audio_url": "",
         "media_id": "",
     }
+
+
+def test_multi_bot_long_connection_routes_each_bot_to_own_webhook_and_credentials() -> None:
+    requests: list[httpx.Request] = []
+    captured_listeners: list[dict[str, object]] = []
+    bots_json = json.dumps(
+        [
+            {
+                "name": "customer_support",
+                "app_id": "cli_customer",
+                "app_secret": "secret_customer",
+                "n8n_webhook_url": "http://n8n.local/webhook/customer-support-inbound",
+            },
+            {
+                "name": "warehouse",
+                "app_id": "cli_warehouse",
+                "app_secret": "secret_warehouse",
+                "n8n_webhook_url": "http://n8n.local/webhook/warehouse-inbound",
+            },
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "http://n8n.local/webhook/customer-support-inbound":
+            return httpx.Response(200, json={"reply": "customer reply"})
+        if str(request.url) == "http://n8n.local/webhook/warehouse-inbound":
+            return httpx.Response(200, json={"reply": "warehouse reply"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            content = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={"code": 0, "tenant_access_token": f"token-{content['app_id']}"},
+            )
+        if str(request.url).startswith("https://open.feishu.cn/open-apis/im/v1/messages/"):
+            return httpx.Response(200, json={"code": 0})
+        return httpx.Response(404, json={"error": "unexpected url"})
+
+    def fake_long_connection_starter(**kwargs: object) -> object:
+        captured_listeners.append(kwargs)
+        return object()
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_bots_json=bots_json,
+        feishu_event_mode="long_connection",
+        long_connection_starter=fake_long_connection_starter,
+    )
+
+    with TestClient(app):
+        assert [listener["app_id"] for listener in captured_listeners] == [
+            "cli_customer",
+            "cli_warehouse",
+        ]
+        for listener in captured_listeners:
+            on_event = listener["on_event"]
+            assert callable(on_event)
+            on_event(
+                {
+                    "schema": "2.0",
+                    "header": {"event_id": f"evt_{listener['app_id']}"},
+                    "event": {
+                        "sender": {"sender_id": {"open_id": "ou_sender"}},
+                        "message": {
+                            "message_id": "om_shared",
+                            "chat_id": "oc_chat",
+                            "message_type": "text",
+                            "content": '{"text":"test message"}',
+                        },
+                    },
+                }
+            )
+
+    n8n_urls = [
+        str(request.url)
+        for request in requests
+        if str(request.url).startswith("http://n8n.local/webhook/")
+    ]
+    assert n8n_urls == [
+        "http://n8n.local/webhook/customer-support-inbound",
+        "http://n8n.local/webhook/warehouse-inbound",
+    ]
+
+    token_requests = [
+        json.loads(request.content)
+        for request in requests
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+    ]
+    assert token_requests == [
+        {"app_id": "cli_customer", "app_secret": "secret_customer"},
+        {"app_id": "cli_warehouse", "app_secret": "secret_warehouse"},
+    ]
+
+    reply_requests = [
+        request
+        for request in requests
+        if str(request.url).startswith("https://open.feishu.cn/open-apis/im/v1/messages/")
+    ]
+    assert [request.headers["authorization"] for request in reply_requests] == [
+        "Bearer token-cli_customer",
+        "Bearer token-cli_warehouse",
+    ]
+    assert [json.loads(request.content)["content"] for request in reply_requests] == [
+        '{"text": "customer reply"}',
+        '{"text": "warehouse reply"}',
+    ]
+
+
+def test_multi_bot_deduplication_is_scoped_by_bot_name() -> None:
+    requests: list[httpx.Request] = []
+    captured_listeners: list[dict[str, object]] = []
+    bots_json = json.dumps(
+        [
+            {
+                "name": "customer_support",
+                "app_id": "cli_customer",
+                "app_secret": "secret_customer",
+                "n8n_webhook_url": "http://n8n.local/webhook/customer-support-inbound",
+            },
+            {
+                "name": "warehouse",
+                "app_id": "cli_warehouse",
+                "app_secret": "secret_warehouse",
+                "n8n_webhook_url": "http://n8n.local/webhook/warehouse-inbound",
+            },
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"reply": ""})
+
+    def fake_long_connection_starter(**kwargs: object) -> object:
+        captured_listeners.append(kwargs)
+        return object()
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_bots_json=bots_json,
+        feishu_event_mode="long_connection",
+        long_connection_starter=fake_long_connection_starter,
+    )
+    payload = {
+        "schema": "2.0",
+        "header": {"event_id": "evt_same"},
+        "event": {
+            "sender": {"sender_id": {"open_id": "ou_sender"}},
+            "message": {
+                "message_id": "om_same",
+                "chat_id": "oc_chat",
+                "message_type": "text",
+                "content": '{"text":"same id"}',
+            },
+        },
+    }
+
+    with TestClient(app):
+        captured_listeners[0]["on_event"](payload)
+        captured_listeners[0]["on_event"](payload)
+        captured_listeners[1]["on_event"](payload)
+
+    n8n_urls = [
+        str(request.url)
+        for request in requests
+        if str(request.url).startswith("http://n8n.local/webhook/")
+    ]
+    assert n8n_urls == [
+        "http://n8n.local/webhook/customer-support-inbound",
+        "http://n8n.local/webhook/warehouse-inbound",
+    ]
