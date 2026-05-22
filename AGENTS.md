@@ -27,7 +27,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 
 - Feishu department chat path: department bot -> `feishu-adapter` -> department n8n webhook -> department Agent -> tool/API -> Feishu reply.
 - Feishu gateway diagnostics: `GET /health/details` on `feishu-adapter` reports bot configuration, listener count, processed message count, and run-log status without secrets.
-- Warehouse inventory table provisioning and sync: `POST /warehouse/inventory-table/provision` creates or reuses a fixed-schema table inside an existing Feishu Bitable app/base; `POST /warehouse/inventory-table/sync` auto-provisions when needed and publishes a one-way snapshot from `mock-api /warehouse/inventory/{sku}`.
+- Warehouse inventory table provisioning, sync, and view tooling: `POST /warehouse/inventory-table/provision` creates or reuses a fixed-schema table inside an existing Feishu Bitable app/base; `POST /warehouse/inventory-table/sync` auto-provisions when needed and publishes a one-way snapshot from `mock-api /warehouse/inventory/{sku}`; `GET /warehouse/inventory-table/schema` and `POST /warehouse/inventory-table/views/create` let Warehouse Agent create controlled Feishu grid views from validated field plans.
 - Fast path: Feishu -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> Feishu reply. If the fast path declines, the workflow falls back to Parent Agent.
 - Department workflow exports: `n8n/workflows/customer-support-workflow.json`, `n8n/workflows/warehouse-workflow.json`, `n8n/workflows/procurement-workflow.json`, and `n8n/workflows/operations-workflow.json`
 - Parent/son workflow export: `n8n/workflows/chat-parent-son-agent.json` is legacy compatibility.
@@ -37,7 +37,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 - AI decision endpoint: `POST /decide` in `services/ai-service/app/main.py`
 - Order status tool code: `services/ai-service/app/order_status_tool.py`
 - n8n customer-support tools: `order_status_tool` and `policy_search_tool` inside `n8n/workflows/customer-support-workflow.json`
-- n8n warehouse tools: `warehouse_inventory_tool`, `warehouse_exception_tool`, `warehouse_fulfillment_tool`, `warehouse_inventory_table_provision_tool`, and `warehouse_inventory_table_sync_tool` inside `n8n/workflows/warehouse-workflow.json`
+- n8n warehouse tools: `warehouse_inventory_tool`, `warehouse_exception_tool`, `warehouse_fulfillment_tool`, `warehouse_inventory_table_provision_tool`, `warehouse_inventory_table_sync_tool`, `warehouse_table_schema_tool`, and `warehouse_view_create_tool` inside `n8n/workflows/warehouse-workflow.json`
 - n8n procurement and operations tools: `procurement_mock_tool` and `operations_mock_tool` inside their department workflows.
 - n8n memory nodes: `Parent Postgres Chat Memory` and `Customer Support Postgres Chat Memory`
 - Parent and son memory may share the same physical table, but their `sessionKey` values must be namespaced separately (`parent:` and `customer_support:`) to avoid cross-agent context pollution.
@@ -94,6 +94,8 @@ The project is a Docker-first internal ecommerce operations copilot.
 - Use `warehouse_fulfillment_tool` and `/warehouse/fulfillment/check` for shipping eligibility, fulfillment blockers, and next warehouse actions.
 - Use `warehouse_inventory_table_provision_tool` only when users explicitly ask to create, initialize, or configure the Feishu inventory table. It creates or reuses a table in an existing Bitable app/base, adds colored single-select fields for risk/status, and does not create the base or the inventory source of truth.
 - Use `warehouse_inventory_table_sync_tool` only when users explicitly ask to sync/export/publish/show a Feishu table snapshot. If no table id is configured, the backend may auto-provision or reuse the table before syncing. Feishu table data is a read model, not the inventory source of truth.
+- Use `warehouse_table_schema_tool` before any request to create a Feishu inventory view. It returns the real field names, types, select colors, and existing views.
+- Use `warehouse_view_create_tool` only after schema discovery. Its input must be JSON with `view_name`, `visible_fields`, `filters`, and `sorts`; the backend rejects unknown fields before calling Feishu. The MVP creates or reuses a grid view and returns the validated plan instead of letting the Agent run direct Feishu CLI/API commands.
 - `Procurement Agent` and `Operations Agent` are backed by deterministic mock endpoints in their own department workflows.
 - Do not commit `.env` or print secrets.
 - When adding an English Markdown document, add the Chinese `.zh.md` counterpart.
@@ -122,5 +124,7 @@ Useful smoke paths:
 - feishu-adapter diagnostics: `http://localhost:8010/health/details`
 - warehouse inventory table provision: `http://localhost:8010/warehouse/inventory-table/provision`
 - warehouse inventory table sync: `http://localhost:8010/warehouse/inventory-table/sync`
+- warehouse inventory table schema: `http://localhost:8010/warehouse/inventory-table/schema`
+- warehouse inventory view create: `http://localhost:8010/warehouse/inventory-table/views/create`
 
 Expected order smoke phrase for `ord_100`: `Order ord_100 is delivered. Shipment status is delivered.`

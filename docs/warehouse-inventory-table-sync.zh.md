@@ -10,6 +10,8 @@
 mock-api / 未来仓储系统
         -> feishu-adapter /warehouse/inventory-table/provision
         -> feishu-adapter /warehouse/inventory-table/sync
+        -> feishu-adapter /warehouse/inventory-table/schema
+        -> feishu-adapter /warehouse/inventory-table/views/create
         -> 飞书表格 upsert
         -> Warehouse Agent 回复
 ```
@@ -44,6 +46,34 @@ Warehouse Agent 有一个工具叫 `warehouse_inventory_table_sync_tool`。只�
 - 如果记录存在则更新，不存在则创建。
 - 配置 `FEISHU_RUN_LOG_URL` 后写入 run log。
 - 如果表格配置缺失，返回安全降级错误。
+
+## 视图创建行为
+
+Warehouse Agent 现在有两个受控工具用于创建飞书库存视图：
+
+- `warehouse_table_schema_tool` 读取当前表字段、字段类型、带颜色的单选项和已有视图。
+- `warehouse_view_create_tool` 在 Agent 提交 JSON 计划后创建或复用视图。
+
+Agent 必须先调用 `warehouse_table_schema_tool`。它不能编造 schema 工具没有返回的字段。后端会在调用飞书前校验所有 `visible_fields`、过滤字段和排序字段。
+
+示例用户请求：
+
+```text
+@Warehouse 创建一个“高风险库存”视图，只显示 SKU、Warehouse、Available、Risk Level、Recommendation，过滤 Risk Level=high，并按 Available 升序排序。
+```
+
+预期工具计划：
+
+```json
+{
+  "view_name": "High Risk Inventory",
+  "visible_fields": ["SKU", "Warehouse", "Available", "Risk Level", "Recommendation"],
+  "filters": [{"field": "Risk Level", "operator": "is", "value": "high"}],
+  "sorts": [{"field": "Available", "order": "asc"}]
+}
+```
+
+MVP 边界：后端当前会创建或复用飞书 grid 视图，并返回经过校验的计划。`filters`、`sorts` 和 `visible_fields` 会保留在响应 trace 中，但在飞书视图属性 API 形状通过 live testing 锁定前，暂不直接修改飞书视图属性。这样可以避免让 Agent 直接执行不受控的飞书 CLI/API 调用。
 
 ## 表格字段
 
@@ -103,6 +133,21 @@ Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/s
   -Body '{"sku":"sku_bag_1"}' | ConvertTo-Json -Depth 10
 ```
 
+读取 schema：
+
+```powershell
+Invoke-RestMethod http://localhost:8010/warehouse/inventory-table/schema |
+  ConvertTo-Json -Depth 10
+```
+
+创建或复用视图：
+
+```powershell
+Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/views/create `
+  -ContentType "application/json" `
+  -Body '{"view_name":"High Risk Inventory","visible_fields":["SKU","Warehouse","Available","Risk Level","Recommendation"],"filters":[{"field":"Risk Level","operator":"is","value":"high"}],"sorts":[{"field":"Available","order":"asc"}]}' | ConvertTo-Json -Depth 10
+```
+
 预期行为：
 
 - 缺少创建配置时返回 `ok=false` 和 `missing_feishu_inventory_table_provision_config`。
@@ -110,3 +155,6 @@ Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/s
 - 创建成功时返回 `ok=true`、`action=created` 或 `action=existing`、`table_id` 和固定字段列表。
 - 缺少同步配置时返回 `ok=false` 和 `missing_feishu_inventory_table_config`。
 - 同步配置正确时会自动创建或复用表格，然后返回 `ok=true`、`action=created` 或 `action=updated`，以及 `record_id`。
+- 读取 schema 会返回 `ok=true`、`table_id`、`fields` 和 `views`。
+- 创建视图会返回 `ok=true`、`action=created` 或 `action=existing`、`view_id` 和 `validated_plan`。
+- 如果字段不存在，会返回 `ok=false`、`invalid_inventory_view_plan` 和 `missing_fields`，并且不会调用飞书创建视图。

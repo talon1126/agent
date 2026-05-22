@@ -54,6 +54,7 @@ Send to the Warehouse bot or mention it in a shared group:
 @Warehouse 查询 sku_bag_1 的库存、库位和履约风险
 @Warehouse 创建仓储库存飞书表格
 @Warehouse 把 sku_bag_1 的库存快照同步到飞书表格
+@Warehouse 创建一个“高风险库存”视图，只显示 SKU、Warehouse、Available、Risk Level、Recommendation，过滤 Risk Level=high
 ```
 
 Expected behavior:
@@ -62,11 +63,12 @@ Expected behavior:
 - The warehouse tools return inventory, locations, open exceptions, and risk.
 - The explicit table creation request calls `warehouse_inventory_table_provision_tool` and returns `created` or `existing`.
 - The explicit sync request calls `warehouse_inventory_table_sync_tool` and returns `created` or `updated`.
+- The explicit view request calls `warehouse_table_schema_tool` first, then `warehouse_view_create_tool`, and returns `created` or `existing` plus a `validated_plan`.
 - Other department workflows do not execute.
 
 Explain:
 
-"This project hit a real multi-bot failure mode: in a shared Feishu group, one message can be received by every bot. The gateway now filters group messages by mention and bot open_id so one message cannot fan out to every workflow. For inventory visibility, the Agent can publish a one-way Feishu table snapshot. The table is a read model, not the inventory source of truth."
+"This project hit a real multi-bot failure mode: in a shared Feishu group, one message can be received by every bot. The gateway now filters group messages by mention and bot open_id so one message cannot fan out to every workflow. For inventory visibility, the Agent can publish a one-way Feishu table snapshot and create controlled Feishu views from real table schema. The table is a read model, not the inventory source of truth."
 
 ## 5. Procurement Demo
 

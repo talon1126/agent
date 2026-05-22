@@ -10,6 +10,8 @@ The Feishu table is a read model, not the inventory source of truth.
 mock-api / future warehouse system
         -> feishu-adapter /warehouse/inventory-table/provision
         -> feishu-adapter /warehouse/inventory-table/sync
+        -> feishu-adapter /warehouse/inventory-table/schema
+        -> feishu-adapter /warehouse/inventory-table/views/create
         -> Feishu table upsert
         -> Warehouse Agent reply
 ```
@@ -44,6 +46,34 @@ The sync endpoint:
 - Updates the existing record or creates a new one.
 - Writes a run log when `FEISHU_RUN_LOG_URL` is configured.
 - Returns a safe error if table credentials are missing.
+
+## View Creation Behavior
+
+The Warehouse Agent now has two controlled tools for Feishu inventory views:
+
+- `warehouse_table_schema_tool` reads the current table fields, field types, colored select options, and existing views.
+- `warehouse_view_create_tool` creates or reuses a view after the Agent submits a validated JSON plan.
+
+The Agent must call `warehouse_table_schema_tool` first. It must not invent fields that are not returned by the schema tool. The backend validates all `visible_fields`, filter fields, and sort fields before calling Feishu.
+
+Example user request:
+
+```text
+@Warehouse Create a "High Risk Inventory" view. Show SKU, Warehouse, Available, Risk Level, and Recommendation. Filter Risk Level=high and sort Available ascending.
+```
+
+Expected tool plan:
+
+```json
+{
+  "view_name": "High Risk Inventory",
+  "visible_fields": ["SKU", "Warehouse", "Available", "Risk Level", "Recommendation"],
+  "filters": [{"field": "Risk Level", "operator": "is", "value": "high"}],
+  "sorts": [{"field": "Available", "order": "asc"}]
+}
+```
+
+MVP boundary: the backend currently creates or reuses a Feishu grid view and returns the validated plan. It keeps filters, sorts, and visible fields in the response trace, but does not yet mutate Feishu view properties until the view-property API shape is locked down with live testing. This keeps the Agent from making unsafe direct Feishu CLI/API calls.
 
 ## Table Fields
 
@@ -103,6 +133,21 @@ Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/s
   -Body '{"sku":"sku_bag_1"}' | ConvertTo-Json -Depth 10
 ```
 
+Schema:
+
+```powershell
+Invoke-RestMethod http://localhost:8010/warehouse/inventory-table/schema |
+  ConvertTo-Json -Depth 10
+```
+
+Create or reuse a view:
+
+```powershell
+Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/views/create `
+  -ContentType "application/json" `
+  -Body '{"view_name":"High Risk Inventory","visible_fields":["SKU","Warehouse","Available","Risk Level","Recommendation"],"filters":[{"field":"Risk Level","operator":"is","value":"high"}],"sorts":[{"field":"Available","order":"asc"}]}' | ConvertTo-Json -Depth 10
+```
+
 Expected behavior:
 
 - Missing provision config returns `ok=false` and `missing_feishu_inventory_table_provision_config`.
@@ -110,3 +155,6 @@ Expected behavior:
 - Successful provisioning returns `ok=true`, `action=created` or `action=existing`, `table_id`, and the fixed field list.
 - Missing sync config returns `ok=false` and `missing_feishu_inventory_table_config`.
 - Valid sync config returns `ok=true`, auto-creates or reuses the table when needed, then returns `action=created` or `action=updated` plus a `record_id`.
+- Schema returns `ok=true`, `table_id`, `fields`, and `views`.
+- View creation returns `ok=true`, `action=created` or `action=existing`, `view_id`, and `validated_plan`.
+- Unknown fields return `ok=false`, `invalid_inventory_view_plan`, `missing_fields`, and no Feishu view creation call.

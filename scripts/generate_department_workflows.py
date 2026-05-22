@@ -35,6 +35,8 @@ DEPARTMENTS = {
             "warehouse_fulfillment_tool",
             "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
+            "warehouse_table_schema_tool",
+            "warehouse_view_create_tool",
         ],
     },
     "procurement": {
@@ -164,6 +166,93 @@ try {
   });
 }"""
 
+WAREHOUSE_SCHEMA_TOOL_JS = """function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value || {};
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return { query: value };
+  }
+}
+
+function first(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+try {
+  const input = parseMaybeJson(query);
+  const tableName = String(first(input.table_name, input.tableName, input.name, 'Warehouse Inventory Snapshot')).trim();
+  const encodedName = encodeURIComponent(tableName || 'Warehouse Inventory Snapshot');
+
+  const result = await helpers.httpRequest({
+    method: 'GET',
+    url: `http://feishu-adapter:8000/warehouse/inventory-table/schema?table_name=${encodedName}`,
+    json: true
+  });
+
+  return JSON.stringify(result);
+} catch (error) {
+  return JSON.stringify({
+    ok: false,
+    error: 'warehouse_table_schema_runtime_error',
+    message: error && error.message ? error.message : String(error)
+  });
+}"""
+
+WAREHOUSE_VIEW_CREATE_TOOL_JS = """function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value || {};
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return { query: value };
+  }
+}
+
+function first(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function splitFields(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  return String(value)
+    .split(/[,，]/)
+    .map((field) => field.trim())
+    .filter(Boolean);
+}
+
+try {
+  const input = parseMaybeJson(query);
+  const text = String(first(input.query, input.text, '')).trim();
+  const quotedName = text.match(/[“\"]([^”\"]+)[”\"]/);
+  const viewName = String(first(input.view_name, input.viewName, input.name, quotedName && quotedName[1], 'Warehouse Inventory View')).trim();
+  const visibleFields = splitFields(first(input.visible_fields, input.visibleFields, input.fields));
+  const filters = Array.isArray(input.filters) ? input.filters : [];
+  const sorts = Array.isArray(input.sorts) ? input.sorts : [];
+
+  const result = await helpers.httpRequest({
+    method: 'POST',
+    url: 'http://feishu-adapter:8000/warehouse/inventory-table/views/create',
+    body: {
+      table_name: String(first(input.table_name, input.tableName, 'Warehouse Inventory Snapshot')).trim(),
+      view_name: viewName,
+      view_type: String(first(input.view_type, input.viewType, 'grid')).trim(),
+      visible_fields: visibleFields,
+      filters,
+      sorts
+    },
+    json: true
+  });
+
+  return JSON.stringify(result);
+} catch (error) {
+  return JSON.stringify({
+    ok: false,
+    error: 'warehouse_view_create_runtime_error',
+    message: error && error.message ? error.message : String(error)
+  });
+}"""
+
 
 def load_source_workflow() -> dict[str, Any]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
@@ -215,6 +304,40 @@ def make_warehouse_provision_tool() -> dict[str, Any]:
     }
 
 
+def make_warehouse_schema_tool() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "description": (
+                "Use this tool before creating a Feishu inventory table view. It returns "
+                "the current table fields, field types, colored select options, and existing views."
+            ),
+            "jsCode": WAREHOUSE_SCHEMA_TOOL_JS,
+        },
+        "id": "warehouse-table-schema-tool-node",
+        "name": "warehouse_table_schema_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [1248, 320],
+    }
+
+
+def make_warehouse_view_create_tool() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "description": (
+                "Use this tool after warehouse_table_schema_tool when the user asks to "
+                "create a Feishu inventory view. Pass JSON with view_name, visible_fields, filters, and sorts."
+            ),
+            "jsCode": WAREHOUSE_VIEW_CREATE_TOOL_JS,
+        },
+        "id": "warehouse-view-create-tool-node",
+        "name": "warehouse_view_create_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [1248, 320],
+    }
+
+
 def make_agent_node(source_agent: dict[str, Any]) -> dict[str, Any]:
     agent = copy.deepcopy(source_agent)
     agent["type"] = "@n8n/n8n-nodes-langchain.agent"
@@ -232,20 +355,23 @@ def update_warehouse_agent_prompt(agent: dict[str, Any]) -> None:
         "- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。",
         "- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。\n"
         "- warehouse_inventory_table_provision_tool：仅在用户明确要求创建、初始化或配置飞书库存表时，创建固定 schema 的飞书表格。\n"
-        "- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 SKU 库存快照同步到飞书表格。",
+        "- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 SKU 库存快照同步到飞书表格。\n"
+        "- warehouse_table_schema_tool：当用户要求创建飞书库存视图时，先读取当前表字段、字段类型、颜色选项和已有视图。\n"
+        "- warehouse_view_create_tool：读取 schema 后，用受控 JSON 创建或复用飞书库存视图。",
     )
     system_message = system_message.replace(
         "4. 如果用户提供了 sku_ 开头的 SKU，结合问题类型调用对应工具；必要时可以连续调用多个工具。",
         "4. 如果用户要求创建、初始化或配置飞书库存表，先调用 warehouse_inventory_table_provision_tool；如果同时要求同步某个 sku_ 开头的 SKU，再调用 warehouse_inventory_tool 获取事实，然后调用 warehouse_inventory_table_sync_tool 同步快照。\n"
         "5. 如果用户要求同步、导出、发布、表格、飞书表格或看板，并提供了 sku_ 开头的 SKU，先调用 warehouse_inventory_tool 获取事实，再调用 warehouse_inventory_table_sync_tool 同步快照。\n"
-        "6. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool 或 warehouse_inventory_table_sync_tool。",
+        "6. 如果用户要求创建某个飞书库存视图，必须先调用 warehouse_table_schema_tool，再调用 warehouse_view_create_tool；warehouse_view_create_tool 的输入必须是 JSON，包含 view_name、visible_fields、filters 和 sorts；不要编造 schema 中不存在的字段。\n"
+        "7. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool、warehouse_inventory_table_sync_tool、warehouse_table_schema_tool 或 warehouse_view_create_tool。",
     )
     renumbering = {
-        "5. 如果用户没有提供 SKU": "7. 如果用户没有提供 SKU",
-        "6. 回复必须保留工具返回": "8. 回复必须保留工具返回",
-        "7. 不要创建采购单": "9. 不要创建采购单",
-        "8. 不要编造仓库或库存数据": "10. 不要编造仓库或库存数据",
-        "9. 回复必须简洁": "11. 回复必须简洁",
+        "5. 如果用户没有提供 SKU": "8. 如果用户没有提供 SKU",
+        "6. 回复必须保留工具返回": "9. 回复必须保留工具返回",
+        "7. 不要创建采购单": "10. 不要创建采购单",
+        "8. 不要编造仓库或库存数据": "11. 不要编造仓库或库存数据",
+        "9. 回复必须简洁": "12. 回复必须简洁",
     }
     for old, new in renumbering.items():
         system_message = system_message.replace(old, new)
@@ -326,6 +452,12 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
             else
             make_warehouse_sync_tool()
             if tool_name == "warehouse_inventory_table_sync_tool"
+            else
+            make_warehouse_schema_tool()
+            if tool_name == "warehouse_table_schema_tool"
+            else
+            make_warehouse_view_create_tool()
+            if tool_name == "warehouse_view_create_tool"
             else clone_node(source, tool_name)
         )
         tool["position"] = [720 + index * 176, 320]

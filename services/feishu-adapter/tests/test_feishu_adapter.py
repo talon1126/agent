@@ -411,7 +411,7 @@ def test_inventory_table_provision_returns_existing_table_when_table_id_is_confi
                     "code": 0,
                     "data": {
                         "items": [
-                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1},
+                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1, "property": None},
                             {"field_id": "fld_product", "field_name": "Product Name", "type": 1},
                             {"field_id": "fld_warehouse", "field_name": "Warehouse", "type": 1},
                             {"field_id": "fld_available", "field_name": "Available", "type": 2},
@@ -963,6 +963,286 @@ def test_inventory_table_sync_updates_existing_snapshot_record() -> None:
     assert response.status_code == 200
     assert response.json()["action"] == "updated"
     assert requests[-1].method == "PUT"
+
+
+def test_inventory_table_schema_returns_fields_and_views() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1, "property": None},
+                            {
+                                "field_id": "fld_risk",
+                                "field_name": "Risk Level",
+                                "type": 3,
+                                "property": {
+                                    "options": [
+                                        {"name": "low", "color": 28},
+                                        {"name": "medium", "color": 24},
+                                        {"name": "high", "color": 17},
+                                    ]
+                                },
+                            },
+                        ]
+                    },
+                },
+            )
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/views":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {
+                                "view_id": "vew_existing",
+                                "view_name": "Grid",
+                                "view_type": "grid",
+                            }
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_inventory",
+    )
+    client = TestClient(app)
+
+    response = client.get("/warehouse/inventory-table/schema")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "ok": True,
+        "configured": True,
+        "table_id": "tbl_inventory",
+        "table_name": "Warehouse Inventory Snapshot",
+        "table_url": "",
+        "fields": [
+            {
+                "field_id": "fld_sku",
+                "field_name": "SKU",
+                "type": 1,
+                "kind": "text",
+                "options": [],
+            },
+            {
+                "field_id": "fld_risk",
+                "field_name": "Risk Level",
+                "type": 3,
+                "kind": "single_select",
+                "options": [
+                    {"name": "low", "color": 28},
+                    {"name": "medium", "color": 24},
+                    {"name": "high", "color": 17},
+                ],
+            },
+        ],
+        "views": [
+            {
+                "view_id": "vew_existing",
+                "view_name": "Grid",
+                "view_type": "grid",
+            }
+        ],
+    }
+    assert [request.method for request in requests] == ["POST", "GET", "GET"]
+
+
+def test_inventory_table_view_create_validates_fields_and_creates_view() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1},
+                            {"field_id": "fld_wh", "field_name": "Warehouse", "type": 1},
+                            {"field_id": "fld_available", "field_name": "Available", "type": 2},
+                            {"field_id": "fld_risk", "field_name": "Risk Level", "type": 3},
+                            {"field_id": "fld_rec", "field_name": "Recommendation", "type": 1},
+                        ]
+                    },
+                },
+            )
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/views":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {"view": {"view_id": "vew_high_risk"}},
+                },
+            )
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_inventory",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/views/create",
+        json={
+            "view_name": "High Risk Inventory",
+            "visible_fields": ["SKU", "Warehouse", "Available", "Risk Level", "Recommendation"],
+            "filters": [{"field": "Risk Level", "operator": "is", "value": "high"}],
+            "sorts": [{"field": "Available", "order": "asc"}],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["action"] == "created"
+    assert body["view_id"] == "vew_high_risk"
+    assert body["table_id"] == "tbl_inventory"
+    assert body["validated_plan"] == {
+        "view_name": "High Risk Inventory",
+        "view_type": "grid",
+        "visible_fields": ["SKU", "Warehouse", "Available", "Risk Level", "Recommendation"],
+        "filters": [{"field": "Risk Level", "operator": "is", "value": "high"}],
+        "sorts": [{"field": "Available", "order": "asc"}],
+    }
+    create_requests = [
+        request
+        for request in requests
+        if request.method == "POST" and str(request.url).endswith("/tables/tbl_inventory/views")
+    ]
+    assert len(create_requests) == 1
+    assert json.loads(create_requests[0].content) == {
+        "view_name": "High Risk Inventory",
+        "view_type": "grid",
+    }
+
+
+def test_inventory_table_view_create_rejects_unknown_fields() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"items": [{"field_id": "fld_sku", "field_name": "SKU", "type": 1}]}},
+            )
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/views":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_inventory",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/views/create",
+        json={
+            "view_name": "Bad View",
+            "visible_fields": ["SKU", "Bad Field"],
+            "filters": [{"field": "Missing Filter", "operator": "is", "value": "x"}],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error"] == "invalid_inventory_view_plan"
+    assert body["missing_fields"] == ["Bad Field", "Missing Filter"]
+    assert not [
+        request
+        for request in requests
+        if request.method == "POST" and str(request.url).endswith("/tables/tbl_inventory/views")
+    ]
+
+
+def test_inventory_table_view_create_returns_existing_when_view_name_exists() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"items": [{"field_id": "fld_sku", "field_name": "SKU", "type": 1}]}},
+            )
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/views":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {
+                                "view_id": "vew_existing",
+                                "view_name": "High Risk Inventory",
+                                "view_type": "grid",
+                            }
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_inventory",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/views/create",
+        json={"view_name": "High Risk Inventory", "visible_fields": ["SKU"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["action"] == "existing"
+    assert body["view_id"] == "vew_existing"
+    assert not [
+        request
+        for request in requests
+        if request.method == "POST" and str(request.url).endswith("/tables/tbl_inventory/views")
+    ]
 
 
 def test_event_callback_still_acknowledges_when_feishu_reply_fails() -> None:

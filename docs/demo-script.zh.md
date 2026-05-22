@@ -54,6 +54,7 @@ Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 1
 @Warehouse 查询 sku_bag_1 的库存、库位和履约风险
 @Warehouse 创建仓储库存飞书表格
 @Warehouse 把 sku_bag_1 的库存快照同步到飞书表格
+@Warehouse 创建一个“高风险库存”视图，只显示 SKU、Warehouse、Available、Risk Level、Recommendation，过滤 Risk Level=high
 ```
 
 预期行为：
@@ -62,11 +63,12 @@ Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 1
 - 仓储工具返回库存、库位、未关闭异常和风险等级。
 - 明确建表请求会调用 `warehouse_inventory_table_provision_tool`，返回 `created` 或 `existing`。
 - 明确同步请求会调用 `warehouse_inventory_table_sync_tool`，返回 `created` 或 `updated`。
+- 明确创建视图请求会先调用 `warehouse_table_schema_tool`，再调用 `warehouse_view_create_tool`，返回 `created` 或 `existing`，并带有 `validated_plan`。
 - 其他部门 workflow 不执行。
 
 讲解：
 
-“这个项目遇到过真实的多 bot 问题：多个机器人在同一个飞书群里时，一条消息可能被所有 bot 收到。现在 gateway 会通过 mention 和 bot open_id 过滤，避免一条群消息触发所有 workflow。对于库存可见性，Agent 可以把库存发布成单向飞书表格快照。这个表格是 read model，不是库存主数据源。”
+“这个项目遇到过真实的多 bot 问题：多个机器人在同一个飞书群里时，一条消息可能被所有 bot 收到。现在 gateway 会通过 mention 和 bot open_id 过滤，避免一条群消息触发所有 workflow。对于库存可见性，Agent 可以把库存发布成单向飞书表格快照，也可以基于真实表结构创建受控飞书视图。这个表格是 read model，不是库存主数据源。”
 
 ## 5. 采购 Demo
 

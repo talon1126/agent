@@ -16,6 +16,8 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_fulfillment_tool",
             "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
+            "warehouse_table_schema_tool",
+            "warehouse_view_create_tool",
             "procurement_mock_tool",
             "operations_mock_tool",
             "echo_task_tool",
@@ -33,6 +35,8 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_fulfillment_tool",
             "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
+            "warehouse_table_schema_tool",
+            "warehouse_view_create_tool",
         },
         "forbidden_tools": {
             "order_status_tool",
@@ -57,6 +61,8 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_fulfillment_tool",
             "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
+            "warehouse_table_schema_tool",
+            "warehouse_view_create_tool",
             "operations_mock_tool",
             "echo_task_tool",
         },
@@ -76,6 +82,8 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_fulfillment_tool",
             "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
+            "warehouse_table_schema_tool",
+            "warehouse_view_create_tool",
             "procurement_mock_tool",
             "echo_task_tool",
         },
@@ -130,8 +138,12 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             system_message = agent["parameters"]["options"]["systemMessage"]
             assert "warehouse_inventory_table_provision_tool" in system_message
             assert "warehouse_inventory_table_sync_tool" in system_message
+            assert "warehouse_table_schema_tool" in system_message
+            assert "warehouse_view_create_tool" in system_message
             assert "创建、初始化或配置飞书库存表" in system_message
             assert "同步、导出、发布、表格、飞书表格或看板" in system_message
+            assert "必须先调用 warehouse_table_schema_tool" in system_message
+            assert "不要编造 schema 中不存在的字段" in system_message
 
 
 def test_department_workflows_connect_directly_to_department_agent() -> None:

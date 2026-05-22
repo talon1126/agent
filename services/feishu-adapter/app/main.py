@@ -43,6 +43,26 @@ class InventoryTableProvisionRequest(BaseModel):
     table_name: str = "Warehouse Inventory Snapshot"
 
 
+class InventoryTableViewFilter(BaseModel):
+    field: str
+    operator: str
+    value: Any | None = None
+
+
+class InventoryTableViewSort(BaseModel):
+    field: str
+    order: str = "asc"
+
+
+class InventoryTableViewCreateRequest(BaseModel):
+    view_name: str
+    table_name: str = "Warehouse Inventory Snapshot"
+    view_type: str = "grid"
+    visible_fields: list[str] = []
+    filters: list[InventoryTableViewFilter] = []
+    sorts: list[InventoryTableViewSort] = []
+
+
 INVENTORY_TABLE_FIELD_SPECS = [
     {"field_name": "SKU", "type": 1},
     {"field_name": "Product Name", "type": 1},
@@ -388,16 +408,58 @@ def create_app(
     def bitable_fields_url(table_identifier: str) -> str:
         return f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables/{table_identifier}/fields"
 
+    def bitable_views_url(table_identifier: str) -> str:
+        return f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables/{table_identifier}/views"
+
     def bitable_field_url(table_identifier: str, field_id: str) -> str:
         return f"{bitable_fields_url(table_identifier)}/{field_id}"
+
+    def field_kind(type_value: Any) -> str:
+        return {
+            1: "text",
+            2: "number",
+            3: "single_select",
+        }.get(type_value, f"type_{type_value}")
+
+    def inventory_field_options(field: dict[str, Any]) -> list[dict[str, Any]]:
+        property_payload = field.get("property") or {}
+        options = property_payload.get("options", [])
+        if not isinstance(options, list):
+            return []
+        return [
+            {
+                "name": str(option.get("name") or ""),
+                "color": option.get("color"),
+            }
+            for option in options
+            if isinstance(option, dict) and option.get("name")
+        ]
+
+    def serialize_inventory_field(field: dict[str, Any]) -> dict[str, Any]:
+        type_value = field.get("type")
+        return {
+            "field_id": str(field.get("field_id") or ""),
+            "field_name": str(field.get("field_name") or ""),
+            "type": type_value,
+            "kind": field_kind(type_value),
+            "options": inventory_field_options(field),
+        }
+
+    def serialize_inventory_view(view: dict[str, Any]) -> dict[str, str]:
+        return {
+            "view_id": str(view.get("view_id") or view.get("id") or ""),
+            "view_name": str(view.get("view_name") or view.get("name") or ""),
+            "view_type": str(view.get("view_type") or view.get("type") or ""),
+        }
 
     def field_signature(field: dict[str, Any]) -> dict[str, Any]:
         signature: dict[str, Any] = {
             "field_name": field["field_name"],
             "type": field["type"],
         }
-        if "property" in field:
-            signature["property"] = field["property"]
+        property_payload = field.get("property")
+        if property_payload is not None:
+            signature["property"] = property_payload
         return signature
 
     def fields_by_name_for_table(*, token: str, table_identifier: str) -> dict[str, dict[str, Any]]:
@@ -474,6 +536,19 @@ def create_app(
         items = payload.get("data", {}).get("items", [])
         return [item for item in items if isinstance(item, dict)]
 
+    def list_inventory_table_views(*, token: str, table_identifier: str) -> list[dict[str, str]]:
+        response = client.get(
+            bitable_views_url(table_identifier),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table view list failed: {payload}")
+        data = payload.get("data", {})
+        items = data.get("items") or data.get("views") or []
+        return [serialize_inventory_view(item) for item in items if isinstance(item, dict)]
+
     def find_inventory_table_by_name(*, token: str, table_name: str) -> dict[str, str]:
         for item in list_inventory_tables(token=token):
             if str(item.get("name") or item.get("table_name") or "") == table_name:
@@ -482,6 +557,64 @@ def create_app(
                     "view_id": str(item.get("default_view_id") or item.get("view_id") or ""),
                 }
         return {"table_id": "", "view_id": ""}
+
+    def resolve_inventory_table_for_schema(*, token: str, table_name: str) -> dict[str, str]:
+        if inventory_table_state["table_id"]:
+            return {
+                "table_id": inventory_table_state["table_id"],
+                "view_id": inventory_table_state["view_id"],
+                "action": "existing",
+            }
+        existing = find_inventory_table_by_name(token=token, table_name=table_name)
+        if existing["table_id"]:
+            remember_inventory_table(existing)
+            return {**existing, "action": "existing"}
+        return create_or_reuse_inventory_table(token=token, table_name=table_name)
+
+    def build_inventory_table_schema(*, token: str, table_name: str) -> dict[str, Any]:
+        table_result = resolve_inventory_table_for_schema(token=token, table_name=table_name)
+        fields_by_name = fields_by_name_for_table(token=token, table_identifier=table_result["table_id"])
+        views = list_inventory_table_views(token=token, table_identifier=table_result["table_id"])
+        return {
+            "table_id": table_result["table_id"],
+            "view_id": table_result["view_id"],
+            "action": table_result["action"],
+            "fields": [serialize_inventory_field(field) for field in fields_by_name.values()],
+            "views": views,
+        }
+
+    def validated_inventory_view_plan(
+        request: InventoryTableViewCreateRequest,
+        fields_by_name: dict[str, dict[str, Any]],
+    ) -> tuple[dict[str, Any], list[str]]:
+        plan = {
+            "view_name": request.view_name.strip(),
+            "view_type": (request.view_type.strip() or "grid").lower(),
+            "visible_fields": [field.strip() for field in request.visible_fields if field.strip()],
+            "filters": [
+                {
+                    "field": item.field.strip(),
+                    "operator": item.operator.strip(),
+                    "value": item.value,
+                }
+                for item in request.filters
+                if item.field.strip()
+            ],
+            "sorts": [
+                {
+                    "field": item.field.strip(),
+                    "order": (item.order.strip() or "asc").lower(),
+                }
+                for item in request.sorts
+                if item.field.strip()
+            ],
+        }
+        referenced_fields: list[str] = []
+        referenced_fields.extend(plan["visible_fields"])
+        referenced_fields.extend(item["field"] for item in plan["filters"])
+        referenced_fields.extend(item["field"] for item in plan["sorts"])
+        missing_fields = list(dict.fromkeys(field for field in referenced_fields if field not in fields_by_name))
+        return plan, missing_fields
 
     def ensure_inventory_table_fields(*, token: str, table_identifier: str) -> None:
         try:
@@ -604,6 +737,221 @@ def create_app(
         record = data.get("record") if isinstance(data.get("record"), dict) else {}
         returned_record_id = str(record.get("record_id") or data.get("record_id") or record_id)
         return {"action": action, "record_id": returned_record_id}
+
+    def create_inventory_table_view(
+        *,
+        token: str,
+        table_identifier: str,
+        view_name: str,
+        view_type: str,
+    ) -> dict[str, str]:
+        response = client.post(
+            bitable_views_url(table_identifier),
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "view_name": view_name,
+                "view_type": view_type,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table view create failed: {payload}")
+        data = payload.get("data", {})
+        view = data.get("view") if isinstance(data.get("view"), dict) else {}
+        view_id = str(view.get("view_id") or data.get("view_id") or "")
+        if not view_id:
+            raise RuntimeError(f"Feishu inventory table view create returned no view_id: {payload}")
+        return {"view_id": view_id, "action": "created"}
+
+    @app.get("/warehouse/inventory-table/schema")
+    def get_inventory_table_schema(table_name: str = "Warehouse Inventory Snapshot") -> dict[str, Any]:
+        started = perf_counter()
+        if not inventory_table_provision_configured():
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "missing_feishu_inventory_table_provision_config",
+                "message": "Feishu inventory table schema requires app credentials and app token.",
+            }
+        normalized_table_name = table_name.strip() or "Warehouse Inventory Snapshot"
+        try:
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            schema = build_inventory_table_schema(token=token, table_name=normalized_table_name)
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"inventory_table_schema:{schema['table_id']}",
+                workflow="/warehouse/inventory-table/schema",
+                status="succeeded",
+                latency_ms=latency_ms,
+                tool_calls=[
+                    {
+                        "tool": "warehouse_table_schema_tool",
+                        "input": {"table_name": normalized_table_name},
+                        "output": {
+                            "table_id": schema["table_id"],
+                            "field_count": len(schema["fields"]),
+                            "view_count": len(schema["views"]),
+                        },
+                    }
+                ],
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                "table_id": schema["table_id"],
+                "table_name": normalized_table_name,
+                "table_url": inventory_table_url_for(schema["table_id"]),
+                "fields": schema["fields"],
+                "views": schema["views"],
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+            write_inventory_table_run_log(
+                event_id="inventory_table_schema:failed",
+                workflow="/warehouse/inventory-table/schema",
+                status="failed",
+                latency_ms=latency_ms,
+                error=message,
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "error": "feishu_inventory_table_schema_failed",
+                "message": message,
+            }
+
+    @app.post("/warehouse/inventory-table/views/create")
+    def create_inventory_view(request: InventoryTableViewCreateRequest) -> dict[str, Any]:
+        started = perf_counter()
+        if not inventory_table_provision_configured():
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "missing_feishu_inventory_table_provision_config",
+                "message": "Feishu inventory view creation requires app credentials and app token.",
+            }
+        table_name = request.table_name.strip() or "Warehouse Inventory Snapshot"
+        try:
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            table_result = resolve_inventory_table_for_schema(token=token, table_name=table_name)
+            fields_by_name = fields_by_name_for_table(token=token, table_identifier=table_result["table_id"])
+            views = list_inventory_table_views(token=token, table_identifier=table_result["table_id"])
+            plan, missing_fields = validated_inventory_view_plan(request, fields_by_name)
+            if not plan["view_name"]:
+                missing_fields = [*missing_fields, "view_name"]
+            if missing_fields:
+                latency_ms = (perf_counter() - started) * 1000
+                write_inventory_table_run_log(
+                    event_id="inventory_table_view_create:invalid",
+                    workflow="/warehouse/inventory-table/views/create",
+                    status="failed",
+                    latency_ms=latency_ms,
+                    error=f"missing fields: {missing_fields}",
+                    tool_calls=[
+                        {
+                            "tool": "warehouse_view_create_tool",
+                            "input": request.model_dump(),
+                            "output": {"missing_fields": missing_fields},
+                        }
+                    ],
+                )
+                return {
+                    "ok": False,
+                    "configured": True,
+                    "error": "invalid_inventory_view_plan",
+                    "message": "The requested view references fields that do not exist in the inventory table.",
+                    "table_id": table_result["table_id"],
+                    "missing_fields": missing_fields,
+                    "available_fields": list(fields_by_name.keys()),
+                    "validated_plan": plan,
+                }
+            for view in views:
+                if view["view_name"] == plan["view_name"]:
+                    latency_ms = (perf_counter() - started) * 1000
+                    write_inventory_table_run_log(
+                        event_id=f"inventory_table_view_create:{view['view_id']}",
+                        workflow="/warehouse/inventory-table/views/create",
+                        status="succeeded",
+                        latency_ms=latency_ms,
+                        tool_calls=[
+                            {
+                                "tool": "warehouse_view_create_tool",
+                                "input": request.model_dump(),
+                                "output": {"action": "existing", "view_id": view["view_id"]},
+                            }
+                        ],
+                    )
+                    return {
+                        "ok": True,
+                        "configured": True,
+                        "action": "existing",
+                        "table_id": table_result["table_id"],
+                        "table_name": table_name,
+                        "table_url": inventory_table_url_for(table_result["table_id"]),
+                        "view_id": view["view_id"],
+                        "view_name": view["view_name"],
+                        "view_type": view["view_type"],
+                        "validated_plan": plan,
+                    }
+            result = create_inventory_table_view(
+                token=token,
+                table_identifier=table_result["table_id"],
+                view_name=plan["view_name"],
+                view_type=plan["view_type"],
+            )
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"inventory_table_view_create:{result['view_id']}",
+                workflow="/warehouse/inventory-table/views/create",
+                status="succeeded",
+                latency_ms=latency_ms,
+                tool_calls=[
+                    {
+                        "tool": "warehouse_view_create_tool",
+                        "input": request.model_dump(),
+                        "output": result,
+                    }
+                ],
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                **result,
+                "table_id": table_result["table_id"],
+                "table_name": table_name,
+                "table_url": inventory_table_url_for(table_result["table_id"]),
+                "view_name": plan["view_name"],
+                "view_type": plan["view_type"],
+                "validated_plan": plan,
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+            write_inventory_table_run_log(
+                event_id="inventory_table_view_create:failed",
+                workflow="/warehouse/inventory-table/views/create",
+                status="failed",
+                latency_ms=latency_ms,
+                error=message,
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "error": "feishu_inventory_table_view_create_failed",
+                "message": message,
+            }
 
     @app.post("/warehouse/inventory-table/provision")
     def provision_inventory_table(request: InventoryTableProvisionRequest) -> dict[str, Any]:
