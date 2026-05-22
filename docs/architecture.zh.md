@@ -53,11 +53,11 @@ workflow 使用 n8n HTTP Request 节点做服务调用。Code 节点只负责 JS
 - Dead-letter records
 - Replay requests
 
-fixture 数据位于 `fixtures/data`，脚本化事件位于 `fixtures/events`。
+fixture 数据位于 `fixtures/data`，脚本化事件位于 `fixtures/events`。配置 `DATABASE_URL` 后，`mock-api` 会在 Postgres 中创建 `warehouse_inventory`、`warehouse_locations` 和 `warehouse_exceptions`，并从 fixtures seed 初始数据。仓储 endpoint 优先读 Postgres；没有配置数据库时才 fallback 到 fixtures。
 
 ### Postgres
 
-Postgres 通过 Docker Compose 启动，作为运维存储目标。当前轻量 demo 中，部分动作记录暂存在 `mock-api` 内存里；`ai-service` 可以使用 Postgres 保存 `session_state` 和 `user_profile`。目标生产形态是持久化 approvals、run logs、dead letters、replay history、精简 user profile 和短期 session state。
+Postgres 通过 Docker Compose 启动，作为运维存储目标。`ai-service` 可以使用它保存 `session_state` 和 `user_profile`；配置 `DATABASE_URL` 后，`mock-api` 使用它保存仓储库存、库位和仓储异常。部分动作记录仍暂存在 `mock-api` 内存里；目标生产形态是持久化 approvals、run logs、dead letters、replay history、精简 user profile 和短期 session state。
 
 ## 决策流程
 
@@ -92,6 +92,7 @@ sequenceDiagram
 - replay endpoint 用于失败事件恢复流程。
 - 多 bot 飞书场景下处理重复消息和共享群聊 fan-out。
 - 政策 RAG 保留 source file、section 和 clause id 元数据。
+- 仓储事实数据保留在 `mock-api` 或未来 warehouse-service API 后面；n8n 和 `feishu-adapter` 不直接读取仓储 PostgreSQL 表。
 - 仓储库存可以单向同步为飞书表格快照/read model，库存写入仍保留在源系统。
 
 ## SaaS 替换点

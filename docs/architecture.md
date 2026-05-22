@@ -53,11 +53,11 @@ The service validates input and output through Pydantic schemas. The first imple
 - Dead-letter records
 - Replay requests
 
-Fixture data lives in `fixtures/data`, and scripted events live in `fixtures/events`.
+Fixture data lives in `fixtures/data`, and scripted events live in `fixtures/events`. When `DATABASE_URL` is configured, `mock-api` creates `warehouse_inventory`, `warehouse_locations`, and `warehouse_exceptions` in Postgres and seeds them from fixtures. Warehouse endpoints read Postgres first and fall back to fixtures when no database is configured.
 
 ### Postgres
 
-Postgres runs in Docker Compose as the operational store target. The current lightweight demo stores some action records in memory inside `mock-api`, while `ai-service` can use Postgres for `session_state` and `user_profile`. The target production shape is persistent approvals, run logs, dead letters, replay history, compact user profiles, and short-term session state.
+Postgres runs in Docker Compose as the operational store target. `ai-service` can use it for `session_state` and `user_profile`, and `mock-api` uses it for warehouse inventory, warehouse locations, and warehouse exceptions when `DATABASE_URL` is configured. Some action records are still in-memory inside `mock-api`; the target production shape is persistent approvals, run logs, dead letters, replay history, compact user profiles, and short-term session state.
 
 ## Decision Flow
 
@@ -92,6 +92,7 @@ sequenceDiagram
 - Replay endpoint for failed-event recovery workflows.
 - Multi-bot Feishu safeguards for duplicate messages and shared-group fan-out.
 - Policy RAG metadata with source file, section, and clause id.
+- Warehouse facts stay behind `mock-api` or a future warehouse-service API. n8n and `feishu-adapter` should not read warehouse Postgres tables directly.
 - One-way warehouse inventory snapshots to Feishu tables as a read model, with inventory writes kept in the source system.
 
 ## SaaS Replacement Points

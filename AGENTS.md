@@ -18,7 +18,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 - `ai-service` owns backend AI logic that should be testable without n8n. It currently exposes deterministic decisioning and a message handling endpoint.
 - `mock-api` simulates enterprise systems: orders, customers, shipments, inventory, warehouse operations, approvals, tickets, internal notifications, run logs, dead letters, and replay.
 - `feishu-adapter` can publish structured message run logs to `FEISHU_RUN_LOG_URL`; the default Docker target is `mock-api /run-logs`.
-- `postgres` exists as the operational store target. Current demo state is still mostly in fixtures or in-memory mock endpoints.
+- `postgres` is the operational store target. `mock-api` now creates and seeds `warehouse_inventory`, `warehouse_locations`, and `warehouse_exceptions` from fixtures when `DATABASE_URL` is configured, while some action records still remain in in-memory mock endpoints.
 - `ai-service` creates `session_state` and `user_profile` in Postgres when `DATABASE_URL` is configured. Fast path stores `last_order_id` in `session_state` and mirrors it into `user_profile.profile` when `sender_id` is available.
 - The recommended chat architecture is now one Feishu Gateway Adapter plus independent department workflows: `Customer Support Workflow`, `Warehouse Workflow`, `Procurement Workflow`, and `Operations Workflow`.
 - `chat-parent-son-agent.json` remains as a legacy compatibility artifact, but the main internal chat path should use department workflows instead of Parent -> son dispatch.
@@ -59,6 +59,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 
 - `services/mock-api/app/main.py`: FastAPI mock enterprise API.
 - `services/mock-api/app/store.py`: fixture loading helpers.
+- `services/mock-api/app/warehouse_store.py`: Postgres-first warehouse repository, schema creation, and fixture seeding for warehouse inventory, locations, and exceptions.
 - `fixtures/data/orders.json`: order fixture data.
 - `fixtures/data/customers.json`: customer fixture data.
 - `fixtures/data/shipments.json`: shipment fixture data.
@@ -82,6 +83,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 - Keep orchestration in n8n.
 - Keep model-facing logic and deterministic testable behavior in `ai-service`.
 - Keep enterprise API simulations in `mock-api`.
+- Keep warehouse facts behind `mock-api`/future warehouse-service APIs. Do not let n8n or `feishu-adapter` read warehouse Postgres tables directly.
 - Use n8n Postgres Chat Memory for conversational references such as "this order".
 - Use `session_state` for durable short-term backend state that must survive `ai-service` restarts, such as the fast path `last_order_id`.
 - Use `user_profile` for durable user-level facts and future summaries/preferences; keep it compact and avoid storing full chat transcripts there.

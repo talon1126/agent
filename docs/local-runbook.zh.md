@@ -127,6 +127,15 @@ connected to wss://msg-frontier.feishu.cn/ws/v2...
 
 配置 `FEISHU_RUN_LOG_URL` 后，每条处理完成的飞书消息都会写入结构化 run log，包含 `message_id`、`bot_name`、`workflow`、`status`、耗时字段、`error`，以及 workflow 返回的 `tool_calls`。
 
+`mock-api` 启动时如果配置了 `DATABASE_URL`，会从 fixtures 创建并 seed 仓储相关 PostgreSQL 表。可以这样验证：
+
+```powershell
+docker compose exec -T postgres psql -U agent -d agent_ops -c "\dt warehouse_*"
+docker compose exec -T postgres psql -U agent -d agent_ops -c "select sku, available, reserved, pending_orders from warehouse_inventory order by sku;"
+```
+
+仓储 endpoint 仍然统一通过 `mock-api` 访问；n8n 和 `feishu-adapter` 不应该直接读取这些表。
+
 仓储用户可以明确要求创建固定 schema 的飞书库存表，并把某个 SKU 库存快照同步进去。先配置 `FEISHU_INVENTORY_TABLE_APP_TOKEN` 和表格应用凭证，然后创建表：
 
 ```powershell

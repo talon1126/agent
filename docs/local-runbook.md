@@ -127,6 +127,15 @@ When a real bot message arrives, the adapter logs `received feishu long connecti
 
 When `FEISHU_RUN_LOG_URL` is configured, every completed Feishu message writes a structured run log with `message_id`, `bot_name`, `workflow`, `status`, latency fields, `error`, and workflow `tool_calls` if returned.
 
+When `mock-api` starts with `DATABASE_URL`, it creates and seeds warehouse tables from fixtures. Verify them with:
+
+```powershell
+docker compose exec -T postgres psql -U agent -d agent_ops -c "\dt warehouse_*"
+docker compose exec -T postgres psql -U agent -d agent_ops -c "select sku, available, reserved, pending_orders from warehouse_inventory order by sku;"
+```
+
+Warehouse endpoints still go through `mock-api`; n8n and `feishu-adapter` should not read these tables directly.
+
 Warehouse users can explicitly ask to create a fixed-schema Feishu inventory table and sync an SKU snapshot to it. Configure `FEISHU_INVENTORY_TABLE_APP_TOKEN` and table app credentials first, then provision:
 
 ```powershell

@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.store import FIXTURE_DIR, find_by_id, load_json
+from app.warehouse_store import WarehouseRepository, create_warehouse_repository_from_env
 
 app = FastAPI(title="Ecommerce Mock Enterprise API")
 
@@ -15,6 +16,14 @@ RUN_LOGS: list[dict] = []
 DEAD_LETTERS: list[dict] = []
 REPLAYS: list[dict] = []
 INTERNAL_NOTIFICATIONS: list[dict] = []
+WAREHOUSE_REPOSITORY: WarehouseRepository | None | bool = False
+
+
+def get_warehouse_repository() -> WarehouseRepository | None:
+    global WAREHOUSE_REPOSITORY
+    if WAREHOUSE_REPOSITORY is False:
+        WAREHOUSE_REPOSITORY = create_warehouse_repository_from_env(FIXTURE_DIR)
+    return WAREHOUSE_REPOSITORY if isinstance(WAREHOUSE_REPOSITORY, WarehouseRepository) else None
 
 
 class ApprovalRequest(BaseModel):
@@ -108,6 +117,11 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.on_event("startup")
+def startup_warehouse_store() -> None:
+    get_warehouse_repository()
+
+
 @app.get("/orders/{order_id}")
 def get_order(order_id: str) -> dict:
     order = find_by_id("orders.json", "order_id", order_id)
@@ -141,14 +155,27 @@ def get_inventory(sku: str) -> dict:
 
 
 def load_locations_for_sku(sku: str) -> list[dict[str, Any]]:
+    repository = get_warehouse_repository()
+    if repository:
+        return repository.list_locations_for_sku(sku)
     return [item for item in load_json("warehouse_locations.json") if item.get("sku") == sku]
 
 
 def load_exceptions_for_sku(sku: str, status: str | None = None) -> list[dict[str, Any]]:
+    repository = get_warehouse_repository()
+    if repository:
+        return repository.list_exceptions_for_sku(sku, status)
     records = [item for item in load_json("warehouse_exceptions.json") if item.get("sku") == sku]
     if status:
         records = [item for item in records if item.get("status") == status]
     return records
+
+
+def load_inventory_for_sku(sku: str) -> dict[str, Any] | None:
+    repository = get_warehouse_repository()
+    if repository:
+        return repository.get_inventory(sku)
+    return find_by_id("inventory.json", "sku", sku)
 
 
 def warehouse_risk_level(inventory: dict, open_exceptions: list[dict[str, Any]]) -> str:
@@ -167,7 +194,7 @@ def warehouse_risk_level(inventory: dict, open_exceptions: list[dict[str, Any]])
 
 @app.get("/warehouse/inventory/{sku}")
 def get_warehouse_inventory(sku: str) -> dict:
-    inventory = find_by_id("inventory.json", "sku", sku)
+    inventory = load_inventory_for_sku(sku)
     if not inventory:
         raise HTTPException(status_code=404, detail="inventory not found")
     locations = load_locations_for_sku(sku)
@@ -208,7 +235,7 @@ def check_warehouse_fulfillment(payload: dict) -> dict:
             "blockers": ["missing_sku"],
         }
 
-    inventory = find_by_id("inventory.json", "sku", sku)
+    inventory = load_inventory_for_sku(sku)
     if not inventory:
         return {
             "ok": False,
@@ -257,7 +284,7 @@ def check_warehouse_fulfillment(payload: dict) -> dict:
 @app.post("/procurement/mock")
 def procurement_mock(payload: dict) -> dict:
     sku = str(payload.get("sku") or "").strip()
-    inventory = find_by_id("inventory.json", "sku", sku) if sku else None
+    inventory = load_inventory_for_sku(sku) if sku else None
     if not inventory:
         return {
             "ok": False,

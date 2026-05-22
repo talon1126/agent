@@ -18,7 +18,7 @@
 - `ai-service` 负责后端 AI 逻辑，要求可以脱离 n8n 单独测试。当前包含确定性决策和消息处理入口。
 - `mock-api` 模拟企业内部系统：订单、客户、物流、库存、仓储作业、审批、工单、内部通知、运行日志、dead letter 和 replay。
 - `feishu-adapter` 可以把结构化消息 run log 写到 `FEISHU_RUN_LOG_URL`；Docker 默认目标是 `mock-api /run-logs`。
-- `postgres` 是运维存储目标。当前 demo 状态主要仍在 fixtures 或 mock endpoint 内存中。
+- `postgres` 是运维存储目标。配置 `DATABASE_URL` 后，`mock-api` 现在会从 fixtures 创建并 seed `warehouse_inventory`、`warehouse_locations` 和 `warehouse_exceptions`；部分动作记录仍保留在 mock endpoint 内存中。
 - 配置 `DATABASE_URL` 后，`ai-service` 会在 Postgres 中创建 `session_state` 和 `user_profile`。fast path 会把 `last_order_id` 存到 `session_state`，如果有 `sender_id`，也会同步到 `user_profile.profile`。
 - 当前推荐聊天架构是一个 Feishu Gateway Adapter 加多个独立部门 workflow：`Customer Support Workflow`、`Warehouse Workflow`、`Procurement Workflow` 和 `Operations Workflow`。
 - `chat-parent-son-agent.json` 仍作为历史兼容文件保留，但主内部聊天链路应使用部门 workflow，而不是 Parent -> son 分发。
@@ -59,6 +59,7 @@
 
 - `services/mock-api/app/main.py`：FastAPI mock 企业 API。
 - `services/mock-api/app/store.py`：fixture 加载 helper。
+- `services/mock-api/app/warehouse_store.py`：Postgres-first 仓储 repository，负责创建仓储库存、库位和异常表，并从 fixtures seed 数据。
 - `fixtures/data/orders.json`：订单 fixture 数据。
 - `fixtures/data/customers.json`：客户 fixture 数据。
 - `fixtures/data/shipments.json`：物流 fixture 数据。
@@ -82,6 +83,7 @@
 - 编排保留在 n8n。
 - 模型相关逻辑和确定性可测试行为保留在 `ai-service`。
 - 企业 API 模拟保留在 `mock-api`。
+- 仓储事实数据必须通过 `mock-api` / 未来的 warehouse-service API 暴露。不要让 n8n 或 `feishu-adapter` 直接读取仓储 PostgreSQL 表。
 - 使用 n8n Postgres Chat Memory 处理“这个订单”这类对话指代。
 - 使用 `session_state` 保存需要跨 `ai-service` 重启保留的短期后端状态，例如 fast path 的 `last_order_id`。
 - 使用 `user_profile` 保存长期用户级事实、未来摘要和偏好；保持精简，不要把完整聊天记录放进去。
