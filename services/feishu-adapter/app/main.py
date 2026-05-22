@@ -104,6 +104,7 @@ def create_app(
     feishu_api_base_url: str | None = None,
     feishu_event_mode: str | None = None,
     feishu_bots_json: str | None = None,
+    run_log_url: str | None = None,
     long_connection_starter: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Feishu Adapter")
@@ -117,6 +118,7 @@ def create_app(
     api_base_url = feishu_api_base_url or os.getenv("FEISHU_API_BASE_URL", FEISHU_API_BASE_URL)
     event_mode = feishu_event_mode or os.getenv("FEISHU_EVENT_MODE", "http")
     bots_json = feishu_bots_json if feishu_bots_json is not None else os.getenv("FEISHU_BOTS_JSON", "")
+    runtime_run_log_url = run_log_url if run_log_url is not None else os.getenv("FEISHU_RUN_LOG_URL", "")
     bot_configs = parse_bot_configs(
         bots_json=bots_json,
         fallback_webhook_url=webhook_url,
@@ -127,28 +129,109 @@ def create_app(
     start_listener = long_connection_starter or start_long_connection_listener
     processed_message_ids: set[str] = set()
     processed_message_ids_lock = threading.Lock()
+    listener_count = 0
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/details")
+    def health_details() -> dict[str, Any]:
+        with processed_message_ids_lock:
+            processed_count = len(processed_message_ids)
+        return {
+            "status": "ok",
+            "event_mode": event_mode,
+            "bot_count": len(bot_configs),
+            "listener_count": getattr(app.state, "feishu_listener_count", listener_count),
+            "run_log_enabled": bool(runtime_run_log_url),
+            "processed_message_count": processed_count,
+            "bots": [
+                {
+                    "name": bot.name,
+                    "n8n_webhook_url": bot.n8n_webhook_url,
+                    "n8n_webhook_status": "configured" if bot.n8n_webhook_url else "missing",
+                    "has_app_id": bool(bot.app_id),
+                    "has_app_secret": bool(bot.app_secret),
+                    "has_bot_open_id": bool(bot.bot_open_id),
+                }
+                for bot in bot_configs
+            ],
+        }
+
+    def tool_calls_from_n8n_payload(payload: dict[str, Any]) -> list[Any]:
+        tool_calls = payload.get("tool_trace") or payload.get("tool_calls") or []
+        return tool_calls if isinstance(tool_calls, list) else []
+
+    def write_run_log(
+        *,
+        bot: BotConfig,
+        message: Any,
+        status: str,
+        total_ms: float,
+        n8n_ms: float = 0.0,
+        token_ms: float = 0.0,
+        reply_ms: float = 0.0,
+        has_reply: bool = False,
+        tool_calls: list[Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        if not runtime_run_log_url:
+            return
+        try:
+            client.post(
+                runtime_run_log_url,
+                json={
+                    "event_id": message.message_id,
+                    "message_id": message.message_id,
+                    "bot_name": bot.name,
+                    "workflow": bot.n8n_webhook_url,
+                    "status": status,
+                    "latency_ms": round(total_ms, 1),
+                    "n8n_ms": round(n8n_ms, 1),
+                    "token_ms": round(token_ms, 1),
+                    "reply_ms": round(reply_ms, 1),
+                    "has_reply": has_reply,
+                    "tool_calls": tool_calls or [],
+                    "error": error,
+                },
+            ).raise_for_status()
+        except httpx.HTTPError as run_log_error:
+            logger.warning(
+                "failed to write feishu run log bot=%s message_id=%s error=%s",
+                bot.name,
+                message.message_id,
+                run_log_error,
+            )
 
     def process_message(bot: BotConfig, message: Any) -> None:
         total_started = perf_counter()
         n8n_ms = 0.0
         token_ms = 0.0
         reply_ms = 0.0
+        tool_calls: list[Any] = []
         try:
             n8n_started = perf_counter()
             n8n_response = client.post(bot.n8n_webhook_url, json=to_n8n_payload(message))
             n8n_ms = (perf_counter() - n8n_started) * 1000
             n8n_response.raise_for_status()
             n8n_payload = n8n_response.json()
+            tool_calls = tool_calls_from_n8n_payload(n8n_payload)
         except httpx.HTTPError as error:
+            total_ms = (perf_counter() - total_started) * 1000
             logger.error(
                 "failed to forward feishu bot=%s message_id=%s to n8n error=%s",
                 bot.name,
                 message.message_id,
                 error,
+            )
+            write_run_log(
+                bot=bot,
+                message=message,
+                status="failed",
+                total_ms=total_ms,
+                n8n_ms=n8n_ms,
+                error=str(error),
             )
             return
 
@@ -163,17 +246,31 @@ def create_app(
         )
 
         if not bot.app_id or not bot.app_secret or not reply:
+            total_ms = (perf_counter() - total_started) * 1000
             logger.info(
                 "feishu bot=%s message_id=%s completed total_ms=%.1f n8n_ms=%.1f token_ms=%.1f reply_ms=%.1f",
                 bot.name,
                 message.message_id,
-                (perf_counter() - total_started) * 1000,
+                total_ms,
                 n8n_ms,
                 token_ms,
                 reply_ms,
             )
+            write_run_log(
+                bot=bot,
+                message=message,
+                status="succeeded",
+                total_ms=total_ms,
+                n8n_ms=n8n_ms,
+                token_ms=token_ms,
+                reply_ms=reply_ms,
+                has_reply=bool(reply),
+                tool_calls=tool_calls,
+            )
             return
 
+        status = "succeeded"
+        error_text = None
         try:
             token_started = perf_counter()
             tenant_access_token = get_tenant_access_token(
@@ -199,6 +296,8 @@ def create_app(
                 reply_ms,
             )
         except httpx.HTTPError as error:
+            status = "reply_failed"
+            error_text = str(error)
             logger.warning(
                 "failed to reply to feishu bot=%s message_id=%s error=%s",
                 bot.name,
@@ -206,14 +305,27 @@ def create_app(
                 error,
             )
         finally:
+            total_ms = (perf_counter() - total_started) * 1000
             logger.info(
                 "feishu bot=%s message_id=%s completed total_ms=%.1f n8n_ms=%.1f token_ms=%.1f reply_ms=%.1f",
                 bot.name,
                 message.message_id,
-                (perf_counter() - total_started) * 1000,
+                total_ms,
                 n8n_ms,
                 token_ms,
                 reply_ms,
+            )
+            write_run_log(
+                bot=bot,
+                message=message,
+                status=status,
+                total_ms=total_ms,
+                n8n_ms=n8n_ms,
+                token_ms=token_ms,
+                reply_ms=reply_ms,
+                has_reply=True,
+                tool_calls=tool_calls,
+                error=error_text,
             )
 
     def handle_feishu_event(bot: BotConfig, payload: dict[str, Any]) -> None:
@@ -260,7 +372,9 @@ def create_app(
 
     @app.on_event("startup")
     def startup_long_connection() -> None:
+        nonlocal listener_count
         if event_mode != "long_connection":
+            app.state.feishu_listener_count = 0
             return
         clients = []
         for bot in bot_configs:
@@ -279,6 +393,8 @@ def create_app(
             )
             logger.info("started feishu long connection listener bot=%s", bot.name)
         app.state.feishu_long_connection_clients = clients
+        listener_count = len(clients)
+        app.state.feishu_listener_count = listener_count
 
     @app.post("/feishu/events")
     def receive_event(payload: dict[str, Any], background_tasks: BackgroundTasks) -> dict[str, Any]:

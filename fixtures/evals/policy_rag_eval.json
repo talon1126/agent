@@ -1,0 +1,27 @@
+[
+  {
+    "id": "refund_followup",
+    "query": "这个订单怎么退款？",
+    "expected_clause_prefix": "REFUND-"
+  },
+  {
+    "id": "refund_money_back",
+    "query": "客户说想退钱，应该按照哪条规则处理？",
+    "expected_clause_prefix": "REFUND-"
+  },
+  {
+    "id": "logistics_delay",
+    "query": "物流延迟了应该怎么处理？",
+    "expected_clause_prefix": "LOGISTICS-"
+  },
+  {
+    "id": "bad_review",
+    "query": "客户给了差评，客服应该怎么回应？",
+    "expected_clause_prefix": "REVIEW-"
+  },
+  {
+    "id": "inventory_low_stock",
+    "query": "库存不足会影响售后履约吗？",
+    "expected_clause_prefix": "INVENTORY-"
+  }
+]

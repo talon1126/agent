@@ -25,6 +25,62 @@ def test_url_verification_returns_challenge() -> None:
     assert response.json() == {"challenge": "challenge-code"}
 
 
+def test_health_details_reports_gateway_configuration_without_secrets() -> None:
+    bots_json = json.dumps(
+        [
+            {
+                "name": "customer_support",
+                "app_id": "cli_customer",
+                "app_secret": "secret_customer",
+                "bot_open_id": "ou_customer_bot",
+                "n8n_webhook_url": "http://n8n.local/webhook/customer-support-inbound",
+            },
+            {
+                "name": "warehouse",
+                "app_id": "cli_warehouse",
+                "app_secret": "secret_warehouse",
+                "n8n_webhook_url": "http://n8n.local/webhook/warehouse-inbound",
+            },
+        ]
+    )
+    app = create_app(
+        feishu_bots_json=bots_json,
+        feishu_event_mode="long_connection",
+        run_log_url="http://mock-api.local/run-logs",
+        long_connection_starter=lambda **kwargs: object(),
+    )
+    with TestClient(app) as client:
+        response = client.get("/health/details")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["event_mode"] == "long_connection"
+    assert body["bot_count"] == 2
+    assert body["listener_count"] == 2
+    assert body["run_log_enabled"] is True
+    assert body["processed_message_count"] == 0
+    assert body["bots"] == [
+        {
+            "name": "customer_support",
+            "n8n_webhook_url": "http://n8n.local/webhook/customer-support-inbound",
+            "n8n_webhook_status": "configured",
+            "has_app_id": True,
+            "has_app_secret": True,
+            "has_bot_open_id": True,
+        },
+        {
+            "name": "warehouse",
+            "n8n_webhook_url": "http://n8n.local/webhook/warehouse-inbound",
+            "n8n_webhook_status": "configured",
+            "has_app_id": True,
+            "has_app_secret": True,
+            "has_bot_open_id": False,
+        },
+    ]
+    assert "secret_customer" not in json.dumps(body)
+
+
 def test_normalize_text_event_extracts_chat_message_fields() -> None:
     payload = {
         "schema": "2.0",
@@ -221,6 +277,86 @@ def test_event_callback_replies_to_feishu_when_credentials_are_configured() -> N
         "msg_type": "text",
         "content": '{"text": "Order ord_100 is delivered."}',
     }
+
+
+def test_event_callback_writes_structured_run_log() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "http://n8n.local/webhook/customer-support-inbound":
+            return httpx.Response(
+                200,
+                json={
+                    "reply": "Order ord_100 is delivered.",
+                    "tool_trace": [
+                        {
+                            "tool": "order_status_tool",
+                            "input": {"order_id": "ord_100"},
+                            "output": {"status": "delivered"},
+                        }
+                    ],
+                },
+            )
+        if str(request.url) == "http://mock-api.local/run-logs":
+            return httpx.Response(200, json={"ok": True})
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/im/v1/messages/om_001/reply":
+            return httpx.Response(200, json={"code": 0})
+        return httpx.Response(404, json={"error": "unexpected url"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_bots_json=json.dumps(
+            [
+                {
+                    "name": "customer_support",
+                    "app_id": "cli_customer",
+                    "app_secret": "secret_customer",
+                    "n8n_webhook_url": "http://n8n.local/webhook/customer-support-inbound",
+                }
+            ]
+        ),
+        feishu_event_mode="long_connection",
+        run_log_url="http://mock-api.local/run-logs",
+        long_connection_starter=lambda **kwargs: object(),
+    )
+
+    with TestClient(app):
+        app.state.feishu_long_connection_clients
+        on_event = app.state.feishu_long_connection_clients
+        assert on_event is not None
+
+    response = TestClient(app).post(
+        "/feishu/events",
+        json={
+            "schema": "2.0",
+            "header": {"event_id": "evt_001", "event_type": "im.message.receive_v1"},
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou_sender"}},
+                "message": {
+                    "message_id": "om_001",
+                    "chat_id": "oc_chat",
+                    "message_type": "text",
+                    "content": '{"text":"帮我查一下订单 ord_100"}',
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    run_log_requests = [request for request in requests if str(request.url) == "http://mock-api.local/run-logs"]
+    assert len(run_log_requests) == 1
+    run_log = json.loads(run_log_requests[0].content)
+    assert run_log["event_id"] == "om_001"
+    assert run_log["message_id"] == "om_001"
+    assert run_log["bot_name"] == "customer_support"
+    assert run_log["workflow"] == "http://n8n.local/webhook/customer-support-inbound"
+    assert run_log["status"] == "succeeded"
+    assert run_log["has_reply"] is True
+    assert run_log["tool_calls"][0]["tool"] == "order_status_tool"
+    assert run_log["latency_ms"] >= 0
 
 
 def test_event_callback_still_acknowledges_when_feishu_reply_fails() -> None:

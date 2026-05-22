@@ -59,6 +59,34 @@ DEPARTMENTS = {
     },
 }
 
+FORMAT_REPLY_JS = """const source = $items('Normalize Inbound Message')[0]?.json ?? {};
+
+function normalizeToolTrace(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((step) => ({
+    tool: step.tool ?? step.name ?? step.action?.tool ?? 'unknown_tool',
+    input: step.input ?? step.toolInput ?? step.action?.toolInput ?? null,
+    output: step.output ?? step.result ?? step.observation ?? null,
+  }));
+}
+
+return $input.all().map((item) => {
+  const reply = item.json.answer ?? item.json.output ?? item.json.text ?? item.json.response ?? JSON.stringify(item.json);
+  const rawToolTrace = item.json.tool_trace ?? item.json.tool_calls ?? item.json.intermediateSteps ?? item.json.intermediate_steps ?? [];
+  return {
+    json: {
+      ok: true,
+      platform: source.platform,
+      chat_id: source.chat_id,
+      sender_id: source.sender_id,
+      message_id: source.message_id,
+      reply,
+      tool_trace: normalizeToolTrace(rawToolTrace),
+      raw_agent_output: item.json
+    }
+  };
+});"""
+
 
 def load_source_workflow() -> dict[str, Any]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
@@ -146,6 +174,7 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
 
     format_reply = clone_node(source, "Format Webhook Reply")
     format_reply["position"] = [720, 80]
+    format_reply["parameters"]["jsCode"] = FORMAT_REPLY_JS
     respond = clone_node(source, "Respond to Webhook")
     respond["position"] = [944, 80]
 

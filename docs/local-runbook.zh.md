@@ -113,6 +113,7 @@ FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret
 ```powershell
 docker compose up -d --build feishu-adapter
 docker compose logs -f feishu-adapter
+Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 10
 ```
 
 预期启动日志：
@@ -123,6 +124,8 @@ connected to wss://msg-frontier.feishu.cn/ws/v2...
 ```
 
 真实机器人消息到达时，adapter 会依次输出 `received feishu long connection event`、`forwarded ... bot=<bot_name> ... to n8n`、`replied to feishu`。群聊里被跳过的消息会记录为 `skipping group feishu event ... because bot was not mentioned` 或 `skipping unmentioned group feishu event ...`。adapter 会按 `bot_name + message_id` 对重复推送做去重。
+
+配置 `FEISHU_RUN_LOG_URL` 后，每条处理完成的飞书消息都会写入结构化 run log，包含 `message_id`、`bot_name`、`workflow`、`status`、耗时字段、`error`，以及 workflow 返回的 `tool_calls`。
 
 本地模拟端点是：
 

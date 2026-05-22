@@ -133,7 +133,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\nreturn $input.all().map((item) => {\n  const reply = item.json.answer ?? item.json.output ?? item.json.text ?? item.json.response ?? JSON.stringify(item.json);\n  return {\n    json: {\n      ok: true,\n      platform: source.platform,\n      chat_id: source.chat_id,\n      sender_id: source.sender_id,\n      message_id: source.message_id,\n      reply,\n      raw_agent_output: item.json\n    }\n  };\n});"
+          "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\n\nfunction normalizeToolTrace(raw) {\n  if (!Array.isArray(raw)) return [];\n  return raw.map((step) => ({\n    tool: step.tool ?? step.name ?? step.action?.tool ?? 'unknown_tool',\n    input: step.input ?? step.toolInput ?? step.action?.toolInput ?? null,\n    output: step.output ?? step.result ?? step.observation ?? null,\n  }));\n}\n\nreturn $input.all().map((item) => {\n  const reply = item.json.answer ?? item.json.output ?? item.json.text ?? item.json.response ?? JSON.stringify(item.json);\n  const rawToolTrace = item.json.tool_trace ?? item.json.tool_calls ?? item.json.intermediateSteps ?? item.json.intermediate_steps ?? [];\n  return {\n    json: {\n      ok: true,\n      platform: source.platform,\n      chat_id: source.chat_id,\n      sender_id: source.sender_id,\n      message_id: source.message_id,\n      reply,\n      tool_trace: normalizeToolTrace(rawToolTrace),\n      raw_agent_output: item.json\n    }\n  };\n});"
         },
         "id": "b25f55b7-3df4-44ce-9809-e714eb4e9a62",
         "name": "Format Webhook Reply",

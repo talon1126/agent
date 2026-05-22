@@ -60,6 +60,7 @@ services:
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
       FEISHU_API_BASE_URL: ${FEISHU_API_BASE_URL:-https://open.feishu.cn}
       FEISHU_EVENT_MODE: ${FEISHU_EVENT_MODE:-long_connection}
+      FEISHU_RUN_LOG_URL: ${FEISHU_RUN_LOG_URL:-http://mock-api:8000/run-logs}
       FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:-}
       FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
     ports:

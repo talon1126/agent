@@ -115,6 +115,9 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
         assert memory["parameters"]["sessionKey"].startswith(
             f"={{{{ '{expected['agent'].lower().replace(' ', '_').replace('_agent', '')}:"
         )
+        format_reply = node_by_name(workflow, "Format Webhook Reply")
+        assert "tool_trace" in format_reply["parameters"]["jsCode"]
+        assert "intermediateSteps" in format_reply["parameters"]["jsCode"]
 
 
 def test_department_workflows_connect_directly_to_department_agent() -> None:

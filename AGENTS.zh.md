@@ -17,6 +17,7 @@
 - `feishu-adapter` 负责飞书/Lark 协议处理。它支持 `FEISHU_BOTS_JSON` 多机器人网关模式，默认使用长连接模式，归一化收到的消息，把每个 bot 转发到对应部门 n8n webhook，按 `bot_name + message_id` 去重，并把回复发回飞书。
 - `ai-service` 负责后端 AI 逻辑，要求可以脱离 n8n 单独测试。当前包含确定性决策和消息处理入口。
 - `mock-api` 模拟企业内部系统：订单、客户、物流、库存、仓储作业、审批、工单、内部通知、运行日志、dead letter 和 replay。
+- `feishu-adapter` 可以把结构化消息 run log 写到 `FEISHU_RUN_LOG_URL`；Docker 默认目标是 `mock-api /run-logs`。
 - `postgres` 是运维存储目标。当前 demo 状态主要仍在 fixtures 或 mock endpoint 内存中。
 - 配置 `DATABASE_URL` 后，`ai-service` 会在 Postgres 中创建 `session_state` 和 `user_profile`。fast path 会把 `last_order_id` 存到 `session_state`，如果有 `sender_id`，也会同步到 `user_profile.profile`。
 - 当前推荐聊天架构是一个 Feishu Gateway Adapter 加多个独立部门 workflow：`Customer Support Workflow`、`Warehouse Workflow`、`Procurement Workflow` 和 `Operations Workflow`。
@@ -25,6 +26,7 @@
 ## 关键入口
 
 - 飞书部门聊天链路：部门机器人 -> `feishu-adapter` -> 部门 n8n webhook -> 部门 Agent -> tool/API -> 飞书回复。
+- 飞书网关诊断：`feishu-adapter` 的 `GET /health/details` 会展示 bot 配置、listener 数量、已处理消息数量和 run-log 状态，但不暴露 secret。
 - fast path 链路：飞书 -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> 飞书回复。如果 fast path 拒绝处理，workflow 会回退到 Parent Agent。
 - 部门 workflow 导出：`n8n/workflows/customer-support-workflow.json`、`n8n/workflows/warehouse-workflow.json`、`n8n/workflows/procurement-workflow.json` 和 `n8n/workflows/operations-workflow.json`
 - Parent/son workflow 导出：`n8n/workflows/chat-parent-son-agent.json` 是历史兼容文件。
@@ -40,6 +42,7 @@
 - Parent 和 son memory 可以共用同一张物理表，但 `sessionKey` 必须分别加命名空间（`parent:` 和 `customer_support:`），避免跨 Agent 上下文污染。
 - n8n 政策 RAG 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `policy_search_tool`
 - 政策检索 API：`services/mock-api/app/main.py` 中的 `POST /policies/search`
+- 政策 RAG eval 用例：`fixtures/evals/policy_rag_eval.json`
 
 ## ai-service 结构
 
@@ -113,5 +116,6 @@ docker compose ps
 - ai-service 本地端口：`http://localhost:8001`
 - mock-api 本地端口：`http://localhost:8002`
 - feishu-adapter 本地端口：`http://localhost:8010`
+- feishu-adapter 诊断端点：`http://localhost:8010/health/details`
 
 `ord_100` 的预期订单 smoke 片段：`Order ord_100 is delivered. Shipment status is delivered.`

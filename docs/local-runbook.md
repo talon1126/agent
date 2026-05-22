@@ -113,6 +113,7 @@ Start or rebuild the adapter:
 ```powershell
 docker compose up -d --build feishu-adapter
 docker compose logs -f feishu-adapter
+Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 10
 ```
 
 Expected startup log:
@@ -123,6 +124,8 @@ connected to wss://msg-frontier.feishu.cn/ws/v2...
 ```
 
 When a real bot message arrives, the adapter logs `received feishu long connection event`, then `forwarded ... bot=<bot_name> ... to n8n`, and finally `replied to feishu`. In group chats, skipped messages are logged as `skipping group feishu event ... because bot was not mentioned` or `skipping unmentioned group feishu event ...`. The adapter deduplicates repeated pushes by `bot_name + message_id`.
+
+When `FEISHU_RUN_LOG_URL` is configured, every completed Feishu message writes a structured run log with `message_id`, `bot_name`, `workflow`, `status`, latency fields, `error`, and workflow `tool_calls` if returned.
 
 The local simulation endpoint is:
 

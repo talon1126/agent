@@ -2,15 +2,21 @@
 
 ## System Goal
 
-This project models an internal ecommerce after-sales workflow. The workflow receives operational events, gathers context from enterprise systems, asks an AI decision service for a structured recommendation, applies guardrails, and records operational results.
+This project models an internal ecommerce operations copilot. Department employees interact through Feishu bots, and each bot maps to an independent n8n workflow for customer support, warehouse, procurement, or operations work. The system can also run scripted after-sales events for repeatable demos.
 
 It is intentionally built as a local, Docker-first demo so the system can be shown without external SaaS accounts or paid model calls.
 
 ## Components
 
+### Feishu Gateway Adapter
+
+`feishu-adapter` owns Feishu/Lark protocol handling. It supports multi-bot long connection mode, normalizes inbound messages, filters shared-group messages by bot mention, forwards each department bot to its own n8n webhook, replies with the matching bot credentials, and writes structured run logs when configured.
+
+The detailed health endpoint `GET /health/details` reports bot names, webhook configuration, listener count, processed message count, and run-log status without exposing secrets.
+
 ### n8n Orchestration Layer
 
-n8n owns workflow sequencing:
+n8n owns workflow sequencing for both event workflows and department chat workflows:
 
 1. Receive an after-sales event through `POST /webhook/after-sales-event`.
 2. Fetch order, customer, shipment, and inventory context from `mock-api`.
@@ -18,6 +24,8 @@ n8n owns workflow sequencing:
 4. Call `ai-service /decide`.
 5. Create an approval request, support ticket, or internal notification.
 6. Write a run log.
+
+The main internal chat path uses independent department workflows rather than a legacy Parent/Son dispatcher graph. This keeps department ownership and tool permissions easier to explain and test.
 
 The workflow uses n8n HTTP Request nodes for service calls. Code nodes only reshape JSON payloads, which keeps the flow compatible with n8n v2 where Code nodes cannot make direct HTTP requests.
 
@@ -49,7 +57,7 @@ Fixture data lives in `fixtures/data`, and scripted events live in `fixtures/eve
 
 ### Postgres
 
-Postgres runs in Docker Compose as the operational store target. The current lightweight demo stores action records in memory inside `mock-api`, while keeping the Postgres container available for the next phase: persistent approvals, run logs, dead letters, and replay history.
+Postgres runs in Docker Compose as the operational store target. The current lightweight demo stores some action records in memory inside `mock-api`, while `ai-service` can use Postgres for `session_state` and `user_profile`. The target production shape is persistent approvals, run logs, dead letters, replay history, compact user profiles, and short-term session state.
 
 ## Decision Flow
 
@@ -79,9 +87,11 @@ sequenceDiagram
 - Schema validation at the AI boundary through `EventContext` and `DecisionOutput`.
 - Deterministic fake AI mode for repeatable tests and demos.
 - Approval guardrails for high-value refunds, VIP cases, and public review risk.
-- Run logs with event id, workflow id, status, latency, model, token estimate, and error.
+- Run logs with message/event id, bot name, workflow, status, latency, tool calls, and error.
 - Dead-letter endpoint for unrecoverable events.
 - Replay endpoint for failed-event recovery workflows.
+- Multi-bot Feishu safeguards for duplicate messages and shared-group fan-out.
+- Policy RAG metadata with source file, section, and clause id.
 
 ## SaaS Replacement Points
 

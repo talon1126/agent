@@ -17,6 +17,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 - `feishu-adapter` owns Feishu/Lark protocol handling. It supports a multi-bot gateway mode with `FEISHU_BOTS_JSON`, uses long connection mode by default, normalizes inbound messages, forwards each bot to its department n8n webhook, deduplicates by `bot_name + message_id`, and replies to Feishu.
 - `ai-service` owns backend AI logic that should be testable without n8n. It currently exposes deterministic decisioning and a message handling endpoint.
 - `mock-api` simulates enterprise systems: orders, customers, shipments, inventory, warehouse operations, approvals, tickets, internal notifications, run logs, dead letters, and replay.
+- `feishu-adapter` can publish structured message run logs to `FEISHU_RUN_LOG_URL`; the default Docker target is `mock-api /run-logs`.
 - `postgres` exists as the operational store target. Current demo state is still mostly in fixtures or in-memory mock endpoints.
 - `ai-service` creates `session_state` and `user_profile` in Postgres when `DATABASE_URL` is configured. Fast path stores `last_order_id` in `session_state` and mirrors it into `user_profile.profile` when `sender_id` is available.
 - The recommended chat architecture is now one Feishu Gateway Adapter plus independent department workflows: `Customer Support Workflow`, `Warehouse Workflow`, `Procurement Workflow`, and `Operations Workflow`.
@@ -25,6 +26,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 ## Key Entry Points
 
 - Feishu department chat path: department bot -> `feishu-adapter` -> department n8n webhook -> department Agent -> tool/API -> Feishu reply.
+- Feishu gateway diagnostics: `GET /health/details` on `feishu-adapter` reports bot configuration, listener count, processed message count, and run-log status without secrets.
 - Fast path: Feishu -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> Feishu reply. If the fast path declines, the workflow falls back to Parent Agent.
 - Department workflow exports: `n8n/workflows/customer-support-workflow.json`, `n8n/workflows/warehouse-workflow.json`, `n8n/workflows/procurement-workflow.json`, and `n8n/workflows/operations-workflow.json`
 - Parent/son workflow export: `n8n/workflows/chat-parent-son-agent.json` is legacy compatibility.
@@ -40,6 +42,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 - Parent and son memory may share the same physical table, but their `sessionKey` values must be namespaced separately (`parent:` and `customer_support:`) to avoid cross-agent context pollution.
 - n8n policy RAG tool: `policy_search_tool` inside `n8n/workflows/chat-parent-son-agent.json`
 - Policy search API: `POST /policies/search` in `services/mock-api/app/main.py`
+- Policy RAG eval cases: `fixtures/evals/policy_rag_eval.json`
 
 ## ai-service Structure
 
@@ -113,5 +116,6 @@ Useful smoke paths:
 - ai-service local port: `http://localhost:8001`
 - mock-api local port: `http://localhost:8002`
 - feishu-adapter local port: `http://localhost:8010`
+- feishu-adapter diagnostics: `http://localhost:8010/health/details`
 
 Expected order smoke phrase for `ord_100`: `Order ord_100 is delivered. Shipment status is delivered.`

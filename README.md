@@ -51,6 +51,7 @@ Health checks:
 ```powershell
 Invoke-RestMethod http://localhost:8001/health
 Invoke-RestMethod http://localhost:8002/health
+Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 10
 Invoke-RestMethod http://localhost:8002/orders/ord_100
 ```
 
@@ -166,6 +167,7 @@ docker compose restart n8n
 - `POST http://localhost:8001/decide`
 - `POST http://localhost:8001/message/handle`
 - `GET http://localhost:8010/health`
+- `GET http://localhost:8010/health/details`
 - `POST http://localhost:8010/feishu/events`
 - `GET http://localhost:8002/orders/{order_id}`
 - `GET http://localhost:8002/customers/{customer_id}`
@@ -193,6 +195,7 @@ pytest tests\test_department_workflows.py
 
 - [Architecture](docs/architecture.md)
 - [Demo Script](docs/demo-script.md)
+- [Deployment and Operations](docs/deployment.md)
 - [Local Runbook](docs/local-runbook.md)
 - [n8n Workflow Contract](docs/n8n-workflow-contract.md)
 - [中文 README](README.zh.md)
