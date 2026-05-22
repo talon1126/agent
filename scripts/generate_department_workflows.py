@@ -33,6 +33,7 @@ DEPARTMENTS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
         ],
     },
@@ -130,6 +131,39 @@ try {
   });
 }"""
 
+WAREHOUSE_PROVISION_TOOL_JS = """function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value || {};
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return { query: value };
+  }
+}
+
+function first(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+try {
+  const input = parseMaybeJson(query);
+  const tableName = String(first(input.table_name, input.tableName, input.name, 'Warehouse Inventory Snapshot')).trim();
+
+  const result = await helpers.httpRequest({
+    method: 'POST',
+    url: 'http://feishu-adapter:8000/warehouse/inventory-table/provision',
+    body: { table_name: tableName || 'Warehouse Inventory Snapshot' },
+    json: true
+  });
+
+  return JSON.stringify(result);
+} catch (error) {
+  return JSON.stringify({
+    ok: false,
+    error: 'warehouse_inventory_table_provision_runtime_error',
+    message: error && error.message ? error.message : String(error)
+  });
+}"""
+
 
 def load_source_workflow() -> dict[str, Any]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
@@ -164,6 +198,23 @@ def make_warehouse_sync_tool() -> dict[str, Any]:
     }
 
 
+def make_warehouse_provision_tool() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "description": (
+                "Use this tool only when the user explicitly asks to create, initialize, "
+                "or provision the Feishu inventory table for warehouse snapshots."
+            ),
+            "jsCode": WAREHOUSE_PROVISION_TOOL_JS,
+        },
+        "id": "warehouse-inventory-table-provision-tool-node",
+        "name": "warehouse_inventory_table_provision_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [1248, 320],
+    }
+
+
 def make_agent_node(source_agent: dict[str, Any]) -> dict[str, Any]:
     agent = copy.deepcopy(source_agent)
     agent["type"] = "@n8n/n8n-nodes-langchain.agent"
@@ -180,19 +231,21 @@ def update_warehouse_agent_prompt(agent: dict[str, Any]) -> None:
     system_message = system_message.replace(
         "- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。",
         "- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。\n"
+        "- warehouse_inventory_table_provision_tool：仅在用户明确要求创建、初始化或配置飞书库存表时，创建固定 schema 的飞书表格。\n"
         "- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 SKU 库存快照同步到飞书表格。",
     )
     system_message = system_message.replace(
         "4. 如果用户提供了 sku_ 开头的 SKU，结合问题类型调用对应工具；必要时可以连续调用多个工具。",
-        "4. 如果用户要求同步、导出、发布、表格、飞书表格或看板，并提供了 sku_ 开头的 SKU，先调用 warehouse_inventory_tool 获取事实，再调用 warehouse_inventory_table_sync_tool 同步快照。\n"
-        "5. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_sync_tool。",
+        "4. 如果用户要求创建、初始化或配置飞书库存表，先调用 warehouse_inventory_table_provision_tool；如果同时要求同步某个 sku_ 开头的 SKU，再调用 warehouse_inventory_tool 获取事实，然后调用 warehouse_inventory_table_sync_tool 同步快照。\n"
+        "5. 如果用户要求同步、导出、发布、表格、飞书表格或看板，并提供了 sku_ 开头的 SKU，先调用 warehouse_inventory_tool 获取事实，再调用 warehouse_inventory_table_sync_tool 同步快照。\n"
+        "6. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool 或 warehouse_inventory_table_sync_tool。",
     )
     renumbering = {
-        "5. 如果用户没有提供 SKU": "6. 如果用户没有提供 SKU",
-        "6. 回复必须保留工具返回": "7. 回复必须保留工具返回",
-        "7. 不要创建采购单": "8. 不要创建采购单",
-        "8. 不要编造仓库或库存数据": "9. 不要编造仓库或库存数据",
-        "9. 回复必须简洁": "10. 回复必须简洁",
+        "5. 如果用户没有提供 SKU": "7. 如果用户没有提供 SKU",
+        "6. 回复必须保留工具返回": "8. 回复必须保留工具返回",
+        "7. 不要创建采购单": "9. 不要创建采购单",
+        "8. 不要编造仓库或库存数据": "10. 不要编造仓库或库存数据",
+        "9. 回复必须简洁": "11. 回复必须简洁",
     }
     for old, new in renumbering.items():
         system_message = system_message.replace(old, new)
@@ -268,6 +321,9 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
     tools = []
     for index, tool_name in enumerate(department["tools"]):
         tool = (
+            make_warehouse_provision_tool()
+            if tool_name == "warehouse_inventory_table_provision_tool"
+            else
             make_warehouse_sync_tool()
             if tool_name == "warehouse_inventory_table_sync_tool"
             else clone_node(source, tool_name)

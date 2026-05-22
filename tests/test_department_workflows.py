@@ -14,6 +14,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
             "procurement_mock_tool",
             "operations_mock_tool",
@@ -30,6 +31,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
         },
         "forbidden_tools": {
@@ -53,6 +55,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
             "operations_mock_tool",
             "echo_task_tool",
@@ -71,6 +74,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_provision_tool",
             "warehouse_inventory_table_sync_tool",
             "procurement_mock_tool",
             "echo_task_tool",
@@ -124,7 +128,9 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
         assert "intermediateSteps" in format_reply["parameters"]["jsCode"]
         if expected["agent"] == "Warehouse Agent":
             system_message = agent["parameters"]["options"]["systemMessage"]
+            assert "warehouse_inventory_table_provision_tool" in system_message
             assert "warehouse_inventory_table_sync_tool" in system_message
+            assert "创建、初始化或配置飞书库存表" in system_message
             assert "同步、导出、发布、表格、飞书表格或看板" in system_message
 
 

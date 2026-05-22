@@ -27,7 +27,7 @@
 
 - 飞书部门聊天链路：部门机器人 -> `feishu-adapter` -> 部门 n8n webhook -> 部门 Agent -> tool/API -> 飞书回复。
 - 飞书网关诊断：`feishu-adapter` 的 `GET /health/details` 会展示 bot 配置、listener 数量、已处理消息数量和 run-log 状态，但不暴露 secret。
-- 仓储库存表格同步：`feishu-adapter` 的 `POST /warehouse/inventory-table/sync` 会基于 `mock-api /warehouse/inventory/{sku}` 发布单向飞书表格快照。
+- 仓储库存表格创建和同步：`feishu-adapter` 的 `POST /warehouse/inventory-table/provision` 会在已有飞书多维表格 app/base 里创建固定 schema 的数据表；`POST /warehouse/inventory-table/sync` 会基于 `mock-api /warehouse/inventory/{sku}` 发布单向快照。
 - fast path 链路：飞书 -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> 飞书回复。如果 fast path 拒绝处理，workflow 会回退到 Parent Agent。
 - 部门 workflow 导出：`n8n/workflows/customer-support-workflow.json`、`n8n/workflows/warehouse-workflow.json`、`n8n/workflows/procurement-workflow.json` 和 `n8n/workflows/operations-workflow.json`
 - Parent/son workflow 导出：`n8n/workflows/chat-parent-son-agent.json` 是历史兼容文件。
@@ -37,7 +37,7 @@
 - AI 决策入口：`services/ai-service/app/main.py` 中的 `POST /decide`
 - 订单状态工具代码：`services/ai-service/app/order_status_tool.py`
 - n8n 客服工具：`n8n/workflows/customer-support-workflow.json` 中的 `order_status_tool` 和 `policy_search_tool`
-- n8n 仓储工具：`n8n/workflows/warehouse-workflow.json` 中的 `warehouse_inventory_tool`、`warehouse_exception_tool` 和 `warehouse_fulfillment_tool`
+- n8n 仓储工具：`n8n/workflows/warehouse-workflow.json` 中的 `warehouse_inventory_tool`、`warehouse_exception_tool`、`warehouse_fulfillment_tool`、`warehouse_inventory_table_provision_tool` 和 `warehouse_inventory_table_sync_tool`
 - n8n 采购和运营工具：分别位于自己的部门 workflow 中的 `procurement_mock_tool` 和 `operations_mock_tool`
 - n8n memory 节点：`Parent Postgres Chat Memory` 和 `Customer Support Postgres Chat Memory`
 - Parent 和 son memory 可以共用同一张物理表，但 `sessionKey` 必须分别加命名空间（`parent:` 和 `customer_support:`），避免跨 Agent 上下文污染。
@@ -92,6 +92,7 @@
 - 使用 `warehouse_inventory_tool` 和 `/warehouse/inventory/{sku}` 查询 SKU 库存、已预留库存、库位、异常和风险。
 - 使用 `warehouse_exception_tool` 和 `/warehouse/exceptions/search` 处理库存差异、待上架、破损、找不到库位和拣货延迟问题。
 - 使用 `warehouse_fulfillment_tool` 和 `/warehouse/fulfillment/check` 判断能否发货、履约阻塞原因和下一步仓储动作。
+- 只有用户明确要求创建、初始化或配置飞书库存表时，才使用 `warehouse_inventory_table_provision_tool`。它只会在已有多维表格 app/base 里创建数据表，不会创建 base，也不会创建库存主数据源。
 - 只有用户明确要求同步、导出、发布或展示飞书表格快照时，才使用 `warehouse_inventory_table_sync_tool`。飞书表格是 read model，不是库存主数据源。
 - `Procurement Agent` 和 `Operations Agent` 在自己的部门 workflow 中使用确定性 mock endpoint。
 - 不要提交 `.env`，不要打印 secrets。
@@ -119,6 +120,7 @@ docker compose ps
 - mock-api 本地端口：`http://localhost:8002`
 - feishu-adapter 本地端口：`http://localhost:8010`
 - feishu-adapter 诊断端点：`http://localhost:8010/health/details`
+- 仓储库存表格创建：`http://localhost:8010/warehouse/inventory-table/provision`
 - 仓储库存表格同步：`http://localhost:8010/warehouse/inventory-table/sync`
 
 `ord_100` 的预期订单 smoke 片段：`Order ord_100 is delivered. Shipment status is delivered.`

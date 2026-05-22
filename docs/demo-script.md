@@ -52,6 +52,7 @@ Send to the Warehouse bot or mention it in a shared group:
 
 ```text
 @Warehouse 查询 sku_bag_1 的库存、库位和履约风险
+@Warehouse 创建仓储库存飞书表格
 @Warehouse 把 sku_bag_1 的库存快照同步到飞书表格
 ```
 
@@ -59,6 +60,7 @@ Expected behavior:
 
 - Only the Warehouse workflow runs.
 - The warehouse tools return inventory, locations, open exceptions, and risk.
+- The explicit table creation request calls `warehouse_inventory_table_provision_tool` and returns `created` or `existing`.
 - The explicit sync request calls `warehouse_inventory_table_sync_tool` and returns `created` or `updated`.
 - Other department workflows do not execute.
 

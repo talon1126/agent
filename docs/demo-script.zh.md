@@ -52,6 +52,7 @@ Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 1
 
 ```text
 @Warehouse 查询 sku_bag_1 的库存、库位和履约风险
+@Warehouse 创建仓储库存飞书表格
 @Warehouse 把 sku_bag_1 的库存快照同步到飞书表格
 ```
 
@@ -59,6 +60,7 @@ Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 1
 
 - 只有 Warehouse workflow 执行。
 - 仓储工具返回库存、库位、未关闭异常和风险等级。
+- 明确建表请求会调用 `warehouse_inventory_table_provision_tool`，返回 `created` 或 `existing`。
 - 明确同步请求会调用 `warehouse_inventory_table_sync_tool`，返回 `created` 或 `updated`。
 - 其他部门 workflow 不执行。
 

@@ -39,6 +39,26 @@ class InventoryTableSyncRequest(BaseModel):
     sku: str
 
 
+class InventoryTableProvisionRequest(BaseModel):
+    table_name: str = "Warehouse Inventory Snapshot"
+
+
+INVENTORY_TABLE_FIELD_SPECS = [
+    {"field_name": "SKU", "type": "text"},
+    {"field_name": "Product Name", "type": "text"},
+    {"field_name": "Warehouse", "type": "text"},
+    {"field_name": "Available", "type": "number"},
+    {"field_name": "Reserved", "type": "number"},
+    {"field_name": "Pending Orders", "type": "number"},
+    {"field_name": "Risk Level", "type": "text"},
+    {"field_name": "Open Exception Count", "type": "number"},
+    {"field_name": "Recommendation", "type": "text"},
+    {"field_name": "Last Synced At", "type": "text"},
+    {"field_name": "Sync Status", "type": "text"},
+    {"field_name": "Source Version", "type": "text"},
+]
+
+
 def _clean_bot_name(value: str) -> str:
     name = value.strip().lower().replace("-", "_")
     return name or "default"
@@ -236,9 +256,10 @@ def create_app(
                 run_log_error,
             )
 
-    def write_sync_run_log(
+    def write_inventory_table_run_log(
         *,
-        sku: str,
+        event_id: str,
+        workflow: str,
         status: str,
         latency_ms: float,
         error: str | None = None,
@@ -250,10 +271,10 @@ def create_app(
             client.post(
                 runtime_run_log_url,
                 json={
-                    "event_id": f"inventory_table_sync:{sku}",
+                    "event_id": event_id,
                     "message_id": "",
                     "bot_name": "warehouse",
-                    "workflow": "/warehouse/inventory-table/sync",
+                    "workflow": workflow,
                     "status": status,
                     "latency_ms": round(latency_ms, 1),
                     "tool_calls": tool_calls or [],
@@ -261,10 +282,39 @@ def create_app(
                 },
             ).raise_for_status()
         except httpx.HTTPError as run_log_error:
-            logger.warning("failed to write inventory table sync run log sku=%s error=%s", sku, run_log_error)
+            logger.warning(
+                "failed to write inventory table run log event_id=%s error=%s",
+                event_id,
+                run_log_error,
+            )
+
+    def write_sync_run_log(
+        *,
+        sku: str,
+        status: str,
+        latency_ms: float,
+        error: str | None = None,
+        tool_calls: list[Any] | None = None,
+    ) -> None:
+        write_inventory_table_run_log(
+            event_id=f"inventory_table_sync:{sku}",
+            workflow="/warehouse/inventory-table/sync",
+            status=status,
+            latency_ms=latency_ms,
+            error=error,
+            tool_calls=tool_calls,
+        )
 
     def inventory_table_sync_configured() -> bool:
         return bool(table_app_id and table_app_secret and table_app_token and table_id)
+
+    def inventory_table_provision_configured() -> bool:
+        return bool(table_app_id and table_app_secret and table_app_token)
+
+    def inventory_table_url_for(table_identifier: str) -> str:
+        if not table_url:
+            return ""
+        return table_url.replace("{table_id}", table_identifier)
 
     def build_inventory_snapshot_fields(inventory: dict[str, Any]) -> dict[str, Any]:
         sku = str(inventory.get("sku") or "").strip()
@@ -293,6 +343,44 @@ def create_app(
     def bitable_records_url(record_id: str | None = None) -> str:
         base = f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables/{table_id}/records"
         return f"{base}/{record_id}" if record_id else base
+
+    def bitable_tables_url() -> str:
+        return f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables"
+
+    def bitable_fields_url(table_identifier: str) -> str:
+        return f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables/{table_identifier}/fields"
+
+    def create_inventory_table_fields(*, token: str, table_identifier: str) -> None:
+        for field in INVENTORY_TABLE_FIELD_SPECS:
+            response = client.post(
+                bitable_fields_url(table_identifier),
+                headers={"Authorization": f"Bearer {token}"},
+                json=field,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in {0, None}:
+                raise RuntimeError(f"Feishu inventory table field create failed: {payload}")
+
+    def create_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
+        response = client.post(
+            bitable_tables_url(),
+            headers={"Authorization": f"Bearer {token}"},
+            json={"table": {"name": table_name}},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table create failed: {payload}")
+        data = payload.get("data", {})
+        created_table_id = str(data.get("table_id") or "")
+        if not created_table_id:
+            raise RuntimeError(f"Feishu inventory table create returned no table_id: {payload}")
+        create_inventory_table_fields(token=token, table_identifier=created_table_id)
+        return {
+            "table_id": created_table_id,
+            "view_id": str(data.get("default_view_id") or data.get("view_id") or ""),
+        }
 
     def find_inventory_table_record(*, token: str, sku: str, warehouse_id: str) -> str:
         params: dict[str, Any] = {
@@ -343,6 +431,72 @@ def create_app(
         record = data.get("record") if isinstance(data.get("record"), dict) else {}
         returned_record_id = str(record.get("record_id") or data.get("record_id") or record_id)
         return {"action": action, "record_id": returned_record_id}
+
+    @app.post("/warehouse/inventory-table/provision")
+    def provision_inventory_table(request: InventoryTableProvisionRequest) -> dict[str, Any]:
+        started = perf_counter()
+        if not inventory_table_provision_configured():
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "missing_feishu_inventory_table_provision_config",
+                "message": "Feishu inventory table provisioning requires app credentials and app token.",
+            }
+        if table_id:
+            return {
+                "ok": True,
+                "configured": True,
+                "action": "existing",
+                "table_id": table_id,
+                "view_id": table_view_id,
+                "table_url": inventory_table_url_for(table_id),
+            }
+        table_name = request.table_name.strip() or "Warehouse Inventory Snapshot"
+        try:
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            result = create_inventory_table(token=token, table_name=table_name)
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"inventory_table_provision:{result['table_id']}",
+                workflow="/warehouse/inventory-table/provision",
+                status="succeeded",
+                latency_ms=latency_ms,
+                tool_calls=[
+                    {
+                        "tool": "warehouse_inventory_table_provision_tool",
+                        "input": {"table_name": table_name},
+                        "output": result,
+                    }
+                ],
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                "action": "created",
+                **result,
+                "table_url": inventory_table_url_for(result["table_id"]),
+                "fields": [field["field_name"] for field in INVENTORY_TABLE_FIELD_SPECS],
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id="inventory_table_provision:failed",
+                workflow="/warehouse/inventory-table/provision",
+                status="failed",
+                latency_ms=latency_ms,
+                error=str(error),
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "error": "feishu_inventory_table_provision_failed",
+                "message": str(error),
+            }
 
     @app.post("/warehouse/inventory-table/sync")
     def sync_inventory_table(request: InventoryTableSyncRequest) -> dict[str, Any]:

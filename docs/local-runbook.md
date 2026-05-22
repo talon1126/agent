@@ -127,7 +127,13 @@ When a real bot message arrives, the adapter logs `received feishu long connecti
 
 When `FEISHU_RUN_LOG_URL` is configured, every completed Feishu message writes a structured run log with `message_id`, `bot_name`, `workflow`, `status`, latency fields, `error`, and workflow `tool_calls` if returned.
 
-Warehouse users can explicitly ask to sync an SKU snapshot to a Feishu table. Configure `FEISHU_INVENTORY_TABLE_APP_TOKEN`, `FEISHU_INVENTORY_TABLE_ID`, and table app credentials, then test:
+Warehouse users can explicitly ask to create a fixed-schema Feishu inventory table and sync an SKU snapshot to it. Configure `FEISHU_INVENTORY_TABLE_APP_TOKEN` and table app credentials first, then provision:
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"table_name":"Warehouse Inventory Snapshot"}' http://localhost:8010/warehouse/inventory-table/provision
+```
+
+Copy the returned `table_id` into `.env` as `FEISHU_INVENTORY_TABLE_ID`, restart `feishu-adapter`, then test sync:
 
 ```powershell
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"sku":"sku_bag_1"}' http://localhost:8010/warehouse/inventory-table/sync

@@ -127,7 +127,13 @@ connected to wss://msg-frontier.feishu.cn/ws/v2...
 
 配置 `FEISHU_RUN_LOG_URL` 后，每条处理完成的飞书消息都会写入结构化 run log，包含 `message_id`、`bot_name`、`workflow`、`status`、耗时字段、`error`，以及 workflow 返回的 `tool_calls`。
 
-仓储用户可以明确要求把某个 SKU 库存快照同步到飞书表格。配置 `FEISHU_INVENTORY_TABLE_APP_TOKEN`、`FEISHU_INVENTORY_TABLE_ID` 和表格应用凭证后，可以这样测试：
+仓储用户可以明确要求创建固定 schema 的飞书库存表，并把某个 SKU 库存快照同步进去。先配置 `FEISHU_INVENTORY_TABLE_APP_TOKEN` 和表格应用凭证，然后创建表：
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"table_name":"Warehouse Inventory Snapshot"}' http://localhost:8010/warehouse/inventory-table/provision
+```
+
+把返回的 `table_id` 填回 `.env` 的 `FEISHU_INVENTORY_TABLE_ID`，重启 `feishu-adapter`，再测试同步：
 
 ```powershell
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"sku":"sku_bag_1"}' http://localhost:8010/warehouse/inventory-table/sync
