@@ -27,7 +27,7 @@
 
 - 飞书部门聊天链路：部门机器人 -> `feishu-adapter` -> 部门 n8n webhook -> 部门 Agent -> tool/API -> 飞书回复。
 - 飞书网关诊断：`feishu-adapter` 的 `GET /health/details` 会展示 bot 配置、listener 数量、已处理消息数量和 run-log 状态，但不暴露 secret。
-- 仓储库存表格创建和同步：`feishu-adapter` 的 `POST /warehouse/inventory-table/provision` 会在已有飞书多维表格 app/base 里创建固定 schema 的数据表；`POST /warehouse/inventory-table/sync` 会基于 `mock-api /warehouse/inventory/{sku}` 发布单向快照。
+- 仓储库存表格创建和同步：`feishu-adapter` 的 `POST /warehouse/inventory-table/provision` 会在已有飞书多维表格 app/base 里创建或复用固定 schema 的数据表；`POST /warehouse/inventory-table/sync` 会在需要时自动建表，并基于 `mock-api /warehouse/inventory/{sku}` 发布单向快照。
 - fast path 链路：飞书 -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> 飞书回复。如果 fast path 拒绝处理，workflow 会回退到 Parent Agent。
 - 部门 workflow 导出：`n8n/workflows/customer-support-workflow.json`、`n8n/workflows/warehouse-workflow.json`、`n8n/workflows/procurement-workflow.json` 和 `n8n/workflows/operations-workflow.json`
 - Parent/son workflow 导出：`n8n/workflows/chat-parent-son-agent.json` 是历史兼容文件。
@@ -92,8 +92,8 @@
 - 使用 `warehouse_inventory_tool` 和 `/warehouse/inventory/{sku}` 查询 SKU 库存、已预留库存、库位、异常和风险。
 - 使用 `warehouse_exception_tool` 和 `/warehouse/exceptions/search` 处理库存差异、待上架、破损、找不到库位和拣货延迟问题。
 - 使用 `warehouse_fulfillment_tool` 和 `/warehouse/fulfillment/check` 判断能否发货、履约阻塞原因和下一步仓储动作。
-- 只有用户明确要求创建、初始化或配置飞书库存表时，才使用 `warehouse_inventory_table_provision_tool`。它只会在已有多维表格 app/base 里创建数据表，不会创建 base，也不会创建库存主数据源。
-- 只有用户明确要求同步、导出、发布或展示飞书表格快照时，才使用 `warehouse_inventory_table_sync_tool`。飞书表格是 read model，不是库存主数据源。
+- 只有用户明确要求创建、初始化或配置飞书库存表时，才使用 `warehouse_inventory_table_provision_tool`。它只会在已有多维表格 app/base 里创建或复用数据表，并为风险和状态创建带颜色的单选字段，不会创建 base，也不会创建库存主数据源。
+- 只有用户明确要求同步、导出、发布或展示飞书表格快照时，才使用 `warehouse_inventory_table_sync_tool`。如果没有配置 table id，后端可以先自动创建或复用表格再同步。飞书表格是 read model，不是库存主数据源。
 - `Procurement Agent` 和 `Operations Agent` 在自己的部门 workflow 中使用确定性 mock endpoint。
 - 不要提交 `.env`，不要打印 secrets。
 - 每新增一份英文 Markdown 文档，都要同时新增中文 `.zh.md` 版本。

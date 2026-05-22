@@ -44,18 +44,39 @@ class InventoryTableProvisionRequest(BaseModel):
 
 
 INVENTORY_TABLE_FIELD_SPECS = [
-    {"field_name": "SKU", "type": "text"},
-    {"field_name": "Product Name", "type": "text"},
-    {"field_name": "Warehouse", "type": "text"},
-    {"field_name": "Available", "type": "number"},
-    {"field_name": "Reserved", "type": "number"},
-    {"field_name": "Pending Orders", "type": "number"},
-    {"field_name": "Risk Level", "type": "text"},
-    {"field_name": "Open Exception Count", "type": "number"},
-    {"field_name": "Recommendation", "type": "text"},
-    {"field_name": "Last Synced At", "type": "text"},
-    {"field_name": "Sync Status", "type": "text"},
-    {"field_name": "Source Version", "type": "text"},
+    {"field_name": "SKU", "type": 1},
+    {"field_name": "Product Name", "type": 1},
+    {"field_name": "Warehouse", "type": 1},
+    {"field_name": "Available", "type": 2},
+    {"field_name": "Reserved", "type": 2},
+    {"field_name": "Pending Orders", "type": 2},
+    {
+        "field_name": "Risk Level",
+        "type": 3,
+        "property": {
+            "options": [
+                {"name": "low", "color": 28},
+                {"name": "medium", "color": 24},
+                {"name": "high", "color": 17},
+                {"name": "unknown", "color": 0},
+            ]
+        },
+    },
+    {"field_name": "Open Exception Count", "type": 2},
+    {"field_name": "Recommendation", "type": 1},
+    {"field_name": "Last Synced At", "type": 1},
+    {
+        "field_name": "Sync Status",
+        "type": 3,
+        "property": {
+            "options": [
+                {"name": "synced", "color": 28},
+                {"name": "pending", "color": 24},
+                {"name": "failed", "color": 17},
+            ]
+        },
+    },
+    {"field_name": "Source Version", "type": 1},
 ]
 
 
@@ -121,6 +142,16 @@ def parse_bot_configs(
     return bots
 
 
+def describe_http_error(error: httpx.HTTPError) -> str:
+    if isinstance(error, httpx.HTTPStatusError):
+        try:
+            payload = error.response.json()
+        except ValueError:
+            return str(error)
+        return f"{error}; response={payload}"
+    return str(error)
+
+
 def create_app(
     *,
     http_client: httpx.Client | None = None,
@@ -171,6 +202,10 @@ def create_app(
         else os.getenv("FEISHU_INVENTORY_TABLE_VIEW_ID", "")
     )
     table_url = inventory_table_url if inventory_table_url is not None else os.getenv("FEISHU_INVENTORY_TABLE_URL", "")
+    inventory_table_state = {
+        "table_id": table_id,
+        "view_id": table_view_id,
+    }
     bot_configs = parse_bot_configs(
         bots_json=bots_json,
         fallback_webhook_url=webhook_url,
@@ -306,7 +341,7 @@ def create_app(
         )
 
     def inventory_table_sync_configured() -> bool:
-        return bool(table_app_id and table_app_secret and table_app_token and table_id)
+        return bool(table_app_id and table_app_secret and table_app_token)
 
     def inventory_table_provision_configured() -> bool:
         return bool(table_app_id and table_app_secret and table_app_token)
@@ -341,7 +376,10 @@ def create_app(
         }
 
     def bitable_records_url(record_id: str | None = None) -> str:
-        base = f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables/{table_id}/records"
+        base = (
+            f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}"
+            f"/tables/{inventory_table_state['table_id']}/records"
+        )
         return f"{base}/{record_id}" if record_id else base
 
     def bitable_tables_url() -> str:
@@ -350,8 +388,23 @@ def create_app(
     def bitable_fields_url(table_identifier: str) -> str:
         return f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables/{table_identifier}/fields"
 
-    def create_inventory_table_fields(*, token: str, table_identifier: str) -> None:
+    def field_names_for_table(*, token: str, table_identifier: str) -> set[str]:
+        response = client.get(
+            bitable_fields_url(table_identifier),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table field list failed: {payload}")
+        items = payload.get("data", {}).get("items", [])
+        return {str(item.get("field_name") or "") for item in items if isinstance(item, dict)}
+
+    def create_inventory_table_fields(*, token: str, table_identifier: str, existing_fields: set[str] | None = None) -> None:
+        existing = existing_fields or set()
         for field in INVENTORY_TABLE_FIELD_SPECS:
+            if field["field_name"] in existing:
+                continue
             response = client.post(
                 bitable_fields_url(table_identifier),
                 headers={"Authorization": f"Bearer {token}"},
@@ -362,7 +415,47 @@ def create_app(
             if payload.get("code") not in {0, None}:
                 raise RuntimeError(f"Feishu inventory table field create failed: {payload}")
 
-    def create_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
+    def list_inventory_tables(*, token: str) -> list[dict[str, Any]]:
+        response = client.get(
+            bitable_tables_url(),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table list failed: {payload}")
+        items = payload.get("data", {}).get("items", [])
+        return [item for item in items if isinstance(item, dict)]
+
+    def find_inventory_table_by_name(*, token: str, table_name: str) -> dict[str, str]:
+        for item in list_inventory_tables(token=token):
+            if str(item.get("name") or item.get("table_name") or "") == table_name:
+                return {
+                    "table_id": str(item.get("table_id") or ""),
+                    "view_id": str(item.get("default_view_id") or item.get("view_id") or ""),
+                }
+        return {"table_id": "", "view_id": ""}
+
+    def ensure_inventory_table_fields(*, token: str, table_identifier: str) -> None:
+        try:
+            existing_fields = field_names_for_table(token=token, table_identifier=table_identifier)
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code != 404:
+                raise
+            existing_fields = set()
+        create_inventory_table_fields(
+            token=token,
+            table_identifier=table_identifier,
+            existing_fields=existing_fields,
+        )
+
+    def remember_inventory_table(result: dict[str, str]) -> None:
+        if result.get("table_id"):
+            inventory_table_state["table_id"] = result["table_id"]
+        if result.get("view_id"):
+            inventory_table_state["view_id"] = result["view_id"]
+
+    def create_or_reuse_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
         response = client.post(
             bitable_tables_url(),
             headers={"Authorization": f"Bearer {token}"},
@@ -371,15 +464,46 @@ def create_app(
         response.raise_for_status()
         payload = response.json()
         if payload.get("code") not in {0, None}:
+            if payload.get("code") == 1254013:
+                existing = find_inventory_table_by_name(token=token, table_name=table_name)
+                if existing["table_id"]:
+                    ensure_inventory_table_fields(token=token, table_identifier=existing["table_id"])
+                    remember_inventory_table(existing)
+                    return {**existing, "action": "existing"}
             raise RuntimeError(f"Feishu inventory table create failed: {payload}")
         data = payload.get("data", {})
         created_table_id = str(data.get("table_id") or "")
         if not created_table_id:
             raise RuntimeError(f"Feishu inventory table create returned no table_id: {payload}")
         create_inventory_table_fields(token=token, table_identifier=created_table_id)
-        return {
+        result = {
             "table_id": created_table_id,
             "view_id": str(data.get("default_view_id") or data.get("view_id") or ""),
+            "action": "created",
+        }
+        remember_inventory_table(result)
+        return result
+
+    def ensure_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
+        if inventory_table_state["table_id"]:
+            return {
+                "table_id": inventory_table_state["table_id"],
+                "view_id": inventory_table_state["view_id"],
+                "action": "existing",
+            }
+        existing = find_inventory_table_by_name(token=token, table_name=table_name)
+        if existing["table_id"]:
+            ensure_inventory_table_fields(token=token, table_identifier=existing["table_id"])
+            remember_inventory_table(existing)
+            return {**existing, "action": "existing"}
+        return create_or_reuse_inventory_table(token=token, table_name=table_name)
+
+    def create_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
+        result = create_or_reuse_inventory_table(token=token, table_name=table_name)
+        return {
+            "table_id": result["table_id"],
+            "view_id": result["view_id"],
+            "action": result["action"],
         }
 
     def find_inventory_table_record(*, token: str, sku: str, warehouse_id: str) -> str:
@@ -442,14 +566,14 @@ def create_app(
                 "error": "missing_feishu_inventory_table_provision_config",
                 "message": "Feishu inventory table provisioning requires app credentials and app token.",
             }
-        if table_id:
+        if inventory_table_state["table_id"]:
             return {
                 "ok": True,
                 "configured": True,
                 "action": "existing",
-                "table_id": table_id,
-                "view_id": table_view_id,
-                "table_url": inventory_table_url_for(table_id),
+                "table_id": inventory_table_state["table_id"],
+                "view_id": inventory_table_state["view_id"],
+                "table_url": inventory_table_url_for(inventory_table_state["table_id"]),
             }
         table_name = request.table_name.strip() or "Warehouse Inventory Snapshot"
         try:
@@ -459,7 +583,7 @@ def create_app(
                 app_secret=table_app_secret,
                 api_base_url=api_base_url,
             )
-            result = create_inventory_table(token=token, table_name=table_name)
+            result = ensure_inventory_table(token=token, table_name=table_name)
             latency_ms = (perf_counter() - started) * 1000
             write_inventory_table_run_log(
                 event_id=f"inventory_table_provision:{result['table_id']}",
@@ -477,25 +601,26 @@ def create_app(
             return {
                 "ok": True,
                 "configured": True,
-                "action": "created",
+                "action": result["action"],
                 **result,
                 "table_url": inventory_table_url_for(result["table_id"]),
                 "fields": [field["field_name"] for field in INVENTORY_TABLE_FIELD_SPECS],
             }
         except (httpx.HTTPError, RuntimeError) as error:
             latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
             write_inventory_table_run_log(
                 event_id="inventory_table_provision:failed",
                 workflow="/warehouse/inventory-table/provision",
                 status="failed",
                 latency_ms=latency_ms,
-                error=str(error),
+                error=message,
             )
             return {
                 "ok": False,
                 "configured": True,
                 "error": "feishu_inventory_table_provision_failed",
-                "message": str(error),
+                "message": message,
             }
 
     @app.post("/warehouse/inventory-table/sync")
@@ -522,6 +647,10 @@ def create_app(
                 app_secret=table_app_secret,
                 api_base_url=api_base_url,
             )
+            provision_result = ensure_inventory_table(
+                token=token,
+                table_name="Warehouse Inventory Snapshot",
+            )
             result = upsert_inventory_table_record(token=token, fields=fields)
             latency_ms = (perf_counter() - started) * 1000
             write_sync_run_log(
@@ -535,7 +664,8 @@ def create_app(
                 "configured": True,
                 "sku": sku,
                 **result,
-                "table_url": table_url,
+                "table_id": provision_result["table_id"],
+                "table_url": inventory_table_url_for(provision_result["table_id"]),
                 "last_synced_at": fields["Last Synced At"],
                 "source_version": fields["Source Version"],
             }

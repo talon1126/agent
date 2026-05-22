@@ -24,8 +24,9 @@ The provision endpoint:
 
 - Requires `FEISHU_INVENTORY_TABLE_APP_ID`, `FEISHU_INVENTORY_TABLE_APP_SECRET`, and `FEISHU_INVENTORY_TABLE_APP_TOKEN`.
 - Creates a data table in the configured Bitable app/base.
-- Adds the fixed inventory snapshot fields listed below.
+- Adds the fixed inventory snapshot fields listed below, including colored single-select fields for `Risk Level` and `Sync Status`.
 - Returns `action=existing` without calling Feishu when `FEISHU_INVENTORY_TABLE_ID` is already configured.
+- Reuses an existing table with the same name when Feishu returns `TableNameDuplicated`, then creates any missing fields. This recovers from a partially provisioned table.
 - Writes a run log when `FEISHU_RUN_LOG_URL` is configured.
 - Does not create a new Feishu app/base or a source-of-truth inventory database.
 
@@ -36,6 +37,7 @@ The Warehouse Agent has a tool named `warehouse_inventory_table_sync_tool`. It s
 The sync endpoint:
 
 - Fetches `GET /warehouse/inventory/{sku}` from `mock-api`.
+- Auto-provisions or reuses the inventory table when `FEISHU_INVENTORY_TABLE_ID` is not configured.
 - Builds a normalized table row.
 - Looks up an existing Feishu table record by `SKU + Warehouse`.
 - Updates the existing record or creates a new one.
@@ -53,11 +55,11 @@ Warehouse
 Available
 Reserved
 Pending Orders
-Risk Level
+Risk Level        # single select: low=green, medium=yellow, high=red, unknown=gray
 Open Exception Count
 Recommendation
 Last Synced At
-Sync Status
+Sync Status       # single select: synced=green, pending=yellow, failed=red
 Source Version
 ```
 
@@ -74,7 +76,9 @@ FEISHU_INVENTORY_TABLE_VIEW_ID=
 FEISHU_INVENTORY_TABLE_URL=
 ```
 
-For provisioning, `FEISHU_INVENTORY_TABLE_ID` is optional. After a successful create, copy the returned `table_id` into `.env` as `FEISHU_INVENTORY_TABLE_ID` so future sync calls update that table.
+`FEISHU_INVENTORY_TABLE_ID` is optional. If it is configured, provision and sync use that table. If it is empty, the backend looks for `Warehouse Inventory Snapshot` by name, reuses it when found, or creates it when missing. The adapter remembers the resolved `table_id` for the current process, so sync can work without manual `.env` editing.
+
+For long-running demos, copying the returned `table_id` into `.env` is still useful because it survives container restarts and avoids a table-name lookup.
 
 `FEISHU_INVENTORY_TABLE_VIEW_ID` and `FEISHU_INVENTORY_TABLE_URL` are optional. The URL is only returned to users as a convenient link.
 
@@ -100,6 +104,6 @@ Expected behavior:
 
 - Missing provision config returns `ok=false` and `missing_feishu_inventory_table_provision_config`.
 - Existing `FEISHU_INVENTORY_TABLE_ID` returns `ok=true` and `action=existing`.
-- Successful provisioning returns `ok=true`, `action=created`, `table_id`, and the fixed field list.
+- Successful provisioning returns `ok=true`, `action=created` or `action=existing`, `table_id`, and the fixed field list.
 - Missing sync config returns `ok=false` and `missing_feishu_inventory_table_config`.
-- Valid config returns `ok=true`, `action=created` or `action=updated`, and a `record_id`.
+- Valid sync config returns `ok=true`, auto-creates or reuses the table when needed, then returns `action=created` or `action=updated` plus a `record_id`.

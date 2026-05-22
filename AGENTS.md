@@ -27,7 +27,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 
 - Feishu department chat path: department bot -> `feishu-adapter` -> department n8n webhook -> department Agent -> tool/API -> Feishu reply.
 - Feishu gateway diagnostics: `GET /health/details` on `feishu-adapter` reports bot configuration, listener count, processed message count, and run-log status without secrets.
-- Warehouse inventory table provisioning and sync: `POST /warehouse/inventory-table/provision` creates a fixed-schema table inside an existing Feishu Bitable app/base; `POST /warehouse/inventory-table/sync` publishes a one-way snapshot from `mock-api /warehouse/inventory/{sku}`.
+- Warehouse inventory table provisioning and sync: `POST /warehouse/inventory-table/provision` creates or reuses a fixed-schema table inside an existing Feishu Bitable app/base; `POST /warehouse/inventory-table/sync` auto-provisions when needed and publishes a one-way snapshot from `mock-api /warehouse/inventory/{sku}`.
 - Fast path: Feishu -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> Feishu reply. If the fast path declines, the workflow falls back to Parent Agent.
 - Department workflow exports: `n8n/workflows/customer-support-workflow.json`, `n8n/workflows/warehouse-workflow.json`, `n8n/workflows/procurement-workflow.json`, and `n8n/workflows/operations-workflow.json`
 - Parent/son workflow export: `n8n/workflows/chat-parent-son-agent.json` is legacy compatibility.
@@ -92,8 +92,8 @@ The project is a Docker-first internal ecommerce operations copilot.
 - Use `warehouse_inventory_tool` and `/warehouse/inventory/{sku}` for SKU stock, reserved stock, location, exception, and risk lookup.
 - Use `warehouse_exception_tool` and `/warehouse/exceptions/search` for stock mismatch, pending putaway, damage, missing-location, and picking-delay questions.
 - Use `warehouse_fulfillment_tool` and `/warehouse/fulfillment/check` for shipping eligibility, fulfillment blockers, and next warehouse actions.
-- Use `warehouse_inventory_table_provision_tool` only when users explicitly ask to create, initialize, or configure the Feishu inventory table. It creates a table in an existing Bitable app/base; it does not create the base or the inventory source of truth.
-- Use `warehouse_inventory_table_sync_tool` only when users explicitly ask to sync/export/publish/show a Feishu table snapshot. Feishu table data is a read model, not the inventory source of truth.
+- Use `warehouse_inventory_table_provision_tool` only when users explicitly ask to create, initialize, or configure the Feishu inventory table. It creates or reuses a table in an existing Bitable app/base, adds colored single-select fields for risk/status, and does not create the base or the inventory source of truth.
+- Use `warehouse_inventory_table_sync_tool` only when users explicitly ask to sync/export/publish/show a Feishu table snapshot. If no table id is configured, the backend may auto-provision or reuse the table before syncing. Feishu table data is a read model, not the inventory source of truth.
 - `Procurement Agent` and `Operations Agent` are backed by deterministic mock endpoints in their own department workflows.
 - Do not commit `.env` or print secrets.
 - When adding an English Markdown document, add the Chinese `.zh.md` counterpart.
