@@ -3,11 +3,13 @@ import logging
 import threading
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from pydantic import BaseModel
 
 from app.feishu_client import FEISHU_API_BASE_URL, get_tenant_access_token, reply_text_message
 from app.feishu_events import normalize_feishu_event, to_n8n_payload
@@ -31,6 +33,10 @@ class BotConfig:
     api_base_url: str
     bot_open_id: str = ""
     enabled: bool = True
+
+
+class InventoryTableSyncRequest(BaseModel):
+    sku: str
 
 
 def _clean_bot_name(value: str) -> str:
@@ -105,6 +111,13 @@ def create_app(
     feishu_event_mode: str | None = None,
     feishu_bots_json: str | None = None,
     run_log_url: str | None = None,
+    mock_api_url: str | None = None,
+    inventory_table_app_id: str | None = None,
+    inventory_table_app_secret: str | None = None,
+    inventory_table_app_token: str | None = None,
+    inventory_table_id: str | None = None,
+    inventory_table_view_id: str | None = None,
+    inventory_table_url: str | None = None,
     long_connection_starter: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Feishu Adapter")
@@ -119,6 +132,25 @@ def create_app(
     event_mode = feishu_event_mode or os.getenv("FEISHU_EVENT_MODE", "http")
     bots_json = feishu_bots_json if feishu_bots_json is not None else os.getenv("FEISHU_BOTS_JSON", "")
     runtime_run_log_url = run_log_url if run_log_url is not None else os.getenv("FEISHU_RUN_LOG_URL", "")
+    runtime_mock_api_url = (mock_api_url if mock_api_url is not None else os.getenv("MOCK_API_URL", "http://mock-api:8000")).rstrip("/")
+    table_app_id = inventory_table_app_id if inventory_table_app_id is not None else os.getenv("FEISHU_INVENTORY_TABLE_APP_ID", app_id)
+    table_app_secret = (
+        inventory_table_app_secret
+        if inventory_table_app_secret is not None
+        else os.getenv("FEISHU_INVENTORY_TABLE_APP_SECRET", app_secret)
+    )
+    table_app_token = (
+        inventory_table_app_token
+        if inventory_table_app_token is not None
+        else os.getenv("FEISHU_INVENTORY_TABLE_APP_TOKEN", "")
+    )
+    table_id = inventory_table_id if inventory_table_id is not None else os.getenv("FEISHU_INVENTORY_TABLE_ID", "")
+    table_view_id = (
+        inventory_table_view_id
+        if inventory_table_view_id is not None
+        else os.getenv("FEISHU_INVENTORY_TABLE_VIEW_ID", "")
+    )
+    table_url = inventory_table_url if inventory_table_url is not None else os.getenv("FEISHU_INVENTORY_TABLE_URL", "")
     bot_configs = parse_bot_configs(
         bots_json=bots_json,
         fallback_webhook_url=webhook_url,
@@ -203,6 +235,171 @@ def create_app(
                 message.message_id,
                 run_log_error,
             )
+
+    def write_sync_run_log(
+        *,
+        sku: str,
+        status: str,
+        latency_ms: float,
+        error: str | None = None,
+        tool_calls: list[Any] | None = None,
+    ) -> None:
+        if not runtime_run_log_url:
+            return
+        try:
+            client.post(
+                runtime_run_log_url,
+                json={
+                    "event_id": f"inventory_table_sync:{sku}",
+                    "message_id": "",
+                    "bot_name": "warehouse",
+                    "workflow": "/warehouse/inventory-table/sync",
+                    "status": status,
+                    "latency_ms": round(latency_ms, 1),
+                    "tool_calls": tool_calls or [],
+                    "error": error,
+                },
+            ).raise_for_status()
+        except httpx.HTTPError as run_log_error:
+            logger.warning("failed to write inventory table sync run log sku=%s error=%s", sku, run_log_error)
+
+    def inventory_table_sync_configured() -> bool:
+        return bool(table_app_id and table_app_secret and table_app_token and table_id)
+
+    def build_inventory_snapshot_fields(inventory: dict[str, Any]) -> dict[str, Any]:
+        sku = str(inventory.get("sku") or "").strip()
+        locations = inventory.get("locations") if isinstance(inventory.get("locations"), list) else []
+        first_location = locations[0] if locations and isinstance(locations[0], dict) else {}
+        warehouse_id = str(first_location.get("warehouse_id") or inventory.get("warehouse_id") or "unknown")
+        open_exceptions = (
+            inventory.get("open_exceptions") if isinstance(inventory.get("open_exceptions"), list) else []
+        )
+        synced_at = datetime.now(UTC).isoformat()
+        return {
+            "SKU": sku,
+            "Product Name": str(inventory.get("product_name") or inventory.get("name") or sku),
+            "Warehouse": warehouse_id,
+            "Available": int(inventory.get("available", 0)),
+            "Reserved": int(inventory.get("reserved", 0)),
+            "Pending Orders": int(inventory.get("pending_orders", 0)),
+            "Risk Level": str(inventory.get("risk_level") or "unknown"),
+            "Open Exception Count": len(open_exceptions),
+            "Recommendation": str(inventory.get("recommendation") or ""),
+            "Last Synced At": synced_at,
+            "Sync Status": "synced",
+            "Source Version": f"mock-api:{sku}:{warehouse_id}",
+        }
+
+    def bitable_records_url(record_id: str | None = None) -> str:
+        base = f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables/{table_id}/records"
+        return f"{base}/{record_id}" if record_id else base
+
+    def find_inventory_table_record(*, token: str, sku: str, warehouse_id: str) -> str:
+        params: dict[str, Any] = {
+            "page_size": 20,
+            "filter": f'AND(CurrentValue.[SKU]="{sku}",CurrentValue.[Warehouse]="{warehouse_id}")',
+        }
+        if table_view_id:
+            params["view_id"] = table_view_id
+        response = client.get(
+            bitable_records_url(),
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table record lookup failed: {payload}")
+        items = payload.get("data", {}).get("items", [])
+        if not items:
+            return ""
+        return str(items[0].get("record_id") or items[0].get("id") or "")
+
+    def upsert_inventory_table_record(*, token: str, fields: dict[str, Any]) -> dict[str, str]:
+        record_id = find_inventory_table_record(
+            token=token,
+            sku=str(fields["SKU"]),
+            warehouse_id=str(fields["Warehouse"]),
+        )
+        if record_id:
+            response = client.put(
+                bitable_records_url(record_id),
+                headers={"Authorization": f"Bearer {token}"},
+                json={"fields": fields},
+            )
+            action = "updated"
+        else:
+            response = client.post(
+                bitable_records_url(),
+                headers={"Authorization": f"Bearer {token}"},
+                json={"fields": fields},
+            )
+            action = "created"
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table upsert failed: {payload}")
+        data = payload.get("data", {})
+        record = data.get("record") if isinstance(data.get("record"), dict) else {}
+        returned_record_id = str(record.get("record_id") or data.get("record_id") or record_id)
+        return {"action": action, "record_id": returned_record_id}
+
+    @app.post("/warehouse/inventory-table/sync")
+    def sync_inventory_table(request: InventoryTableSyncRequest) -> dict[str, Any]:
+        started = perf_counter()
+        sku = request.sku.strip().lower()
+        if not inventory_table_sync_configured():
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "missing_feishu_inventory_table_config",
+                "message": "Feishu inventory table sync is not configured.",
+            }
+        try:
+            inventory_response = client.get(
+                f"{runtime_mock_api_url}/warehouse/inventory/{sku}",
+            )
+            inventory_response.raise_for_status()
+            inventory = inventory_response.json()
+            fields = build_inventory_snapshot_fields(inventory)
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            result = upsert_inventory_table_record(token=token, fields=fields)
+            latency_ms = (perf_counter() - started) * 1000
+            write_sync_run_log(
+                sku=sku,
+                status="succeeded",
+                latency_ms=latency_ms,
+                tool_calls=[{"tool": "warehouse_inventory_table_sync_tool", "input": {"sku": sku}, "output": result}],
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                "sku": sku,
+                **result,
+                "table_url": table_url,
+                "last_synced_at": fields["Last Synced At"],
+                "source_version": fields["Source Version"],
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            write_sync_run_log(
+                sku=sku,
+                status="failed",
+                latency_ms=latency_ms,
+                error=str(error),
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "sku": sku,
+                "error": "feishu_inventory_table_sync_failed",
+                "message": str(error),
+            }
 
     def process_message(bot: BotConfig, message: Any) -> None:
         total_started = perf_counter()

@@ -92,6 +92,7 @@ sequenceDiagram
 - replay endpoint 用于失败事件恢复流程。
 - 多 bot 飞书场景下处理重复消息和共享群聊 fan-out。
 - 政策 RAG 保留 source file、section 和 clause id 元数据。
+- 仓储库存可以单向同步为飞书表格快照/read model，库存写入仍保留在源系统。
 
 ## SaaS 替换点
 

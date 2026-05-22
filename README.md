@@ -169,6 +169,7 @@ docker compose restart n8n
 - `GET http://localhost:8010/health`
 - `GET http://localhost:8010/health/details`
 - `POST http://localhost:8010/feishu/events`
+- `POST http://localhost:8010/warehouse/inventory-table/sync`
 - `GET http://localhost:8002/orders/{order_id}`
 - `GET http://localhost:8002/customers/{customer_id}`
 - `GET http://localhost:8002/shipments/{shipment_id}`
@@ -196,6 +197,7 @@ pytest tests\test_department_workflows.py
 - [Architecture](docs/architecture.md)
 - [Demo Script](docs/demo-script.md)
 - [Deployment and Operations](docs/deployment.md)
+- [Warehouse Inventory Feishu Table Sync](docs/warehouse-inventory-table-sync.md)
 - [Local Runbook](docs/local-runbook.md)
 - [n8n Workflow Contract](docs/n8n-workflow-contract.md)
 - [中文 README](README.zh.md)

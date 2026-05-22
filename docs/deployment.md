@@ -31,6 +31,7 @@ Do not commit `.env`. Configure these at runtime:
 - `FEISHU_BOTS_JSON`: one entry per department bot, including `bot_open_id` for shared group routing.
 - `FEISHU_EVENT_MODE=long_connection`
 - `FEISHU_RUN_LOG_URL=http://mock-api:8000/run-logs` or the production run-log endpoint.
+- `FEISHU_INVENTORY_TABLE_APP_TOKEN`, `FEISHU_INVENTORY_TABLE_ID`, and table app credentials when Warehouse Agent should publish inventory snapshots to a Feishu table.
 - `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL` for the model gateway.
 - `DATABASE_URL` for durable memory and operational state.
 
@@ -73,6 +74,7 @@ Use deterministic paths before LLM calls whenever possible:
 
 - Fast path for common order and refund follow-ups.
 - RAG before generation for policy questions.
+- One-way Feishu table snapshots for warehouse visibility; keep warehouse data writes in the source system.
 - Short memory windows plus compact session state.
 - Timeout and fallback replies for slow n8n, tool, or model calls.
 - Run logs for latency comparisons between fast path and LLM path.

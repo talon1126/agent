@@ -92,6 +92,7 @@ sequenceDiagram
 - Replay endpoint for failed-event recovery workflows.
 - Multi-bot Feishu safeguards for duplicate messages and shared-group fan-out.
 - Policy RAG metadata with source file, section, and clause id.
+- One-way warehouse inventory snapshots to Feishu tables as a read model, with inventory writes kept in the source system.
 
 ## SaaS Replacement Points
 

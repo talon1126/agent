@@ -42,7 +42,7 @@
         "parameters": {
           "text": "={{ $json.input_text }}",
           "options": {
-            "systemMessage": "你是 Warehouse Agent，专门处理仓储、库存、履约和发货作业问题。\n\n可用工具：\n- warehouse_inventory_tool：查询 SKU 库存、已预留库存、待处理订单、补货阈值和库位。\n- warehouse_exception_tool：查询库存差异、破损、待上架、找不到库位、拣货延迟等仓储异常。\n- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。\n\n处理规则：\n1. 如果用户询问 SKU 库存、现货、库位、缺货或补货阈值，必须调用 warehouse_inventory_tool。\n2. 如果用户询问库存差异、破损、待上架、找不到库位、拣货延迟或仓储异常，必须调用 warehouse_exception_tool。\n3. 如果用户询问能否发货、履约风险、出库阻塞或发货作业状态，必须调用 warehouse_fulfillment_tool。\n4. 如果用户提供了 sku_ 开头的 SKU，结合问题类型调用对应工具；必要时可以连续调用多个工具。\n5. 如果用户没有提供 SKU，请要求用户提供 SKU，例如 sku_bag_1。\n6. 回复必须保留工具返回的 SKU、可用库存、已预留库存、库位、异常、风险等级和行动建议等关键字段。\n7. 不要创建采购单；采购归 Procurement Agent 处理。\n8. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。\n9. 回复必须简洁，适合直接发回飞书。",
+            "systemMessage": "你是 Warehouse Agent，专门处理仓储、库存、履约和发货作业问题。\n\n可用工具：\n- warehouse_inventory_tool：查询 SKU 库存、已预留库存、待处理订单、补货阈值和库位。\n- warehouse_exception_tool：查询库存差异、破损、待上架、找不到库位、拣货延迟等仓储异常。\n- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。\n- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 SKU 库存快照同步到飞书表格。\n\n处理规则：\n1. 如果用户询问 SKU 库存、现货、库位、缺货或补货阈值，必须调用 warehouse_inventory_tool。\n2. 如果用户询问库存差异、破损、待上架、找不到库位、拣货延迟或仓储异常，必须调用 warehouse_exception_tool。\n3. 如果用户询问能否发货、履约风险、出库阻塞或发货作业状态，必须调用 warehouse_fulfillment_tool。\n4. 如果用户要求同步、导出、发布、表格、飞书表格或看板，并提供了 sku_ 开头的 SKU，先调用 warehouse_inventory_tool 获取事实，再调用 warehouse_inventory_table_sync_tool 同步快照。\n5. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_sync_tool。\n6. 如果用户没有提供 SKU，请要求用户提供 SKU，例如 sku_bag_1。\n7. 回复必须保留工具返回的 SKU、可用库存、已预留库存、库位、异常、风险等级和行动建议等关键字段。\n8. 不要创建采购单；采购归 Procurement Agent 处理。\n9. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。\n10. 回复必须简洁，适合直接发回飞书。",
             "maxIterations": 3,
             "returnIntermediateSteps": true
           },
@@ -142,6 +142,20 @@
         "typeVersion": 1.3,
         "position": [
           1072,
+          320
+        ]
+      },
+      {
+        "parameters": {
+          "description": "Use this Feishu table sync tool only when the user asks to sync, export, publish, or show an SKU inventory snapshot in a Feishu table.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractSku(input) {\n  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bsku_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const sku = extractSku(input);\n  if (!sku) {\n    return JSON.stringify({ ok: false, error: 'missing_sku', message: '请提供 SKU，例如 sku_bag_1。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://feishu-adapter:8000/warehouse/inventory-table/sync',\n    body: { sku },\n    json: true\n  });\n\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'warehouse_inventory_table_sync_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+        },
+        "id": "warehouse-inventory-table-sync-tool-node",
+        "name": "warehouse_inventory_table_sync_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [
+          1248,
           320
         ]
       },
@@ -264,6 +278,17 @@
         ]
       },
       "warehouse_fulfillment_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Warehouse Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "warehouse_inventory_table_sync_tool": {
         "ai_tool": [
           [
             {

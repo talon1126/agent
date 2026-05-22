@@ -14,6 +14,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_sync_tool",
             "procurement_mock_tool",
             "operations_mock_tool",
             "echo_task_tool",
@@ -29,6 +30,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_sync_tool",
         },
         "forbidden_tools": {
             "order_status_tool",
@@ -51,6 +53,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_sync_tool",
             "operations_mock_tool",
             "echo_task_tool",
         },
@@ -68,6 +71,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_sync_tool",
             "procurement_mock_tool",
             "echo_task_tool",
         },
@@ -118,6 +122,10 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
         format_reply = node_by_name(workflow, "Format Webhook Reply")
         assert "tool_trace" in format_reply["parameters"]["jsCode"]
         assert "intermediateSteps" in format_reply["parameters"]["jsCode"]
+        if expected["agent"] == "Warehouse Agent":
+            system_message = agent["parameters"]["options"]["systemMessage"]
+            assert "warehouse_inventory_table_sync_tool" in system_message
+            assert "同步、导出、发布、表格、飞书表格或看板" in system_message
 
 
 def test_department_workflows_connect_directly_to_department_agent() -> None:

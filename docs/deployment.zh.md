@@ -31,6 +31,7 @@ Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 1
 - `FEISHU_BOTS_JSON`：每个部门机器人一项；如果多个 bot 在同一个群里，需要配置 `bot_open_id`。
 - `FEISHU_EVENT_MODE=long_connection`
 - `FEISHU_RUN_LOG_URL=http://mock-api:8000/run-logs`，或者生产环境的 run-log endpoint。
+- `FEISHU_INVENTORY_TABLE_APP_TOKEN`、`FEISHU_INVENTORY_TABLE_ID` 和表格应用凭证，用于让 Warehouse Agent 把库存快照发布到飞书表格。
 - `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL`，用于模型网关。
 - `DATABASE_URL`，用于持久化 memory 和运维状态。
 
@@ -73,6 +74,7 @@ Invoke-RestMethod http://localhost:8002/run-logs | ConvertTo-Json -Depth 10
 
 - 常见订单和退款追问走 fast path。
 - 政策问题先 RAG，再生成回答。
+- 仓储可见性用单向飞书表格快照；库存写入仍保留在源系统。
 - 使用短窗口 memory 和紧凑 session state。
 - n8n、工具或模型超时时返回降级回复。
 - 用 run log 对比 fast path 和 LLM path 的延迟。

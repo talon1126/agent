@@ -52,17 +52,19 @@ Send to the Warehouse bot or mention it in a shared group:
 
 ```text
 @Warehouse 查询 sku_bag_1 的库存、库位和履约风险
+@Warehouse 把 sku_bag_1 的库存快照同步到飞书表格
 ```
 
 Expected behavior:
 
 - Only the Warehouse workflow runs.
 - The warehouse tools return inventory, locations, open exceptions, and risk.
+- The explicit sync request calls `warehouse_inventory_table_sync_tool` and returns `created` or `updated`.
 - Other department workflows do not execute.
 
 Explain:
 
-"This project hit a real multi-bot failure mode: in a shared Feishu group, one message can be received by every bot. The gateway now filters group messages by mention and bot open_id so one message cannot fan out to every workflow."
+"This project hit a real multi-bot failure mode: in a shared Feishu group, one message can be received by every bot. The gateway now filters group messages by mention and bot open_id so one message cannot fan out to every workflow. For inventory visibility, the Agent can publish a one-way Feishu table snapshot. The table is a read model, not the inventory source of truth."
 
 ## 5. Procurement Demo
 

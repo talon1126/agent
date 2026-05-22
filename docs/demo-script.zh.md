@@ -52,17 +52,19 @@ Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 1
 
 ```text
 @Warehouse 查询 sku_bag_1 的库存、库位和履约风险
+@Warehouse 把 sku_bag_1 的库存快照同步到飞书表格
 ```
 
 预期行为：
 
 - 只有 Warehouse workflow 执行。
 - 仓储工具返回库存、库位、未关闭异常和风险等级。
+- 明确同步请求会调用 `warehouse_inventory_table_sync_tool`，返回 `created` 或 `updated`。
 - 其他部门 workflow 不执行。
 
 讲解：
 
-“这个项目遇到过真实的多 bot 问题：多个机器人在同一个飞书群里时，一条消息可能被所有 bot 收到。现在 gateway 会通过 mention 和 bot open_id 过滤，避免一条群消息触发所有 workflow。”
+“这个项目遇到过真实的多 bot 问题：多个机器人在同一个飞书群里时，一条消息可能被所有 bot 收到。现在 gateway 会通过 mention 和 bot open_id 过滤，避免一条群消息触发所有 workflow。对于库存可见性，Agent 可以把库存发布成单向飞书表格快照。这个表格是 read model，不是库存主数据源。”
 
 ## 5. 采购 Demo
 

@@ -33,6 +33,7 @@ DEPARTMENTS = {
             "warehouse_inventory_tool",
             "warehouse_exception_tool",
             "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_sync_tool",
         ],
     },
     "procurement": {
@@ -87,6 +88,48 @@ return $input.all().map((item) => {
   };
 });"""
 
+WAREHOUSE_SYNC_TOOL_JS = """function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value || {};
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return { query: value };
+  }
+}
+
+function first(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function extractSku(input) {
+  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();
+  const match = text.match(/\\bsku_[0-9A-Za-z_]+\\b/i);
+  return match ? match[0].toLowerCase() : '';
+}
+
+try {
+  const input = parseMaybeJson(query);
+  const sku = extractSku(input);
+  if (!sku) {
+    return JSON.stringify({ ok: false, error: 'missing_sku', message: '请提供 SKU，例如 sku_bag_1。' });
+  }
+
+  const result = await helpers.httpRequest({
+    method: 'POST',
+    url: 'http://feishu-adapter:8000/warehouse/inventory-table/sync',
+    body: { sku },
+    json: true
+  });
+
+  return JSON.stringify(result);
+} catch (error) {
+  return JSON.stringify({
+    ok: false,
+    error: 'warehouse_inventory_table_sync_runtime_error',
+    message: error && error.message ? error.message : String(error)
+  });
+}"""
+
 
 def load_source_workflow() -> dict[str, Any]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
@@ -104,6 +147,23 @@ def clone_node(workflow: dict[str, Any], name: str) -> dict[str, Any]:
     return copy.deepcopy(find_node(workflow, name))
 
 
+def make_warehouse_sync_tool() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "description": (
+                "Use this Feishu table sync tool only when the user asks to sync, export, "
+                "publish, or show an SKU inventory snapshot in a Feishu table."
+            ),
+            "jsCode": WAREHOUSE_SYNC_TOOL_JS,
+        },
+        "id": "warehouse-inventory-table-sync-tool-node",
+        "name": "warehouse_inventory_table_sync_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [1248, 320],
+    }
+
+
 def make_agent_node(source_agent: dict[str, Any]) -> dict[str, Any]:
     agent = copy.deepcopy(source_agent)
     agent["type"] = "@n8n/n8n-nodes-langchain.agent"
@@ -111,6 +171,32 @@ def make_agent_node(source_agent: dict[str, Any]) -> dict[str, Any]:
     agent["parameters"]["promptType"] = "define"
     agent["position"] = [320, 120]
     return agent
+
+
+def update_warehouse_agent_prompt(agent: dict[str, Any]) -> None:
+    if agent.get("name") != "Warehouse Agent":
+        return
+    system_message = agent["parameters"]["options"]["systemMessage"]
+    system_message = system_message.replace(
+        "- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。",
+        "- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。\n"
+        "- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 SKU 库存快照同步到飞书表格。",
+    )
+    system_message = system_message.replace(
+        "4. 如果用户提供了 sku_ 开头的 SKU，结合问题类型调用对应工具；必要时可以连续调用多个工具。",
+        "4. 如果用户要求同步、导出、发布、表格、飞书表格或看板，并提供了 sku_ 开头的 SKU，先调用 warehouse_inventory_tool 获取事实，再调用 warehouse_inventory_table_sync_tool 同步快照。\n"
+        "5. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_sync_tool。",
+    )
+    renumbering = {
+        "5. 如果用户没有提供 SKU": "6. 如果用户没有提供 SKU",
+        "6. 回复必须保留工具返回": "7. 回复必须保留工具返回",
+        "7. 不要创建采购单": "8. 不要创建采购单",
+        "8. 不要编造仓库或库存数据": "9. 不要编造仓库或库存数据",
+        "9. 回复必须简洁": "10. 回复必须简洁",
+    }
+    for old, new in renumbering.items():
+        system_message = system_message.replace(old, new)
+    agent["parameters"]["options"]["systemMessage"] = system_message
 
 
 def make_memory_node(template: dict[str, Any], name: str, prefix: str) -> dict[str, Any]:
@@ -161,6 +247,7 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
     normalize["position"] = [-496, 80]
 
     agent = make_agent_node(clone_node(source, department["agent"]))
+    update_warehouse_agent_prompt(agent)
     model = clone_node(source, department["model"])
     model["position"] = [256, 320]
 
@@ -180,7 +267,11 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
 
     tools = []
     for index, tool_name in enumerate(department["tools"]):
-        tool = clone_node(source, tool_name)
+        tool = (
+            make_warehouse_sync_tool()
+            if tool_name == "warehouse_inventory_table_sync_tool"
+            else clone_node(source, tool_name)
+        )
         tool["position"] = [720 + index * 176, 320]
         tools.append(tool)
 
