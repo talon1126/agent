@@ -27,6 +27,7 @@ The provision endpoint:
 - Adds the fixed inventory snapshot fields listed below, including colored single-select fields for `Risk Level` and `Sync Status`.
 - Returns `action=existing` without calling Feishu when `FEISHU_INVENTORY_TABLE_ID` is already configured.
 - Reuses an existing table with the same name when Feishu returns `TableNameDuplicated`, then creates any missing fields. This recovers from a partially provisioned table.
+- Upgrades existing `Risk Level` and `Sync Status` text fields to colored single-select fields when Feishu returns their field IDs.
 - Writes a run log when `FEISHU_RUN_LOG_URL` is configured.
 - Does not create a new Feishu app/base or a source-of-truth inventory database.
 
@@ -64,6 +65,8 @@ Source Version
 ```
 
 `Source Version` is a lightweight idempotency marker such as `mock-api:sku_bag_1:wh_hk_1`.
+
+If an older table already shows white/plain text values in `Risk Level` or `Sync Status`, call the provision endpoint again after deploying this version. The adapter will inspect the existing fields and update those two fields to colored single-select fields.
 
 ## Required Environment
 

@@ -27,6 +27,7 @@ Warehouse Agent 有一个工具叫 `warehouse_inventory_table_provision_tool`。
 - 创建下方列出的固定库存快照字段，其中 `Risk Level` 和 `Sync Status` 是带颜色的单选字段。
 - 如果已经配置 `FEISHU_INVENTORY_TABLE_ID`，直接返回 `action=existing`，不会重复调用飞书建表。
 - 如果飞书返回 `TableNameDuplicated`，会按同名表复用，并补齐缺失字段。这样可以从“表已创建但字段创建失败”的半成品状态恢复。
+- 如果已有 `Risk Level` 和 `Sync Status` 是旧的文本字段，只要飞书返回了字段 ID，后端会把它们升级为带颜色的单选字段。
 - 配置 `FEISHU_RUN_LOG_URL` 后写入 run log。
 - 不创建新的飞书 app/base，也不创建库存主数据源。
 
@@ -64,6 +65,8 @@ Source Version
 ```
 
 `Source Version` 是轻量幂等标识，例如 `mock-api:sku_bag_1:wh_hk_1`。
+
+如果旧表里的 `Risk Level` 或 `Sync Status` 现在仍然是白色普通文本，部署这个版本后重新调用创建 endpoint。adapter 会检查已有字段，并把这两个字段更新成带颜色的单选字段。
 
 ## 必要环境变量
 

@@ -388,7 +388,19 @@ def create_app(
     def bitable_fields_url(table_identifier: str) -> str:
         return f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables/{table_identifier}/fields"
 
-    def field_names_for_table(*, token: str, table_identifier: str) -> set[str]:
+    def bitable_field_url(table_identifier: str, field_id: str) -> str:
+        return f"{bitable_fields_url(table_identifier)}/{field_id}"
+
+    def field_signature(field: dict[str, Any]) -> dict[str, Any]:
+        signature: dict[str, Any] = {
+            "field_name": field["field_name"],
+            "type": field["type"],
+        }
+        if "property" in field:
+            signature["property"] = field["property"]
+        return signature
+
+    def fields_by_name_for_table(*, token: str, table_identifier: str) -> dict[str, dict[str, Any]]:
         response = client.get(
             bitable_fields_url(table_identifier),
             headers={"Authorization": f"Bearer {token}"},
@@ -398,12 +410,47 @@ def create_app(
         if payload.get("code") not in {0, None}:
             raise RuntimeError(f"Feishu inventory table field list failed: {payload}")
         items = payload.get("data", {}).get("items", [])
-        return {str(item.get("field_name") or "") for item in items if isinstance(item, dict)}
+        return {
+            str(item.get("field_name") or ""): item
+            for item in items
+            if isinstance(item, dict) and item.get("field_name")
+        }
 
-    def create_inventory_table_fields(*, token: str, table_identifier: str, existing_fields: set[str] | None = None) -> None:
-        existing = existing_fields or set()
+    def update_inventory_table_field(
+        *,
+        token: str,
+        table_identifier: str,
+        field_id: str,
+        field: dict[str, Any],
+    ) -> None:
+        response = client.put(
+            bitable_field_url(table_identifier, field_id),
+            headers={"Authorization": f"Bearer {token}"},
+            json=field,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, 1254606, None}:
+            raise RuntimeError(f"Feishu inventory table field update failed: {payload}")
+
+    def create_inventory_table_fields(
+        *,
+        token: str,
+        table_identifier: str,
+        existing_fields: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        existing = existing_fields or {}
         for field in INVENTORY_TABLE_FIELD_SPECS:
-            if field["field_name"] in existing:
+            existing_field = existing.get(str(field["field_name"]))
+            if existing_field:
+                field_id = str(existing_field.get("field_id") or "")
+                if field_id and field_signature(field) != field_signature(existing_field):
+                    update_inventory_table_field(
+                        token=token,
+                        table_identifier=table_identifier,
+                        field_id=field_id,
+                        field=field,
+                    )
                 continue
             response = client.post(
                 bitable_fields_url(table_identifier),
@@ -438,11 +485,11 @@ def create_app(
 
     def ensure_inventory_table_fields(*, token: str, table_identifier: str) -> None:
         try:
-            existing_fields = field_names_for_table(token=token, table_identifier=table_identifier)
+            existing_fields = fields_by_name_for_table(token=token, table_identifier=table_identifier)
         except httpx.HTTPStatusError as error:
             if error.response.status_code != 404:
                 raise
-            existing_fields = set()
+            existing_fields = {}
         create_inventory_table_fields(
             token=token,
             table_identifier=table_identifier,
@@ -486,11 +533,13 @@ def create_app(
 
     def ensure_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
         if inventory_table_state["table_id"]:
-            return {
+            result = {
                 "table_id": inventory_table_state["table_id"],
                 "view_id": inventory_table_state["view_id"],
                 "action": "existing",
             }
+            ensure_inventory_table_fields(token=token, table_identifier=result["table_id"])
+            return result
         existing = find_inventory_table_by_name(token=token, table_name=table_name)
         if existing["table_id"]:
             ensure_inventory_table_fields(token=token, table_identifier=existing["table_id"])
@@ -565,15 +614,6 @@ def create_app(
                 "configured": False,
                 "error": "missing_feishu_inventory_table_provision_config",
                 "message": "Feishu inventory table provisioning requires app credentials and app token.",
-            }
-        if inventory_table_state["table_id"]:
-            return {
-                "ok": True,
-                "configured": True,
-                "action": "existing",
-                "table_id": inventory_table_state["table_id"],
-                "view_id": inventory_table_state["view_id"],
-                "table_url": inventory_table_url_for(inventory_table_state["table_id"]),
             }
         table_name = request.table_name.strip() or "Warehouse Inventory Snapshot"
         try:

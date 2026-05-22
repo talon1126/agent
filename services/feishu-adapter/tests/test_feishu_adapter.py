@@ -402,7 +402,55 @@ def test_inventory_table_provision_returns_existing_table_when_table_id_is_confi
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(500, json={"error": "should not call Feishu when table_id exists"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1},
+                            {"field_id": "fld_product", "field_name": "Product Name", "type": 1},
+                            {"field_id": "fld_warehouse", "field_name": "Warehouse", "type": 1},
+                            {"field_id": "fld_available", "field_name": "Available", "type": 2},
+                            {"field_id": "fld_reserved", "field_name": "Reserved", "type": 2},
+                            {"field_id": "fld_pending", "field_name": "Pending Orders", "type": 2},
+                            {
+                                "field_id": "fld_risk",
+                                "field_name": "Risk Level",
+                                "type": 3,
+                                "property": {
+                                    "options": [
+                                        {"name": "low", "color": 28},
+                                        {"name": "medium", "color": 24},
+                                        {"name": "high", "color": 17},
+                                        {"name": "unknown", "color": 0},
+                                    ]
+                                },
+                            },
+                            {"field_id": "fld_exc", "field_name": "Open Exception Count", "type": 2},
+                            {"field_id": "fld_rec", "field_name": "Recommendation", "type": 1},
+                            {"field_id": "fld_sync_at", "field_name": "Last Synced At", "type": 1},
+                            {
+                                "field_id": "fld_status",
+                                "field_name": "Sync Status",
+                                "type": 3,
+                                "property": {
+                                    "options": [
+                                        {"name": "synced", "color": 28},
+                                        {"name": "pending", "color": 24},
+                                        {"name": "failed", "color": 17},
+                                    ]
+                                },
+                            },
+                            {"field_id": "fld_source", "field_name": "Source Version", "type": 1},
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
 
     app = create_app(
         http_client=httpx.Client(transport=httpx.MockTransport(handler)),
@@ -418,15 +466,15 @@ def test_inventory_table_provision_returns_existing_table_when_table_id_is_confi
     response = client.post("/warehouse/inventory-table/provision", json={})
 
     assert response.status_code == 200
-    assert response.json() == {
-        "ok": True,
-        "configured": True,
-        "action": "existing",
-        "table_id": "tbl_existing",
-        "view_id": "vew_existing",
-        "table_url": "https://example.feishu.cn/base/app_token?table=tbl_existing",
-    }
-    assert requests == []
+    body = response.json()
+    assert body["ok"] is True
+    assert body["configured"] is True
+    assert body["action"] == "existing"
+    assert body["table_id"] == "tbl_existing"
+    assert body["view_id"] == "vew_existing"
+    assert body["table_url"] == "https://example.feishu.cn/base/app_token?table=tbl_existing"
+    assert "Risk Level" in body["fields"]
+    assert [request.method for request in requests] == ["POST", "GET"]
 
 
 def test_inventory_table_provision_creates_inventory_table_with_fixed_schema() -> None:
@@ -617,6 +665,120 @@ def test_inventory_table_provision_reuses_duplicate_table_and_creates_missing_fi
     assert "SKU" not in [json.loads(request.content)["field_name"] for request in field_create_requests]
 
 
+def test_inventory_table_provision_updates_existing_text_fields_to_colored_single_selects() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1},
+                            {"field_id": "fld_risk", "field_name": "Risk Level", "type": 1},
+                            {"field_id": "fld_status", "field_name": "Sync Status", "type": 1},
+                        ]
+                    },
+                },
+            )
+        if url in {
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields/fld_risk",
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields/fld_status",
+        }:
+            return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": url.rsplit('/', 1)[-1]}}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_created"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_api_base_url="https://open.feishu.cn",
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_existing",
+    )
+    client = TestClient(app)
+
+    response = client.post("/warehouse/inventory-table/provision", json={})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    update_requests = [request for request in requests if request.method == "PUT"]
+    assert [str(request.url) for request in update_requests] == [
+        "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields/fld_risk",
+        "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields/fld_status",
+    ]
+    assert json.loads(update_requests[0].content) == {
+        "field_name": "Risk Level",
+        "type": 3,
+        "property": {
+            "options": [
+                {"name": "low", "color": 28},
+                {"name": "medium", "color": 24},
+                {"name": "high", "color": 17},
+                {"name": "unknown", "color": 0},
+            ]
+        },
+    }
+    assert json.loads(update_requests[1].content) == {
+        "field_name": "Sync Status",
+        "type": 3,
+        "property": {
+            "options": [
+                {"name": "synced", "color": 28},
+                {"name": "pending", "color": 24},
+                {"name": "failed", "color": 17},
+            ]
+        },
+    }
+
+
+def test_inventory_table_provision_treats_field_data_not_change_as_success() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {"field_id": "fld_risk", "field_name": "Risk Level", "type": 1},
+                        ]
+                    },
+                },
+            )
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields/fld_risk":
+            return httpx.Response(200, json={"code": 1254606, "msg": "DataNotChange"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_created"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_api_base_url="https://open.feishu.cn",
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_existing",
+    )
+    client = TestClient(app)
+
+    response = client.post("/warehouse/inventory-table/provision", json={})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
 def test_inventory_table_sync_auto_provisions_table_when_table_id_is_missing() -> None:
     requests: list[httpx.Request] = []
 
@@ -705,6 +867,8 @@ def test_inventory_table_sync_creates_snapshot_record() -> None:
             )
         if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
         if str(request.url).startswith(
             "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/records?"
         ):
@@ -772,6 +936,8 @@ def test_inventory_table_sync_updates_existing_snapshot_record() -> None:
             )
         if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
         if str(request.url).startswith(
             "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/records?"
         ):
