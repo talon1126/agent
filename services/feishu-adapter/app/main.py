@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
 
 from app.feishu_client import FEISHU_API_BASE_URL, get_tenant_access_token, reply_text_message
 from app.feishu_events import normalize_feishu_event, to_n8n_payload
@@ -45,13 +45,41 @@ class InventoryTableProvisionRequest(BaseModel):
 
 class InventoryTableViewFilter(BaseModel):
     field: str
-    operator: str
+    operator: str = "is"
     value: Any | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_filter(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            normalized = dict(value)
+            normalized["operator"] = str(normalized.get("operator") or "is")
+            return normalized
+        if isinstance(value, str):
+            if "=" in value:
+                field, filter_value = value.split("=", 1)
+                return {"field": field.strip(), "operator": "is", "value": filter_value.strip()}
+            return {"field": value.strip(), "operator": "is", "value": None}
+        return value
 
 
 class InventoryTableViewSort(BaseModel):
     field: str
     order: str = "asc"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_sort(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            normalized = dict(value)
+            normalized["order"] = str(normalized.get("order") or normalized.get("direction") or "asc")
+            return normalized
+        if isinstance(value, str):
+            parts = value.rsplit(" ", 1)
+            if len(parts) == 2 and parts[1].lower() in {"asc", "desc"}:
+                return {"field": parts[0].strip(), "order": parts[1].lower()}
+            return {"field": value.strip(), "order": "asc"}
+        return value
 
 
 class InventoryTableViewCreateRequest(BaseModel):
@@ -61,6 +89,42 @@ class InventoryTableViewCreateRequest(BaseModel):
     visible_fields: list[str] = []
     filters: list[InventoryTableViewFilter] = []
     sorts: list[InventoryTableViewSort] = []
+
+    @field_validator("visible_fields", mode="before")
+    @classmethod
+    def normalize_visible_fields(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [field.strip() for field in value.replace("，", ",").split(",") if field.strip()]
+        return value
+
+    @field_validator("filters", mode="before")
+    @classmethod
+    def normalize_filters(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            if "field" in value:
+                return [value]
+            return [
+                {"field": str(field), "operator": "is", "value": filter_value}
+                for field, filter_value in value.items()
+            ]
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        return value
+
+    @field_validator("sorts", mode="before")
+    @classmethod
+    def normalize_sorts(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            return [value]
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        return value
 
 
 INVENTORY_TABLE_FIELD_SPECS = [
@@ -897,6 +961,7 @@ def create_app(
                         "ok": True,
                         "configured": True,
                         "action": "existing",
+                        "task_complete": True,
                         "table_id": table_result["table_id"],
                         "table_name": table_name,
                         "table_url": inventory_table_url_for(table_result["table_id"]),
@@ -904,6 +969,11 @@ def create_app(
                         "view_name": view["view_name"],
                         "view_type": view["view_type"],
                         "validated_plan": plan,
+                        "completion_message": (
+                            f"Feishu inventory view {view['view_name']} already exists "
+                            f"with view_id={view['view_id']}. Reply to the user now; "
+                            "do not call warehouse_view_create_tool again for this view."
+                        ),
                     }
             result = create_inventory_table_view(
                 token=token,
@@ -929,12 +999,18 @@ def create_app(
                 "ok": True,
                 "configured": True,
                 **result,
+                "task_complete": True,
                 "table_id": table_result["table_id"],
                 "table_name": table_name,
                 "table_url": inventory_table_url_for(table_result["table_id"]),
                 "view_name": plan["view_name"],
                 "view_type": plan["view_type"],
                 "validated_plan": plan,
+                "completion_message": (
+                    f"Feishu inventory view {plan['view_name']} was created "
+                    f"with view_id={result['view_id']}. Reply to the user now; "
+                    "do not call warehouse_view_create_tool again for this view."
+                ),
             }
         except (httpx.HTTPError, RuntimeError) as error:
             latency_ms = (perf_counter() - started) * 1000

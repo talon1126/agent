@@ -221,14 +221,50 @@ function splitFields(value) {
     .filter(Boolean);
 }
 
+function normalizeFilters(value) {
+  if (!value) return [];
+  if (typeof value === 'string') return value.trim() ? [value.trim()] : [];
+  if (!Array.isArray(value)) {
+    if (typeof value === 'object' && value.field) return [value];
+    if (typeof value === 'object') {
+      return Object.entries(value).map(([field, filterValue]) => ({
+        field,
+        operator: 'is',
+        value: filterValue
+      }));
+    }
+    return [];
+  }
+  return value.map((rule) => {
+    if (typeof rule === 'string') return rule;
+    return {
+      ...rule,
+      operator: rule.operator || 'is'
+    };
+  });
+}
+
+function normalizeSorts(value) {
+  if (!value) return [];
+  if (typeof value === 'string') return value.trim() ? [value.trim()] : [];
+  const items = Array.isArray(value) ? value : [value];
+  return items.map((rule) => {
+    if (typeof rule === 'string') return rule;
+    return {
+      ...rule,
+      order: rule.order || rule.direction || 'asc'
+    };
+  });
+}
+
 try {
   const input = parseMaybeJson(query);
   const text = String(first(input.query, input.text, '')).trim();
   const quotedName = text.match(/[“\"]([^”\"]+)[”\"]/);
   const viewName = String(first(input.view_name, input.viewName, input.name, quotedName && quotedName[1], 'Warehouse Inventory View')).trim();
   const visibleFields = splitFields(first(input.visible_fields, input.visibleFields, input.fields));
-  const filters = Array.isArray(input.filters) ? input.filters : [];
-  const sorts = Array.isArray(input.sorts) ? input.sorts : [];
+  const filters = normalizeFilters(input.filters);
+  const sorts = normalizeSorts(input.sorts);
 
   const result = await helpers.httpRequest({
     method: 'POST',
@@ -365,14 +401,15 @@ def update_warehouse_agent_prompt(agent: dict[str, Any]) -> None:
         "4. 如果用户要求创建、初始化或配置飞书库存表，先调用 warehouse_inventory_table_provision_tool；如果同时要求同步某个 sku_ 开头的 SKU，再调用 warehouse_inventory_tool 获取事实，然后调用 warehouse_inventory_table_sync_tool 同步快照。\n"
         "5. 如果用户要求同步、导出、发布、表格、飞书表格或看板，并提供了 sku_ 开头的 SKU，先调用 warehouse_inventory_tool 获取事实，再调用 warehouse_inventory_table_sync_tool 同步快照。\n"
         "6. 如果用户要求创建某个飞书库存视图，必须先调用 warehouse_table_schema_tool，再调用 warehouse_view_create_tool；warehouse_view_create_tool 的输入必须是 JSON，包含 view_name、visible_fields、filters 和 sorts；不要编造 schema 中不存在的字段。\n"
-        "7. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool、warehouse_inventory_table_sync_tool、warehouse_table_schema_tool 或 warehouse_view_create_tool。",
+        "7. warehouse_view_create_tool 返回 ok=true 后，立即根据返回的 action、view_id 和 validated_plan 回复用户；同一个 view_name 不要重复调用 warehouse_view_create_tool。\n"
+        "8. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool、warehouse_inventory_table_sync_tool、warehouse_table_schema_tool 或 warehouse_view_create_tool。",
     )
     renumbering = {
-        "5. 如果用户没有提供 SKU": "8. 如果用户没有提供 SKU",
-        "6. 回复必须保留工具返回": "9. 回复必须保留工具返回",
-        "7. 不要创建采购单": "10. 不要创建采购单",
-        "8. 不要编造仓库或库存数据": "11. 不要编造仓库或库存数据",
-        "9. 回复必须简洁": "12. 回复必须简洁",
+        "5. 如果用户没有提供 SKU": "9. 如果用户没有提供 SKU",
+        "6. 回复必须保留工具返回": "10. 回复必须保留工具返回",
+        "7. 不要创建采购单": "11. 不要创建采购单",
+        "8. 不要编造仓库或库存数据": "12. 不要编造仓库或库存数据",
+        "9. 回复必须简洁": "13. 回复必须简洁",
     }
     for old, new in renumbering.items():
         system_message = system_message.replace(old, new)
