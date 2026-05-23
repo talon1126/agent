@@ -198,6 +198,7 @@ pytest tests\test_department_workflows.py
 - [Demo 脚本](docs/demo-script.zh.md)
 - [部署和运维](docs/deployment.zh.md)
 - [仓储库存飞书表格同步](docs/warehouse-inventory-table-sync.zh.md)
+- [仓储视图模板构建器](docs/warehouse-view-template-builder.zh.md)
 - [本地运行手册](docs/local-runbook.zh.md)
 - [n8n Workflow Contract](docs/n8n-workflow-contract.zh.md)
 - [English README](README.md)

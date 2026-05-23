@@ -28,6 +28,7 @@
 - 飞书部门聊天链路：部门机器人 -> `feishu-adapter` -> 部门 n8n webhook -> 部门 Agent -> tool/API -> 飞书回复。
 - 飞书网关诊断：`feishu-adapter` 的 `GET /health/details` 会展示 bot 配置、listener 数量、已处理消息数量和 run-log 状态，但不暴露 secret。
 - 仓储库存表格创建、同步和视图工具：`feishu-adapter` 的 `POST /warehouse/inventory-table/provision` 会在已有飞书多维表格 app/base 里创建或复用固定 schema 的数据表；`POST /warehouse/inventory-table/sync` 会在需要时自动建表，并基于 `mock-api /warehouse/inventory/{sku}` 发布单向快照；`GET /warehouse/inventory-table/schema` 和 `POST /warehouse/inventory-table/views/create` 让 Warehouse Agent 可以基于校验后的字段计划创建受控飞书 grid 视图。
+- 仓储视图模板构建器：员工可以用“高风险库存”“缺货预警”等自然语言创建视图。`feishu-adapter` 会把消息映射为 `template + slots`，校验 schema，再调用受控视图创建接口。
 - fast path 链路：飞书 -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> 飞书回复。如果 fast path 拒绝处理，workflow 会回退到 Parent Agent。
 - 部门 workflow 导出：`n8n/workflows/customer-support-workflow.json`、`n8n/workflows/warehouse-workflow.json`、`n8n/workflows/procurement-workflow.json` 和 `n8n/workflows/operations-workflow.json`
 - Parent/son workflow 导出：`n8n/workflows/chat-parent-son-agent.json` 是历史兼容文件。

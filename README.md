@@ -198,6 +198,7 @@ pytest tests\test_department_workflows.py
 - [Demo Script](docs/demo-script.md)
 - [Deployment and Operations](docs/deployment.md)
 - [Warehouse Inventory Feishu Table Sync](docs/warehouse-inventory-table-sync.md)
+- [Warehouse View Template Builder](docs/warehouse-view-template-builder.md)
 - [Local Runbook](docs/local-runbook.md)
 - [n8n Workflow Contract](docs/n8n-workflow-contract.md)
 - [中文 README](README.zh.md)
