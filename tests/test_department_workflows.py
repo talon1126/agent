@@ -190,6 +190,9 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             restore_code = template_restore["parameters"]["jsCode"]
             assert "$items('Detect Warehouse View Template Request')" in restore_code
             assert "input_text" in restore_code or "...source" in restore_code
+            assert template_restore["position"] != format_reply["position"]
+            assert template_restore["position"] == [448, 160]
+            assert format_reply["position"] == [720, 160]
             assert (
                 "warehouse_view_template_fast_path"
                 in template_reply["parameters"]["jsCode"]

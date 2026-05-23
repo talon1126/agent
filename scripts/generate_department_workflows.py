@@ -561,7 +561,7 @@ def make_warehouse_view_fast_path_restore_source() -> dict[str, Any]:
         "name": "Restore Warehouse View Template Source",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
-        "position": [720, 80],
+        "position": [448, 160],
     }
 
 
@@ -685,6 +685,8 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
     format_reply = clone_node(source, "Format Webhook Reply")
     format_reply["position"] = [720, 80]
     format_reply["parameters"]["jsCode"] = FORMAT_REPLY_JS
+    if is_warehouse:
+        format_reply["position"] = [720, 160]
     respond = clone_node(source, "Respond to Webhook")
     respond["position"] = [944, 80]
 
