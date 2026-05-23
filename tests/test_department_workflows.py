@@ -146,29 +146,40 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "不要编造 schema 中不存在的字段" in system_message
             assert "不要重复调用 warehouse_view_create_tool" in system_message
             assert agent["parameters"]["options"]["maxIterations"] >= 6
-            view_tool = node_by_name(workflow, "warehouse_view_create_tool")
-            assert "normalizeFilters" in view_tool["parameters"]["jsCode"]
-            assert "rule.operator || 'is'" in view_tool["parameters"]["jsCode"]
-            assert "rule.order || rule.direction || 'asc'" in view_tool["parameters"]["jsCode"]
-            fast_path_detector = node_by_name(workflow, "Detect Warehouse View Fast Path")
-            fast_path_create = node_by_name(workflow, "Create Warehouse View Fast Path")
-            fast_path_reply = node_by_name(workflow, "Format Warehouse View Fast Path Reply")
+            template_detector = node_by_name(
+                workflow, "Detect Warehouse View Template Request"
+            )
+            template_create = node_by_name(workflow, "Create Warehouse View From Template")
+            template_reply = node_by_name(
+                workflow, "Format Warehouse View Template Reply"
+            )
 
-            detector_code = fast_path_detector["parameters"]["jsCode"]
-            assert "warehouse_view_fast_path" in detector_code
-            assert "warehouse_view_request" in detector_code
-            assert "Risk Level" in detector_code
-            assert "Available" in detector_code
+            detector_code = template_detector["parameters"]["jsCode"]
+            assert "warehouse_view_template_candidate" in detector_code
             assert "视图" in detector_code
-            assert "create" in detector_code
-            assert fast_path_create["parameters"]["url"].endswith(
-                "/warehouse/inventory-table/views/create"
+            assert "看板" in detector_code
+            assert "建" in detector_code
+            assert "建一个" in detector_code
+            assert "帮我建" in detector_code
+            assert "'表格'" not in detector_code
+            assert "'table'" not in detector_code
+            assert "extractVisibleFields" not in detector_code
+            assert "extractRiskFilter" not in detector_code
+            assert "extractSorts" not in detector_code
+            assert "visible_fields" not in detector_code
+            assert "filters" not in detector_code
+            assert "sorts" not in detector_code
+            assert template_create["parameters"]["url"].endswith(
+                "/warehouse/inventory-table/views/from-template"
             )
-            assert fast_path_create["parameters"]["jsonBody"] == (
-                "={{ $json.warehouse_view_request }}"
+            assert template_create["parameters"]["jsonBody"] == (
+                "={{ $json.warehouse_view_template_body }}"
             )
-            assert "warehouse_view_fast_path" in fast_path_reply["parameters"]["jsCode"]
-            assert "tool_trace" in fast_path_reply["parameters"]["jsCode"]
+            assert (
+                "warehouse_view_template_fast_path"
+                in template_reply["parameters"]["jsCode"]
+            )
+            assert "tool_trace" in template_reply["parameters"]["jsCode"]
 
 
 def test_department_workflows_connect_directly_to_department_agent() -> None:
@@ -181,25 +192,43 @@ def test_department_workflows_connect_directly_to_department_agent() -> None:
         ]
         if expected["agent"] == "Warehouse Agent":
             assert connections["Normalize Inbound Message"]["main"] == [
-                [{"node": "Detect Warehouse View Fast Path", "type": "main", "index": 0}]
-            ]
-            assert connections["Detect Warehouse View Fast Path"]["main"] == [
-                [{"node": "Is Warehouse View Fast Path", "type": "main", "index": 0}]
-            ]
-            assert connections["Is Warehouse View Fast Path"]["main"] == [
-                [{"node": "Create Warehouse View Fast Path", "type": "main", "index": 0}],
-                [{"node": expected["agent"], "type": "main", "index": 0}],
-            ]
-            assert connections["Create Warehouse View Fast Path"]["main"] == [
                 [
                     {
-                        "node": "Format Warehouse View Fast Path Reply",
+                        "node": "Detect Warehouse View Template Request",
                         "type": "main",
                         "index": 0,
                     }
                 ]
             ]
-            assert connections["Format Warehouse View Fast Path Reply"]["main"] == [
+            assert connections["Detect Warehouse View Template Request"]["main"] == [
+                [
+                    {
+                        "node": "Is Warehouse View Template Request",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ]
+            ]
+            assert connections["Is Warehouse View Template Request"]["main"] == [
+                [
+                    {
+                        "node": "Create Warehouse View From Template",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+                [{"node": expected["agent"], "type": "main", "index": 0}],
+            ]
+            assert connections["Create Warehouse View From Template"]["main"] == [
+                [
+                    {
+                        "node": "Format Warehouse View Template Reply",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ]
+            ]
+            assert connections["Format Warehouse View Template Reply"]["main"] == [
                 [{"node": "Respond to Webhook", "type": "main", "index": 0}]
             ]
         else:
