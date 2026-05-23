@@ -1,6 +1,7 @@
 from app.view_template_builder import (
     load_warehouse_view_templates,
     match_warehouse_view_template,
+    render_warehouse_view_plan,
 )
 
 
@@ -68,3 +69,38 @@ def test_unknown_template_returns_suggestions() -> None:
     assert result.matched is False
     assert result.error == "unknown_view_template"
     assert "高风险库存" in result.suggestions
+
+
+def test_renders_inventory_risk_template_with_slots() -> None:
+    plan = render_warehouse_view_plan(
+        template_id="inventory_risk_view",
+        view_name="香港仓高风险库存",
+        slots={"risk_level": "high", "warehouse": "wh_hk_1"},
+    )
+
+    assert plan["table_name"] == "Warehouse Inventory Snapshot"
+    assert plan["view_name"] == "香港仓高风险库存"
+    assert plan["visible_fields"] == [
+        "SKU",
+        "Warehouse",
+        "Available",
+        "Risk Level",
+        "Recommendation",
+    ]
+    assert {"field": "Risk Level", "operator": "is", "value": "high"} in plan[
+        "filters"
+    ]
+    assert {"field": "Warehouse", "operator": "is", "value": "wh_hk_1"} in plan[
+        "filters"
+    ]
+    assert plan["sorts"] == [{"field": "Available", "order": "asc"}]
+
+
+def test_renders_available_threshold_slot() -> None:
+    plan = render_warehouse_view_plan(
+        template_id="low_stock_view",
+        view_name="低于 5 件库存",
+        slots={"available_lt": 5},
+    )
+
+    assert {"field": "Available", "operator": "lt", "value": 5} in plan["filters"]

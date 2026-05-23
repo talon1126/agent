@@ -36,6 +36,53 @@ def load_warehouse_view_templates() -> list[WarehouseViewTemplate]:
     return [WarehouseViewTemplate(**raw_template) for raw_template in raw_templates]
 
 
+def get_template(template_id: str) -> WarehouseViewTemplate:
+    for template in load_warehouse_view_templates():
+        if template.template_id == template_id:
+            return template
+    raise ValueError(f"unknown template_id: {template_id}")
+
+
+def render_filters(slots: dict[str, Any]) -> list[dict[str, Any]]:
+    filters: list[dict[str, Any]] = []
+    if slots.get("risk_level"):
+        filters.append(
+            {"field": "Risk Level", "operator": "is", "value": slots["risk_level"]}
+        )
+    if slots.get("warehouse"):
+        filters.append(
+            {"field": "Warehouse", "operator": "is", "value": slots["warehouse"]}
+        )
+    if slots.get("available_lt") is not None:
+        filters.append(
+            {
+                "field": "Available",
+                "operator": "lt",
+                "value": int(slots["available_lt"]),
+            }
+        )
+    return filters
+
+
+def render_warehouse_view_plan(
+    template_id: str,
+    view_name: str | None,
+    slots: dict[str, Any],
+) -> dict[str, Any]:
+    template = get_template(template_id)
+    merged_slots = {**template.defaults, **slots}
+    return {
+        "table_name": template.table_name,
+        "view_name": view_name or template.display_name,
+        "view_type": "grid",
+        "visible_fields": list(template.visible_fields),
+        "filters": render_filters(merged_slots),
+        "sorts": list(template.sorts),
+        "template_id": template.template_id,
+        "slots": merged_slots,
+    }
+
+
 def match_warehouse_view_template(message: str) -> TemplateMatchResult:
     template = _find_template(message, load_warehouse_view_templates())
     if template is None:
