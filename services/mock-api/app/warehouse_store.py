@@ -3,16 +3,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import (
-    Column,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    create_engine,
-    func,
-    select,
-)
+from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, select
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger("mock_api.warehouse_store")
@@ -65,12 +56,6 @@ def init_warehouse_schema(engine: Engine) -> None:
     )
 
 
-def _table_is_empty(engine: Engine, table: Table) -> bool:
-    with engine.connect() as connection:
-        count = connection.execute(select(func.count()).select_from(table)).scalar_one()
-    return int(count) == 0
-
-
 def load_fixture_rows(fixture_dir: Path, name: str) -> list[dict[str, Any]]:
     import json
 
@@ -81,18 +66,19 @@ def load_fixture_rows(fixture_dir: Path, name: str) -> list[dict[str, Any]]:
 def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
     init_warehouse_schema(engine)
     with engine.begin() as connection:
-        if _table_is_empty(engine, warehouse_inventory):
-            connection.execute(warehouse_inventory.insert(), load_fixture_rows(fixture_dir, "inventory.json"))
-        if _table_is_empty(engine, warehouse_locations):
-            connection.execute(
-                warehouse_locations.insert(),
-                load_fixture_rows(fixture_dir, "warehouse_locations.json"),
-            )
-        if _table_is_empty(engine, warehouse_exceptions):
-            connection.execute(
-                warehouse_exceptions.insert(),
-                load_fixture_rows(fixture_dir, "warehouse_exceptions.json"),
-            )
+        # Demo data is fixture-owned, so restart/reseed should converge the DB to fixtures.
+        connection.execute(warehouse_exceptions.delete())
+        connection.execute(warehouse_locations.delete())
+        connection.execute(warehouse_inventory.delete())
+        connection.execute(warehouse_inventory.insert(), load_fixture_rows(fixture_dir, "inventory.json"))
+        connection.execute(
+            warehouse_locations.insert(),
+            load_fixture_rows(fixture_dir, "warehouse_locations.json"),
+        )
+        connection.execute(
+            warehouse_exceptions.insert(),
+            load_fixture_rows(fixture_dir, "warehouse_exceptions.json"),
+        )
 
 
 class WarehouseRepository:

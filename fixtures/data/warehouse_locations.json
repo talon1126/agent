@@ -2,5 +2,13 @@
   {"sku":"sku_bottle_1","warehouse_id":"wh_hk_1","warehouse_name":"Hong Kong Main Warehouse","zone":"A","bin":"A-01-01","quantity":42,"status":"available"},
   {"sku":"sku_bag_1","warehouse_id":"wh_hk_1","warehouse_name":"Hong Kong Main Warehouse","zone":"A","bin":"A-01-03","quantity":5,"status":"available"},
   {"sku":"sku_bag_1","warehouse_id":"wh_hk_1","warehouse_name":"Hong Kong Main Warehouse","zone":"Q","bin":"Q-02-01","quantity":3,"status":"reserved"},
-  {"sku":"sku_lamp_1","warehouse_id":"wh_hk_1","warehouse_name":"Hong Kong Main Warehouse","zone":"R","bin":"R-01-07","quantity":2,"status":"pending_putaway"}
+  {"sku":"sku_lamp_1","warehouse_id":"wh_hk_1","warehouse_name":"Hong Kong Main Warehouse","zone":"R","bin":"R-01-07","quantity":2,"status":"pending_putaway"},
+  {"sku":"sku_headphones_1","warehouse_id":"wh_sz_1","warehouse_name":"Shenzhen Forward Warehouse","zone":"B","bin":"B-03-02","quantity":18,"status":"available"},
+  {"sku":"sku_headphones_1","warehouse_id":"wh_sz_1","warehouse_name":"Shenzhen Forward Warehouse","zone":"Q","bin":"Q-01-05","quantity":2,"status":"reserved"},
+  {"sku":"sku_shoes_1","warehouse_id":"wh_hk_1","warehouse_name":"Hong Kong Main Warehouse","zone":"C","bin":"C-02-09","quantity":80,"status":"available"},
+  {"sku":"sku_shoes_1","warehouse_id":"wh_sg_1","warehouse_name":"Singapore Regional Warehouse","zone":"D","bin":"D-01-02","quantity":40,"status":"available"},
+  {"sku":"sku_watch_1","warehouse_id":"wh_hk_1","warehouse_name":"Hong Kong Main Warehouse","zone":"S","bin":"S-00-01","quantity":0,"status":"stockout"},
+  {"sku":"sku_camera_1","warehouse_id":"wh_sz_1","warehouse_name":"Shenzhen Forward Warehouse","zone":"B","bin":"B-04-08","quantity":7,"status":"available"},
+  {"sku":"sku_camera_1","warehouse_id":"wh_sz_1","warehouse_name":"Shenzhen Forward Warehouse","zone":"H","bin":"H-02-03","quantity":1,"status":"quality_hold"},
+  {"sku":"sku_keyboard_1","warehouse_id":"wh_sg_1","warehouse_name":"Singapore Regional Warehouse","zone":"E","bin":"E-06-11","quantity":65,"status":"available"}
 ]

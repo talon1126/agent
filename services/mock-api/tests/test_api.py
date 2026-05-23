@@ -98,6 +98,18 @@ def test_warehouse_inventory_returns_locations_and_risk():
     assert body["recommendation"]
 
 
+def test_warehouse_inventory_returns_new_stockout_fixture():
+    response = client.get("/warehouse/inventory/sku_watch_1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["sku"] == "sku_watch_1"
+    assert body["available"] == 0
+    assert body["risk_level"] == "high"
+    assert body["open_exceptions"][0]["type"] == "stockout"
+
+
 def test_warehouse_exception_search_returns_open_sku_exceptions():
     response = client.post(
         "/warehouse/exceptions/search",

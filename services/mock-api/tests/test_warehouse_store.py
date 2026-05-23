@@ -18,9 +18,9 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         location_count = connection.execute(text("select count(*) from warehouse_locations")).scalar_one()
         exception_count = connection.execute(text("select count(*) from warehouse_exceptions")).scalar_one()
 
-    assert inventory_count == 3
-    assert location_count == 4
-    assert exception_count == 3
+    assert inventory_count == 8
+    assert location_count == 12
+    assert exception_count == 8
 
 
 def test_warehouse_repository_reads_inventory_locations_and_exceptions(tmp_path: Path) -> None:
