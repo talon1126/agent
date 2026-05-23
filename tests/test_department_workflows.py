@@ -153,6 +153,15 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             view_condition = node_by_name(
                 workflow, "Is Warehouse View Intent"
             )
+            sync_condition = node_by_name(
+                workflow, "Is Warehouse Sync Intent"
+            )
+            sync_request = node_by_name(
+                workflow, "Sync Warehouse Inventory From Intent"
+            )
+            sync_reply = node_by_name(
+                workflow, "Format Warehouse Sync Reply"
+            )
             clarification_reply = node_by_name(
                 workflow, "Format Warehouse Clarification Reply"
             )
@@ -189,6 +198,18 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
                 ]
                 == "={{ $json.executor }}"
             )
+            assert (
+                sync_condition["parameters"]["conditions"]["conditions"][0][
+                    "rightValue"
+                ]
+                == "warehouse_inventory_table_sync"
+            )
+            assert sync_request["parameters"]["url"].endswith(
+                "/warehouse/inventory-table/sync/filter"
+            )
+            assert "slots.warehouse" in sync_request["parameters"]["jsonBody"]
+            assert "slots.risk_level" in sync_request["parameters"]["jsonBody"]
+            assert "warehouse_inventory_table_sync_fast_path" in sync_reply["parameters"]["jsCode"]
             assert "clarification_question" in clarification_reply["parameters"]["jsCode"]
             assert "warehouse_intent_router" in clarification_reply["parameters"]["jsCode"]
             assert template_create["parameters"]["url"].endswith(
@@ -265,6 +286,22 @@ def test_department_workflows_connect_directly_to_department_agent() -> None:
                 ],
                 [
                     {
+                        "node": "Is Warehouse Sync Intent",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+            ]
+            assert connections["Is Warehouse Sync Intent"]["main"] == [
+                [
+                    {
+                        "node": "Sync Warehouse Inventory From Intent",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+                [
+                    {
                         "node": "Restore Warehouse Intent Router Source",
                         "type": "main",
                         "index": 0,
@@ -306,6 +343,12 @@ def test_department_workflows_connect_directly_to_department_agent() -> None:
                 [{"node": "Respond to Webhook", "type": "main", "index": 0}]
             ]
             assert connections["Format Warehouse Clarification Reply"]["main"] == [
+                [{"node": "Respond to Webhook", "type": "main", "index": 0}]
+            ]
+            assert connections["Sync Warehouse Inventory From Intent"]["main"] == [
+                [{"node": "Format Warehouse Sync Reply", "type": "main", "index": 0}]
+            ]
+            assert connections["Format Warehouse Sync Reply"]["main"] == [
                 [{"node": "Respond to Webhook", "type": "main", "index": 0}]
             ]
         else:

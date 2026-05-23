@@ -26,6 +26,7 @@
       "priority": 20,
       "required_signal_groups": [
         ["sync", "inventory"],
+        ["update", "inventory"],
         ["update", "inventory", "table"]
       ],
       "signal_weights": {

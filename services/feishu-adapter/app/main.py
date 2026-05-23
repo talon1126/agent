@@ -45,6 +45,13 @@ class InventoryTableSyncRequest(BaseModel):
     sku: str
 
 
+class InventoryTableSyncFilterRequest(BaseModel):
+    sku: str | None = None
+    warehouse_id: str | None = None
+    risk_level: str | None = None
+    limit: int = 50
+
+
 class InventoryTableProvisionRequest(BaseModel):
     table_name: str = "Warehouse Inventory Snapshot"
 
@@ -1227,6 +1234,111 @@ def create_app(
                 "sku": sku,
                 "error": "feishu_inventory_table_sync_failed",
                 "message": str(error),
+            }
+
+    @app.post("/warehouse/inventory-table/sync/filter")
+    def sync_inventory_table_filter(
+        request: InventoryTableSyncFilterRequest,
+    ) -> dict[str, Any]:
+        started = perf_counter()
+        sku = (request.sku or "").strip().lower()
+        warehouse_id = (request.warehouse_id or "").strip()
+        risk_level = (request.risk_level or "").strip()
+        limit = max(min(int(request.limit or 50), 100), 1)
+        if not inventory_table_sync_configured():
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "missing_feishu_inventory_table_config",
+                "message": "Feishu inventory table sync is not configured.",
+            }
+        try:
+            search_payload = {
+                "warehouse_id": warehouse_id or None,
+                "risk_level": risk_level or None,
+                "limit": limit,
+            }
+            if sku:
+                inventory_response = client.get(
+                    f"{runtime_mock_api_url}/warehouse/inventory/{sku}",
+                )
+                inventory_response.raise_for_status()
+                inventory_items = [inventory_response.json()]
+            else:
+                inventory_response = client.post(
+                    f"{runtime_mock_api_url}/warehouse/inventory/search",
+                    json=search_payload,
+                )
+                inventory_response.raise_for_status()
+                inventory_items = inventory_response.json().get("items", [])
+
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            provision_result = ensure_inventory_table(
+                token=token,
+                table_name="Warehouse Inventory Snapshot",
+            )
+            synced_items: list[dict[str, Any]] = []
+            for inventory in inventory_items:
+                fields = build_inventory_snapshot_fields(inventory)
+                result = upsert_inventory_table_record(token=token, fields=fields)
+                synced_items.append(
+                    {
+                        "sku": fields["SKU"],
+                        "warehouse_id": fields["Warehouse"],
+                        "risk_level": fields["Risk Level"],
+                        "action": result.get("action"),
+                        "record_id": result.get("record_id"),
+                        "source_version": fields["Source Version"],
+                    }
+                )
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"inventory_table_sync_filter:{warehouse_id or risk_level or sku or 'all'}",
+                workflow="/warehouse/inventory-table/sync/filter",
+                status="succeeded",
+                latency_ms=latency_ms,
+                tool_calls=[
+                    {
+                        "tool": "warehouse_inventory_table_sync_tool",
+                        "input": request.model_dump(),
+                        "output": {"synced_count": len(synced_items)},
+                    }
+                ],
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                "sku": sku or None,
+                "warehouse_id": warehouse_id or None,
+                "risk_level": risk_level or None,
+                "synced_count": len(synced_items),
+                "items": synced_items,
+                "table_id": provision_result["table_id"],
+                "table_url": inventory_table_url_for(provision_result["table_id"]),
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+            write_inventory_table_run_log(
+                event_id="inventory_table_sync_filter:failed",
+                workflow="/warehouse/inventory-table/sync/filter",
+                status="failed",
+                latency_ms=latency_ms,
+                error=message,
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "sku": sku or None,
+                "warehouse_id": warehouse_id or None,
+                "risk_level": risk_level or None,
+                "error": "feishu_inventory_table_sync_filter_failed",
+                "message": message,
             }
 
     def process_message(bot: BotConfig, message: Any) -> None:

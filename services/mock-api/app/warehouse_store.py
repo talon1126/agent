@@ -161,6 +161,13 @@ class WarehouseRepository:
             ).mappings().first()
         return dict(row) if row else None
 
+    def list_inventory(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(warehouse_inventory).order_by(warehouse_inventory.c.sku)
+            ).mappings().all()
+        return [dict(row) for row in rows]
+
     def list_locations_for_sku(self, sku: str) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:
             rows = connection.execute(

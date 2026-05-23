@@ -110,6 +110,26 @@ def test_warehouse_inventory_returns_new_stockout_fixture():
     assert body["open_exceptions"][0]["type"] == "stockout"
 
 
+def test_warehouse_inventory_search_filters_by_warehouse_and_risk():
+    response = client.post(
+        "/warehouse/inventory/search",
+        json={"warehouse_id": "wh_hk_1", "risk_level": "high"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["count"] >= 2
+    assert {item["sku"] for item in body["items"]}.issuperset(
+        {"sku_bag_1", "sku_watch_1"}
+    )
+    assert {item["risk_level"] for item in body["items"]} == {"high"}
+    assert all(
+        item["locations"][0]["warehouse_id"] == "wh_hk_1"
+        for item in body["items"]
+    )
+
+
 def test_warehouse_exception_search_returns_open_sku_exceptions():
     response = client.post(
         "/warehouse/exceptions/search",

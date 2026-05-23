@@ -374,6 +374,55 @@ return $input.all().map((item) => {
   };
 });"""
 
+FORMAT_WAREHOUSE_SYNC_REPLY_JS = """const source = $items('Normalize Inbound Message')[0]?.json ?? {};
+const route = $items('Warehouse Intent Router')[0]?.json ?? {};
+
+function warehouseLabel(value) {
+  return {
+    wh_hk_1: '香港仓',
+    wh_sz_1: '深圳仓',
+    wh_sg_1: '新加坡仓'
+  }[value] || value || '';
+}
+
+function riskLabel(value) {
+  return {
+    high: '高风险',
+    medium: '中风险',
+    low: '低风险'
+  }[value] || value || '';
+}
+
+return $input.all().map((item) => {
+  const result = item.json;
+  const syncedCount = Number(result.synced_count || 0);
+  const details = Array.isArray(result.items)
+    ? result.items.map((entry) => `${entry.sku}(${riskLabel(entry.risk_level) || '未知风险'}, ${entry.action || 'synced'})`).join(', ')
+    : '';
+  const scope = [
+    result.warehouse_id ? `仓库: ${warehouseLabel(result.warehouse_id)}` : '',
+    result.risk_level ? `风险: ${riskLabel(result.risk_level)}` : ''
+  ].filter(Boolean).join('; ');
+  const reply = result.ok
+    ? `已同步${syncedCount}条库存快照到飞书表格。${scope ? '\\n' + scope : ''}${details ? '\\nSKU: ' + details : ''}`
+    : `同步库存快照失败：${result.error || 'unknown_error'} ${result.message || ''}`.trim();
+
+  return {
+    json: {
+      ok: Boolean(result.ok),
+      platform: source.platform,
+      chat_id: source.chat_id,
+      sender_id: source.sender_id,
+      message_id: source.message_id,
+      reply,
+      tool_trace: [
+        { tool: 'warehouse_inventory_table_sync_fast_path', input: route, output: result }
+      ],
+      raw_agent_output: result
+    }
+  };
+});"""
+
 
 def load_source_workflow() -> dict[str, Any]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
@@ -548,6 +597,65 @@ def make_warehouse_view_intent_condition() -> dict[str, Any]:
     }
 
 
+def make_warehouse_sync_intent_condition() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "conditions": {
+                "options": {
+                    "caseSensitive": True,
+                    "leftValue": "",
+                    "typeValidation": "strict",
+                    "version": 3,
+                },
+                "conditions": [
+                    {
+                        "id": "warehouse-sync-intent",
+                        "leftValue": "={{ $json.executor }}",
+                        "rightValue": "warehouse_inventory_table_sync",
+                        "operator": {
+                            "type": "string",
+                            "operation": "equals",
+                        },
+                    }
+                ],
+                "combinator": "and",
+            },
+            "options": {},
+        },
+        "id": "is-warehouse-sync-intent-node",
+        "name": "Is Warehouse Sync Intent",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [448, 80],
+    }
+
+
+def make_warehouse_sync_intent_request() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "method": "POST",
+            "url": "http://feishu-adapter:8000/warehouse/inventory-table/sync/filter",
+            "sendHeaders": True,
+            "headerParameters": {
+                "parameters": [{"name": "Content-Type", "value": "application/json"}]
+            },
+            "sendBody": True,
+            "contentType": "json",
+            "specifyBody": "json",
+            "jsonBody": (
+                "={{ { sku: $json.slots.sku || '', warehouse_id: $json.slots.warehouse || '', "
+                "risk_level: $json.slots.risk_level || '', limit: 50 } }}"
+            ),
+            "options": {},
+        },
+        "id": "sync-warehouse-inventory-from-intent-node",
+        "name": "Sync Warehouse Inventory From Intent",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [720, 80],
+    }
+
+
 def make_warehouse_view_fast_path_request() -> dict[str, Any]:
     return {
         "parameters": {
@@ -646,6 +754,17 @@ def make_warehouse_clarification_reply() -> dict[str, Any]:
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [176, -96],
+    }
+
+
+def make_warehouse_sync_reply() -> dict[str, Any]:
+    return {
+        "parameters": {"jsCode": FORMAT_WAREHOUSE_SYNC_REPLY_JS},
+        "id": "format-warehouse-sync-reply-node",
+        "name": "Format Warehouse Sync Reply",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [944, 80],
     }
 
 
@@ -789,11 +908,14 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
             make_warehouse_intent_router(),
             make_warehouse_clarification_condition(),
             make_warehouse_view_intent_condition(),
+            make_warehouse_sync_intent_condition(),
             make_warehouse_view_fast_path_request(),
             make_warehouse_view_fast_path_matched_condition(),
+            make_warehouse_sync_intent_request(),
             make_warehouse_intent_router_restore_source(),
             make_warehouse_view_fast_path_restore_source(),
             make_warehouse_clarification_reply(),
+            make_warehouse_sync_reply(),
             make_warehouse_view_fast_path_reply(),
         ]
         if is_warehouse
@@ -843,6 +965,24 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
                 [
                     {
                         "node": "Create Warehouse View From Template",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+                [
+                    {
+                        "node": "Is Warehouse Sync Intent",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+            ]
+        }
+        workflow["connections"]["Is Warehouse Sync Intent"] = {
+            "main": [
+                [
+                    {
+                        "node": "Sync Warehouse Inventory From Intent",
                         "type": "main",
                         "index": 0,
                     }
@@ -901,6 +1041,18 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
         add_connection(
             workflow,
             "Format Warehouse Clarification Reply",
+            "main",
+            "Respond to Webhook",
+        )
+        add_connection(
+            workflow,
+            "Sync Warehouse Inventory From Intent",
+            "main",
+            "Format Warehouse Sync Reply",
+        )
+        add_connection(
+            workflow,
+            "Format Warehouse Sync Reply",
             "main",
             "Respond to Webhook",
         )

@@ -134,6 +134,39 @@
       },
       {
         "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 3
+            },
+            "conditions": [
+              {
+                "id": "warehouse-sync-intent",
+                "leftValue": "={{ $json.executor }}",
+                "rightValue": "warehouse_inventory_table_sync",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "is-warehouse-sync-intent-node",
+        "name": "Is Warehouse Sync Intent",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [
+          448,
+          80
+        ]
+      },
+      {
+        "parameters": {
           "method": "POST",
           "url": "http://feishu-adapter:8000/warehouse/inventory-table/views/from-template",
           "sendHeaders": true,
@@ -196,6 +229,34 @@
       },
       {
         "parameters": {
+          "method": "POST",
+          "url": "http://feishu-adapter:8000/warehouse/inventory-table/sync/filter",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ { sku: $json.slots.sku || '', warehouse_id: $json.slots.warehouse || '', risk_level: $json.slots.risk_level || '', limit: 50 } }}",
+          "options": {}
+        },
+        "id": "sync-warehouse-inventory-from-intent-node",
+        "name": "Sync Warehouse Inventory From Intent",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          720,
+          80
+        ]
+      },
+      {
+        "parameters": {
           "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\nconst route = $input.first().json;\n\nreturn [{\n  json: {\n    ...source,\n    warehouse_intent_route: route\n  }\n}];"
         },
         "id": "restore-warehouse-intent-router-source-node",
@@ -231,6 +292,19 @@
         "position": [
           176,
           -96
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\nconst route = $items('Warehouse Intent Router')[0]?.json ?? {};\n\nfunction warehouseLabel(value) {\n  return {\n    wh_hk_1: '香港仓',\n    wh_sz_1: '深圳仓',\n    wh_sg_1: '新加坡仓'\n  }[value] || value || '';\n}\n\nfunction riskLabel(value) {\n  return {\n    high: '高风险',\n    medium: '中风险',\n    low: '低风险'\n  }[value] || value || '';\n}\n\nreturn $input.all().map((item) => {\n  const result = item.json;\n  const syncedCount = Number(result.synced_count || 0);\n  const details = Array.isArray(result.items)\n    ? result.items.map((entry) => `${entry.sku}(${riskLabel(entry.risk_level) || '未知风险'}, ${entry.action || 'synced'})`).join(', ')\n    : '';\n  const scope = [\n    result.warehouse_id ? `仓库: ${warehouseLabel(result.warehouse_id)}` : '',\n    result.risk_level ? `风险: ${riskLabel(result.risk_level)}` : ''\n  ].filter(Boolean).join('; ');\n  const reply = result.ok\n    ? `已同步${syncedCount}条库存快照到飞书表格。${scope ? '\\n' + scope : ''}${details ? '\\nSKU: ' + details : ''}`\n    : `同步库存快照失败：${result.error || 'unknown_error'} ${result.message || ''}`.trim();\n\n  return {\n    json: {\n      ok: Boolean(result.ok),\n      platform: source.platform,\n      chat_id: source.chat_id,\n      sender_id: source.sender_id,\n      message_id: source.message_id,\n      reply,\n      tool_trace: [\n        { tool: 'warehouse_inventory_table_sync_fast_path', input: route, output: result }\n      ],\n      raw_agent_output: result\n    }\n  };\n});"
+        },
+        "id": "format-warehouse-sync-reply-node",
+        "name": "Format Warehouse Sync Reply",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          944,
+          80
         ]
       },
       {
@@ -501,6 +575,24 @@
           ],
           [
             {
+              "node": "Is Warehouse Sync Intent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Warehouse Sync Intent": {
+        "main": [
+          [
+            {
+              "node": "Sync Warehouse Inventory From Intent",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
               "node": "Restore Warehouse Intent Router Source",
               "type": "main",
               "index": 0
@@ -571,6 +663,28 @@
         ]
       },
       "Format Warehouse Clarification Reply": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Sync Warehouse Inventory From Intent": {
+        "main": [
+          [
+            {
+              "node": "Format Warehouse Sync Reply",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Warehouse Sync Reply": {
         "main": [
           [
             {

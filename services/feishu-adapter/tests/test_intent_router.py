@@ -23,6 +23,17 @@ def test_update_inventory_table_view_routes_to_sync_without_clarification() -> N
     assert route.clarification_question is None
 
 
+def test_update_high_risk_inventory_routes_to_filtered_sync() -> None:
+    route = route_warehouse_intent("帮我更新下香港高风险库存")
+
+    assert route.status == "matched"
+    assert route.intent == "sync_inventory_table"
+    assert route.executor == "warehouse_inventory_table_sync"
+    assert route.slots["warehouse"] == "wh_hk_1"
+    assert route.slots["risk_level"] == "high"
+    assert route.clarification_question is None
+
+
 def test_falls_back_to_agent_for_unclear_warehouse_request() -> None:
     route = route_warehouse_intent("帮我分析一下最近仓库情况")
 

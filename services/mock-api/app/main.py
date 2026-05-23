@@ -32,6 +32,12 @@ class ApprovalRequest(BaseModel):
     explanation: str
 
 
+class WarehouseInventorySearchRequest(BaseModel):
+    warehouse_id: str | None = None
+    risk_level: str | None = None
+    limit: int = 50
+
+
 class PolicySearchRequest(BaseModel):
     query: str
     locale: str = "zh"
@@ -178,6 +184,13 @@ def load_inventory_for_sku(sku: str) -> dict[str, Any] | None:
     return find_by_id("inventory.json", "sku", sku)
 
 
+def load_all_inventory() -> list[dict[str, Any]]:
+    repository = get_warehouse_repository()
+    if repository:
+        return repository.list_inventory()
+    return load_json("inventory.json")
+
+
 def warehouse_risk_level(inventory: dict, open_exceptions: list[dict[str, Any]]) -> str:
     available = int(inventory.get("available", 0))
     reserved = int(inventory.get("reserved", 0))
@@ -190,6 +203,48 @@ def warehouse_risk_level(inventory: dict, open_exceptions: list[dict[str, Any]])
     if open_exceptions:
         return "medium"
     return "low"
+
+
+@app.post("/warehouse/inventory/search")
+def search_warehouse_inventory(payload: WarehouseInventorySearchRequest) -> dict:
+    warehouse_id = (payload.warehouse_id or "").strip()
+    risk_level = (payload.risk_level or "").strip()
+    limit = max(min(int(payload.limit or 50), 100), 1)
+    matches: list[dict[str, Any]] = []
+    for inventory in load_all_inventory():
+        sku = str(inventory.get("sku") or "")
+        locations = load_locations_for_sku(sku)
+        if warehouse_id and not any(
+            item.get("warehouse_id") == warehouse_id for item in locations
+        ):
+            continue
+        open_exceptions = load_exceptions_for_sku(sku, "open")
+        computed_risk = warehouse_risk_level(inventory, open_exceptions)
+        if risk_level and computed_risk != risk_level:
+            continue
+        matches.append(
+            {
+                "ok": True,
+                **inventory,
+                "locations": locations,
+                "open_exceptions": open_exceptions,
+                "risk_level": computed_risk,
+                "recommendation": (
+                    "库存或异常存在履约风险，建议仓库复核并通知采购。"
+                    if computed_risk == "high"
+                    else "库存状态正常，可继续履约。"
+                ),
+            }
+        )
+        if len(matches) >= limit:
+            break
+    return {
+        "ok": True,
+        "warehouse_id": warehouse_id or None,
+        "risk_level": risk_level or None,
+        "count": len(matches),
+        "items": matches,
+    }
 
 
 @app.get("/warehouse/inventory/{sku}")
