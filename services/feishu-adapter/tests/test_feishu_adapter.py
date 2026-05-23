@@ -1318,7 +1318,7 @@ def test_inventory_table_view_templates_endpoint_lists_employee_templates() -> N
     assert any(item["template_id"] == "inventory_risk_view" for item in body["templates"])
 
 
-def test_warehouse_intent_router_endpoint_returns_clarification() -> None:
+def test_warehouse_intent_router_endpoint_routes_update_table_view_to_sync() -> None:
     app = create_app()
     client = TestClient(app)
 
@@ -1329,15 +1329,11 @@ def test_warehouse_intent_router_endpoint_returns_clarification() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "clarification_required"
-    assert body["executor"] == "clarification"
-    assert [candidate["intent"] for candidate in body["candidates"][:2]] == [
-        "sync_inventory_table",
-        "create_inventory_view",
-    ]
+    assert body["status"] == "matched"
+    assert body["intent"] == "sync_inventory_table"
+    assert body["executor"] == "warehouse_inventory_table_sync"
     assert body["slots"]["warehouse"] == "wh_hk_1"
-    assert "同步" in body["clarification_question"]
-    assert "创建" in body["clarification_question"]
+    assert body["clarification_question"] is None
 
 
 def test_inventory_table_view_from_template_creates_controlled_view() -> None:

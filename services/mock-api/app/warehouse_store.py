@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, select
+from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, select, text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger("mock_api.warehouse_store")
@@ -48,12 +48,81 @@ warehouse_exceptions = Table(
     Column("recommended_action", String, nullable=False),
 )
 
+WAREHOUSE_TABLE_COMMENTS = {
+    "warehouse_inventory": "仓储库存主表，按 SKU 保存可用库存、预留库存、待履约订单和补货阈值。",
+    "warehouse_locations": "仓储库位明细表，记录 SKU 在不同仓库、区域、库位中的数量和状态。",
+    "warehouse_exceptions": "仓储异常表，记录库存差异、断货、质检冻结等履约风险事件。",
+}
+
+WAREHOUSE_COLUMN_COMMENTS = {
+    "warehouse_inventory": {
+        "sku": "商品 SKU，库存记录的唯一业务标识。",
+        "available": "当前可用库存数量。",
+        "reserved": "已被订单或作业预留的库存数量。",
+        "pending_orders": "等待履约的订单数量。",
+        "reorder_threshold": "补货预警阈值，低于该值时建议采购或调拨。",
+    },
+    "warehouse_locations": {
+        "id": "库位明细自增主键。",
+        "sku": "商品 SKU，对应仓储库存主表。",
+        "warehouse_id": "仓库编号，例如 wh_hk_1、wh_sz_1、wh_sg_1。",
+        "warehouse_name": "仓库展示名称。",
+        "zone": "仓库区域编号。",
+        "bin": "具体库位编号。",
+        "quantity": "该库位上的库存数量。",
+        "status": "库位库存状态，例如 available、reserved、stockout、quality_hold。",
+    },
+    "warehouse_exceptions": {
+        "exception_id": "仓储异常唯一编号。",
+        "sku": "发生异常的商品 SKU。",
+        "type": "异常类型，例如 stockout、quality_hold、stock_mismatch。",
+        "severity": "异常严重程度，取值 high、medium、low。",
+        "status": "异常处理状态，例如 open、closed。",
+        "warehouse_id": "异常发生仓库编号。",
+        "zone": "异常发生仓库区域。",
+        "bin": "异常发生具体库位。",
+        "message": "异常说明，供 Agent 和员工理解当前问题。",
+        "recommended_action": "建议处理动作，例如 notify_procurement、quality_review。",
+    },
+}
+
 
 def init_warehouse_schema(engine: Engine) -> None:
     metadata.create_all(
         engine,
         tables=[warehouse_inventory, warehouse_locations, warehouse_exceptions],
     )
+    apply_warehouse_comments(engine)
+
+
+def apply_warehouse_comments(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as connection:
+        for table_name, comment in WAREHOUSE_TABLE_COMMENTS.items():
+            connection.execute(
+                text(
+                    f"COMMENT ON TABLE {_quote_identifier(table_name)} "
+                    f"IS {_quote_literal(comment)}"
+                ),
+            )
+        for table_name, column_comments in WAREHOUSE_COLUMN_COMMENTS.items():
+            for column_name, comment in column_comments.items():
+                connection.execute(
+                    text(
+                        "COMMENT ON COLUMN "
+                        f"{_quote_identifier(table_name)}.{_quote_identifier(column_name)} "
+                        f"IS {_quote_literal(comment)}"
+                    ),
+                )
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _quote_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def load_fixture_rows(fixture_dir: Path, name: str) -> list[dict[str, Any]]:

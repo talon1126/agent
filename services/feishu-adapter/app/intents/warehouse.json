@@ -9,8 +9,7 @@
       "executor": "warehouse_view_template",
       "priority": 10,
       "required_signal_groups": [
-        ["create", "view"],
-        ["update", "view"]
+        ["create", "view"]
       ],
       "signal_weights": {
         "create": 0.45,

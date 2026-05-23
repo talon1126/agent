@@ -13,18 +13,14 @@ def test_routes_clear_inventory_view_request() -> None:
     assert route.clarification_question is None
 
 
-def test_asks_for_clarification_when_scores_are_close() -> None:
+def test_update_inventory_table_view_routes_to_sync_without_clarification() -> None:
     route = route_warehouse_intent("帮我更新一下香港仓库存表格视图")
 
-    assert route.status == "clarification_required"
-    assert route.executor == "clarification"
-    assert [candidate["intent"] for candidate in route.candidates[:2]] == [
-        "sync_inventory_table",
-        "create_inventory_view",
-    ]
+    assert route.status == "matched"
+    assert route.intent == "sync_inventory_table"
+    assert route.executor == "warehouse_inventory_table_sync"
     assert route.slots["warehouse"] == "wh_hk_1"
-    assert "同步" in route.clarification_question
-    assert "创建" in route.clarification_question
+    assert route.clarification_question is None
 
 
 def test_falls_back_to_agent_for_unclear_warehouse_request() -> None:
