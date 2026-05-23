@@ -14,6 +14,11 @@ from pydantic import BaseModel, field_validator, model_validator
 from app.feishu_client import FEISHU_API_BASE_URL, get_tenant_access_token, reply_text_message
 from app.feishu_events import normalize_feishu_event, to_n8n_payload
 from app.feishu_long_connection import start_long_connection_listener
+from app.view_template_builder import (
+    load_warehouse_view_templates,
+    match_warehouse_view_template,
+    render_warehouse_view_plan,
+)
 
 DEFAULT_N8N_WEBHOOK_URL = "http://n8n:5678/webhook/chat-agent-inbound"
 logger = logging.getLogger("feishu_adapter")
@@ -125,6 +130,11 @@ class InventoryTableViewCreateRequest(BaseModel):
         if isinstance(value, str):
             return [value] if value.strip() else []
         return value
+
+
+class InventoryTableViewFromTemplateRequest(BaseModel):
+    message: str
+    view_name: str | None = None
 
 
 INVENTORY_TABLE_FIELD_SPECS = [
@@ -891,6 +901,22 @@ def create_app(
                 "message": message,
             }
 
+    @app.get("/warehouse/inventory-table/view-templates")
+    def list_inventory_view_templates() -> dict[str, Any]:
+        templates = load_warehouse_view_templates()
+        return {
+            "ok": True,
+            "templates": [
+                {
+                    "template_id": template.template_id,
+                    "display_name": template.display_name,
+                    "aliases": template.aliases,
+                    "slots": template.slots,
+                }
+                for template in templates
+            ],
+        }
+
     @app.post("/warehouse/inventory-table/views/create")
     def create_inventory_view(request: InventoryTableViewCreateRequest) -> dict[str, Any]:
         started = perf_counter()
@@ -1028,6 +1054,47 @@ def create_app(
                 "error": "feishu_inventory_table_view_create_failed",
                 "message": message,
             }
+
+    @app.post("/warehouse/inventory-table/views/from-template")
+    def create_inventory_view_from_template(
+        request: InventoryTableViewFromTemplateRequest,
+    ) -> dict[str, Any]:
+        match = match_warehouse_view_template(request.message)
+        if not match.matched or not match.template_id:
+            suggestions = match.suggestions or []
+            suggestion_text = "、".join(suggestions)
+            return {
+                "ok": False,
+                "matched": False,
+                "error": match.error or "unknown_view_template",
+                "message": f"未匹配到视图模板。可尝试：{suggestion_text}。",
+                "suggestions": suggestions,
+            }
+
+        try:
+            plan = render_warehouse_view_plan(
+                template_id=match.template_id,
+                view_name=request.view_name or match.view_name,
+                slots=match.slots or {},
+            )
+        except ValueError as error:
+            return {
+                "ok": False,
+                "matched": True,
+                "template_id": match.template_id,
+                "slots": match.slots or {},
+                "error": "invalid_view_template_slots",
+                "message": str(error),
+            }
+
+        create_request = InventoryTableViewCreateRequest.model_validate(plan)
+        result = create_inventory_view(create_request)
+        return {
+            **result,
+            "matched": True,
+            "template_id": match.template_id,
+            "slots": match.slots or {},
+        }
 
     @app.post("/warehouse/inventory-table/provision")
     def provision_inventory_table(request: InventoryTableProvisionRequest) -> dict[str, Any]:

@@ -1306,6 +1306,98 @@ def test_inventory_table_view_create_accepts_llm_shaped_filter_and_sort_payloads
     }
 
 
+def test_inventory_table_view_templates_endpoint_lists_employee_templates() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get("/warehouse/inventory-table/view-templates")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert any(item["template_id"] == "inventory_risk_view" for item in body["templates"])
+
+
+def test_inventory_table_view_from_template_creates_controlled_view() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1},
+                            {"field_id": "fld_wh", "field_name": "Warehouse", "type": 1},
+                            {"field_id": "fld_available", "field_name": "Available", "type": 2},
+                            {"field_id": "fld_risk", "field_name": "Risk Level", "type": 3},
+                            {"field_id": "fld_rec", "field_name": "Recommendation", "type": 1},
+                        ]
+                    },
+                },
+            )
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/views":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(200, json={"code": 0, "data": {"view_id": "vew_hk_high_risk"}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_inventory",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/views/from-template",
+        json={"message": "帮我建一个香港仓高风险库存视图"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["matched"] is True
+    assert body["template_id"] == "inventory_risk_view"
+    assert body["slots"]["risk_level"] == "high"
+    assert body["slots"]["warehouse"] == "wh_hk_1"
+    assert body["validated_plan"]["view_name"] == "香港仓高风险库存"
+    create_requests = [
+        request
+        for request in requests
+        if request.method == "POST" and str(request.url).endswith("/tables/tbl_inventory/views")
+    ]
+    assert len(create_requests) == 1
+    assert json.loads(create_requests[0].content) == {
+        "view_name": "香港仓高风险库存",
+        "view_type": "grid",
+    }
+
+
+def test_inventory_table_view_from_template_returns_suggestions_for_unknown_template() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/views/from-template",
+        json={"message": "帮我建一个财务利润视图"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["matched"] is False
+    assert body["error"] == "unknown_view_template"
+    assert "高风险库存" in body["message"]
+
+
 def test_event_callback_still_acknowledges_when_feishu_reply_fails() -> None:
     requests: list[httpx.Request] = []
 
