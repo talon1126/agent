@@ -115,6 +115,53 @@
       },
       {
         "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 3
+            },
+            "conditions": [
+              {
+                "id": "warehouse-view-template-matched",
+                "leftValue": "={{ $json.matched }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "is-warehouse-view-template-matched-node",
+        "name": "Is Warehouse View Template Matched",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [
+          448,
+          -64
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const source = $items('Detect Warehouse View Template Request')[0]?.json ?? {};\nconst result = $input.first().json;\n\nreturn [{\n  json: {\n    ...source,\n    warehouse_view_template_result: result\n  }\n}];"
+        },
+        "id": "restore-warehouse-view-template-source-node",
+        "name": "Restore Warehouse View Template Source",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          720,
+          80
+        ]
+      },
+      {
+        "parameters": {
           "jsCode": "const source = $items('Detect Warehouse View Template Request')[0]?.json ?? {};\n\nfunction describeRules(plan) {\n  const filters = Array.isArray(plan.filters)\n    ? plan.filters.map((rule) => `${rule.field} ${rule.operator || 'is'} ${rule.value}`).join('; ')\n    : '';\n  const sorts = Array.isArray(plan.sorts)\n    ? plan.sorts.map((rule) => `${rule.field} ${rule.order || 'asc'}`).join('; ')\n    : '';\n  return { filters: filters || '无', sorts: sorts || '无' };\n}\n\nreturn $input.all().map((item) => {\n  const result = item.json;\n  const plan = result.validated_plan || source.warehouse_view_template_body || {};\n  const rules = describeRules(plan);\n  const visibleFields = Array.isArray(plan.visible_fields) ? plan.visible_fields.join(', ') : '';\n  const reply = result.ok\n    ? [\n        `已${result.action === 'created' ? '创建' : '复用'}飞书库存视图：${result.view_name || plan.view_name}`,\n        `view_id: ${result.view_id || ''}`,\n        `table_id: ${result.table_id || ''}`,\n        `字段: ${visibleFields || '默认字段'}`,\n        `筛选: ${rules.filters}`,\n        `排序: ${rules.sorts}`\n      ].join('\\n')\n    : `创建飞书库存视图失败：${result.error || 'unknown_error'} ${result.message || ''}`.trim();\n\n  return {\n    json: {\n      ok: Boolean(result.ok),\n      platform: source.platform,\n      chat_id: source.chat_id,\n      sender_id: source.sender_id,\n      message_id: source.message_id,\n      reply,\n      tool_trace: [\n        {\n          tool: 'warehouse_view_template_fast_path',\n          input: source.warehouse_view_template_body,\n          output: result\n        }\n      ],\n      raw_agent_output: result\n    }\n  };\n});"
         },
         "id": "format-warehouse-view-template-reply-node",
@@ -122,7 +169,7 @@
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          448,
+          720,
           -64
         ]
       },
@@ -374,7 +421,36 @@
         "main": [
           [
             {
+              "node": "Is Warehouse View Template Matched",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Warehouse View Template Matched": {
+        "main": [
+          [
+            {
               "node": "Format Warehouse View Template Reply",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Restore Warehouse View Template Source",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Restore Warehouse View Template Source": {
+        "main": [
+          [
+            {
+              "node": "Warehouse Agent",
               "type": "main",
               "index": 0
             }

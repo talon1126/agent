@@ -357,6 +357,16 @@ return $input.all().map((item) => {
   };
 });"""
 
+RESTORE_WAREHOUSE_VIEW_FAST_PATH_SOURCE_JS = """const source = $items('Detect Warehouse View Template Request')[0]?.json ?? {};
+const result = $input.first().json;
+
+return [{
+  json: {
+    ...source,
+    warehouse_view_template_result: result
+  }
+}];"""
+
 
 def load_source_workflow() -> dict[str, Any]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
@@ -510,6 +520,51 @@ def make_warehouse_view_fast_path_request() -> dict[str, Any]:
     }
 
 
+def make_warehouse_view_fast_path_matched_condition() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "conditions": {
+                "options": {
+                    "caseSensitive": True,
+                    "leftValue": "",
+                    "typeValidation": "strict",
+                    "version": 3,
+                },
+                "conditions": [
+                    {
+                        "id": "warehouse-view-template-matched",
+                        "leftValue": "={{ $json.matched }}",
+                        "rightValue": True,
+                        "operator": {
+                            "type": "boolean",
+                            "operation": "true",
+                            "singleValue": True,
+                        },
+                    }
+                ],
+                "combinator": "and",
+            },
+            "options": {},
+        },
+        "id": "is-warehouse-view-template-matched-node",
+        "name": "Is Warehouse View Template Matched",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [448, -64],
+    }
+
+
+def make_warehouse_view_fast_path_restore_source() -> dict[str, Any]:
+    return {
+        "parameters": {"jsCode": RESTORE_WAREHOUSE_VIEW_FAST_PATH_SOURCE_JS},
+        "id": "restore-warehouse-view-template-source-node",
+        "name": "Restore Warehouse View Template Source",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [720, 80],
+    }
+
+
 def make_warehouse_view_fast_path_reply() -> dict[str, Any]:
     return {
         "parameters": {"jsCode": FORMAT_WAREHOUSE_VIEW_FAST_PATH_REPLY_JS},
@@ -517,7 +572,7 @@ def make_warehouse_view_fast_path_reply() -> dict[str, Any]:
         "name": "Format Warehouse View Template Reply",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
-        "position": [448, -64],
+        "position": [720, -64],
     }
 
 
@@ -657,6 +712,8 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
             make_warehouse_view_fast_path_detector(),
             make_warehouse_view_fast_path_condition(),
             make_warehouse_view_fast_path_request(),
+            make_warehouse_view_fast_path_matched_condition(),
+            make_warehouse_view_fast_path_restore_source(),
             make_warehouse_view_fast_path_reply(),
         ]
         if is_warehouse
@@ -705,7 +762,31 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
             workflow,
             "Create Warehouse View From Template",
             "main",
-            "Format Warehouse View Template Reply",
+            "Is Warehouse View Template Matched",
+        )
+        workflow["connections"]["Is Warehouse View Template Matched"] = {
+            "main": [
+                [
+                    {
+                        "node": "Format Warehouse View Template Reply",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+                [
+                    {
+                        "node": "Restore Warehouse View Template Source",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+            ]
+        }
+        add_connection(
+            workflow,
+            "Restore Warehouse View Template Source",
+            "main",
+            department["agent"],
         )
         add_connection(
             workflow,

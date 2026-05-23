@@ -11,6 +11,8 @@ Examples:
 
 Employees do not need to provide field names, filters, sort rules, or API payloads. The backend maps the request to a controlled template, validates the current Feishu table schema, then creates or reuses the view.
 
+MVP boundary: the current Feishu integration creates or reuses a grid view and returns the validated fields, filters, and sorts plan. It does not yet apply those visible field, filter, or sort settings directly inside the Feishu UI; applying the validated plan to the visible Feishu view is a later enhancement.
+
 Initial templates:
 
 - Inventory risk view

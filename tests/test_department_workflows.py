@@ -150,6 +150,12 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
                 workflow, "Detect Warehouse View Template Request"
             )
             template_create = node_by_name(workflow, "Create Warehouse View From Template")
+            template_matched = node_by_name(
+                workflow, "Is Warehouse View Template Matched"
+            )
+            template_restore = node_by_name(
+                workflow, "Restore Warehouse View Template Source"
+            )
             template_reply = node_by_name(
                 workflow, "Format Warehouse View Template Reply"
             )
@@ -175,6 +181,15 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert template_create["parameters"]["jsonBody"] == (
                 "={{ $json.warehouse_view_template_body }}"
             )
+            assert (
+                template_matched["parameters"]["conditions"]["conditions"][0][
+                    "leftValue"
+                ]
+                == "={{ $json.matched }}"
+            )
+            restore_code = template_restore["parameters"]["jsCode"]
+            assert "$items('Detect Warehouse View Template Request')" in restore_code
+            assert "input_text" in restore_code or "...source" in restore_code
             assert (
                 "warehouse_view_template_fast_path"
                 in template_reply["parameters"]["jsCode"]
@@ -222,11 +237,30 @@ def test_department_workflows_connect_directly_to_department_agent() -> None:
             assert connections["Create Warehouse View From Template"]["main"] == [
                 [
                     {
-                        "node": "Format Warehouse View Template Reply",
+                        "node": "Is Warehouse View Template Matched",
                         "type": "main",
                         "index": 0,
                     }
                 ]
+            ]
+            assert connections["Is Warehouse View Template Matched"]["main"] == [
+                [
+                    {
+                        "node": "Format Warehouse View Template Reply",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+                [
+                    {
+                        "node": "Restore Warehouse View Template Source",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+            ]
+            assert connections["Restore Warehouse View Template Source"]["main"] == [
+                [{"node": expected["agent"], "type": "main", "index": 0}]
             ]
             assert connections["Format Warehouse View Template Reply"]["main"] == [
                 [{"node": "Respond to Webhook", "type": "main", "index": 0}]
