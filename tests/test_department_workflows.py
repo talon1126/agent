@@ -150,6 +150,25 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "normalizeFilters" in view_tool["parameters"]["jsCode"]
             assert "rule.operator || 'is'" in view_tool["parameters"]["jsCode"]
             assert "rule.order || rule.direction || 'asc'" in view_tool["parameters"]["jsCode"]
+            fast_path_detector = node_by_name(workflow, "Detect Warehouse View Fast Path")
+            fast_path_create = node_by_name(workflow, "Create Warehouse View Fast Path")
+            fast_path_reply = node_by_name(workflow, "Format Warehouse View Fast Path Reply")
+
+            detector_code = fast_path_detector["parameters"]["jsCode"]
+            assert "warehouse_view_fast_path" in detector_code
+            assert "warehouse_view_request" in detector_code
+            assert "Risk Level" in detector_code
+            assert "Available" in detector_code
+            assert "视图" in detector_code
+            assert "create" in detector_code
+            assert fast_path_create["parameters"]["url"].endswith(
+                "/warehouse/inventory-table/views/create"
+            )
+            assert fast_path_create["parameters"]["jsonBody"] == (
+                "={{ $json.warehouse_view_request }}"
+            )
+            assert "warehouse_view_fast_path" in fast_path_reply["parameters"]["jsCode"]
+            assert "tool_trace" in fast_path_reply["parameters"]["jsCode"]
 
 
 def test_department_workflows_connect_directly_to_department_agent() -> None:
@@ -160,9 +179,33 @@ def test_department_workflows_connect_directly_to_department_agent() -> None:
         assert connections["When Chat Message Received"]["main"] == [
             [{"node": "Normalize Inbound Message", "type": "main", "index": 0}]
         ]
-        assert connections["Normalize Inbound Message"]["main"] == [
-            [{"node": expected["agent"], "type": "main", "index": 0}]
-        ]
+        if expected["agent"] == "Warehouse Agent":
+            assert connections["Normalize Inbound Message"]["main"] == [
+                [{"node": "Detect Warehouse View Fast Path", "type": "main", "index": 0}]
+            ]
+            assert connections["Detect Warehouse View Fast Path"]["main"] == [
+                [{"node": "Is Warehouse View Fast Path", "type": "main", "index": 0}]
+            ]
+            assert connections["Is Warehouse View Fast Path"]["main"] == [
+                [{"node": "Create Warehouse View Fast Path", "type": "main", "index": 0}],
+                [{"node": expected["agent"], "type": "main", "index": 0}],
+            ]
+            assert connections["Create Warehouse View Fast Path"]["main"] == [
+                [
+                    {
+                        "node": "Format Warehouse View Fast Path Reply",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ]
+            ]
+            assert connections["Format Warehouse View Fast Path Reply"]["main"] == [
+                [{"node": "Respond to Webhook", "type": "main", "index": 0}]
+            ]
+        else:
+            assert connections["Normalize Inbound Message"]["main"] == [
+                [{"node": expected["agent"], "type": "main", "index": 0}]
+            ]
         assert connections[expected["agent"]]["main"] == [
             [{"node": "Format Webhook Reply", "type": "main", "index": 0}]
         ]

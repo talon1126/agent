@@ -289,6 +289,144 @@ try {
   });
 }"""
 
+WAREHOUSE_VIEW_FAST_PATH_DETECT_JS = """const allowedFields = [
+  { name: 'SKU', aliases: ['sku', '商品编码', '产品编码'] },
+  { name: 'Warehouse', aliases: ['warehouse', '仓库'] },
+  { name: 'Available', aliases: ['available', '可用库存', '现货'] },
+  { name: 'Reserved', aliases: ['reserved', '已预留'] },
+  { name: 'On Hand', aliases: ['on hand', '账面库存'] },
+  { name: 'Pending Orders', aliases: ['pending orders', '待处理订单'] },
+  { name: 'Reorder Point', aliases: ['reorder point', '补货阈值'] },
+  { name: 'Location', aliases: ['location', '库位'] },
+  { name: 'Risk Level', aliases: ['risk level', '风险等级', '风险'] },
+  { name: 'Recommendation', aliases: ['recommendation', '建议', '行动建议'] },
+  { name: 'Last Updated', aliases: ['last updated', '更新时间'] }
+];
+
+function includesAny(text, keywords) {
+  const lowered = text.toLowerCase();
+  return keywords.some((keyword) => lowered.includes(String(keyword).toLowerCase()));
+}
+
+function extractViewName(text) {
+  const quoted = text.match(/[“"']([^”"']+)[”"']/);
+  if (quoted && quoted[1]) return quoted[1].trim();
+  const chinese = text.match(/(?:创建|新建|新增|生成)(?:一个|个)?\\s*([^，。,；;]{2,30}?)(?:视图|view)/i);
+  if (chinese && chinese[1]) return chinese[1].trim();
+  const english = text.match(/create\\s+(?:a\\s+)?([^,.;]{2,40}?)(?:\\s+view)?(?:\\s|$)/i);
+  if (english && english[1]) return english[1].trim();
+  return 'Warehouse Inventory View';
+}
+
+function extractVisibleFields(text) {
+  const lowered = text.toLowerCase();
+  const fields = allowedFields
+    .filter((field) => field.aliases.some((alias) => lowered.includes(alias.toLowerCase())))
+    .map((field) => field.name);
+  return fields.length ? fields : ['SKU', 'Warehouse', 'Available', 'Risk Level', 'Recommendation'];
+}
+
+function extractRiskFilter(text) {
+  const explicit = text.match(/risk\\s*level\\s*[=:：]?\\s*(high|medium|low|unknown)/i);
+  if (explicit && explicit[1]) {
+    return { field: 'Risk Level', operator: 'is', value: explicit[1].toLowerCase() };
+  }
+  if (/(高风险|风险等级\\s*[=:：]?\\s*高|risk\\s*level\\s*[=:：]?\\s*高)/i.test(text)) {
+    return { field: 'Risk Level', operator: 'is', value: 'high' };
+  }
+  if (/(中风险|风险等级\\s*[=:：]?\\s*中)/i.test(text)) {
+    return { field: 'Risk Level', operator: 'is', value: 'medium' };
+  }
+  if (/(低风险|风险等级\\s*[=:：]?\\s*低)/i.test(text)) {
+    return { field: 'Risk Level', operator: 'is', value: 'low' };
+  }
+  return null;
+}
+
+function extractSorts(text) {
+  if (!includesAny(text, ['available', '可用库存'])) return [];
+  if (includesAny(text, ['降序', 'descending', 'desc'])) {
+    return [{ field: 'Available', order: 'desc' }];
+  }
+  if (includesAny(text, ['升序', 'ascending', 'asc', '排序', 'sort'])) {
+    return [{ field: 'Available', order: 'asc' }];
+  }
+  return [];
+}
+
+return $input.all().map((item) => {
+  const text = String(item.json.input_text || item.json.text || '').trim();
+  const hasViewIntent = includesAny(text, ['视图', 'view']) && includesAny(text, ['创建', '新建', '新增', '生成', 'create']);
+  const riskFilter = extractRiskFilter(text);
+  const filters = riskFilter ? [riskFilter] : [];
+  const sorts = extractSorts(text);
+
+  return {
+    json: {
+      ...item.json,
+      warehouse_view_fast_path: hasViewIntent,
+      warehouse_view_request: hasViewIntent
+        ? {
+            table_name: 'Warehouse Inventory Snapshot',
+            view_name: extractViewName(text),
+            view_type: 'grid',
+            visible_fields: extractVisibleFields(text),
+            filters,
+            sorts
+          }
+        : {}
+    }
+  };
+});"""
+
+FORMAT_WAREHOUSE_VIEW_FAST_PATH_REPLY_JS = """const source = $items('Detect Warehouse View Fast Path')[0]?.json ?? {};
+
+function describeRules(plan) {
+  const filters = Array.isArray(plan.filters)
+    ? plan.filters.map((rule) => `${rule.field} ${rule.operator || 'is'} ${rule.value}`).join('; ')
+    : '';
+  const sorts = Array.isArray(plan.sorts)
+    ? plan.sorts.map((rule) => `${rule.field} ${rule.order || 'asc'}`).join('; ')
+    : '';
+  return { filters: filters || '无', sorts: sorts || '无' };
+}
+
+return $input.all().map((item) => {
+  const result = item.json;
+  const plan = result.validated_plan || source.warehouse_view_request || {};
+  const rules = describeRules(plan);
+  const visibleFields = Array.isArray(plan.visible_fields) ? plan.visible_fields.join(', ') : '';
+  const reply = result.ok
+    ? [
+        `已${result.action === 'created' ? '创建' : '复用'}飞书库存视图：${result.view_name || plan.view_name}`,
+        `view_id: ${result.view_id || ''}`,
+        `table_id: ${result.table_id || ''}`,
+        `字段: ${visibleFields || '默认字段'}`,
+        `筛选: ${rules.filters}`,
+        `排序: ${rules.sorts}`
+      ].join('\\n')
+    : `创建飞书库存视图失败：${result.error || 'unknown_error'} ${result.message || ''}`.trim();
+
+  return {
+    json: {
+      ok: Boolean(result.ok),
+      platform: source.platform,
+      chat_id: source.chat_id,
+      sender_id: source.sender_id,
+      message_id: source.message_id,
+      reply,
+      tool_trace: [
+        {
+          tool: 'warehouse_view_fast_path',
+          input: source.warehouse_view_request,
+          output: result
+        }
+      ],
+      raw_agent_output: result
+    }
+  };
+});"""
+
 
 def load_source_workflow() -> dict[str, Any]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
@@ -371,6 +509,85 @@ def make_warehouse_view_create_tool() -> dict[str, Any]:
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [1248, 320],
+    }
+
+
+def make_warehouse_view_fast_path_detector() -> dict[str, Any]:
+    return {
+        "parameters": {"jsCode": WAREHOUSE_VIEW_FAST_PATH_DETECT_JS},
+        "id": "detect-warehouse-view-fast-path-node",
+        "name": "Detect Warehouse View Fast Path",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [-272, 80],
+    }
+
+
+def make_warehouse_view_fast_path_condition() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "conditions": {
+                "options": {
+                    "caseSensitive": True,
+                    "leftValue": "",
+                    "typeValidation": "strict",
+                    "version": 3,
+                },
+                "conditions": [
+                    {
+                        "id": "warehouse-view-fast-path-candidate",
+                        "leftValue": "={{ $json.warehouse_view_fast_path }}",
+                        "rightValue": True,
+                        "operator": {
+                            "type": "boolean",
+                            "operation": "true",
+                            "singleValue": True,
+                        },
+                    }
+                ],
+                "combinator": "and",
+            },
+            "options": {},
+        },
+        "id": "is-warehouse-view-fast-path-node",
+        "name": "Is Warehouse View Fast Path",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [-48, 80],
+    }
+
+
+def make_warehouse_view_fast_path_request() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "method": "POST",
+            "url": "http://feishu-adapter:8000/warehouse/inventory-table/views/create",
+            "sendHeaders": True,
+            "headerParameters": {
+                "parameters": [{"name": "Content-Type", "value": "application/json"}]
+            },
+            "sendBody": True,
+            "contentType": "json",
+            "specifyBody": "json",
+            "jsonBody": "={{ $json.warehouse_view_request }}",
+            "options": {},
+        },
+        "id": "create-warehouse-view-fast-path-node",
+        "name": "Create Warehouse View Fast Path",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [176, -64],
+    }
+
+
+def make_warehouse_view_fast_path_reply() -> dict[str, Any]:
+    return {
+        "parameters": {"jsCode": FORMAT_WAREHOUSE_VIEW_FAST_PATH_REPLY_JS},
+        "id": "format-warehouse-view-fast-path-reply-node",
+        "name": "Format Warehouse View Fast Path Reply",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [448, -64],
     }
 
 
@@ -463,8 +680,12 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
     normalize = clone_node(source, "Normalize Inbound Message")
     normalize["position"] = [-496, 80]
 
+    is_warehouse = department["agent"] == "Warehouse Agent"
+
     agent = make_agent_node(clone_node(source, department["agent"]))
     update_warehouse_agent_prompt(agent)
+    if is_warehouse:
+        agent["position"] = [256, 160]
     model = clone_node(source, department["model"])
     model["position"] = [256, 320]
 
@@ -501,10 +722,69 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
         tool["position"] = [720 + index * 176, 320]
         tools.append(tool)
 
-    workflow["nodes"] = [webhook, normalize, agent, model, memory, *tools, format_reply, respond]
+    fast_path_nodes = (
+        [
+            make_warehouse_view_fast_path_detector(),
+            make_warehouse_view_fast_path_condition(),
+            make_warehouse_view_fast_path_request(),
+            make_warehouse_view_fast_path_reply(),
+        ]
+        if is_warehouse
+        else []
+    )
+
+    workflow["nodes"] = [
+        webhook,
+        normalize,
+        *fast_path_nodes,
+        agent,
+        model,
+        memory,
+        *tools,
+        format_reply,
+        respond,
+    ]
 
     add_connection(workflow, "When Chat Message Received", "main", "Normalize Inbound Message")
-    add_connection(workflow, "Normalize Inbound Message", "main", department["agent"])
+    if is_warehouse:
+        add_connection(
+            workflow,
+            "Normalize Inbound Message",
+            "main",
+            "Detect Warehouse View Fast Path",
+        )
+        add_connection(
+            workflow,
+            "Detect Warehouse View Fast Path",
+            "main",
+            "Is Warehouse View Fast Path",
+        )
+        workflow["connections"]["Is Warehouse View Fast Path"] = {
+            "main": [
+                [
+                    {
+                        "node": "Create Warehouse View Fast Path",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+                [{"node": department["agent"], "type": "main", "index": 0}],
+            ]
+        }
+        add_connection(
+            workflow,
+            "Create Warehouse View Fast Path",
+            "main",
+            "Format Warehouse View Fast Path Reply",
+        )
+        add_connection(
+            workflow,
+            "Format Warehouse View Fast Path Reply",
+            "main",
+            "Respond to Webhook",
+        )
+    else:
+        add_connection(workflow, "Normalize Inbound Message", "main", department["agent"])
     add_connection(workflow, department["agent"], "main", "Format Webhook Reply")
     add_connection(workflow, "Format Webhook Reply", "main", "Respond to Webhook")
     add_connection(workflow, department["model"], "ai_languageModel", department["agent"])
