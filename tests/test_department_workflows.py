@@ -144,6 +144,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "同步、导出、发布、表格、飞书表格或看板" in system_message
             assert "必须先调用 warehouse_table_schema_tool" in system_message
             assert "不要编造 schema 中不存在的字段" in system_message
+            assert agent["parameters"]["options"]["maxIterations"] >= 6
 
 
 def test_department_workflows_connect_directly_to_department_agent() -> None:

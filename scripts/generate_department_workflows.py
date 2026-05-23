@@ -350,6 +350,7 @@ def make_agent_node(source_agent: dict[str, Any]) -> dict[str, Any]:
 def update_warehouse_agent_prompt(agent: dict[str, Any]) -> None:
     if agent.get("name") != "Warehouse Agent":
         return
+    agent["parameters"]["options"]["maxIterations"] = 6
     system_message = agent["parameters"]["options"]["systemMessage"]
     system_message = system_message.replace(
         "- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。",
