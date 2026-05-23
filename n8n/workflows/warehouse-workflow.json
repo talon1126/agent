@@ -1,6 +1,6 @@
 [
   {
-    "updatedAt": "2026-05-20T15:21:39.714Z",
+    "updatedAt": "2026-05-23T15:58:49.597Z",
     "createdAt": "2026-05-19T15:41:13.387Z",
     "id": "warehouse-workflow",
     "name": "Warehouse Workflow",
@@ -21,7 +21,7 @@
         "typeVersion": 2.1,
         "position": [
           -720,
-          80
+          64
         ],
         "webhookId": "chat-agent-inbound"
       },
@@ -35,7 +35,7 @@
         "typeVersion": 2,
         "position": [
           -496,
-          80
+          64
         ]
       },
       {
@@ -52,7 +52,6 @@
             ]
           },
           "sendBody": true,
-          "contentType": "json",
           "specifyBody": "json",
           "jsonBody": "={{ { message: $json.input_text || $json.text || '' } }}",
           "options": {}
@@ -63,7 +62,7 @@
         "typeVersion": 4.4,
         "position": [
           -272,
-          80
+          64
         ]
       },
       {
@@ -96,7 +95,7 @@
         "typeVersion": 2.3,
         "position": [
           -48,
-          80
+          64
         ]
       },
       {
@@ -128,8 +127,8 @@
         "type": "n8n-nodes-base.if",
         "typeVersion": 2.3,
         "position": [
-          176,
-          80
+          64,
+          384
         ]
       },
       {
@@ -161,8 +160,8 @@
         "type": "n8n-nodes-base.if",
         "typeVersion": 2.3,
         "position": [
-          448,
-          80
+          176,
+          704
         ]
       },
       {
@@ -179,7 +178,6 @@
             ]
           },
           "sendBody": true,
-          "contentType": "json",
           "specifyBody": "json",
           "jsonBody": "={{ { message: $json.payload.message, view_name: '' } }}",
           "options": {}
@@ -189,8 +187,8 @@
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.4,
         "position": [
-          448,
-          -64
+          176,
+          -48
         ]
       },
       {
@@ -223,8 +221,8 @@
         "type": "n8n-nodes-base.if",
         "typeVersion": 2.3,
         "position": [
-          720,
-          -64
+          496,
+          -48
         ]
       },
       {
@@ -241,7 +239,6 @@
             ]
           },
           "sendBody": true,
-          "contentType": "json",
           "specifyBody": "json",
           "jsonBody": "={{ { sku: $json.slots.sku || '', warehouse_id: $json.slots.warehouse || '', risk_level: $json.slots.risk_level || '', limit: 50 } }}",
           "options": {}
@@ -251,8 +248,8 @@
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.4,
         "position": [
-          720,
-          80
+          288,
+          432
         ]
       },
       {
@@ -264,8 +261,8 @@
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          448,
-          160
+          288,
+          992
         ]
       },
       {
@@ -277,8 +274,8 @@
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          720,
-          160
+          608,
+          192
         ]
       },
       {
@@ -290,8 +287,8 @@
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          176,
-          -96
+          64,
+          -480
         ]
       },
       {
@@ -303,8 +300,8 @@
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          944,
-          80
+          1648,
+          432
         ]
       },
       {
@@ -316,25 +313,25 @@
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          944,
-          -64
+          608,
+          -320
         ]
       },
       {
         "parameters": {
+          "promptType": "define",
           "text": "={{ $json.input_text }}",
           "options": {
             "systemMessage": "你是 Warehouse Agent，专门处理仓储、库存、履约和发货作业问题。\n\n可用工具：\n- warehouse_inventory_tool：查询 SKU 库存、已预留库存、待处理订单、补货阈值和库位。\n- warehouse_exception_tool：查询库存差异、破损、待上架、找不到库位、拣货延迟等仓储异常。\n- warehouse_fulfillment_tool：判断 SKU 是否可以发货，并返回阻塞原因和下一步动作。\n- warehouse_inventory_table_provision_tool：仅在用户明确要求创建、初始化或配置飞书库存表时，创建固定 schema 的飞书表格。\n- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 SKU 库存快照同步到飞书表格。\n- warehouse_table_schema_tool：当用户要求创建飞书库存视图时，先读取当前表字段、字段类型、颜色选项和已有视图。\n- warehouse_view_create_tool：读取 schema 后，用受控 JSON 创建或复用飞书库存视图。\n\n处理规则：\n1. 如果用户询问 SKU 库存、现货、库位、缺货或补货阈值，必须调用 warehouse_inventory_tool。\n2. 如果用户询问库存差异、破损、待上架、找不到库位、拣货延迟或仓储异常，必须调用 warehouse_exception_tool。\n3. 如果用户询问能否发货、履约风险、出库阻塞或发货作业状态，必须调用 warehouse_fulfillment_tool。\n4. 如果用户要求创建、初始化或配置飞书库存表，先调用 warehouse_inventory_table_provision_tool；如果同时要求同步某个 sku_ 开头的 SKU，再调用 warehouse_inventory_tool 获取事实，然后调用 warehouse_inventory_table_sync_tool 同步快照。\n5. 如果用户要求同步、导出、发布、表格、飞书表格或看板，并提供了 sku_ 开头的 SKU，先调用 warehouse_inventory_tool 获取事实，再调用 warehouse_inventory_table_sync_tool 同步快照。\n6. 如果用户要求创建某个飞书库存视图，必须先调用 warehouse_table_schema_tool，再调用 warehouse_view_create_tool；warehouse_view_create_tool 的输入必须是 JSON，包含 view_name、visible_fields、filters 和 sorts；不要编造 schema 中不存在的字段。\n7. warehouse_view_create_tool 返回 ok=true 后，立即根据返回的 action、view_id 和 validated_plan 回复用户；同一个 view_name 不要重复调用 warehouse_view_create_tool。\n8. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool、warehouse_inventory_table_sync_tool、warehouse_table_schema_tool 或 warehouse_view_create_tool。\n9. 如果用户没有提供 SKU，请要求用户提供 SKU，例如 sku_bag_1。\n10. 回复必须保留工具返回的 SKU、可用库存、已预留库存、库位、异常、风险等级和行动建议等关键字段。\n11. 不要创建采购单；采购归 Procurement Agent 处理。\n12. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。\n13. 回复必须简洁，适合直接发回飞书。",
             "maxIterations": 6,
             "returnIntermediateSteps": true
-          },
-          "promptType": "define"
+          }
         },
         "type": "@n8n/n8n-nodes-langchain.agent",
         "typeVersion": 3,
         "position": [
-          256,
-          160
+          944,
+          992
         ],
         "id": "warehouse-agent-node",
         "name": "Warehouse Agent"
@@ -351,8 +348,8 @@
         "type": "@n8n/n8n-nodes-langchain.lmChatAlibabaCloud",
         "typeVersion": 1,
         "position": [
-          256,
-          320
+          880,
+          1248
         ],
         "id": "warehouse-qwen-chat-model-node",
         "name": "Warehouse Qwen Chat Model",
@@ -375,8 +372,8 @@
         "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
         "typeVersion": 1.4,
         "position": [
-          512,
-          320
+          1136,
+          1248
         ],
         "credentials": {
           "postgres": {
@@ -395,8 +392,8 @@
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
-          720,
-          320
+          1344,
+          1248
         ]
       },
       {
@@ -409,8 +406,8 @@
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
-          896,
-          320
+          1520,
+          1248
         ]
       },
       {
@@ -423,8 +420,8 @@
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
-          1072,
-          320
+          1696,
+          1248
         ]
       },
       {
@@ -437,8 +434,8 @@
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
-          1248,
-          320
+          1872,
+          1248
         ]
       },
       {
@@ -451,8 +448,8 @@
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
-          1424,
-          320
+          2048,
+          1248
         ]
       },
       {
@@ -465,8 +462,8 @@
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
-          1600,
-          320
+          2224,
+          1248
         ]
       },
       {
@@ -479,8 +476,8 @@
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
-          1776,
-          320
+          2400,
+          1248
         ]
       },
       {
@@ -492,8 +489,8 @@
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          944,
-          160
+          1648,
+          96
         ]
       },
       {
@@ -507,8 +504,8 @@
         "type": "n8n-nodes-base.respondToWebhook",
         "typeVersion": 1.5,
         "position": [
-          1168,
-          80
+          1760,
+          -480
         ]
       }
     ],

@@ -228,10 +228,18 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "$items('Normalize Inbound Message')" in restore_code
             assert "input_text" in restore_code or "...source" in restore_code
             assert "warehouse_intent_route" in route_restore["parameters"]["jsCode"]
-            assert template_restore["position"] != format_reply["position"]
-            assert route_restore["position"] == [448, 160]
-            assert template_restore["position"] == [720, 160]
-            assert format_reply["position"] == [944, 160]
+            fallback_positions = [
+                route_restore["position"],
+                template_restore["position"],
+                format_reply["position"],
+            ]
+            assert all(
+                isinstance(position, list) and len(position) == 2
+                for position in fallback_positions
+            )
+            assert len({tuple(position) for position in fallback_positions}) == len(
+                fallback_positions
+            )
             assert (
                 "warehouse_view_template_fast_path"
                 in template_reply["parameters"]["jsCode"]
