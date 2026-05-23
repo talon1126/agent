@@ -54,11 +54,15 @@ def render_filters(slots: dict[str, Any]) -> list[dict[str, Any]]:
             {"field": "Warehouse", "operator": "is", "value": slots["warehouse"]}
         )
     if slots.get("available_lt") is not None:
+        try:
+            available_lt = int(slots["available_lt"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("available_lt must be an integer") from exc
         filters.append(
             {
                 "field": "Available",
                 "operator": "lt",
-                "value": int(slots["available_lt"]),
+                "value": available_lt,
             }
         )
     return filters
@@ -138,9 +142,16 @@ def _extract_risk_level(message: str) -> tuple[str, str | None]:
         "low": ("低风险", "low risk", "low"),
     }
     for risk_level, aliases in risk_aliases.items():
-        if any(alias.casefold() in normalized_message for alias in aliases):
+        if any(_matches_risk_alias(normalized_message, alias) for alias in aliases):
             return "risk_level", risk_level
     return "risk_level", None
+
+
+def _matches_risk_alias(normalized_message: str, alias: str) -> bool:
+    normalized_alias = alias.casefold()
+    if normalized_alias.isascii():
+        return re.search(rf"\b{re.escape(normalized_alias)}\b", normalized_message) is not None
+    return normalized_alias in normalized_message
 
 
 def _extract_available_lt(message: str) -> tuple[str, int | None]:

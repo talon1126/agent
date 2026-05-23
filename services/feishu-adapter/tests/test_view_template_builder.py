@@ -1,3 +1,5 @@
+import pytest
+
 from app.view_template_builder import (
     load_warehouse_view_templates,
     match_warehouse_view_template,
@@ -63,6 +65,16 @@ def test_matches_english_low_stock_request() -> None:
     assert result.slots["warehouse"] == "wh_hk_1"
 
 
+def test_below_threshold_does_not_match_low_risk_substring() -> None:
+    result = match_warehouse_view_template(
+        "Create a warehouse exception view for SKUs below 10 units"
+    )
+
+    assert result.matched is True
+    assert result.template_id == "warehouse_exception_view"
+    assert "risk_level" not in result.slots
+
+
 def test_unknown_template_returns_suggestions() -> None:
     result = match_warehouse_view_template("帮我建一个财务利润视图")
 
@@ -104,3 +116,12 @@ def test_renders_available_threshold_slot() -> None:
     )
 
     assert {"field": "Available", "operator": "lt", "value": 5} in plan["filters"]
+
+
+def test_render_rejects_non_integer_available_threshold() -> None:
+    with pytest.raises(ValueError, match="available_lt must be an integer"):
+        render_warehouse_view_plan(
+            template_id="low_stock_view",
+            view_name="低于五件库存",
+            slots={"available_lt": "five"},
+        )
