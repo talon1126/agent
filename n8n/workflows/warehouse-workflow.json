@@ -40,12 +40,27 @@
       },
       {
         "parameters": {
-          "jsCode": "\nreturn $input.all().map((item) => {\n  const text = String(item.json.input_text || item.json.text || '').trim();\n  const lowered = text.toLowerCase();\n  const hasCreateIntent = ['创建', '新建', '新增', '生成', '做一个', '建', '建一个', '帮我建', 'create', 'generate'].some((keyword) => lowered.includes(keyword));\n  const hasViewIntent = ['视图', '看板', 'view', 'board'].some((keyword) => lowered.includes(keyword));\n  const candidate = Boolean(hasCreateIntent && hasViewIntent);\n\n  return {\n    json: {\n      ...item.json,\n      warehouse_view_template_candidate: candidate,\n      warehouse_view_template_body: {\n        message: text,\n        view_name: ''\n      }\n    }\n  };\n});"
+          "method": "POST",
+          "url": "http://feishu-adapter:8000/warehouse/intents/route",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ { message: $json.input_text || $json.text || '' } }}",
+          "options": {}
         },
-        "id": "detect-warehouse-view-template-request-node",
-        "name": "Detect Warehouse View Template Request",
-        "type": "n8n-nodes-base.code",
-        "typeVersion": 2,
+        "id": "warehouse-intent-router-node",
+        "name": "Warehouse Intent Router",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
         "position": [
           -272,
           80
@@ -62,13 +77,12 @@
             },
             "conditions": [
               {
-                "id": "warehouse-view-fast-path-candidate",
-                "leftValue": "={{ $json.warehouse_view_template_candidate }}",
-                "rightValue": true,
+                "id": "warehouse-clarification-required",
+                "leftValue": "={{ $json.status }}",
+                "rightValue": "clarification_required",
                 "operator": {
-                  "type": "boolean",
-                  "operation": "true",
-                  "singleValue": true
+                  "type": "string",
+                  "operation": "equals"
                 }
               }
             ],
@@ -76,12 +90,45 @@
           },
           "options": {}
         },
-        "id": "is-warehouse-view-template-request-node",
-        "name": "Is Warehouse View Template Request",
+        "id": "is-warehouse-clarification-required-node",
+        "name": "Is Warehouse Clarification Required",
         "type": "n8n-nodes-base.if",
         "typeVersion": 2.3,
         "position": [
           -48,
+          80
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 3
+            },
+            "conditions": [
+              {
+                "id": "warehouse-view-template-intent",
+                "leftValue": "={{ $json.executor }}",
+                "rightValue": "warehouse_view_template",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "is-warehouse-view-intent-node",
+        "name": "Is Warehouse View Intent",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [
+          176,
           80
         ]
       },
@@ -101,7 +148,7 @@
           "sendBody": true,
           "contentType": "json",
           "specifyBody": "json",
-          "jsonBody": "={{ $json.warehouse_view_template_body }}",
+          "jsonBody": "={{ { message: $json.payload.message, view_name: '' } }}",
           "options": {}
         },
         "id": "create-warehouse-view-from-template-node",
@@ -109,7 +156,7 @@
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.4,
         "position": [
-          176,
+          448,
           -64
         ]
       },
@@ -143,16 +190,16 @@
         "type": "n8n-nodes-base.if",
         "typeVersion": 2.3,
         "position": [
-          448,
+          720,
           -64
         ]
       },
       {
         "parameters": {
-          "jsCode": "const source = $items('Detect Warehouse View Template Request')[0]?.json ?? {};\nconst result = $input.first().json;\n\nreturn [{\n  json: {\n    ...source,\n    warehouse_view_template_result: result\n  }\n}];"
+          "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\nconst route = $input.first().json;\n\nreturn [{\n  json: {\n    ...source,\n    warehouse_intent_route: route\n  }\n}];"
         },
-        "id": "restore-warehouse-view-template-source-node",
-        "name": "Restore Warehouse View Template Source",
+        "id": "restore-warehouse-intent-router-source-node",
+        "name": "Restore Warehouse Intent Router Source",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
@@ -162,14 +209,40 @@
       },
       {
         "parameters": {
-          "jsCode": "const source = $items('Detect Warehouse View Template Request')[0]?.json ?? {};\n\nfunction describeRules(plan) {\n  const filters = Array.isArray(plan.filters)\n    ? plan.filters.map((rule) => `${rule.field} ${rule.operator || 'is'} ${rule.value}`).join('; ')\n    : '';\n  const sorts = Array.isArray(plan.sorts)\n    ? plan.sorts.map((rule) => `${rule.field} ${rule.order || 'asc'}`).join('; ')\n    : '';\n  return { filters: filters || '无', sorts: sorts || '无' };\n}\n\nreturn $input.all().map((item) => {\n  const result = item.json;\n  const plan = result.validated_plan || source.warehouse_view_template_body || {};\n  const rules = describeRules(plan);\n  const visibleFields = Array.isArray(plan.visible_fields) ? plan.visible_fields.join(', ') : '';\n  const reply = result.ok\n    ? [\n        `已${result.action === 'created' ? '创建' : '复用'}飞书库存视图：${result.view_name || plan.view_name}`,\n        `view_id: ${result.view_id || ''}`,\n        `table_id: ${result.table_id || ''}`,\n        `字段: ${visibleFields || '默认字段'}`,\n        `筛选: ${rules.filters}`,\n        `排序: ${rules.sorts}`\n      ].join('\\n')\n    : `创建飞书库存视图失败：${result.error || 'unknown_error'} ${result.message || ''}`.trim();\n\n  return {\n    json: {\n      ok: Boolean(result.ok),\n      platform: source.platform,\n      chat_id: source.chat_id,\n      sender_id: source.sender_id,\n      message_id: source.message_id,\n      reply,\n      tool_trace: [\n        {\n          tool: 'warehouse_view_template_fast_path',\n          input: source.warehouse_view_template_body,\n          output: result\n        }\n      ],\n      raw_agent_output: result\n    }\n  };\n});"
+          "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\nconst result = $input.first().json;\n\nreturn [{\n  json: {\n    ...source,\n    warehouse_view_template_result: result\n  }\n}];"
+        },
+        "id": "restore-warehouse-view-template-source-node",
+        "name": "Restore Warehouse View Template Source",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          720,
+          160
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\n\nreturn $input.all().map((item) => {\n  const route = item.json;\n  const reply = route.clarification_question || '你的仓储需求不够明确，请补充你想查询、同步还是创建视图。';\n  return {\n    json: {\n      ok: true,\n      platform: source.platform,\n      chat_id: source.chat_id,\n      sender_id: source.sender_id,\n      message_id: source.message_id,\n      reply,\n      tool_trace: [\n        { tool: 'warehouse_intent_router', input: { message: source.input_text || source.text || '' }, output: route }\n      ],\n      raw_agent_output: route\n    }\n  };\n});"
+        },
+        "id": "format-warehouse-clarification-reply-node",
+        "name": "Format Warehouse Clarification Reply",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          176,
+          -96
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\n\nfunction describeRules(plan) {\n  const filters = Array.isArray(plan.filters)\n    ? plan.filters.map((rule) => `${rule.field} ${rule.operator || 'is'} ${rule.value}`).join('; ')\n    : '';\n  const sorts = Array.isArray(plan.sorts)\n    ? plan.sorts.map((rule) => `${rule.field} ${rule.order || 'asc'}`).join('; ')\n    : '';\n  return { filters: filters || '无', sorts: sorts || '无' };\n}\n\nreturn $input.all().map((item) => {\n  const result = item.json;\n  const plan = result.validated_plan || source.warehouse_view_template_body || {};\n  const rules = describeRules(plan);\n  const visibleFields = Array.isArray(plan.visible_fields) ? plan.visible_fields.join(', ') : '';\n  const reply = result.ok\n    ? [\n        `已${result.action === 'created' ? '创建' : '复用'}飞书库存视图：${result.view_name || plan.view_name}`,\n        `view_id: ${result.view_id || ''}`,\n        `table_id: ${result.table_id || ''}`,\n        `字段: ${visibleFields || '默认字段'}`,\n        `筛选: ${rules.filters}`,\n        `排序: ${rules.sorts}`\n      ].join('\\n')\n    : `创建飞书库存视图失败：${result.error || 'unknown_error'} ${result.message || ''}`.trim();\n\n  return {\n    json: {\n      ok: Boolean(result.ok),\n      platform: source.platform,\n      chat_id: source.chat_id,\n      sender_id: source.sender_id,\n      message_id: source.message_id,\n      reply,\n      tool_trace: [\n        { tool: 'warehouse_view_template_fast_path', input: { message: source.input_text || source.text || '' }, output: result }\n      ],\n      raw_agent_output: result\n    }\n  };\n});"
         },
         "id": "format-warehouse-view-template-reply-node",
         "name": "Format Warehouse View Template Reply",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          720,
+          944,
           -64
         ]
       },
@@ -345,7 +418,7 @@
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          720,
+          944,
           160
         ]
       },
@@ -360,7 +433,7 @@
         "type": "n8n-nodes-base.respondToWebhook",
         "typeVersion": 1.5,
         "position": [
-          944,
+          1168,
           80
         ]
       }
@@ -381,25 +454,43 @@
         "main": [
           [
             {
-              "node": "Detect Warehouse View Template Request",
+              "node": "Warehouse Intent Router",
               "type": "main",
               "index": 0
             }
           ]
         ]
       },
-      "Detect Warehouse View Template Request": {
+      "Warehouse Intent Router": {
         "main": [
           [
             {
-              "node": "Is Warehouse View Template Request",
+              "node": "Is Warehouse Clarification Required",
               "type": "main",
               "index": 0
             }
           ]
         ]
       },
-      "Is Warehouse View Template Request": {
+      "Is Warehouse Clarification Required": {
+        "main": [
+          [
+            {
+              "node": "Format Warehouse Clarification Reply",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Is Warehouse View Intent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Warehouse View Intent": {
         "main": [
           [
             {
@@ -410,7 +501,7 @@
           ],
           [
             {
-              "node": "Warehouse Agent",
+              "node": "Restore Warehouse Intent Router Source",
               "type": "main",
               "index": 0
             }
@@ -457,7 +548,29 @@
           ]
         ]
       },
+      "Restore Warehouse Intent Router Source": {
+        "main": [
+          [
+            {
+              "node": "Warehouse Agent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
       "Format Warehouse View Template Reply": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Warehouse Clarification Reply": {
         "main": [
           [
             {

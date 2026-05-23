@@ -1,0 +1,83 @@
+{
+  "department": "warehouse",
+  "min_score": 0.65,
+  "ambiguity_margin": 0.25,
+  "intents": [
+    {
+      "intent": "create_inventory_view",
+      "label": "创建库存视图",
+      "executor": "warehouse_view_template",
+      "priority": 10,
+      "required_signal_groups": [
+        ["create", "view"],
+        ["update", "view"]
+      ],
+      "signal_weights": {
+        "create": 0.45,
+        "view": 0.4,
+        "risk": 0.1,
+        "low_stock": 0.05,
+        "warehouse": 0.05
+      }
+    },
+    {
+      "intent": "sync_inventory_table",
+      "label": "同步库存数据到飞书表格",
+      "executor": "warehouse_inventory_table_sync",
+      "priority": 20,
+      "required_signal_groups": [
+        ["sync", "inventory"],
+        ["update", "inventory", "table"]
+      ],
+      "signal_weights": {
+        "sync": 0.35,
+        "update": 0.25,
+        "inventory": 0.3,
+        "table": 0.2,
+        "warehouse": 0.1,
+        "sku": 0.1
+      }
+    },
+    {
+      "intent": "query_inventory",
+      "label": "查询库存",
+      "executor": "warehouse_inventory_tool",
+      "priority": 10,
+      "required_signal_groups": [
+        ["query", "inventory"],
+        ["query", "sku"]
+      ],
+      "signal_weights": {
+        "query": 0.4,
+        "inventory": 0.3,
+        "sku": 0.2,
+        "warehouse": 0.1
+      }
+    }
+  ],
+  "lexicon": {
+    "create": ["创建", "新建", "新增", "生成", "做一个", "建一个", "帮我建", "create", "generate"],
+    "update": ["更新", "刷新", "改一下", "调整", "update", "refresh"],
+    "sync": ["同步", "导出", "发布", "推送", "sync", "export", "publish"],
+    "query": ["查", "查询", "看一下", "看看", "查一下", "query", "check", "lookup"],
+    "view": ["视图", "看板", "表格视图", "view", "board"],
+    "table": ["表格", "多维表格", "飞书表格", "bitable", "table"],
+    "inventory": ["库存", "存货", "inventory", "stock"],
+    "risk": ["高风险", "中风险", "低风险", "风险", "危险库存", "risk"],
+    "low_stock": ["低库存", "缺货", "库存不足", "low stock"],
+    "warehouse": ["仓", "仓库", "warehouse"],
+    "sku": ["sku"]
+  },
+  "slots": {
+    "warehouse": {
+      "wh_hk_1": ["香港仓", "香港仓库", "香港", "hk", "hong kong"],
+      "wh_sz_1": ["深圳仓", "深圳仓库", "深圳", "sz", "shenzhen"],
+      "wh_sg_1": ["新加坡仓", "新加坡仓库", "新加坡", "sg", "singapore"]
+    },
+    "risk_level": {
+      "high": ["高风险", "高危", "危险", "high risk"],
+      "medium": ["中风险", "中等风险", "medium risk"],
+      "low": ["低风险", "low risk"]
+    }
+  }
+}

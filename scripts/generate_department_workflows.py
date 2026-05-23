@@ -289,27 +289,7 @@ try {
   });
 }"""
 
-WAREHOUSE_VIEW_FAST_PATH_DETECT_JS = """
-return $input.all().map((item) => {
-  const text = String(item.json.input_text || item.json.text || '').trim();
-  const lowered = text.toLowerCase();
-  const hasCreateIntent = ['创建', '新建', '新增', '生成', '做一个', '建', '建一个', '帮我建', 'create', 'generate'].some((keyword) => lowered.includes(keyword));
-  const hasViewIntent = ['视图', '看板', 'view', 'board'].some((keyword) => lowered.includes(keyword));
-  const candidate = Boolean(hasCreateIntent && hasViewIntent);
-
-  return {
-    json: {
-      ...item.json,
-      warehouse_view_template_candidate: candidate,
-      warehouse_view_template_body: {
-        message: text,
-        view_name: ''
-      }
-    }
-  };
-});"""
-
-FORMAT_WAREHOUSE_VIEW_FAST_PATH_REPLY_JS = """const source = $items('Detect Warehouse View Template Request')[0]?.json ?? {};
+FORMAT_WAREHOUSE_VIEW_FAST_PATH_REPLY_JS = """const source = $items('Normalize Inbound Message')[0]?.json ?? {};
 
 function describeRules(plan) {
   const filters = Array.isArray(plan.filters)
@@ -346,18 +326,14 @@ return $input.all().map((item) => {
       message_id: source.message_id,
       reply,
       tool_trace: [
-        {
-          tool: 'warehouse_view_template_fast_path',
-          input: source.warehouse_view_template_body,
-          output: result
-        }
+        { tool: 'warehouse_view_template_fast_path', input: { message: source.input_text || source.text || '' }, output: result }
       ],
       raw_agent_output: result
     }
   };
 });"""
 
-RESTORE_WAREHOUSE_VIEW_FAST_PATH_SOURCE_JS = """const source = $items('Detect Warehouse View Template Request')[0]?.json ?? {};
+RESTORE_WAREHOUSE_VIEW_FAST_PATH_SOURCE_JS = """const source = $items('Normalize Inbound Message')[0]?.json ?? {};
 const result = $input.first().json;
 
 return [{
@@ -366,6 +342,37 @@ return [{
     warehouse_view_template_result: result
   }
 }];"""
+
+RESTORE_WAREHOUSE_INTENT_ROUTER_SOURCE_JS = """const source = $items('Normalize Inbound Message')[0]?.json ?? {};
+const route = $input.first().json;
+
+return [{
+  json: {
+    ...source,
+    warehouse_intent_route: route
+  }
+}];"""
+
+FORMAT_WAREHOUSE_CLARIFICATION_REPLY_JS = """const source = $items('Normalize Inbound Message')[0]?.json ?? {};
+
+return $input.all().map((item) => {
+  const route = item.json;
+  const reply = route.clarification_question || '你的仓储需求不够明确，请补充你想查询、同步还是创建视图。';
+  return {
+    json: {
+      ok: true,
+      platform: source.platform,
+      chat_id: source.chat_id,
+      sender_id: source.sender_id,
+      message_id: source.message_id,
+      reply,
+      tool_trace: [
+        { tool: 'warehouse_intent_router', input: { message: source.input_text || source.text || '' }, output: route }
+      ],
+      raw_agent_output: route
+    }
+  };
+});"""
 
 
 def load_source_workflow() -> dict[str, Any]:
@@ -452,18 +459,30 @@ def make_warehouse_view_create_tool() -> dict[str, Any]:
     }
 
 
-def make_warehouse_view_fast_path_detector() -> dict[str, Any]:
+def make_warehouse_intent_router() -> dict[str, Any]:
     return {
-        "parameters": {"jsCode": WAREHOUSE_VIEW_FAST_PATH_DETECT_JS},
-        "id": "detect-warehouse-view-template-request-node",
-        "name": "Detect Warehouse View Template Request",
-        "type": "n8n-nodes-base.code",
-        "typeVersion": 2,
+        "parameters": {
+            "method": "POST",
+            "url": "http://feishu-adapter:8000/warehouse/intents/route",
+            "sendHeaders": True,
+            "headerParameters": {
+                "parameters": [{"name": "Content-Type", "value": "application/json"}]
+            },
+            "sendBody": True,
+            "contentType": "json",
+            "specifyBody": "json",
+            "jsonBody": "={{ { message: $json.input_text || $json.text || '' } }}",
+            "options": {},
+        },
+        "id": "warehouse-intent-router-node",
+        "name": "Warehouse Intent Router",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
         "position": [-272, 80],
     }
 
 
-def make_warehouse_view_fast_path_condition() -> dict[str, Any]:
+def make_warehouse_clarification_condition() -> dict[str, Any]:
     return {
         "parameters": {
             "conditions": {
@@ -475,13 +494,12 @@ def make_warehouse_view_fast_path_condition() -> dict[str, Any]:
                 },
                 "conditions": [
                     {
-                        "id": "warehouse-view-fast-path-candidate",
-                        "leftValue": "={{ $json.warehouse_view_template_candidate }}",
-                        "rightValue": True,
+                        "id": "warehouse-clarification-required",
+                        "leftValue": "={{ $json.status }}",
+                        "rightValue": "clarification_required",
                         "operator": {
-                            "type": "boolean",
-                            "operation": "true",
-                            "singleValue": True,
+                            "type": "string",
+                            "operation": "equals",
                         },
                     }
                 ],
@@ -489,11 +507,44 @@ def make_warehouse_view_fast_path_condition() -> dict[str, Any]:
             },
             "options": {},
         },
-        "id": "is-warehouse-view-template-request-node",
-        "name": "Is Warehouse View Template Request",
+        "id": "is-warehouse-clarification-required-node",
+        "name": "Is Warehouse Clarification Required",
         "type": "n8n-nodes-base.if",
         "typeVersion": 2.3,
         "position": [-48, 80],
+    }
+
+
+def make_warehouse_view_intent_condition() -> dict[str, Any]:
+    return {
+        "parameters": {
+            "conditions": {
+                "options": {
+                    "caseSensitive": True,
+                    "leftValue": "",
+                    "typeValidation": "strict",
+                    "version": 3,
+                },
+                "conditions": [
+                    {
+                        "id": "warehouse-view-template-intent",
+                        "leftValue": "={{ $json.executor }}",
+                        "rightValue": "warehouse_view_template",
+                        "operator": {
+                            "type": "string",
+                            "operation": "equals",
+                        },
+                    }
+                ],
+                "combinator": "and",
+            },
+            "options": {},
+        },
+        "id": "is-warehouse-view-intent-node",
+        "name": "Is Warehouse View Intent",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [176, 80],
     }
 
 
@@ -509,14 +560,14 @@ def make_warehouse_view_fast_path_request() -> dict[str, Any]:
             "sendBody": True,
             "contentType": "json",
             "specifyBody": "json",
-            "jsonBody": "={{ $json.warehouse_view_template_body }}",
+            "jsonBody": "={{ { message: $json.payload.message, view_name: '' } }}",
             "options": {},
         },
         "id": "create-warehouse-view-from-template-node",
         "name": "Create Warehouse View From Template",
         "type": "n8n-nodes-base.httpRequest",
         "typeVersion": 4.4,
-        "position": [176, -64],
+        "position": [448, -64],
     }
 
 
@@ -550,7 +601,7 @@ def make_warehouse_view_fast_path_matched_condition() -> dict[str, Any]:
         "name": "Is Warehouse View Template Matched",
         "type": "n8n-nodes-base.if",
         "typeVersion": 2.3,
-        "position": [448, -64],
+        "position": [720, -64],
     }
 
 
@@ -561,7 +612,7 @@ def make_warehouse_view_fast_path_restore_source() -> dict[str, Any]:
         "name": "Restore Warehouse View Template Source",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
-        "position": [448, 160],
+        "position": [720, 160],
     }
 
 
@@ -572,7 +623,29 @@ def make_warehouse_view_fast_path_reply() -> dict[str, Any]:
         "name": "Format Warehouse View Template Reply",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
-        "position": [720, -64],
+        "position": [944, -64],
+    }
+
+
+def make_warehouse_intent_router_restore_source() -> dict[str, Any]:
+    return {
+        "parameters": {"jsCode": RESTORE_WAREHOUSE_INTENT_ROUTER_SOURCE_JS},
+        "id": "restore-warehouse-intent-router-source-node",
+        "name": "Restore Warehouse Intent Router Source",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [448, 160],
+    }
+
+
+def make_warehouse_clarification_reply() -> dict[str, Any]:
+    return {
+        "parameters": {"jsCode": FORMAT_WAREHOUSE_CLARIFICATION_REPLY_JS},
+        "id": "format-warehouse-clarification-reply-node",
+        "name": "Format Warehouse Clarification Reply",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [176, -96],
     }
 
 
@@ -686,9 +759,11 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
     format_reply["position"] = [720, 80]
     format_reply["parameters"]["jsCode"] = FORMAT_REPLY_JS
     if is_warehouse:
-        format_reply["position"] = [720, 160]
+        format_reply["position"] = [944, 160]
     respond = clone_node(source, "Respond to Webhook")
     respond["position"] = [944, 80]
+    if is_warehouse:
+        respond["position"] = [1168, 80]
 
     tools = []
     for index, tool_name in enumerate(department["tools"]):
@@ -711,11 +786,14 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
 
     fast_path_nodes = (
         [
-            make_warehouse_view_fast_path_detector(),
-            make_warehouse_view_fast_path_condition(),
+            make_warehouse_intent_router(),
+            make_warehouse_clarification_condition(),
+            make_warehouse_view_intent_condition(),
             make_warehouse_view_fast_path_request(),
             make_warehouse_view_fast_path_matched_condition(),
+            make_warehouse_intent_router_restore_source(),
             make_warehouse_view_fast_path_restore_source(),
+            make_warehouse_clarification_reply(),
             make_warehouse_view_fast_path_reply(),
         ]
         if is_warehouse
@@ -740,15 +818,27 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
             workflow,
             "Normalize Inbound Message",
             "main",
-            "Detect Warehouse View Template Request",
+            "Warehouse Intent Router",
         )
         add_connection(
             workflow,
-            "Detect Warehouse View Template Request",
+            "Warehouse Intent Router",
             "main",
-            "Is Warehouse View Template Request",
+            "Is Warehouse Clarification Required",
         )
-        workflow["connections"]["Is Warehouse View Template Request"] = {
+        workflow["connections"]["Is Warehouse Clarification Required"] = {
+            "main": [
+                [
+                    {
+                        "node": "Format Warehouse Clarification Reply",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
+                [{"node": "Is Warehouse View Intent", "type": "main", "index": 0}],
+            ]
+        }
+        workflow["connections"]["Is Warehouse View Intent"] = {
             "main": [
                 [
                     {
@@ -757,7 +847,13 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
                         "index": 0,
                     }
                 ],
-                [{"node": department["agent"], "type": "main", "index": 0}],
+                [
+                    {
+                        "node": "Restore Warehouse Intent Router Source",
+                        "type": "main",
+                        "index": 0,
+                    }
+                ],
             ]
         }
         add_connection(
@@ -792,7 +888,19 @@ def build_department_workflow(source: dict[str, Any], department: dict[str, Any]
         )
         add_connection(
             workflow,
+            "Restore Warehouse Intent Router Source",
+            "main",
+            department["agent"],
+        )
+        add_connection(
+            workflow,
             "Format Warehouse View Template Reply",
+            "main",
+            "Respond to Webhook",
+        )
+        add_connection(
+            workflow,
+            "Format Warehouse Clarification Reply",
             "main",
             "Respond to Webhook",
         )

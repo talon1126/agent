@@ -14,6 +14,7 @@ from pydantic import BaseModel, field_validator, model_validator
 from app.feishu_client import FEISHU_API_BASE_URL, get_tenant_access_token, reply_text_message
 from app.feishu_events import normalize_feishu_event, to_n8n_payload
 from app.feishu_long_connection import start_long_connection_listener
+from app.intent_router import route_warehouse_intent
 from app.view_template_builder import (
     load_warehouse_view_templates,
     match_warehouse_view_template,
@@ -135,6 +136,10 @@ class InventoryTableViewCreateRequest(BaseModel):
 class InventoryTableViewFromTemplateRequest(BaseModel):
     message: str
     view_name: str | None = None
+
+
+class WarehouseIntentRouteRequest(BaseModel):
+    message: str
 
 
 INVENTORY_TABLE_FIELD_SPECS = [
@@ -916,6 +921,14 @@ def create_app(
                 for template in templates
             ],
         }
+
+    @app.post("/warehouse/intents/route")
+    def route_warehouse_intent_request(
+        request: WarehouseIntentRouteRequest,
+    ) -> dict[str, Any]:
+        route = route_warehouse_intent(request.message).to_dict()
+        route["payload"] = {"message": request.message}
+        return route
 
     @app.post("/warehouse/inventory-table/views/create")
     def create_inventory_view(request: InventoryTableViewCreateRequest) -> dict[str, Any]:
