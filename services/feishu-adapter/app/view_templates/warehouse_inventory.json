@@ -1,0 +1,73 @@
+[
+  {
+    "template_id": "inventory_risk_view",
+    "display_name": "库存风险视图",
+    "aliases": ["高风险库存", "风险库存", "优先处理库存", "high risk inventory", "risk inventory"],
+    "table_name": "Warehouse Inventory Snapshot",
+    "visible_fields": ["SKU", "Warehouse", "Available", "Risk Level", "Recommendation"],
+    "slots": {
+      "risk_level": ["high", "medium", "low"],
+      "warehouse": "optional",
+      "available_lt": "optional"
+    },
+    "defaults": {
+      "risk_level": "high"
+    },
+    "sorts": [{"field": "Available", "order": "asc"}]
+  },
+  {
+    "template_id": "low_stock_view",
+    "display_name": "缺货预警视图",
+    "aliases": ["缺货预警", "低库存", "库存不足", "low stock", "stockout warning"],
+    "table_name": "Warehouse Inventory Snapshot",
+    "visible_fields": ["SKU", "Warehouse", "Available", "Reserved", "Pending Orders", "Recommendation"],
+    "slots": {
+      "warehouse": "optional",
+      "available_lt": "optional"
+    },
+    "defaults": {
+      "available_lt": 10
+    },
+    "sorts": [{"field": "Available", "order": "asc"}]
+  },
+  {
+    "template_id": "warehouse_exception_view",
+    "display_name": "仓储异常视图",
+    "aliases": ["仓储异常", "库存异常", "库位异常", "warehouse exception", "inventory exception"],
+    "table_name": "Warehouse Inventory Snapshot",
+    "visible_fields": ["SKU", "Warehouse", "Open Exception Count", "Risk Level", "Recommendation"],
+    "slots": {
+      "warehouse": "optional",
+      "risk_level": ["high", "medium", "low"]
+    },
+    "defaults": {},
+    "sorts": [{"field": "Risk Level", "order": "desc"}]
+  },
+  {
+    "template_id": "replenishment_candidate_view",
+    "display_name": "补货候选视图",
+    "aliases": ["补货建议", "需要补货", "补货候选", "replenishment", "restock"],
+    "table_name": "Warehouse Inventory Snapshot",
+    "visible_fields": ["SKU", "Warehouse", "Available", "Reserved", "Pending Orders", "Recommendation"],
+    "slots": {
+      "warehouse": "optional"
+    },
+    "defaults": {},
+    "sorts": [{"field": "Available", "order": "asc"}]
+  },
+  {
+    "template_id": "fulfillment_block_view",
+    "display_name": "履约阻塞视图",
+    "aliases": ["履约阻塞", "发货风险", "不能发货", "fulfillment block", "shipping risk"],
+    "table_name": "Warehouse Inventory Snapshot",
+    "visible_fields": ["SKU", "Warehouse", "Available", "Pending Orders", "Risk Level", "Recommendation"],
+    "slots": {
+      "warehouse": "optional",
+      "risk_level": ["high", "medium", "low"]
+    },
+    "defaults": {
+      "risk_level": "high"
+    },
+    "sorts": [{"field": "Pending Orders", "order": "desc"}]
+  }
+]
