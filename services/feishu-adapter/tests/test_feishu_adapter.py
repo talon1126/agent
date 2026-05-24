@@ -1633,7 +1633,17 @@ def test_inventory_table_view_from_template_creates_controlled_view() -> None:
                             {"field_id": "fld_batch", "field_name": "Batch No", "type": 1},
                             {"field_id": "fld_available", "field_name": "Quantity Available", "type": 2},
                             {"field_id": "fld_expiry", "field_name": "Expiry Date", "type": 5},
-                            {"field_id": "fld_risk", "field_name": "Risk Level", "type": 3},
+                            {
+                                "field_id": "fld_risk",
+                                "field_name": "Risk Level",
+                                "type": 3,
+                                "property": {
+                                    "options": [
+                                        {"id": "opt_low", "name": "low", "color": 28},
+                                        {"id": "opt_high", "name": "high", "color": 17},
+                                    ]
+                                },
+                            },
                             {"field_id": "fld_rec", "field_name": "Recommendation", "type": 1},
                         ]
                     },
@@ -1694,7 +1704,7 @@ def test_inventory_table_view_from_template_creates_controlled_view() -> None:
         "property": {
             "filter_info": {
                 "conditions": [
-                    {"field_id": "fld_risk", "operator": "is", "value": "[\"high\"]"},
+                    {"field_id": "fld_risk", "operator": "is", "value": "[\"opt_high\"]"},
                     {"field_id": "fld_wh_id", "operator": "is", "value": "[\"wh_hk_1\"]"},
                 ],
                 "conjunction": "and",

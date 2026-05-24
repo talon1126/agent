@@ -701,14 +701,19 @@ def create_app(
         options = property_payload.get("options", [])
         if not isinstance(options, list):
             return []
-        return [
-            {
+        normalized_options = []
+        for option in options:
+            if not isinstance(option, dict) or not option.get("name"):
+                continue
+            normalized_option = {
                 "name": str(option.get("name") or ""),
                 "color": option.get("color"),
             }
-            for option in options
-            if isinstance(option, dict) and option.get("name")
-        ]
+            option_id = str(option.get("id") or option.get("option_id") or "")
+            if option_id:
+                normalized_option["id"] = option_id
+            normalized_options.append(normalized_option)
+        return normalized_options
 
     def serialize_inventory_field(field: dict[str, Any]) -> dict[str, Any]:
         type_value = field.get("type")
@@ -1102,14 +1107,25 @@ def create_app(
             raise RuntimeError(f"Feishu inventory table view create returned no view_id: {payload}")
         return {"view_id": view_id, "action": "created"}
 
-    def normalize_view_filter_value(value: Any) -> str:
+    def normalize_view_filter_value(value: Any, field: dict[str, Any]) -> str:
         if isinstance(value, list):
             values = value
         elif value is None:
             values = []
         else:
             values = [value]
+        if field.get("type") == 3:
+            values = [single_select_filter_value(field, item) for item in values]
         return json.dumps(values, ensure_ascii=False)
+
+    def single_select_filter_value(field: dict[str, Any], value: Any) -> Any:
+        text_value = str(value)
+        for option in inventory_field_options(field):
+            option_id = option.get("id") or ""
+            option_name = option.get("name") or ""
+            if text_value in {option_id, option_name}:
+                return option_id or option_name
+        return value
 
     def feishu_view_filter_operator(operator: str) -> str:
         return {
@@ -1153,7 +1169,7 @@ def create_app(
                 {
                     "field_id": str(field.get("field_id") or ""),
                     "operator": feishu_view_filter_operator(filter_rule["operator"]),
-                    "value": normalize_view_filter_value(filter_rule["value"]),
+                    "value": normalize_view_filter_value(filter_rule["value"], field),
                 }
             )
         if conditions:
