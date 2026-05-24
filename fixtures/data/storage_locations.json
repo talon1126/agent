@@ -1,0 +1,50 @@
+[
+  {
+    "location_id": "loc_sz_a1",
+    "warehouse_id": "wh_sz_1",
+    "location_code": "A1",
+    "zone": "A",
+    "temperature_zone": "ambient",
+    "capacity_units": 500
+  },
+  {
+    "location_id": "loc_sz_b1",
+    "warehouse_id": "wh_sz_1",
+    "location_code": "B1",
+    "zone": "B",
+    "temperature_zone": "ambient",
+    "capacity_units": 400
+  },
+  {
+    "location_id": "loc_sz_c1",
+    "warehouse_id": "wh_sz_1",
+    "location_code": "C1",
+    "zone": "C",
+    "temperature_zone": "chilled",
+    "capacity_units": 300
+  },
+  {
+    "location_id": "loc_hk_a1",
+    "warehouse_id": "wh_hk_1",
+    "location_code": "A1",
+    "zone": "A",
+    "temperature_zone": "ambient",
+    "capacity_units": 350
+  },
+  {
+    "location_id": "loc_hk_b1",
+    "warehouse_id": "wh_hk_1",
+    "location_code": "B1",
+    "zone": "B",
+    "temperature_zone": "chilled",
+    "capacity_units": 260
+  },
+  {
+    "location_id": "loc_hk_c1",
+    "warehouse_id": "wh_hk_1",
+    "location_code": "C1",
+    "zone": "C",
+    "temperature_zone": "ambient",
+    "capacity_units": 320
+  }
+]

@@ -62,13 +62,13 @@ def test_records_internal_notifications_and_run_logs():
     assert client.get("/run-logs").json()[-1]["status"] == "succeeded"
 
 
-def test_procurement_mock_recommends_replenishment_for_low_stock():
-    response = client.post("/procurement/mock", json={"sku": "sku_bag_1"})
+def test_procurement_mock_recommends_replenishment_for_low_batch_stock():
+    response = client.post("/procurement/mock", json={"item_id": "item_vinda_tissue"})
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["sku"] == "sku_bag_1"
+    assert body["item_id"] == "item_vinda_tissue"
     assert body["recommendation"] == "create_purchase_request"
     assert body["system"] == "mock-procurement"
 
@@ -84,50 +84,49 @@ def test_operations_summary_mock_returns_cross_domain_summary():
     assert any(item["domain"] == "warehouse" for item in body["incidents"])
 
 
-def test_warehouse_inventory_returns_locations_and_risk():
-    response = client.get("/warehouse/inventory/sku_bag_1")
+def test_warehouse_inventory_returns_batches_locations_and_risk():
+    response = client.get("/warehouse/inventory/item_vinda_tissue")
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["sku"] == "sku_bag_1"
-    assert body["available"] == 5
-    assert body["reserved"] == 3
+    assert body["item_id"] == "item_vinda_tissue"
+    assert body["item_name"] == "维达纸巾"
+    assert body["category_name"] == "纸品"
+    assert body["total_quantity_available"] == 108
     assert body["risk_level"] == "high"
-    assert body["locations"][0]["warehouse_id"] == "wh_hk_1"
+    assert body["batches"][0]["warehouse_id"] == "wh_sz_1"
+    assert body["batches"][0]["location_code"] == "A1"
     assert body["recommendation"]
 
 
-def test_warehouse_inventory_returns_new_stockout_fixture():
-    response = client.get("/warehouse/inventory/sku_watch_1")
+def test_warehouse_inventory_returns_perishable_batch_fixture():
+    response = client.get("/warehouse/inventory/item_milk_pure")
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["sku"] == "sku_watch_1"
-    assert body["available"] == 0
+    assert body["item_id"] == "item_milk_pure"
+    assert body["category_name"] == "乳制品"
     assert body["risk_level"] == "high"
-    assert body["open_exceptions"][0]["type"] == "stockout"
+    assert body["batches"][0]["expiry_risk"] == "expiring_soon"
 
 
-def test_warehouse_inventory_search_filters_by_warehouse_and_risk():
+def test_warehouse_inventory_search_filters_by_warehouse_category_and_expiry_risk():
     response = client.post(
         "/warehouse/inventory/search",
-        json={"warehouse_id": "wh_hk_1", "risk_level": "high"},
+        json={"warehouse_id": "wh_hk_1", "category": "dairy", "expiry_risk": "expiring_soon"},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["count"] >= 2
-    assert {item["sku"] for item in body["items"]}.issuperset(
-        {"sku_bag_1", "sku_watch_1"}
-    )
-    assert {item["risk_level"] for item in body["items"]} == {"high"}
-    assert all(
-        item["locations"][0]["warehouse_id"] == "wh_hk_1"
-        for item in body["items"]
-    )
+    assert body["schema_id"] == "warehouse_batch_inventory"
+    assert body["count"] >= 1
+    assert {item["item_id"] for item in body["items"]}.issuperset({"item_milk_pure"})
+    assert {item["warehouse_id"] for item in body["items"]} == {"wh_hk_1"}
+    assert {item["category_id"] for item in body["items"]} == {"dairy"}
+    assert {item["expiry_risk"] for item in body["items"]} == {"expiring_soon"}
 
 
 def test_warehouse_inventory_table_schema_exposes_business_fields():
@@ -136,14 +135,18 @@ def test_warehouse_inventory_table_schema_exposes_business_fields():
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["schema_id"] == "warehouse_inventory_snapshot"
+    assert body["schema_id"] == "warehouse_batch_inventory"
     assert body["source"] == "mock-api"
     assert body["fields"][0] == {
-        "name": "SKU",
-        "source": "warehouse_inventory.sku",
+        "name": "Warehouse",
+        "source": "warehouses.name",
         "type": "text",
-        "comment": "商品 SKU，库存记录的唯一业务标识。",
+        "comment": "仓库展示名称，例如深圳仓、香港仓。",
     }
+    assert any(item["name"] == "Location" for item in body["fields"])
+    assert any(item["name"] == "Category" for item in body["fields"])
+    assert any(item["name"] == "Batch No" for item in body["fields"])
+    assert any(item["name"] == "Expiry Date" for item in body["fields"])
     risk_field = next(item for item in body["fields"] if item["name"] == "Risk Level")
     assert risk_field["type"] == "single_select"
     assert risk_field["options"] == [
@@ -154,62 +157,70 @@ def test_warehouse_inventory_table_schema_exposes_business_fields():
     ]
 
 
-def test_warehouse_inventory_table_rows_return_feishu_ready_fields():
+def test_warehouse_inventory_table_rows_return_batch_location_feishu_ready_fields():
     response = client.post(
         "/warehouse/inventory/table-rows",
-        json={"warehouse_id": "wh_hk_1", "risk_level": "high"},
+        json={"warehouse_id": "wh_sz_1", "category": "paper", "limit": 5},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["schema_id"] == "warehouse_inventory_snapshot"
-    assert body["count"] >= 2
+    assert body["schema_id"] == "warehouse_batch_inventory"
+    assert body["count"] >= 1
     first = body["items"][0]
+    assert first["batch_key"].startswith("wh_sz_1:A1:item_vinda_tissue:")
     assert set(first["fields"]).issuperset(
         {
-            "SKU",
-            "Product Name",
             "Warehouse",
-            "Available",
-            "Reserved",
-            "Pending Orders",
+            "Location",
+            "Category",
+            "Item ID",
+            "Item Name",
+            "Brand",
+            "Spec",
+            "Batch No",
+            "Quantity On Hand",
+            "Quantity Available",
+            "Quantity Reserved",
+            "Expiry Date",
             "Risk Level",
-            "Open Exception Count",
             "Recommendation",
             "Last Synced At",
             "Sync Status",
             "Source Version",
         }
     )
-    assert first["fields"]["Risk Level"] == "high"
-    assert first["fields"]["Warehouse"] == "wh_hk_1"
+    assert first["fields"]["Warehouse"] == "深圳仓"
+    assert first["fields"]["Location"] == "A1"
+    assert first["fields"]["Category"] == "纸品"
+    assert first["fields"]["Item Name"] == "维达纸巾"
 
 
-def test_warehouse_exception_search_returns_open_sku_exceptions():
+def test_warehouse_exception_search_returns_expiring_batch_risks():
     response = client.post(
         "/warehouse/exceptions/search",
-        json={"sku": "sku_bag_1", "status": "open"},
+        json={"item_id": "item_milk_pure", "expiry_risk": "expiring_soon"},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
     assert body["matches"]
-    assert body["matches"][0]["sku"] == "sku_bag_1"
-    assert body["matches"][0]["status"] == "open"
+    assert body["matches"][0]["item_id"] == "item_milk_pure"
+    assert body["matches"][0]["expiry_risk"] == "expiring_soon"
 
 
 def test_warehouse_fulfillment_check_blocks_low_stock_sku():
     response = client.post(
         "/warehouse/fulfillment/check",
-        json={"sku": "sku_bag_1"},
+        json={"item_id": "item_vinda_tissue"},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["sku"] == "sku_bag_1"
+    assert body["item_id"] == "item_vinda_tissue"
     assert body["can_ship"] is False
     assert "insufficient_available_stock" in body["blockers"]
     assert body["next_action"] == "notify_procurement"
@@ -218,13 +229,13 @@ def test_warehouse_fulfillment_check_blocks_low_stock_sku():
 def test_warehouse_fulfillment_check_allows_healthy_sku():
     response = client.post(
         "/warehouse/fulfillment/check",
-        json={"sku": "sku_bottle_1"},
+        json={"item_id": "item_office_pen"},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["sku"] == "sku_bottle_1"
+    assert body["item_id"] == "item_office_pen"
     assert body["can_ship"] is True
     assert body["blockers"] == []
     assert body["next_action"] == "release_to_pick"

@@ -1,5 +1,5 @@
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,8 +38,14 @@ class ApprovalRequest(BaseModel):
 
 
 class WarehouseInventorySearchRequest(BaseModel):
+    item_id: str | None = None
     sku: str | None = None
     warehouse_id: str | None = None
+    location_code: str | None = None
+    category: str | None = None
+    category_id: str | None = None
+    batch_no: str | None = None
+    expiry_risk: str | None = None
     risk_level: str | None = None
     limit: int = 50
 
@@ -166,93 +172,126 @@ def get_inventory(sku: str) -> dict:
     return inventory
 
 
-def load_locations_for_sku(sku: str) -> list[dict[str, Any]]:
-    repository = get_warehouse_repository()
-    if repository:
-        return repository.list_locations_for_sku(sku)
-    return [item for item in load_json("warehouse_locations.json") if item.get("sku") == sku]
+DEMO_TODAY = date(2026, 5, 24)
 
-
-def load_exceptions_for_sku(sku: str, status: str | None = None) -> list[dict[str, Any]]:
-    repository = get_warehouse_repository()
-    if repository:
-        return repository.list_exceptions_for_sku(sku, status)
-    records = [item for item in load_json("warehouse_exceptions.json") if item.get("sku") == sku]
-    if status:
-        records = [item for item in records if item.get("status") == status]
-    return records
-
-
-def load_inventory_for_sku(sku: str) -> dict[str, Any] | None:
-    repository = get_warehouse_repository()
-    if repository:
-        return repository.get_inventory(sku)
-    return find_by_id("inventory.json", "sku", sku)
-
-
-def load_all_inventory() -> list[dict[str, Any]]:
-    repository = get_warehouse_repository()
-    if repository:
-        return repository.list_inventory()
-    return load_json("inventory.json")
-
-
-def warehouse_risk_level(inventory: dict, open_exceptions: list[dict[str, Any]]) -> str:
-    available = int(inventory.get("available", 0))
-    reserved = int(inventory.get("reserved", 0))
-    pending_orders = int(inventory.get("pending_orders", 0))
-    reorder_threshold = int(inventory.get("reorder_threshold", 0))
-    if any(item.get("severity") == "high" for item in open_exceptions):
-        return "high"
-    if available - reserved < pending_orders or available < reorder_threshold:
-        return "high"
-    if open_exceptions:
-        return "medium"
-    return "low"
-
+CATEGORY_ALIASES = {
+    "paper": {"paper", "纸品", "纸巾", "抽纸"},
+    "dairy": {"dairy", "乳制品", "牛奶", "酸奶", "奶制品"},
+    "beverage": {"beverage", "饮料", "矿泉水", "可乐"},
+    "daily_chemical": {"daily_chemical", "日化", "洗衣液"},
+    "office_supply": {"office_supply", "办公耗材", "办公用品", "文具"},
+}
 
 WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
     {
-        "name": "SKU",
-        "source": "warehouse_inventory.sku",
-        "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_inventory"]["sku"],
-    },
-    {
-        "name": "Product Name",
-        "source": "computed.product_name",
-        "type": "text",
-        "comment": "商品展示名称；当前 mock 数据没有商品主数据时默认使用 SKU。",
-    },
-    {
         "name": "Warehouse",
-        "source": "warehouse_locations.warehouse_id",
+        "source": "warehouses.name",
         "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_locations"]["warehouse_id"],
+        "comment": "仓库展示名称，例如深圳仓、香港仓。",
     },
     {
-        "name": "Available",
-        "source": "warehouse_inventory.available",
-        "type": "number",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_inventory"]["available"],
+        "name": "Warehouse ID",
+        "source": "warehouses.warehouse_id",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouses"]["warehouse_id"],
     },
     {
-        "name": "Reserved",
-        "source": "warehouse_inventory.reserved",
-        "type": "number",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_inventory"]["reserved"],
+        "name": "Location",
+        "source": "storage_locations.location_code",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["storage_locations"]["location_code"],
     },
     {
-        "name": "Pending Orders",
-        "source": "warehouse_inventory.pending_orders",
+        "name": "Category",
+        "source": "categories.category_name",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_name"],
+    },
+    {
+        "name": "Category ID",
+        "source": "categories.category_id",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_id"],
+    },
+    {
+        "name": "Item ID",
+        "source": "items.item_id",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["item_id"],
+    },
+    {
+        "name": "Item Name",
+        "source": "items.item_name",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["item_name"],
+    },
+    {"name": "Brand", "source": "items.brand", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["brand"]},
+    {"name": "Spec", "source": "items.spec", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["spec"]},
+    {"name": "Unit", "source": "items.unit", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["unit"]},
+    {
+        "name": "Batch No",
+        "source": "inventory_batches.batch_no",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["batch_no"],
+    },
+    {
+        "name": "Quantity On Hand",
+        "source": "inventory_batches.quantity_on_hand",
         "type": "number",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_inventory"]["pending_orders"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["quantity_on_hand"],
+    },
+    {
+        "name": "Quantity Available",
+        "source": "computed.quantity_available",
+        "type": "number",
+        "comment": "账面库存扣除预留库存后的可用数量。",
+    },
+    {
+        "name": "Quantity Reserved",
+        "source": "inventory_batches.quantity_reserved",
+        "type": "number",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["quantity_reserved"],
+    },
+    {
+        "name": "Reorder Threshold",
+        "source": "inventory_batches.reorder_threshold",
+        "type": "number",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["reorder_threshold"],
+    },
+    {
+        "name": "Production Date",
+        "source": "inventory_batches.production_date",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["production_date"],
+    },
+    {
+        "name": "Expiry Date",
+        "source": "inventory_batches.expiry_date",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["expiry_date"],
+    },
+    {
+        "name": "Days To Expiry",
+        "source": "computed.days_to_expiry",
+        "type": "number",
+        "comment": "以演示日期 2026-05-24 计算的剩余保质期天数。",
+    },
+    {
+        "name": "Expiry Risk",
+        "source": "computed.expiry_risk",
+        "type": "single_select",
+        "comment": "批次临期风险，expired 为已过期，expiring_soon 为 45 天内临期。",
+        "options": [
+            {"name": "normal", "color": 28},
+            {"name": "expiring_soon", "color": 24},
+            {"name": "expired", "color": 17},
+        ],
     },
     {
         "name": "Risk Level",
         "source": "computed.risk_level",
         "type": "single_select",
-        "comment": "根据库存、待履约订单、补货阈值和未关闭异常计算出的履约风险等级。",
+        "comment": "根据可用数量、补货阈值、保质期和存储状态计算出的批次库存风险。",
         "options": [
             {"name": "low", "color": 28},
             {"name": "medium", "color": 24},
@@ -261,16 +300,20 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
         ],
     },
     {
-        "name": "Open Exception Count",
-        "source": "warehouse_exceptions.status=open",
-        "type": "number",
-        "comment": "该 SKU 当前未关闭的仓储异常数量。",
+        "name": "Storage Status",
+        "source": "inventory_batches.storage_status",
+        "type": "single_select",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["storage_status"],
+        "options": [
+            {"name": "available", "color": 28},
+            {"name": "quality_hold", "color": 17},
+        ],
     },
     {
         "name": "Recommendation",
         "source": "computed.recommendation",
         "type": "text",
-        "comment": "根据风险等级生成的仓储处理建议。",
+        "comment": "根据批次风险生成的仓储处理建议。",
     },
     {
         "name": "Last Synced At",
@@ -293,51 +336,152 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
         "name": "Source Version",
         "source": "computed.source_version",
         "type": "text",
-        "comment": "用于追踪该行快照来源的版本标识。",
+        "comment": "用于追踪该行批次库存快照来源的版本标识。",
     },
 ]
 
 
-def warehouse_inventory_recommendation(risk_level: str) -> str:
-    if risk_level == "high":
-        return "库存或异常存在履约风险，建议仓库复核并通知采购。"
+def normalize_category(value: str | None) -> str:
+    raw = (value or "").strip().casefold()
+    for category_id, aliases in CATEGORY_ALIASES.items():
+        if raw == category_id or raw in {alias.casefold() for alias in aliases}:
+            return category_id
+    return raw
+
+
+def load_batch_inventory_rows(
+    *,
+    item_id: str | None = None,
+    warehouse_id: str | None = None,
+    location_code: str | None = None,
+    category_id: str | None = None,
+    batch_no: str | None = None,
+) -> list[dict[str, Any]]:
+    repository = get_warehouse_repository()
+    if repository:
+        return repository.list_inventory_batches(
+            item_id=item_id,
+            warehouse_id=warehouse_id,
+            location_code=location_code,
+            category_id=category_id,
+            batch_no=batch_no,
+        )
+
+    warehouse_by_id = {item["warehouse_id"]: item for item in load_json("warehouses.json")}
+    location_by_key = {
+        (item["warehouse_id"], item["location_code"]): item
+        for item in load_json("storage_locations.json")
+    }
+    category_by_id = {item["category_id"]: item for item in load_json("categories.json")}
+    item_by_id = {item["item_id"]: item for item in load_json("items.json")}
+    rows: list[dict[str, Any]] = []
+    for batch in load_json("inventory_batches.json"):
+        item = item_by_id[str(batch["item_id"])]
+        category = category_by_id[str(item["category_id"])]
+        if item_id and batch["item_id"] != item_id:
+            continue
+        if warehouse_id and batch["warehouse_id"] != warehouse_id:
+            continue
+        if location_code and str(batch["location_code"]).casefold() != location_code.casefold():
+            continue
+        if category_id and category["category_id"] != category_id:
+            continue
+        if batch_no and batch["batch_no"] != batch_no:
+            continue
+        warehouse = warehouse_by_id[str(batch["warehouse_id"])]
+        location = location_by_key[(str(batch["warehouse_id"]), str(batch["location_code"]))]
+        rows.append({**batch, **warehouse, **location, **category, **item})
+    return sorted(
+        rows,
+        key=lambda row: (row["warehouse_id"], row["location_code"], row["item_name"], row["batch_no"]),
+    )
+
+
+def days_to_expiry(row: dict[str, Any]) -> int:
+    return (date.fromisoformat(str(row["expiry_date"])) - DEMO_TODAY).days
+
+
+def expiry_risk(row: dict[str, Any]) -> str:
+    days = days_to_expiry(row)
+    if days < 0:
+        return "expired"
+    if days <= 45:
+        return "expiring_soon"
+    return "normal"
+
+
+def quantity_available(row: dict[str, Any]) -> int:
+    return max(int(row.get("quantity_on_hand", 0)) - int(row.get("quantity_reserved", 0)), 0)
+
+
+def batch_risk_level(row: dict[str, Any]) -> str:
+    if row.get("storage_status") == "quality_hold" or expiry_risk(row) in {"expired", "expiring_soon"}:
+        return "high"
+    available = quantity_available(row)
+    threshold = int(row.get("reorder_threshold", 0))
+    if available < threshold:
+        return "high"
+    if available < threshold * 1.5:
+        return "medium"
+    return "low"
+
+
+def batch_recommendation(row: dict[str, Any]) -> str:
+    if row.get("storage_status") == "quality_hold":
+        return "库存处于质检冻结状态，建议仓库复核后再放行。"
+    if expiry_risk(row) == "expired":
+        return "批次已过期，建议下架并按报损流程处理。"
+    if expiry_risk(row) == "expiring_soon":
+        return "批次临近保质期，建议优先出库或做促销处理。"
+    if quantity_available(row) < int(row.get("reorder_threshold", 0)):
+        return "可用库存低于补货阈值，建议通知采购或调拨。"
     return "库存状态正常，可继续履约。"
 
 
-def enrich_warehouse_inventory(inventory: dict[str, Any]) -> dict[str, Any]:
-    sku = str(inventory.get("sku") or "")
-    locations = load_locations_for_sku(sku)
-    open_exceptions = load_exceptions_for_sku(sku, "open")
-    computed_risk = warehouse_risk_level(inventory, open_exceptions)
-    return {
-        "ok": True,
-        **inventory,
-        "locations": locations,
-        "open_exceptions": open_exceptions,
-        "risk_level": computed_risk,
-        "recommendation": warehouse_inventory_recommendation(computed_risk),
+def enrich_batch_row(row: dict[str, Any]) -> dict[str, Any]:
+    available = quantity_available(row)
+    enriched = {
+        **row,
+        "quantity_available": available,
+        "days_to_expiry": days_to_expiry(row),
+        "expiry_risk": expiry_risk(row),
+        "risk_level": batch_risk_level(row),
     }
+    enriched["recommendation"] = batch_recommendation(enriched)
+    enriched["batch_key"] = (
+        f"{enriched['warehouse_id']}:{enriched['location_code']}:"
+        f"{enriched['item_id']}:{enriched['batch_no']}"
+    )
+    return enriched
 
 
-def warehouse_inventory_table_fields(inventory: dict[str, Any]) -> dict[str, Any]:
-    sku = str(inventory.get("sku") or "").strip()
-    locations = inventory.get("locations") if isinstance(inventory.get("locations"), list) else []
-    first_location = locations[0] if locations and isinstance(locations[0], dict) else {}
-    warehouse_id = str(first_location.get("warehouse_id") or inventory.get("warehouse_id") or "unknown")
-    open_exceptions = inventory.get("open_exceptions") if isinstance(inventory.get("open_exceptions"), list) else []
+def batch_inventory_table_fields(row: dict[str, Any]) -> dict[str, Any]:
     return {
-        "SKU": sku,
-        "Product Name": str(inventory.get("product_name") or inventory.get("name") or sku),
-        "Warehouse": warehouse_id,
-        "Available": int(inventory.get("available", 0)),
-        "Reserved": int(inventory.get("reserved", 0)),
-        "Pending Orders": int(inventory.get("pending_orders", 0)),
-        "Risk Level": str(inventory.get("risk_level") or "unknown"),
-        "Open Exception Count": len(open_exceptions),
-        "Recommendation": str(inventory.get("recommendation") or ""),
+        "Warehouse": row["warehouse_name"],
+        "Warehouse ID": row["warehouse_id"],
+        "Location": row["location_code"],
+        "Category": row["category_name"],
+        "Category ID": row["category_id"],
+        "Item ID": row["item_id"],
+        "Item Name": row["item_name"],
+        "Brand": row["brand"],
+        "Spec": row["spec"],
+        "Unit": row["unit"],
+        "Batch No": row["batch_no"],
+        "Quantity On Hand": int(row["quantity_on_hand"]),
+        "Quantity Available": int(row["quantity_available"]),
+        "Quantity Reserved": int(row["quantity_reserved"]),
+        "Reorder Threshold": int(row["reorder_threshold"]),
+        "Production Date": row["production_date"],
+        "Expiry Date": row["expiry_date"],
+        "Days To Expiry": int(row["days_to_expiry"]),
+        "Expiry Risk": row["expiry_risk"],
+        "Risk Level": row["risk_level"],
+        "Storage Status": row["storage_status"],
+        "Recommendation": row["recommendation"],
         "Last Synced At": datetime.now(UTC).isoformat(),
         "Sync Status": "synced",
-        "Source Version": f"mock-api:{sku}:{warehouse_id}",
+        "Source Version": f"mock-api:{row['batch_key']}",
     }
 
 
@@ -345,7 +489,7 @@ def warehouse_inventory_table_fields(inventory: dict[str, Any]) -> dict[str, Any
 def get_warehouse_inventory_table_schema() -> dict[str, Any]:
     return {
         "ok": True,
-        "schema_id": "warehouse_inventory_snapshot",
+        "schema_id": "warehouse_batch_inventory",
         "source": "mock-api",
         "fields": WAREHOUSE_INVENTORY_TABLE_SCHEMA,
     }
@@ -353,30 +497,41 @@ def get_warehouse_inventory_table_schema() -> dict[str, Any]:
 
 @app.post("/warehouse/inventory/search")
 def search_warehouse_inventory(payload: WarehouseInventorySearchRequest) -> dict:
-    sku_filter = (payload.sku or "").strip().lower()
+    item_id = (payload.item_id or payload.sku or "").strip()
     warehouse_id = (payload.warehouse_id or "").strip()
+    location_code = (payload.location_code or "").strip()
+    category_id = normalize_category(payload.category_id or payload.category)
+    batch_no = (payload.batch_no or "").strip()
+    expiry_risk_filter = (payload.expiry_risk or "").strip()
     risk_level = (payload.risk_level or "").strip()
     limit = max(min(int(payload.limit or 50), 100), 1)
+    rows = [
+        enrich_batch_row(row)
+        for row in load_batch_inventory_rows(
+            item_id=item_id or None,
+            warehouse_id=warehouse_id or None,
+            location_code=location_code or None,
+            category_id=category_id or None,
+            batch_no=batch_no or None,
+        )
+    ]
     matches: list[dict[str, Any]] = []
-    for inventory in load_all_inventory():
-        sku = str(inventory.get("sku") or "")
-        if sku_filter and sku != sku_filter:
+    for row in rows:
+        if expiry_risk_filter and row["expiry_risk"] != expiry_risk_filter:
             continue
-        enriched = enrich_warehouse_inventory(inventory)
-        locations = enriched["locations"]
-        if warehouse_id and not any(
-            item.get("warehouse_id") == warehouse_id for item in locations
-        ):
+        if risk_level and row["risk_level"] != risk_level:
             continue
-        computed_risk = enriched["risk_level"]
-        if risk_level and computed_risk != risk_level:
-            continue
-        matches.append(enriched)
+        matches.append(row)
         if len(matches) >= limit:
             break
     return {
         "ok": True,
+        "schema_id": "warehouse_batch_inventory",
+        "item_id": item_id or None,
         "warehouse_id": warehouse_id or None,
+        "location_code": location_code or None,
+        "category_id": category_id or None,
+        "expiry_risk": expiry_risk_filter or None,
         "risk_level": risk_level or None,
         "count": len(matches),
         "items": matches,
@@ -388,72 +543,99 @@ def get_warehouse_inventory_table_rows(payload: WarehouseInventorySearchRequest)
     search_result = search_warehouse_inventory(payload)
     return {
         "ok": True,
-        "schema_id": "warehouse_inventory_snapshot",
+        "schema_id": "warehouse_batch_inventory",
         "count": search_result["count"],
         "items": [
             {
-                "sku": item["sku"],
-                "fields": warehouse_inventory_table_fields(item),
+                "batch_key": item["batch_key"],
+                "item_id": item["item_id"],
+                "batch_no": item["batch_no"],
+                "fields": batch_inventory_table_fields(item),
             }
             for item in search_result["items"]
         ],
     }
 
 
-@app.get("/warehouse/inventory/{sku}")
-def get_warehouse_inventory(sku: str) -> dict:
-    inventory = load_inventory_for_sku(sku)
-    if not inventory:
+@app.get("/warehouse/inventory/{item_id}")
+def get_warehouse_inventory(item_id: str) -> dict:
+    rows = [enrich_batch_row(row) for row in load_batch_inventory_rows(item_id=item_id)]
+    if not rows:
         raise HTTPException(status_code=404, detail="inventory not found")
-    return enrich_warehouse_inventory(inventory)
+    total_on_hand = sum(int(row["quantity_on_hand"]) for row in rows)
+    total_reserved = sum(int(row["quantity_reserved"]) for row in rows)
+    total_available = sum(int(row["quantity_available"]) for row in rows)
+    risk_order = {"high": 3, "medium": 2, "low": 1}
+    risk_level = max((row["risk_level"] for row in rows), key=lambda value: risk_order[value])
+    first = rows[0]
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "item_name": first["item_name"],
+        "category_id": first["category_id"],
+        "category_name": first["category_name"],
+        "total_quantity_on_hand": total_on_hand,
+        "total_quantity_reserved": total_reserved,
+        "total_quantity_available": total_available,
+        "risk_level": risk_level,
+        "recommendation": batch_recommendation(max(rows, key=lambda row: risk_order[row["risk_level"]])),
+        "batches": rows,
+    }
 
 
 @app.post("/warehouse/exceptions/search")
 def search_warehouse_exceptions(payload: dict) -> dict:
-    sku = str(payload.get("sku") or "").strip()
-    status = str(payload.get("status") or "").strip() or None
-    if not sku:
-        return {"ok": False, "error": "missing_sku", "matches": []}
-    matches = load_exceptions_for_sku(sku, status)
-    return {"ok": True, "sku": sku, "status": status, "matches": matches}
+    item_id = str(payload.get("item_id") or payload.get("sku") or "").strip()
+    expiry_risk_filter = str(payload.get("expiry_risk") or "").strip()
+    if not item_id:
+        return {"ok": False, "error": "missing_item_id", "matches": []}
+    rows = [enrich_batch_row(row) for row in load_batch_inventory_rows(item_id=item_id)]
+    matches = [
+        row
+        for row in rows
+        if row["risk_level"] == "high"
+        and (not expiry_risk_filter or row["expiry_risk"] == expiry_risk_filter)
+    ]
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "expiry_risk": expiry_risk_filter or None,
+        "matches": matches,
+    }
 
 
 @app.post("/warehouse/fulfillment/check")
 def check_warehouse_fulfillment(payload: dict) -> dict:
-    sku = str(payload.get("sku") or "").strip()
-    if not sku:
+    item_id = str(payload.get("item_id") or payload.get("sku") or "").strip()
+    if not item_id:
         return {
             "ok": False,
-            "error": "missing_sku",
+            "error": "missing_item_id",
             "can_ship": False,
-            "blockers": ["missing_sku"],
+            "blockers": ["missing_item_id"],
         }
 
-    inventory = load_inventory_for_sku(sku)
-    if not inventory:
+    rows = [enrich_batch_row(row) for row in load_batch_inventory_rows(item_id=item_id)]
+    if not rows:
         return {
             "ok": False,
             "error": "inventory_not_found",
-            "sku": sku,
+            "item_id": item_id,
             "can_ship": False,
             "blockers": ["inventory_not_found"],
         }
 
-    locations = load_locations_for_sku(sku)
-    open_exceptions = load_exceptions_for_sku(sku, "open")
-    available = int(inventory.get("available", 0))
-    reserved = int(inventory.get("reserved", 0))
-    pending_orders = int(inventory.get("pending_orders", 0))
+    available = sum(int(row["quantity_available"]) for row in rows)
+    reserved = sum(int(row["quantity_reserved"]) for row in rows)
     blockers: list[str] = []
-    if available - reserved < pending_orders:
+    if any(row["quantity_available"] < row["reorder_threshold"] for row in rows):
         blockers.append("insufficient_available_stock")
-    if not any(
-        item.get("status") == "available" and int(item.get("quantity", 0)) > 0
-        for item in locations
-    ):
+    if not any(row["storage_status"] == "available" and int(row["quantity_available"]) > 0 for row in rows):
         blockers.append("missing_available_location")
-    if any(item.get("severity") in {"high", "medium"} for item in open_exceptions):
-        blockers.append("open_exception")
+    if any(row["storage_status"] == "quality_hold" for row in rows):
+        blockers.append("quality_hold")
+    if any(row["expiry_risk"] in {"expired", "expiring_soon"} for row in rows):
+        blockers.append("expiry_risk")
 
     can_ship = not blockers
     next_action = (
@@ -463,41 +645,37 @@ def check_warehouse_fulfillment(payload: dict) -> dict:
     )
     return {
         "ok": True,
-        "sku": sku,
+        "item_id": item_id,
         "can_ship": can_ship,
         "blockers": blockers,
         "available": available,
         "reserved": reserved,
-        "pending_orders": pending_orders,
-        "locations": locations,
-        "open_exceptions": open_exceptions,
+        "batches": rows,
         "next_action": next_action,
     }
 
 
 @app.post("/procurement/mock")
 def procurement_mock(payload: dict) -> dict:
-    sku = str(payload.get("sku") or "").strip()
-    inventory = load_inventory_for_sku(sku) if sku else None
-    if not inventory:
+    item_id = str(payload.get("item_id") or payload.get("sku") or "").strip()
+    rows = [enrich_batch_row(row) for row in load_batch_inventory_rows(item_id=item_id)] if item_id else []
+    if not rows:
         return {
             "ok": False,
             "system": "mock-procurement",
-            "sku": sku,
-            "recommendation": "request_valid_sku",
-            "message": "未找到 SKU，需要提供有效 SKU。",
+            "item_id": item_id,
+            "recommendation": "request_valid_item",
+            "message": "未找到商品，需要提供有效 item_id。",
         }
 
-    available = int(inventory.get("available", 0))
-    pending_orders = int(inventory.get("pending_orders", 0))
-    reorder_threshold = int(inventory.get("reorder_threshold", 0))
-    should_replenish = available < reorder_threshold or available < pending_orders
+    available = sum(int(row["quantity_available"]) for row in rows)
+    reorder_threshold = max(int(row["reorder_threshold"]) for row in rows)
+    should_replenish = any(row["quantity_available"] < row["reorder_threshold"] for row in rows)
     return {
         "ok": True,
         "system": "mock-procurement",
-        "sku": sku,
+        "item_id": item_id,
         "available": available,
-        "pending_orders": pending_orders,
         "reorder_threshold": reorder_threshold,
         "recommendation": "create_purchase_request" if should_replenish else "no_action",
         "message": "库存低于阈值，建议创建采购申请。" if should_replenish else "当前库存无需补货。",
@@ -511,12 +689,12 @@ def operations_summary_mock(payload: dict) -> dict:
         "ok": True,
         "system": "mock-operations",
         "query": query,
-        "summary": "今日主要运营异常集中在低库存 SKU 和待跟进售后订单。",
+        "summary": "今日主要运营异常集中在低库存批次、临期乳制品和待跟进售后订单。",
         "incidents": [
             {
                 "domain": "warehouse",
                 "severity": "medium",
-                "message": "sku_bag_1 可用库存低于补货阈值。",
+                "message": "item_vinda_tissue 在深圳仓 A1 的可用库存低于补货阈值。",
             },
             {
                 "domain": "customer_support",
@@ -524,7 +702,7 @@ def operations_summary_mock(payload: dict) -> dict:
                 "message": "退款咨询需要引用售后政策。",
             },
         ],
-        "next_actions": ["检查低库存 SKU", "汇总客服退款问题", "确认采购补货计划"],
+        "next_actions": ["检查低库存批次", "汇总客服退款问题", "确认采购补货计划"],
     }
 
 

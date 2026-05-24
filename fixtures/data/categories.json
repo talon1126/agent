@@ -1,0 +1,27 @@
+[
+  {
+    "category_id": "paper",
+    "category_name": "纸品",
+    "storage_requirement": "ambient"
+  },
+  {
+    "category_id": "dairy",
+    "category_name": "乳制品",
+    "storage_requirement": "chilled"
+  },
+  {
+    "category_id": "beverage",
+    "category_name": "饮料",
+    "storage_requirement": "ambient"
+  },
+  {
+    "category_id": "daily_chemical",
+    "category_name": "日化",
+    "storage_requirement": "ambient"
+  },
+  {
+    "category_id": "office_supply",
+    "category_name": "办公耗材",
+    "storage_requirement": "ambient"
+  }
+]

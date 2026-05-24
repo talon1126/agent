@@ -8,15 +8,17 @@ from app.warehouse_store import (
     WAREHOUSE_TABLE_COMMENTS,
     WarehouseRepository,
     _quote_literal,
+    categories,
     init_warehouse_schema,
+    inventory_batches,
+    items,
     seed_warehouse_fixtures,
-    warehouse_exceptions,
-    warehouse_inventory,
-    warehouse_locations,
+    storage_locations,
+    warehouses,
 )
 
 
-WAREHOUSE_TABLES = [warehouse_inventory, warehouse_locations, warehouse_exceptions]
+WAREHOUSE_TABLES = [warehouses, storage_locations, categories, items, inventory_batches]
 
 
 def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path) -> None:
@@ -27,13 +29,17 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     seed_warehouse_fixtures(engine, FIXTURE_DIR)
 
     with engine.connect() as connection:
-        inventory_count = connection.execute(text("select count(*) from warehouse_inventory")).scalar_one()
-        location_count = connection.execute(text("select count(*) from warehouse_locations")).scalar_one()
-        exception_count = connection.execute(text("select count(*) from warehouse_exceptions")).scalar_one()
+        warehouse_count = connection.execute(text("select count(*) from warehouses")).scalar_one()
+        location_count = connection.execute(text("select count(*) from storage_locations")).scalar_one()
+        category_count = connection.execute(text("select count(*) from categories")).scalar_one()
+        item_count = connection.execute(text("select count(*) from items")).scalar_one()
+        batch_count = connection.execute(text("select count(*) from inventory_batches")).scalar_one()
 
-    assert inventory_count == 8
-    assert location_count == 12
-    assert exception_count == 8
+    assert warehouse_count == 2
+    assert location_count == 6
+    assert category_count == 5
+    assert item_count == 8
+    assert batch_count == 10
 
 
 def test_warehouse_tables_and_columns_have_chinese_comments() -> None:
@@ -53,22 +59,23 @@ def test_postgres_comment_literal_escapes_single_quotes() -> None:
     assert _quote_literal("员工's 库存说明") == "'员工''s 库存说明'"
 
 
-def test_warehouse_repository_reads_inventory_locations_and_exceptions(tmp_path: Path) -> None:
+def test_warehouse_repository_reads_batch_inventory_rows(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
     init_warehouse_schema(engine)
     seed_warehouse_fixtures(engine, FIXTURE_DIR)
     repository = WarehouseRepository(engine)
 
-    inventory = repository.get_inventory("sku_bag_1")
-    locations = repository.list_locations_for_sku("sku_bag_1")
-    open_exceptions = repository.list_exceptions_for_sku("sku_bag_1", status="open")
+    rows = repository.list_inventory_batches(
+        warehouse_id="wh_sz_1",
+        category_id="paper",
+    )
 
-    assert inventory == {
-        "sku": "sku_bag_1",
-        "available": 5,
-        "reserved": 3,
-        "pending_orders": 9,
-        "reorder_threshold": 15,
-    }
-    assert [item["bin"] for item in locations] == ["A-01-03", "Q-02-01"]
-    assert open_exceptions[0]["exception_id"] == "wh_exc_100"
+    assert rows
+    assert rows[0]["warehouse_id"] == "wh_sz_1"
+    assert rows[0]["warehouse_name"] == "深圳仓"
+    assert rows[0]["location_code"] == "A1"
+    assert rows[0]["category_id"] == "paper"
+    assert rows[0]["category_name"] == "纸品"
+    assert rows[0]["item_id"] == "item_vinda_tissue"
+    assert rows[0]["item_name"] == "维达纸巾"
+    assert rows[0]["batch_no"] == "BATCH-20260501"

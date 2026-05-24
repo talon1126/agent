@@ -1,0 +1,74 @@
+[
+  {
+    "item_id": "item_vinda_tissue",
+    "category_id": "paper",
+    "item_name": "维达纸巾",
+    "brand": "维达",
+    "spec": "3层抽纸 24包",
+    "unit": "包",
+    "barcode": "6901234567001"
+  },
+  {
+    "item_id": "item_milk_pure",
+    "category_id": "dairy",
+    "item_name": "纯牛奶",
+    "brand": "蒙牛",
+    "spec": "250ml*24盒",
+    "unit": "箱",
+    "barcode": "6901234567002"
+  },
+  {
+    "item_id": "item_yogurt_plain",
+    "category_id": "dairy",
+    "item_name": "原味酸奶",
+    "brand": "伊利",
+    "spec": "180g*12杯",
+    "unit": "箱",
+    "barcode": "6901234567003"
+  },
+  {
+    "item_id": "item_water_spring",
+    "category_id": "beverage",
+    "item_name": "矿泉水",
+    "brand": "农夫山泉",
+    "spec": "550ml*24瓶",
+    "unit": "箱",
+    "barcode": "6901234567004"
+  },
+  {
+    "item_id": "item_cola_zero",
+    "category_id": "beverage",
+    "item_name": "零度可乐",
+    "brand": "可口可乐",
+    "spec": "330ml*24罐",
+    "unit": "箱",
+    "barcode": "6901234567005"
+  },
+  {
+    "item_id": "item_detergent",
+    "category_id": "daily_chemical",
+    "item_name": "洗衣液",
+    "brand": "蓝月亮",
+    "spec": "3kg",
+    "unit": "瓶",
+    "barcode": "6901234567006"
+  },
+  {
+    "item_id": "item_office_pen",
+    "category_id": "office_supply",
+    "item_name": "中性笔",
+    "brand": "晨光",
+    "spec": "0.5mm 黑色 12支",
+    "unit": "盒",
+    "barcode": "6901234567007"
+  },
+  {
+    "item_id": "item_copy_paper",
+    "category_id": "office_supply",
+    "item_name": "A4复印纸",
+    "brand": "得力",
+    "spec": "80g 500张",
+    "unit": "包",
+    "barcode": "6901234567008"
+  }
+]

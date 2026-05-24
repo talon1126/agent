@@ -10,79 +10,113 @@ logger = logging.getLogger("mock_api.warehouse_store")
 
 metadata = MetaData()
 
-warehouse_inventory = Table(
-    "warehouse_inventory",
+warehouses = Table(
+    "warehouses",
     metadata,
-    Column("sku", String, primary_key=True),
-    Column("available", Integer, nullable=False, default=0),
-    Column("reserved", Integer, nullable=False, default=0),
-    Column("pending_orders", Integer, nullable=False, default=0),
-    Column("reorder_threshold", Integer, nullable=False, default=0),
-)
-
-warehouse_locations = Table(
-    "warehouse_locations",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("sku", String, nullable=False, index=True),
-    Column("warehouse_id", String, nullable=False),
+    Column("warehouse_id", String, primary_key=True),
     Column("warehouse_name", String, nullable=False),
-    Column("zone", String, nullable=False),
-    Column("bin", String, nullable=False),
-    Column("quantity", Integer, nullable=False, default=0),
+    Column("city", String, nullable=False),
+    Column("region", String, nullable=False),
     Column("status", String, nullable=False),
 )
 
-warehouse_exceptions = Table(
-    "warehouse_exceptions",
+storage_locations = Table(
+    "storage_locations",
     metadata,
-    Column("exception_id", String, primary_key=True),
-    Column("sku", String, nullable=False, index=True),
-    Column("type", String, nullable=False),
-    Column("severity", String, nullable=False),
-    Column("status", String, nullable=False),
-    Column("warehouse_id", String, nullable=False),
+    Column("location_id", String, primary_key=True),
+    Column("warehouse_id", String, nullable=False, index=True),
+    Column("location_code", String, nullable=False, index=True),
     Column("zone", String, nullable=False),
-    Column("bin", String, nullable=False),
-    Column("message", String, nullable=False),
-    Column("recommended_action", String, nullable=False),
+    Column("temperature_zone", String, nullable=False),
+    Column("capacity_units", Integer, nullable=False, default=0),
+)
+
+categories = Table(
+    "categories",
+    metadata,
+    Column("category_id", String, primary_key=True),
+    Column("category_name", String, nullable=False),
+    Column("storage_requirement", String, nullable=False),
+)
+
+items = Table(
+    "items",
+    metadata,
+    Column("item_id", String, primary_key=True),
+    Column("category_id", String, nullable=False, index=True),
+    Column("item_name", String, nullable=False),
+    Column("brand", String, nullable=False),
+    Column("spec", String, nullable=False),
+    Column("unit", String, nullable=False),
+    Column("barcode", String, nullable=False),
+)
+
+inventory_batches = Table(
+    "inventory_batches",
+    metadata,
+    Column("batch_id", String, primary_key=True),
+    Column("warehouse_id", String, nullable=False, index=True),
+    Column("location_code", String, nullable=False, index=True),
+    Column("item_id", String, nullable=False, index=True),
+    Column("batch_no", String, nullable=False, index=True),
+    Column("production_date", String, nullable=False),
+    Column("expiry_date", String, nullable=False),
+    Column("quantity_on_hand", Integer, nullable=False, default=0),
+    Column("quantity_reserved", Integer, nullable=False, default=0),
+    Column("reorder_threshold", Integer, nullable=False, default=0),
+    Column("storage_status", String, nullable=False),
 )
 
 WAREHOUSE_TABLE_COMMENTS = {
-    "warehouse_inventory": "仓储库存主表，按 SKU 保存可用库存、预留库存、待履约订单和补货阈值。",
-    "warehouse_locations": "仓储库位明细表，记录 SKU 在不同仓库、区域、库位中的数量和状态。",
-    "warehouse_exceptions": "仓储异常表，记录库存差异、断货、质检冻结等履约风险事件。",
+    "warehouses": "仓库主数据表，保存企业仓库的编号、名称、城市和启用状态。",
+    "storage_locations": "具体库位表，保存仓库内 A1、B1、C1 等可存储位置及容量属性。",
+    "categories": "商品分类表，保存纸品、乳制品、饮料等业务分类和存储要求。",
+    "items": "商品主数据表，保存每个商品的名称、品牌、规格、单位和条码。",
+    "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
 }
 
 WAREHOUSE_COLUMN_COMMENTS = {
-    "warehouse_inventory": {
-        "sku": "商品 SKU，库存记录的唯一业务标识。",
-        "available": "当前可用库存数量。",
-        "reserved": "已被订单或作业预留的库存数量。",
-        "pending_orders": "等待履约的订单数量。",
-        "reorder_threshold": "补货预警阈值，低于该值时建议采购或调拨。",
+    "warehouses": {
+        "warehouse_id": "仓库编号，例如 wh_sz_1、wh_hk_1。",
+        "warehouse_name": "仓库展示名称，例如深圳仓、香港仓。",
+        "city": "仓库所在城市。",
+        "region": "仓库所属区域。",
+        "status": "仓库启用状态，例如 active。",
     },
-    "warehouse_locations": {
-        "id": "库位明细自增主键。",
-        "sku": "商品 SKU，对应仓储库存主表。",
-        "warehouse_id": "仓库编号，例如 wh_hk_1、wh_sz_1、wh_sg_1。",
-        "warehouse_name": "仓库展示名称。",
-        "zone": "仓库区域编号。",
-        "bin": "具体库位编号。",
-        "quantity": "该库位上的库存数量。",
-        "status": "库位库存状态，例如 available、reserved、stockout、quality_hold。",
+    "storage_locations": {
+        "location_id": "库位唯一编号。",
+        "warehouse_id": "库位所属仓库编号。",
+        "location_code": "员工可识别的具体库位编号，例如 A1、B1、C1。",
+        "zone": "库位所属仓库区域。",
+        "temperature_zone": "库位温区，例如 ambient、chilled。",
+        "capacity_units": "库位最大容量，按商品单位折算。",
     },
-    "warehouse_exceptions": {
-        "exception_id": "仓储异常唯一编号。",
-        "sku": "发生异常的商品 SKU。",
-        "type": "异常类型，例如 stockout、quality_hold、stock_mismatch。",
-        "severity": "异常严重程度，取值 high、medium、low。",
-        "status": "异常处理状态，例如 open、closed。",
-        "warehouse_id": "异常发生仓库编号。",
-        "zone": "异常发生仓库区域。",
-        "bin": "异常发生具体库位。",
-        "message": "异常说明，供 Agent 和员工理解当前问题。",
-        "recommended_action": "建议处理动作，例如 notify_procurement、quality_review。",
+    "categories": {
+        "category_id": "商品分类编号，例如 paper、dairy。",
+        "category_name": "商品分类展示名称，例如纸品、乳制品。",
+        "storage_requirement": "该分类默认存储要求，例如常温或冷藏。",
+    },
+    "items": {
+        "item_id": "商品主数据编号。",
+        "category_id": "商品所属分类编号。",
+        "item_name": "商品名称，例如维达纸巾、纯牛奶。",
+        "brand": "商品品牌。",
+        "spec": "商品规格。",
+        "unit": "库存计量单位。",
+        "barcode": "商品条码。",
+    },
+    "inventory_batches": {
+        "batch_id": "库存批次唯一编号。",
+        "warehouse_id": "批次库存所在仓库编号。",
+        "location_code": "批次库存所在具体库位编号。",
+        "item_id": "批次库存对应商品编号。",
+        "batch_no": "业务批次号，用于追踪入库批次。",
+        "production_date": "生产日期。",
+        "expiry_date": "保质期到期日期。",
+        "quantity_on_hand": "账面库存数量。",
+        "quantity_reserved": "已被订单或作业预留的库存数量。",
+        "reorder_threshold": "补货预警阈值。",
+        "storage_status": "库存存储状态，例如 available、quality_hold。",
     },
 }
 
@@ -90,7 +124,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
 def init_warehouse_schema(engine: Engine) -> None:
     metadata.create_all(
         engine,
-        tables=[warehouse_inventory, warehouse_locations, warehouse_exceptions],
+        tables=[warehouses, storage_locations, categories, items, inventory_batches],
     )
     apply_warehouse_comments(engine)
 
@@ -136,17 +170,21 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
     init_warehouse_schema(engine)
     with engine.begin() as connection:
         # Demo data is fixture-owned, so restart/reseed should converge the DB to fixtures.
-        connection.execute(warehouse_exceptions.delete())
-        connection.execute(warehouse_locations.delete())
-        connection.execute(warehouse_inventory.delete())
-        connection.execute(warehouse_inventory.insert(), load_fixture_rows(fixture_dir, "inventory.json"))
+        connection.execute(inventory_batches.delete())
+        connection.execute(items.delete())
+        connection.execute(categories.delete())
+        connection.execute(storage_locations.delete())
+        connection.execute(warehouses.delete())
+        connection.execute(warehouses.insert(), load_fixture_rows(fixture_dir, "warehouses.json"))
         connection.execute(
-            warehouse_locations.insert(),
-            load_fixture_rows(fixture_dir, "warehouse_locations.json"),
+            storage_locations.insert(),
+            load_fixture_rows(fixture_dir, "storage_locations.json"),
         )
+        connection.execute(categories.insert(), load_fixture_rows(fixture_dir, "categories.json"))
+        connection.execute(items.insert(), load_fixture_rows(fixture_dir, "items.json"))
         connection.execute(
-            warehouse_exceptions.insert(),
-            load_fixture_rows(fixture_dir, "warehouse_exceptions.json"),
+            inventory_batches.insert(),
+            load_fixture_rows(fixture_dir, "inventory_batches.json"),
         )
 
 
@@ -154,37 +192,56 @@ class WarehouseRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
 
-    def get_inventory(self, sku: str) -> dict[str, Any] | None:
-        with self.engine.connect() as connection:
-            row = connection.execute(
-                select(warehouse_inventory).where(warehouse_inventory.c.sku == sku)
-            ).mappings().first()
-        return dict(row) if row else None
-
-    def list_inventory(self) -> list[dict[str, Any]]:
-        with self.engine.connect() as connection:
-            rows = connection.execute(
-                select(warehouse_inventory).order_by(warehouse_inventory.c.sku)
-            ).mappings().all()
-        return [dict(row) for row in rows]
-
-    def list_locations_for_sku(self, sku: str) -> list[dict[str, Any]]:
-        with self.engine.connect() as connection:
-            rows = connection.execute(
-                select(warehouse_locations)
-                .where(warehouse_locations.c.sku == sku)
-                .order_by(warehouse_locations.c.id)
-            ).mappings().all()
-        return [
-            {key: value for key, value in dict(row).items() if key != "id"}
-            for row in rows
-        ]
-
-    def list_exceptions_for_sku(self, sku: str, status: str | None = None) -> list[dict[str, Any]]:
-        statement = select(warehouse_exceptions).where(warehouse_exceptions.c.sku == sku)
-        if status:
-            statement = statement.where(warehouse_exceptions.c.status == status)
-        statement = statement.order_by(warehouse_exceptions.c.exception_id)
+    def list_inventory_batches(
+        self,
+        *,
+        item_id: str | None = None,
+        warehouse_id: str | None = None,
+        location_code: str | None = None,
+        category_id: str | None = None,
+        batch_no: str | None = None,
+    ) -> list[dict[str, Any]]:
+        statement = (
+            select(
+                inventory_batches,
+                warehouses.c.warehouse_name,
+                warehouses.c.city,
+                storage_locations.c.zone,
+                storage_locations.c.temperature_zone,
+                categories.c.category_id,
+                categories.c.category_name,
+                categories.c.storage_requirement,
+                items.c.item_name,
+                items.c.brand,
+                items.c.spec,
+                items.c.unit,
+                items.c.barcode,
+            )
+            .join(warehouses, warehouses.c.warehouse_id == inventory_batches.c.warehouse_id)
+            .join(
+                storage_locations,
+                (storage_locations.c.warehouse_id == inventory_batches.c.warehouse_id)
+                & (storage_locations.c.location_code == inventory_batches.c.location_code),
+            )
+            .join(items, items.c.item_id == inventory_batches.c.item_id)
+            .join(categories, categories.c.category_id == items.c.category_id)
+        )
+        if item_id:
+            statement = statement.where(inventory_batches.c.item_id == item_id)
+        if warehouse_id:
+            statement = statement.where(inventory_batches.c.warehouse_id == warehouse_id)
+        if location_code:
+            statement = statement.where(inventory_batches.c.location_code == location_code)
+        if category_id:
+            statement = statement.where(categories.c.category_id == category_id)
+        if batch_no:
+            statement = statement.where(inventory_batches.c.batch_no == batch_no)
+        statement = statement.order_by(
+            inventory_batches.c.warehouse_id,
+            inventory_batches.c.location_code,
+            items.c.item_name,
+            inventory_batches.c.batch_no,
+        )
         with self.engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
         return [dict(row) for row in rows]

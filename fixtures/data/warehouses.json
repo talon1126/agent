@@ -1,0 +1,16 @@
+[
+  {
+    "warehouse_id": "wh_sz_1",
+    "warehouse_name": "深圳仓",
+    "city": "深圳",
+    "region": "South China",
+    "status": "active"
+  },
+  {
+    "warehouse_id": "wh_hk_1",
+    "warehouse_name": "香港仓",
+    "city": "香港",
+    "region": "Hong Kong",
+    "status": "active"
+  }
+]
