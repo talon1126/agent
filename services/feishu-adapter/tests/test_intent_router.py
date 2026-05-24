@@ -34,6 +34,19 @@ def test_update_high_risk_inventory_routes_to_filtered_sync() -> None:
     assert route.clarification_question is None
 
 
+def test_update_category_location_and_expiry_inventory_routes_to_filtered_sync() -> None:
+    route = route_warehouse_intent("帮我更新深圳仓A1库位乳制品临期库存")
+
+    assert route.status == "matched"
+    assert route.intent == "sync_inventory_table"
+    assert route.executor == "warehouse_inventory_table_sync"
+    assert route.slots["warehouse"] == "wh_sz_1"
+    assert route.slots["location_code"] == "A1"
+    assert route.slots["category"] == "dairy"
+    assert route.slots["expiry_risk"] == "expiring_soon"
+    assert route.clarification_question is None
+
+
 def test_falls_back_to_agent_for_unclear_warehouse_request() -> None:
     route = route_warehouse_intent("帮我分析一下最近仓库情况")
 
@@ -45,10 +58,10 @@ def test_falls_back_to_agent_for_unclear_warehouse_request() -> None:
 
 
 def test_routes_inventory_query_request() -> None:
-    route = route_warehouse_intent("查一下 sku_bag_1 在香港仓的库存")
+    route = route_warehouse_intent("查一下 item_vinda_tissue 在香港仓的库存")
 
     assert route.status == "matched"
     assert route.intent == "query_inventory"
     assert route.executor == "warehouse_inventory_tool"
     assert route.slots["warehouse"] == "wh_hk_1"
-    assert route.slots["sku"] == "sku_bag_1"
+    assert route.slots["item_id"] == "item_vinda_tissue"

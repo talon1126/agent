@@ -145,6 +145,12 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "必须先调用 warehouse_table_schema_tool" in system_message
             assert "不要编造 schema 中不存在的字段" in system_message
             assert "不要重复调用 warehouse_view_create_tool" in system_message
+            assert "item_id" in system_message
+            assert "库位" in system_message
+            assert "批次" in system_message
+            assert "临期" in system_message
+            assert "请要求用户提供 SKU" not in system_message
+            assert "sku_bag_1" not in system_message
             assert agent["parameters"]["options"]["maxIterations"] >= 6
             intent_router = node_by_name(workflow, "Warehouse Intent Router")
             clarification_condition = node_by_name(
@@ -207,9 +213,18 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert sync_request["parameters"]["url"].endswith(
                 "/warehouse/inventory-table/sync/filter"
             )
+            assert "slots.item_id" in sync_request["parameters"]["jsonBody"]
             assert "slots.warehouse" in sync_request["parameters"]["jsonBody"]
+            assert "slots.location_code" in sync_request["parameters"]["jsonBody"]
+            assert "slots.category" in sync_request["parameters"]["jsonBody"]
             assert "slots.risk_level" in sync_request["parameters"]["jsonBody"]
+            assert "slots.expiry_risk" in sync_request["parameters"]["jsonBody"]
+            assert "sku:" not in sync_request["parameters"]["jsonBody"]
             assert "warehouse_inventory_table_sync_fast_path" in sync_reply["parameters"]["jsCode"]
+            assert "entry.item_id" in sync_reply["parameters"]["jsCode"]
+            assert "entry.batch_no" in sync_reply["parameters"]["jsCode"]
+            assert "entry.location_code" in sync_reply["parameters"]["jsCode"]
+            assert "SKU:" not in sync_reply["parameters"]["jsCode"]
             assert "clarification_question" in clarification_reply["parameters"]["jsCode"]
             assert "warehouse_intent_router" in clarification_reply["parameters"]["jsCode"]
             assert template_create["parameters"]["url"].endswith(
@@ -245,6 +260,22 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
                 in template_reply["parameters"]["jsCode"]
             )
             assert "tool_trace" in template_reply["parameters"]["jsCode"]
+
+            inventory_tool = node_by_name(workflow, "warehouse_inventory_tool")
+            exception_tool = node_by_name(workflow, "warehouse_exception_tool")
+            fulfillment_tool = node_by_name(workflow, "warehouse_fulfillment_tool")
+            table_sync_tool = node_by_name(workflow, "warehouse_inventory_table_sync_tool")
+            for tool in (inventory_tool, exception_tool, fulfillment_tool, table_sync_tool):
+                tool_code = tool["parameters"]["jsCode"]
+                assert "extractItemId" in tool_code
+                assert "item_id" in tool_code
+                assert "请提供商品 item_id" in tool_code
+                assert "extractSku" not in tool_code
+                assert "请提供 SKU" not in tool_code
+            assert "/warehouse/inventory/' + encodeURIComponent(itemId)" in inventory_tool["parameters"]["jsCode"]
+            assert "body: { item_id: itemId" in exception_tool["parameters"]["jsCode"]
+            assert "body: { item_id: itemId" in fulfillment_tool["parameters"]["jsCode"]
+            assert "body: { item_id: itemId" in table_sync_tool["parameters"]["jsCode"]
 
 
 def test_department_workflows_connect_directly_to_department_agent() -> None:

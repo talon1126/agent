@@ -35,7 +35,10 @@
         "inventory": 0.3,
         "table": 0.2,
         "warehouse": 0.1,
-        "sku": 0.1
+        "item": 0.1,
+        "category": 0.1,
+        "location": 0.1,
+        "expiry": 0.1
       }
     },
     {
@@ -45,12 +48,12 @@
       "priority": 10,
       "required_signal_groups": [
         ["query", "inventory"],
-        ["query", "sku"]
+        ["query", "item"]
       ],
       "signal_weights": {
         "query": 0.4,
         "inventory": 0.3,
-        "sku": 0.2,
+        "item": 0.2,
         "warehouse": 0.1
       }
     }
@@ -65,8 +68,11 @@
     "inventory": ["库存", "存货", "inventory", "stock"],
     "risk": ["高风险", "中风险", "低风险", "风险", "危险库存", "risk"],
     "low_stock": ["低库存", "缺货", "库存不足", "low stock"],
+    "category": ["分类", "品类", "纸品", "乳制品", "奶制品", "饮料", "日化", "办公耗材", "category"],
+    "location": ["库位", "货位", "储位", "location", "bin"],
+    "expiry": ["临期", "快过期", "过期", "保质期", "expiry", "expiring"],
     "warehouse": ["仓", "仓库", "warehouse"],
-    "sku": ["sku"]
+    "item": ["item_", "sku_"]
   },
   "slots": {
     "warehouse": {
@@ -78,6 +84,17 @@
       "high": ["高风险", "高危", "危险", "high risk"],
       "medium": ["中风险", "中等风险", "medium risk"],
       "low": ["低风险", "low risk"]
+    },
+    "category": {
+      "paper": ["纸品", "纸巾", "抽纸", "paper"],
+      "dairy": ["乳制品", "奶制品", "牛奶", "酸奶", "dairy", "milk", "yogurt"],
+      "beverage": ["饮料", "矿泉水", "可乐", "beverage", "drink"],
+      "daily_chemical": ["日化", "洗衣液", "daily chemical", "detergent"],
+      "office_supply": ["办公耗材", "办公用品", "文具", "office supply"]
+    },
+    "expiry_risk": {
+      "expired": ["已过期", "过期", "expired"],
+      "expiring_soon": ["临期", "快过期", "保质期", "expiring", "expiry"]
     }
   }
 }

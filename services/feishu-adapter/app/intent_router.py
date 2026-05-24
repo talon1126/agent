@@ -35,7 +35,8 @@ def route_warehouse_intent(message: str) -> IntentRoute:
     normalized_message = _normalize(message)
     signals = _match_signals(normalized_message, config["lexicon"])
     slots = _extract_slots(normalized_message, config.get("slots", {}))
-    _extract_sku(normalized_message, signals, slots)
+    _extract_item_id(normalized_message, signals, slots)
+    _extract_location_code(normalized_message, slots)
 
     candidates = sorted(
         (
@@ -118,12 +119,18 @@ def _extract_slots(
     return slots
 
 
-def _extract_sku(message: str, signals: list[str], slots: dict[str, Any]) -> None:
-    match = re.search(r"\bsku_[0-9a-z_]+\b", message, flags=re.IGNORECASE)
+def _extract_item_id(message: str, signals: list[str], slots: dict[str, Any]) -> None:
+    match = re.search(r"\b(?:item|sku)_[0-9a-z_]+\b", message, flags=re.IGNORECASE)
     if match:
-        slots["sku"] = match.group(0).casefold()
-        if "sku" not in signals:
-            signals.append("sku")
+        slots["item_id"] = match.group(0).casefold()
+        if "item" not in signals:
+            signals.append("item")
+
+
+def _extract_location_code(message: str, slots: dict[str, Any]) -> None:
+    match = re.search(r"(?<![a-z0-9])([a-z]\d{1,2})(?![a-z0-9])", message, flags=re.IGNORECASE)
+    if match:
+        slots["location_code"] = match.group(1).upper()
 
 
 def _score_intent(intent_config: dict[str, Any], signals: list[str]) -> dict[str, Any]:
