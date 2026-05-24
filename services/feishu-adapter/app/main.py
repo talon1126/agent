@@ -42,12 +42,21 @@ class BotConfig:
 
 
 class InventoryTableSyncRequest(BaseModel):
-    sku: str
+    item_id: str
+    warehouse_id: str | None = None
+    location_code: str | None = None
+    batch_no: str | None = None
 
 
 class InventoryTableSyncFilterRequest(BaseModel):
+    item_id: str | None = None
     sku: str | None = None
     warehouse_id: str | None = None
+    location_code: str | None = None
+    category: str | None = None
+    category_id: str | None = None
+    batch_no: str | None = None
+    expiry_risk: str | None = None
     risk_level: str | None = None
     limit: int = 50
 
@@ -150,12 +159,35 @@ class WarehouseIntentRouteRequest(BaseModel):
 
 
 INVENTORY_TABLE_FIELD_SPECS = [
-    {"field_name": "SKU", "type": 1},
-    {"field_name": "Product Name", "type": 1},
     {"field_name": "Warehouse", "type": 1},
-    {"field_name": "Available", "type": 2},
-    {"field_name": "Reserved", "type": 2},
-    {"field_name": "Pending Orders", "type": 2},
+    {"field_name": "Warehouse ID", "type": 1},
+    {"field_name": "Location", "type": 1},
+    {"field_name": "Category", "type": 1},
+    {"field_name": "Category ID", "type": 1},
+    {"field_name": "Item ID", "type": 1},
+    {"field_name": "Item Name", "type": 1},
+    {"field_name": "Brand", "type": 1},
+    {"field_name": "Spec", "type": 1},
+    {"field_name": "Unit", "type": 1},
+    {"field_name": "Batch No", "type": 1},
+    {"field_name": "Quantity On Hand", "type": 2},
+    {"field_name": "Quantity Available", "type": 2},
+    {"field_name": "Quantity Reserved", "type": 2},
+    {"field_name": "Reorder Threshold", "type": 2},
+    {"field_name": "Production Date", "type": 1},
+    {"field_name": "Expiry Date", "type": 1},
+    {"field_name": "Days To Expiry", "type": 2},
+    {
+        "field_name": "Expiry Risk",
+        "type": 3,
+        "property": {
+            "options": [
+                {"name": "normal", "color": 28},
+                {"name": "expiring_soon", "color": 24},
+                {"name": "expired", "color": 17},
+            ]
+        },
+    },
     {
         "field_name": "Risk Level",
         "type": 3,
@@ -168,7 +200,16 @@ INVENTORY_TABLE_FIELD_SPECS = [
             ]
         },
     },
-    {"field_name": "Open Exception Count", "type": 2},
+    {
+        "field_name": "Storage Status",
+        "type": 3,
+        "property": {
+            "options": [
+                {"name": "available", "color": 28},
+                {"name": "quality_hold", "color": 17},
+            ]
+        },
+    },
     {"field_name": "Recommendation", "type": 1},
     {"field_name": "Last Synced At", "type": 1},
     {
@@ -527,16 +568,28 @@ def create_app(
 
     def fetch_inventory_table_rows(
         *,
+        item_id: str | None = None,
         sku: str | None = None,
         warehouse_id: str | None = None,
+        location_code: str | None = None,
+        category: str | None = None,
+        category_id: str | None = None,
+        batch_no: str | None = None,
+        expiry_risk: str | None = None,
         risk_level: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         response = client.post(
             f"{runtime_mock_api_url}/warehouse/inventory/table-rows",
             json={
+                "item_id": item_id or None,
                 "sku": sku or None,
                 "warehouse_id": warehouse_id or None,
+                "location_code": location_code or None,
+                "category": category or None,
+                "category_id": category_id or None,
+                "batch_no": batch_no or None,
+                "expiry_risk": expiry_risk or None,
                 "risk_level": risk_level or None,
                 "limit": limit,
             },
@@ -565,15 +618,27 @@ def create_app(
 
     def fetch_inventory_table_rows_with_fallback(
         *,
+        item_id: str | None = None,
         sku: str | None = None,
         warehouse_id: str | None = None,
+        location_code: str | None = None,
+        category: str | None = None,
+        category_id: str | None = None,
+        batch_no: str | None = None,
+        expiry_risk: str | None = None,
         risk_level: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         try:
             return fetch_inventory_table_rows(
+                item_id=item_id,
                 sku=sku,
                 warehouse_id=warehouse_id,
+                location_code=location_code,
+                category=category,
+                category_id=category_id,
+                batch_no=batch_no,
+                expiry_risk=expiry_risk,
                 risk_level=risk_level,
                 limit=limit,
             )
@@ -587,6 +652,11 @@ def create_app(
             return legacy_inventory_rows_from_items([inventory_response.json()])
         search_payload = {
             "warehouse_id": warehouse_id or None,
+            "location_code": location_code or None,
+            "category": category or None,
+            "category_id": category_id or None,
+            "batch_no": batch_no or None,
+            "expiry_risk": expiry_risk or None,
             "risk_level": risk_level or None,
             "limit": limit,
         }
@@ -932,10 +1002,37 @@ def create_app(
             "action": result["action"],
         }
 
-    def find_inventory_table_record(*, token: str, sku: str, warehouse_id: str) -> str:
+    def inventory_record_identity(fields: dict[str, Any]) -> dict[str, str]:
+        batch_identity = {
+            "Warehouse ID": str(fields.get("Warehouse ID") or "").strip(),
+            "Location": str(fields.get("Location") or "").strip(),
+            "Item ID": str(fields.get("Item ID") or "").strip(),
+            "Batch No": str(fields.get("Batch No") or "").strip(),
+        }
+        if all(batch_identity.values()):
+            return batch_identity
+        legacy_identity = {
+            "SKU": str(fields.get("SKU") or "").strip(),
+            "Warehouse": str(fields.get("Warehouse") or "").strip(),
+        }
+        if all(legacy_identity.values()):
+            return legacy_identity
+        raise RuntimeError(
+            "inventory table row is missing batch identity fields: "
+            "Warehouse ID, Location, Item ID, Batch No"
+        )
+
+    def bitable_filter_literal(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    def find_inventory_table_record(*, token: str, identity: dict[str, str]) -> str:
+        conditions = [
+            f'CurrentValue.[{field_name}]="{bitable_filter_literal(value)}"'
+            for field_name, value in identity.items()
+        ]
         params: dict[str, Any] = {
             "page_size": 20,
-            "filter": f'AND(CurrentValue.[SKU]="{sku}",CurrentValue.[Warehouse]="{warehouse_id}")',
+            "filter": f"AND({','.join(conditions)})",
         }
         if table_view_id:
             params["view_id"] = table_view_id
@@ -954,11 +1051,8 @@ def create_app(
         return str(items[0].get("record_id") or items[0].get("id") or "")
 
     def upsert_inventory_table_record(*, token: str, fields: dict[str, Any]) -> dict[str, str]:
-        record_id = find_inventory_table_record(
-            token=token,
-            sku=str(fields["SKU"]),
-            warehouse_id=str(fields["Warehouse"]),
-        )
+        identity = inventory_record_identity(fields)
+        record_id = find_inventory_table_record(token=token, identity=identity)
         if record_id:
             response = client.put(
                 bitable_records_url(record_id),
@@ -1459,7 +1553,7 @@ def create_app(
     @app.post("/warehouse/inventory-table/sync")
     def sync_inventory_table(request: InventoryTableSyncRequest) -> dict[str, Any]:
         started = perf_counter()
-        sku = request.sku.strip().lower()
+        item_id = request.item_id.strip()
         if not inventory_table_sync_configured():
             return {
                 "ok": False,
@@ -1468,9 +1562,15 @@ def create_app(
                 "message": "Feishu inventory table sync is not configured.",
             }
         try:
-            rows = fetch_inventory_table_rows_with_fallback(sku=sku, limit=1)
+            rows = fetch_inventory_table_rows_with_fallback(
+                item_id=item_id,
+                warehouse_id=(request.warehouse_id or "").strip() or None,
+                location_code=(request.location_code or "").strip() or None,
+                batch_no=(request.batch_no or "").strip() or None,
+                limit=1,
+            )
             if not rows:
-                raise RuntimeError(f"warehouse inventory table rows returned no data for sku={sku}")
+                raise RuntimeError(f"warehouse inventory table rows returned no data for item_id={item_id}")
             fields = rows[0]["fields"]
             token = get_tenant_access_token(
                 client=client,
@@ -1485,15 +1585,25 @@ def create_app(
             result = upsert_inventory_table_record(token=token, fields=fields)
             latency_ms = (perf_counter() - started) * 1000
             write_sync_run_log(
-                sku=sku,
+                sku=item_id,
                 status="succeeded",
                 latency_ms=latency_ms,
-                tool_calls=[{"tool": "warehouse_inventory_table_sync_tool", "input": {"sku": sku}, "output": result}],
+                tool_calls=[
+                    {
+                        "tool": "warehouse_inventory_table_sync_tool",
+                        "input": request.model_dump(),
+                        "output": result,
+                    }
+                ],
             )
             return {
                 "ok": True,
                 "configured": True,
-                "sku": sku,
+                "item_id": item_id,
+                "batch_key": rows[0].get("batch_key"),
+                "warehouse_id": fields.get("Warehouse ID"),
+                "location_code": fields.get("Location"),
+                "batch_no": fields.get("Batch No"),
                 **result,
                 "table_id": provision_result["table_id"],
                 "table_url": inventory_table_url_for(provision_result["table_id"]),
@@ -1503,7 +1613,7 @@ def create_app(
         except (httpx.HTTPError, RuntimeError) as error:
             latency_ms = (perf_counter() - started) * 1000
             write_sync_run_log(
-                sku=sku,
+                sku=item_id,
                 status="failed",
                 latency_ms=latency_ms,
                 error=str(error),
@@ -1511,7 +1621,7 @@ def create_app(
             return {
                 "ok": False,
                 "configured": True,
-                "sku": sku,
+                "item_id": item_id,
                 "error": "feishu_inventory_table_sync_failed",
                 "message": str(error),
             }
@@ -1521,8 +1631,14 @@ def create_app(
         request: InventoryTableSyncFilterRequest,
     ) -> dict[str, Any]:
         started = perf_counter()
+        item_id = (request.item_id or request.sku or "").strip()
         sku = (request.sku or "").strip().lower()
         warehouse_id = (request.warehouse_id or "").strip()
+        location_code = (request.location_code or "").strip()
+        category = (request.category or "").strip()
+        category_id = (request.category_id or "").strip()
+        batch_no = (request.batch_no or "").strip()
+        expiry_risk = (request.expiry_risk or "").strip()
         risk_level = (request.risk_level or "").strip()
         limit = max(min(int(request.limit or 50), 100), 1)
         if not inventory_table_sync_configured():
@@ -1534,8 +1650,14 @@ def create_app(
             }
         try:
             inventory_rows = fetch_inventory_table_rows_with_fallback(
+                item_id=item_id or None,
                 sku=sku or None,
                 warehouse_id=warehouse_id or None,
+                location_code=location_code or None,
+                category=category or None,
+                category_id=category_id or None,
+                batch_no=batch_no or None,
+                expiry_risk=expiry_risk or None,
                 risk_level=risk_level or None,
                 limit=limit,
             )
@@ -1555,12 +1677,15 @@ def create_app(
                 result = upsert_inventory_table_record(token=token, fields=fields)
                 synced_items.append(
                     {
-                        "sku": fields["SKU"],
-                        "warehouse_id": fields["Warehouse"],
-                        "risk_level": fields["Risk Level"],
+                        "batch_key": row.get("batch_key"),
+                        "item_id": fields.get("Item ID") or row.get("item_id"),
+                        "warehouse_id": fields.get("Warehouse ID"),
+                        "location_code": fields.get("Location"),
+                        "batch_no": fields.get("Batch No") or row.get("batch_no"),
+                        "risk_level": fields.get("Risk Level"),
                         "action": result.get("action"),
                         "record_id": result.get("record_id"),
-                        "source_version": fields["Source Version"],
+                        "source_version": fields.get("Source Version", ""),
                     }
                 )
             latency_ms = (perf_counter() - started) * 1000
@@ -1580,8 +1705,14 @@ def create_app(
             return {
                 "ok": True,
                 "configured": True,
+                "item_id": item_id or None,
                 "sku": sku or None,
                 "warehouse_id": warehouse_id or None,
+                "location_code": location_code or None,
+                "category": category or None,
+                "category_id": category_id or None,
+                "batch_no": batch_no or None,
+                "expiry_risk": expiry_risk or None,
                 "risk_level": risk_level or None,
                 "synced_count": len(synced_items),
                 "items": synced_items,
@@ -1601,8 +1732,14 @@ def create_app(
             return {
                 "ok": False,
                 "configured": True,
+                "item_id": item_id or None,
                 "sku": sku or None,
                 "warehouse_id": warehouse_id or None,
+                "location_code": location_code or None,
+                "category": category or None,
+                "category_id": category_id or None,
+                "batch_no": batch_no or None,
+                "expiry_risk": expiry_risk or None,
                 "risk_level": risk_level or None,
                 "error": "feishu_inventory_table_sync_filter_failed",
                 "message": message,

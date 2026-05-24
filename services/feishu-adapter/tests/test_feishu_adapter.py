@@ -5,7 +5,42 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.feishu_events import FeishuMessage, normalize_feishu_event
-from app.main import create_app
+from app.main import INVENTORY_TABLE_FIELD_SPECS, create_app
+
+
+def batch_inventory_table_rows_response() -> dict:
+    return {
+        "ok": True,
+        "schema_id": "warehouse_batch_inventory",
+        "count": 1,
+        "items": [
+            {
+                "batch_key": "wh_sz_1:A1:item_vinda_tissue:BATCH-20260501",
+                "item_id": "item_vinda_tissue",
+                "batch_no": "BATCH-20260501",
+                "fields": {
+                    "Warehouse": "深圳仓",
+                    "Warehouse ID": "wh_sz_1",
+                    "Location": "A1",
+                    "Category": "纸品",
+                    "Category ID": "paper",
+                    "Item ID": "item_vinda_tissue",
+                    "Item Name": "维达纸巾",
+                    "Brand": "维达",
+                    "Spec": "3层抽纸 24包",
+                    "Unit": "包",
+                    "Batch No": "BATCH-20260501",
+                    "Quantity On Hand": 120,
+                    "Quantity Available": 96,
+                    "Quantity Reserved": 24,
+                    "Risk Level": "high",
+                    "Last Synced At": "2026-05-24T00:00:00+00:00",
+                    "Sync Status": "synced",
+                    "Source Version": "mock-api:wh_sz_1:A1:item_vinda_tissue:BATCH-20260501",
+                },
+            }
+        ],
+    }
 
 
 def test_url_verification_returns_challenge() -> None:
@@ -367,7 +402,7 @@ def test_inventory_table_sync_returns_not_configured_without_table_settings() ->
     )
     client = TestClient(app)
 
-    response = client.post("/warehouse/inventory-table/sync", json={"sku": "sku_bag_1"})
+    response = client.post("/warehouse/inventory-table/sync", json={"item_id": "item_vinda_tissue"})
 
     assert response.status_code == 200
     assert response.json() == {
@@ -473,8 +508,9 @@ def test_inventory_table_provision_returns_existing_table_when_table_id_is_confi
     assert body["table_id"] == "tbl_existing"
     assert body["view_id"] == "vew_existing"
     assert body["table_url"] == "https://example.feishu.cn/base/app_token?table=tbl_existing"
+    assert "Item ID" in body["fields"]
+    assert "Batch No" in body["fields"]
     assert "Risk Level" in body["fields"]
-    assert [request.method for request in requests] == ["GET", "POST", "GET"]
     assert str(requests[0].url).endswith("/warehouse/inventory/table-schema")
 
 
@@ -536,35 +572,11 @@ def test_inventory_table_provision_creates_inventory_table_with_fixed_schema() -
         for request in requests
         if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields"
     ]
-    assert len(field_requests) == 12
-    assert [json.loads(request.content)["field_name"] for request in field_requests] == [
-        "SKU",
-        "Product Name",
-        "Warehouse",
-        "Available",
-        "Reserved",
-        "Pending Orders",
-        "Risk Level",
-        "Open Exception Count",
-        "Recommendation",
-        "Last Synced At",
-        "Sync Status",
-        "Source Version",
-    ]
-    assert [json.loads(request.content)["type"] for request in field_requests] == [
-        1,
-        1,
-        1,
-            2,
-            2,
-            2,
-            3,
-            2,
-            1,
-            1,
-            3,
-            1,
-        ]
+    assert len(field_requests) == len(INVENTORY_TABLE_FIELD_SPECS)
+    field_names = [json.loads(request.content)["field_name"] for request in field_requests]
+    assert field_names == [field["field_name"] for field in INVENTORY_TABLE_FIELD_SPECS]
+    assert "SKU" not in field_names
+    assert {"Warehouse ID", "Location", "Item ID", "Batch No", "Quantity Available"}.issubset(field_names)
     field_bodies = [json.loads(request.content) for request in field_requests]
     risk_field = next(field for field in field_bodies if field["field_name"] == "Risk Level")
     sync_field = next(field for field in field_bodies if field["field_name"] == "Sync Status")
@@ -591,20 +603,7 @@ def test_inventory_table_provision_creates_inventory_table_with_fixed_schema() -
             ]
         },
     }
-    assert body["fields"] == [
-        "SKU",
-        "Product Name",
-        "Warehouse",
-        "Available",
-        "Reserved",
-        "Pending Orders",
-        "Risk Level",
-        "Open Exception Count",
-        "Recommendation",
-        "Last Synced At",
-        "Sync Status",
-        "Source Version",
-    ]
+    assert body["fields"] == [field["field_name"] for field in INVENTORY_TABLE_FIELD_SPECS]
 
 
 def test_inventory_table_provision_uses_backend_schema_when_available() -> None:
@@ -739,7 +738,7 @@ def test_inventory_table_provision_reuses_duplicate_table_and_creates_missing_fi
         if request.method == "POST"
         and str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_existing/fields"
     ]
-    assert len(field_create_requests) == 11
+    assert len(field_create_requests) == len(INVENTORY_TABLE_FIELD_SPECS)
     assert "SKU" not in [json.loads(request.content)["field_name"] for request in field_create_requests]
 
 
@@ -863,21 +862,8 @@ def test_inventory_table_sync_auto_provisions_table_when_table_id_is_missing() -
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         url = str(request.url)
-        if url == "http://mock-api.local/warehouse/inventory/sku_bag_1":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "sku": "sku_bag_1",
-                    "available": 5,
-                    "reserved": 3,
-                    "pending_orders": 9,
-                    "risk_level": "high",
-                    "recommendation": "review stock",
-                    "locations": [{"warehouse_id": "wh_hk_1"}],
-                    "open_exceptions": [],
-                },
-            )
+        if url == "http://mock-api.local/warehouse/inventory/table-rows":
+            return httpx.Response(200, json=batch_inventory_table_rows_response())
         if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
         if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
@@ -905,7 +891,7 @@ def test_inventory_table_sync_auto_provisions_table_when_table_id_is_missing() -
     )
     client = TestClient(app)
 
-    response = client.post("/warehouse/inventory-table/sync", json={"sku": "sku_bag_1"})
+    response = client.post("/warehouse/inventory-table/sync", json={"item_id": "item_vinda_tissue"})
 
     assert response.status_code == 200
     body = response.json()
@@ -920,29 +906,8 @@ def test_inventory_table_sync_creates_snapshot_record() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if str(request.url) == "http://mock-api.local/warehouse/inventory/sku_bag_1":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "sku": "sku_bag_1",
-                    "product_name": "Canvas Bag",
-                    "available": 5,
-                    "reserved": 3,
-                    "pending_orders": 9,
-                    "risk_level": "high",
-                    "recommendation": "库存或异常存在履约风险，建议仓库复核并通知采购。",
-                    "locations": [
-                        {
-                            "warehouse_id": "wh_hk_1",
-                            "location_code": "A-01-01",
-                            "quantity": 5,
-                            "status": "available",
-                        }
-                    ],
-                    "open_exceptions": [{"exception_id": "wh_exc_1"}],
-                },
-            )
+        if str(request.url) == "http://mock-api.local/warehouse/inventory/table-rows":
+            return httpx.Response(200, json=batch_inventory_table_rows_response())
         if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
         if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
@@ -967,7 +932,7 @@ def test_inventory_table_sync_creates_snapshot_record() -> None:
     )
     client = TestClient(app)
 
-    response = client.post("/warehouse/inventory-table/sync", json={"sku": "sku_bag_1"})
+    response = client.post("/warehouse/inventory-table/sync", json={"item_id": "item_vinda_tissue"})
 
     assert response.status_code == 200
     body = response.json()
@@ -977,19 +942,30 @@ def test_inventory_table_sync_creates_snapshot_record() -> None:
     assert body["table_url"] == "https://example.feishu.cn/base/app_token?table=tbl_inventory"
     create_request = requests[-1]
     assert json.loads(create_request.content)["fields"] == {
-        "SKU": "sku_bag_1",
-        "Product Name": "Canvas Bag",
-        "Warehouse": "wh_hk_1",
-        "Available": 5,
-        "Reserved": 3,
-        "Pending Orders": 9,
+        "Warehouse": "深圳仓",
+        "Warehouse ID": "wh_sz_1",
+        "Location": "A1",
+        "Category": "纸品",
+        "Category ID": "paper",
+        "Item ID": "item_vinda_tissue",
+        "Item Name": "维达纸巾",
+        "Brand": "维达",
+        "Spec": "3层抽纸 24包",
+        "Unit": "包",
+        "Batch No": "BATCH-20260501",
+        "Quantity On Hand": 120,
+        "Quantity Available": 96,
+        "Quantity Reserved": 24,
         "Risk Level": "high",
-        "Open Exception Count": 1,
-        "Recommendation": "库存或异常存在履约风险，建议仓库复核并通知采购。",
-        "Last Synced At": body["last_synced_at"],
+        "Last Synced At": "2026-05-24T00:00:00+00:00",
         "Sync Status": "synced",
-        "Source Version": "mock-api:sku_bag_1:wh_hk_1",
+        "Source Version": "mock-api:wh_sz_1:A1:item_vinda_tissue:BATCH-20260501",
     }
+    assert body["item_id"] == "item_vinda_tissue"
+    assert body["batch_key"] == "wh_sz_1:A1:item_vinda_tissue:BATCH-20260501"
+    assert body["warehouse_id"] == "wh_sz_1"
+    assert body["location_code"] == "A1"
+    assert body["batch_no"] == "BATCH-20260501"
 
 
 def test_inventory_table_sync_updates_existing_snapshot_record() -> None:
@@ -997,21 +973,8 @@ def test_inventory_table_sync_updates_existing_snapshot_record() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if str(request.url) == "http://mock-api.local/warehouse/inventory/sku_bag_1":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "sku": "sku_bag_1",
-                    "available": 5,
-                    "reserved": 3,
-                    "pending_orders": 9,
-                    "risk_level": "high",
-                    "recommendation": "review stock",
-                    "locations": [{"warehouse_id": "wh_hk_1"}],
-                    "open_exceptions": [],
-                },
-            )
+        if str(request.url) == "http://mock-api.local/warehouse/inventory/table-rows":
+            return httpx.Response(200, json=batch_inventory_table_rows_response())
         if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
         if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
@@ -1036,7 +999,7 @@ def test_inventory_table_sync_updates_existing_snapshot_record() -> None:
     )
     client = TestClient(app)
 
-    response = client.post("/warehouse/inventory-table/sync", json={"sku": "sku_bag_1"})
+    response = client.post("/warehouse/inventory-table/sync", json={"item_id": "item_vinda_tissue"})
 
     assert response.status_code == 200
     assert response.json()["action"] == "updated"
@@ -1048,36 +1011,29 @@ def test_inventory_table_sync_filter_updates_matching_inventory_records() -> Non
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if str(request.url) == "http://mock-api.local/warehouse/inventory/search":
+        if str(request.url) == "http://mock-api.local/warehouse/inventory/table-rows":
+            second_response = batch_inventory_table_rows_response()
+            second_item = {
+                **second_response["items"][0],
+                "batch_key": "wh_sz_1:B1:item_vinda_tissue:BATCH-20260401",
+                "batch_no": "BATCH-20260401",
+                "fields": {
+                    **second_response["items"][0]["fields"],
+                    "Location": "B1",
+                    "Batch No": "BATCH-20260401",
+                    "Quantity On Hand": 16,
+                    "Quantity Available": 12,
+                    "Quantity Reserved": 4,
+                    "Source Version": "mock-api:wh_sz_1:B1:item_vinda_tissue:BATCH-20260401",
+                },
+            }
             return httpx.Response(
                 200,
                 json={
                     "ok": True,
+                    "schema_id": "warehouse_batch_inventory",
                     "count": 2,
-                    "items": [
-                        {
-                            "ok": True,
-                            "sku": "sku_bag_1",
-                            "available": 5,
-                            "reserved": 3,
-                            "pending_orders": 9,
-                            "risk_level": "high",
-                            "recommendation": "review stock",
-                            "locations": [{"warehouse_id": "wh_hk_1"}],
-                            "open_exceptions": [{"exception_id": "wh_exc_100"}],
-                        },
-                        {
-                            "ok": True,
-                            "sku": "sku_watch_1",
-                            "available": 0,
-                            "reserved": 0,
-                            "pending_orders": 7,
-                            "risk_level": "high",
-                            "recommendation": "notify procurement",
-                            "locations": [{"warehouse_id": "wh_hk_1"}],
-                            "open_exceptions": [{"exception_id": "wh_exc_104"}],
-                        },
-                    ],
+                    "items": [batch_inventory_table_rows_response()["items"][0], second_item],
                 },
             )
         if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
@@ -1104,16 +1060,17 @@ def test_inventory_table_sync_filter_updates_matching_inventory_records() -> Non
 
     response = client.post(
         "/warehouse/inventory-table/sync/filter",
-        json={"warehouse_id": "wh_hk_1", "risk_level": "high"},
+        json={"warehouse_id": "wh_sz_1", "category": "paper", "risk_level": "high"},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
     assert body["synced_count"] == 2
-    assert body["warehouse_id"] == "wh_hk_1"
+    assert body["warehouse_id"] == "wh_sz_1"
+    assert body["category"] == "paper"
     assert body["risk_level"] == "high"
-    assert [item["sku"] for item in body["items"]] == ["sku_bag_1", "sku_watch_1"]
+    assert [item["batch_no"] for item in body["items"]] == ["BATCH-20260501", "BATCH-20260401"]
     create_requests = [
         request
         for request in requests
@@ -1132,19 +1089,26 @@ def test_inventory_table_sync_filter_uses_backend_table_rows() -> None:
                 200,
                 json={
                     "ok": True,
-                    "schema_id": "warehouse_inventory_snapshot",
+                    "schema_id": "warehouse_batch_inventory",
                     "count": 1,
                     "items": [
                         {
-                            "sku": "sku_bag_1",
+                            "batch_key": "wh_sz_1:A1:item_vinda_tissue:BATCH-20260501",
+                            "item_id": "item_vinda_tissue",
+                            "batch_no": "BATCH-20260501",
                             "fields": {
-                                "SKU": "sku_bag_1",
-                                "Warehouse": "wh_hk_1",
-                                "Available": 5,
+                                "Warehouse": "深圳仓",
+                                "Warehouse ID": "wh_sz_1",
+                                "Location": "A1",
+                                "Category": "纸品",
+                                "Item ID": "item_vinda_tissue",
+                                "Item Name": "维达纸巾",
+                                "Batch No": "BATCH-20260501",
+                                "Quantity Available": 96,
                                 "Risk Level": "high",
                                 "Backend Only Metric": 99,
                                 "Last Synced At": "2026-05-24T00:00:00+00:00",
-                                "Source Version": "mock-api:sku_bag_1:wh_hk_1",
+                                "Source Version": "mock-api:wh_sz_1:A1:item_vinda_tissue:BATCH-20260501",
                             },
                         }
                     ],
@@ -1174,7 +1138,7 @@ def test_inventory_table_sync_filter_uses_backend_table_rows() -> None:
 
     response = client.post(
         "/warehouse/inventory-table/sync/filter",
-        json={"warehouse_id": "wh_hk_1", "risk_level": "high"},
+        json={"warehouse_id": "wh_sz_1", "risk_level": "high"},
     )
 
     assert response.status_code == 200
@@ -1186,17 +1150,48 @@ def test_inventory_table_sync_filter_uses_backend_table_rows() -> None:
     ]
     assert len(table_row_requests) == 1
     assert json.loads(table_row_requests[0].content) == {
+        "item_id": None,
         "sku": None,
-        "warehouse_id": "wh_hk_1",
+        "warehouse_id": "wh_sz_1",
+        "location_code": None,
+        "category": None,
+        "category_id": None,
+        "batch_no": None,
+        "expiry_risk": None,
         "risk_level": "high",
         "limit": 50,
     }
+    lookup_request = next(
+        request
+        for request in requests
+        if request.method == "GET" and str(request.url).startswith(
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/records?"
+        )
+    )
+    decoded_query = str(lookup_request.url.params["filter"])
+    assert 'CurrentValue.[Warehouse ID]="wh_sz_1"' in decoded_query
+    assert 'CurrentValue.[Location]="A1"' in decoded_query
+    assert 'CurrentValue.[Item ID]="item_vinda_tissue"' in decoded_query
+    assert 'CurrentValue.[Batch No]="BATCH-20260501"' in decoded_query
     create_request = next(
         request
         for request in requests
         if request.method == "POST" and str(request.url).endswith("/records")
     )
     assert json.loads(create_request.content)["fields"]["Backend Only Metric"] == 99
+    assert body["items"] == [
+        {
+            "batch_key": "wh_sz_1:A1:item_vinda_tissue:BATCH-20260501",
+            "item_id": "item_vinda_tissue",
+            "warehouse_id": "wh_sz_1",
+            "location_code": "A1",
+            "batch_no": "BATCH-20260501",
+            "risk_level": "high",
+            "action": "created",
+            "record_id": "rec_new",
+            "source_version": "mock-api:wh_sz_1:A1:item_vinda_tissue:BATCH-20260501",
+        }
+    ]
 
 
 def test_inventory_table_schema_returns_fields_and_views() -> None:
