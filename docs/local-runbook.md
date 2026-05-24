@@ -130,22 +130,34 @@ When `FEISHU_RUN_LOG_URL` is configured, every completed Feishu message writes a
 When `mock-api` starts with `DATABASE_URL`, it creates and seeds warehouse tables from fixtures. Verify them with:
 
 ```powershell
-docker compose exec -T postgres psql -U agent -d agent_ops -c "\dt warehouse_*"
-docker compose exec -T postgres psql -U agent -d agent_ops -c "select sku, available, reserved, pending_orders from warehouse_inventory order by sku;"
+docker compose exec -T postgres psql -U agent -d agent_ops -c "\dt"
+docker compose exec -T postgres psql -U agent -d agent_ops -c "select warehouse_id, location_code, item_id, batch_no, quantity_on_hand, quantity_reserved, storage_status from inventory_batches order by warehouse_id, location_code, item_id limit 10;"
 ```
 
 Warehouse endpoints still go through `mock-api`; n8n and `feishu-adapter` should not read these tables directly.
 
-Warehouse users can explicitly ask to create a fixed-schema Feishu inventory table and sync an SKU snapshot to it. Configure `FEISHU_INVENTORY_TABLE_APP_TOKEN` and table app credentials first, then provision:
+Warehouse users can explicitly ask to create a fixed-schema Feishu inventory table and sync item or filtered batch snapshots to it. Configure `FEISHU_INVENTORY_TABLE_APP_TOKEN` and table app credentials first, then provision:
 
 ```powershell
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"table_name":"Warehouse Inventory Snapshot"}' http://localhost:8010/warehouse/inventory-table/provision
 ```
 
-Copy the returned `table_id` into `.env` as `FEISHU_INVENTORY_TABLE_ID`, restart `feishu-adapter`, then test sync:
+Copy the returned `table_id` into `.env` as `FEISHU_INVENTORY_TABLE_ID`, restart `feishu-adapter`, then test item sync:
 
 ```powershell
-Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"sku":"sku_bag_1"}' http://localhost:8010/warehouse/inventory-table/sync
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"item_id":"item_vinda_tissue"}' http://localhost:8010/warehouse/inventory-table/sync
+```
+
+Test filtered batch sync without asking the Agent to infer slots:
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"warehouse_id":"wh_sz_1","location_code":"A1","category":"dairy","expiry_risk":"expiring_soon","limit":50}' http://localhost:8010/warehouse/inventory-table/sync/filter
+```
+
+Test the deterministic warehouse intent router before running the full n8n/LLM path:
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"message":"帮我更新深圳仓A1库位乳制品临期库存"}' http://localhost:8010/warehouse/intents/route | ConvertTo-Json -Depth 10
 ```
 
 The table is a read-only snapshot/read model. Do not treat Feishu table edits as inventory source data.
@@ -178,7 +190,7 @@ Test department routes through n8n directly:
 
 ```powershell
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/customer-support-inbound
-Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_sku_bag_1","text":"sku_bag_1 今天能发货吗"}' http://localhost:5678/webhook/warehouse-inbound
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_item_vinda_tissue","text":"item_vinda_tissue 今天能发货吗"}' http://localhost:5678/webhook/warehouse-inbound
 ```
 
 Expected local result: the customer-support reply uses `order_status_tool`, and the warehouse reply uses the warehouse tools. These direct n8n checks may call the configured LLM; use mock-api endpoint checks when avoiding model quota.

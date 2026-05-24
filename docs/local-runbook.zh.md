@@ -130,22 +130,34 @@ connected to wss://msg-frontier.feishu.cn/ws/v2...
 `mock-api` 启动时如果配置了 `DATABASE_URL`，会从 fixtures 创建并 seed 仓储相关 PostgreSQL 表。可以这样验证：
 
 ```powershell
-docker compose exec -T postgres psql -U agent -d agent_ops -c "\dt warehouse_*"
-docker compose exec -T postgres psql -U agent -d agent_ops -c "select sku, available, reserved, pending_orders from warehouse_inventory order by sku;"
+docker compose exec -T postgres psql -U agent -d agent_ops -c "\dt"
+docker compose exec -T postgres psql -U agent -d agent_ops -c "select warehouse_id, location_code, item_id, batch_no, quantity_on_hand, quantity_reserved, storage_status from inventory_batches order by warehouse_id, location_code, item_id limit 10;"
 ```
 
 仓储 endpoint 仍然统一通过 `mock-api` 访问；n8n 和 `feishu-adapter` 不应该直接读取这些表。
 
-仓储用户可以明确要求创建固定 schema 的飞书库存表，并把某个 SKU 库存快照同步进去。先配置 `FEISHU_INVENTORY_TABLE_APP_TOKEN` 和表格应用凭证，然后创建表：
+仓储用户可以明确要求创建固定 schema 的飞书库存表，并把单个商品或过滤后的批次快照同步进去。先配置 `FEISHU_INVENTORY_TABLE_APP_TOKEN` 和表格应用凭证，然后创建表：
 
 ```powershell
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"table_name":"Warehouse Inventory Snapshot"}' http://localhost:8010/warehouse/inventory-table/provision
 ```
 
-把返回的 `table_id` 填回 `.env` 的 `FEISHU_INVENTORY_TABLE_ID`，重启 `feishu-adapter`，再测试同步：
+把返回的 `table_id` 填回 `.env` 的 `FEISHU_INVENTORY_TABLE_ID`，重启 `feishu-adapter`，再测试单商品同步：
 
 ```powershell
-Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"sku":"sku_bag_1"}' http://localhost:8010/warehouse/inventory-table/sync
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"item_id":"item_vinda_tissue"}' http://localhost:8010/warehouse/inventory-table/sync
+```
+
+不依赖 Agent 推理，直接测试过滤批次同步：
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"warehouse_id":"wh_sz_1","location_code":"A1","category":"dairy","expiry_risk":"expiring_soon","limit":50}' http://localhost:8010/warehouse/inventory-table/sync/filter
+```
+
+进入完整 n8n/LLM 链路前，可以先测试确定性的仓储意图路由：
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"message":"帮我更新深圳仓A1库位乳制品临期库存"}' http://localhost:8010/warehouse/intents/route | ConvertTo-Json -Depth 10
 ```
 
 飞书表格只是只读快照/read model，不要把表格编辑当作库存主数据。
@@ -178,7 +190,7 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"schema":
 
 ```powershell
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/customer-support-inbound
-Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_sku_bag_1","text":"sku_bag_1 今天能发货吗"}' http://localhost:5678/webhook/warehouse-inbound
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_item_vinda_tissue","text":"item_vinda_tissue 今天能发货吗"}' http://localhost:5678/webhook/warehouse-inbound
 ```
 
 预期本地结果：客服 workflow 会调用 `order_status_tool`，仓储 workflow 会调用仓储工具。这类直接 n8n 检查可能调用已配置的 LLM；如果要避免模型额度，优先检查 mock-api endpoint。

@@ -53,11 +53,11 @@ workflow 使用 n8n HTTP Request 节点做服务调用。Code 节点只负责 JS
 - Dead-letter records
 - Replay requests
 
-fixture 数据位于 `fixtures/data`，脚本化事件位于 `fixtures/events`。配置 `DATABASE_URL` 后，`mock-api` 会在 Postgres 中创建 `warehouse_inventory`、`warehouse_locations` 和 `warehouse_exceptions`，并从 fixtures seed 初始数据。仓储 endpoint 优先读 Postgres；没有配置数据库时才 fallback 到 fixtures。
+fixture 数据位于 `fixtures/data`，脚本化事件位于 `fixtures/events`。配置 `DATABASE_URL` 后，`mock-api` 会在 Postgres 中创建批次 + 库位仓储模型：`warehouses`、`storage_locations`、`categories`、`items` 和 `inventory_batches`，并从 fixtures seed 初始数据。仓储 endpoint 优先读 Postgres；没有配置数据库时才 fallback 到 fixtures。
 
 ### Postgres
 
-Postgres 通过 Docker Compose 启动，作为运维存储目标。`ai-service` 可以使用它保存 `session_state` 和 `user_profile`；配置 `DATABASE_URL` 后，`mock-api` 使用它保存仓储库存、库位和仓储异常。部分动作记录仍暂存在 `mock-api` 内存里；目标生产形态是持久化 approvals、run logs、dead letters、replay history、精简 user profile 和短期 session state。
+Postgres 通过 Docker Compose 启动，作为运维存储目标。`ai-service` 可以使用它保存 `session_state` 和 `user_profile`；配置 `DATABASE_URL` 后，`mock-api` 使用它保存仓储批次 + 库位库存。部分动作记录仍暂存在 `mock-api` 内存里；目标生产形态是持久化 approvals、run logs、dead letters、replay history、精简 user profile 和短期 session state。
 
 ## 决策流程
 

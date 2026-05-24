@@ -53,11 +53,11 @@ The service validates input and output through Pydantic schemas. The first imple
 - Dead-letter records
 - Replay requests
 
-Fixture data lives in `fixtures/data`, and scripted events live in `fixtures/events`. When `DATABASE_URL` is configured, `mock-api` creates `warehouse_inventory`, `warehouse_locations`, and `warehouse_exceptions` in Postgres and seeds them from fixtures. Warehouse endpoints read Postgres first and fall back to fixtures when no database is configured.
+Fixture data lives in `fixtures/data`, and scripted events live in `fixtures/events`. When `DATABASE_URL` is configured, `mock-api` creates the batch + location warehouse model in Postgres: `warehouses`, `storage_locations`, `categories`, `items`, and `inventory_batches`. Warehouse endpoints read Postgres first and fall back to fixtures when no database is configured.
 
 ### Postgres
 
-Postgres runs in Docker Compose as the operational store target. `ai-service` can use it for `session_state` and `user_profile`, and `mock-api` uses it for warehouse inventory, warehouse locations, and warehouse exceptions when `DATABASE_URL` is configured. Some action records are still in-memory inside `mock-api`; the target production shape is persistent approvals, run logs, dead letters, replay history, compact user profiles, and short-term session state.
+Postgres runs in Docker Compose as the operational store target. `ai-service` can use it for `session_state` and `user_profile`, and `mock-api` uses it for warehouse batch + location inventory when `DATABASE_URL` is configured. Some action records are still in-memory inside `mock-api`; the target production shape is persistent approvals, run logs, dead letters, replay history, compact user profiles, and short-term session state.
 
 ## Decision Flow
 

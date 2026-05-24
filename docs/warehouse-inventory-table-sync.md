@@ -1,22 +1,39 @@
 # Warehouse Inventory Feishu Table Provision and Sync
 
-Warehouse inventory table provisioning creates a fixed-schema Feishu table inside an existing Bitable app/base. Warehouse inventory table sync then publishes an SKU inventory snapshot to that table when a warehouse user explicitly asks for a table, export, sync, or dashboard view.
-
-## Design
+Warehouse inventory table provisioning creates a fixed-schema Feishu table inside an existing Bitable app/base. Warehouse inventory table sync publishes batch + location inventory snapshots when a warehouse user explicitly asks for a table, export, sync, or dashboard view.
 
 The Feishu table is a read model, not the inventory source of truth.
+
+## Design
 
 ```text
 mock-api / future warehouse system
         -> feishu-adapter /warehouse/inventory-table/provision
         -> feishu-adapter /warehouse/inventory-table/sync
+        -> feishu-adapter /warehouse/inventory-table/sync/filter
         -> feishu-adapter /warehouse/inventory-table/schema
-        -> feishu-adapter /warehouse/inventory-table/views/create
-        -> Feishu table upsert
-        -> Warehouse Agent reply
+        -> feishu-adapter /warehouse/inventory-table/views/from-template
+        -> Feishu table upsert or Feishu view create
+        -> Warehouse workflow reply
 ```
 
-Inventory facts stay in `mock-api` or a future warehouse system. The Feishu table gives employees a collaborative snapshot with risk and recommendations.
+Inventory facts stay in `mock-api` or a future warehouse system. Feishu gives employees a collaborative snapshot with risk, expiry state, locations, and recommendations.
+
+## Data Model
+
+The current warehouse inventory model is batch + location based:
+
+- `warehouses`: warehouse identity, for example Shenzhen, Hong Kong, Singapore
+- `storage_locations`: specific positions such as A1, B1, C1
+- `categories`: business categories such as paper, dairy, beverage, daily chemical, office supply
+- `items`: item master data, including brand, spec, and unit
+- `inventory_batches`: quantity, reservation, production date, expiry date, risk level, and recommendation by item, warehouse, location, and batch
+
+The idempotent record identity for Feishu sync is:
+
+```text
+Warehouse ID + Location + Item ID + Batch No
+```
 
 ## Provision Behavior
 
@@ -26,77 +43,90 @@ The provision endpoint:
 
 - Requires `FEISHU_INVENTORY_TABLE_APP_ID`, `FEISHU_INVENTORY_TABLE_APP_SECRET`, and `FEISHU_INVENTORY_TABLE_APP_TOKEN`.
 - Creates a data table in the configured Bitable app/base.
-- Adds the fixed inventory snapshot fields listed below, including colored single-select fields for `Risk Level` and `Sync Status`.
+- Adds fixed batch + location fields, including colored single-select fields for `Risk Level`, `Expiry Risk`, `Storage Status`, and `Sync Status`.
 - Returns `action=existing` without calling Feishu when `FEISHU_INVENTORY_TABLE_ID` is already configured.
-- Reuses an existing table with the same name when Feishu returns `TableNameDuplicated`, then creates any missing fields. This recovers from a partially provisioned table.
-- Upgrades existing `Risk Level` and `Sync Status` text fields to colored single-select fields when Feishu returns their field IDs.
+- Reuses an existing table with the same name when Feishu returns `TableNameDuplicated`, then creates any missing fields.
 - Writes a run log when `FEISHU_RUN_LOG_URL` is configured.
 - Does not create a new Feishu app/base or a source-of-truth inventory database.
 
 ## Sync Behavior
 
-The Warehouse Agent has a tool named `warehouse_inventory_table_sync_tool`. It should call this tool only when the user asks to sync, export, publish, show a Feishu table, or create a dashboard-style snapshot.
+There are two sync paths:
 
-The sync endpoint:
+- `/warehouse/inventory-table/sync` syncs a specific `item_id`, for example `item_vinda_tissue`.
+- `/warehouse/inventory-table/sync/filter` syncs a filtered set of records by warehouse, location, category, risk level, expiry state, or batch number.
 
-- Fetches `GET /warehouse/inventory/{sku}` from `mock-api`.
-- Auto-provisions or reuses the inventory table when `FEISHU_INVENTORY_TABLE_ID` is not configured.
-- Builds a normalized table row.
-- Looks up an existing Feishu table record by `SKU + Warehouse`.
-- Updates the existing record or creates a new one.
-- Writes a run log when `FEISHU_RUN_LOG_URL` is configured.
-- Returns a safe error if table credentials are missing.
+The sync endpoints:
+
+- Fetch rows from `mock-api /warehouse/inventory/table-rows`.
+- Auto-provision or reuse the inventory table when `FEISHU_INVENTORY_TABLE_ID` is not configured.
+- Build Feishu rows with batch + location fields.
+- Look up existing Feishu records by `Warehouse ID + Location + Item ID + Batch No`.
+- Update existing records or create new records.
+- Return a safe error if table credentials are missing.
 
 ## View Creation Behavior
 
-The Warehouse Agent now has two controlled tools for Feishu inventory views:
+Natural-language view creation should use:
 
-- `warehouse_table_schema_tool` reads the current table fields, field types, colored select options, and existing views.
-- `warehouse_view_create_tool` creates or reuses a view after the Agent submits a validated JSON plan.
-
-The Agent must call `warehouse_table_schema_tool` first. It must not invent fields that are not returned by the schema tool. The backend validates all `visible_fields`, filter fields, and sort fields before calling Feishu.
+- `POST /warehouse/inventory-table/views/from-template` for employee-friendly requests.
+- `POST /warehouse/inventory-table/views/create` only for controlled JSON plans.
 
 Example user request:
 
 ```text
-@Warehouse Create a "High Risk Inventory" view. Show SKU, Warehouse, Available, Risk Level, and Recommendation. Filter Risk Level=high and sort Available ascending.
+@Warehouse 帮我建一个香港仓乳制品临期库存视图
 ```
 
-Expected tool plan:
+Expected template plan:
 
 ```json
 {
-  "view_name": "High Risk Inventory",
-  "visible_fields": ["SKU", "Warehouse", "Available", "Risk Level", "Recommendation"],
-  "filters": [{"field": "Risk Level", "operator": "is", "value": "high"}],
-  "sorts": [{"field": "Available", "order": "asc"}]
+  "template_id": "expiring_inventory_view",
+  "view_name": "香港仓乳制品临期库存",
+  "visible_fields": ["Warehouse", "Location", "Category", "Item Name", "Batch No", "Expiry Date", "Days To Expiry", "Expiry Risk", "Quantity Available", "Recommendation"],
+  "filters": [
+    {"field": "Warehouse ID", "operator": "is", "value": "wh_hk_1"},
+    {"field": "Category ID", "operator": "is", "value": "dairy"},
+    {"field": "Expiry Risk", "operator": "is", "value": "expiring_soon"}
+  ],
+  "sorts": [{"field": "Days To Expiry", "order": "asc"}]
 }
 ```
-
-MVP boundary: the backend currently creates or reuses a Feishu grid view and returns the validated plan. It keeps filters, sorts, and visible fields in the response trace, but does not yet mutate Feishu view properties until the view-property API shape is locked down with live testing. This keeps the Agent from making unsafe direct Feishu CLI/API calls.
 
 ## Table Fields
 
 Create these Feishu table fields:
 
 ```text
-SKU
-Product Name
 Warehouse
-Available
-Reserved
-Pending Orders
-Risk Level        # single select: low=green, medium=yellow, high=red, unknown=gray
-Open Exception Count
+Warehouse ID
+Location
+Category
+Category ID
+Item ID
+Item Name
+Brand
+Spec
+Unit
+Batch No
+Quantity On Hand
+Quantity Available
+Quantity Reserved
+Reorder Threshold
+Production Date
+Expiry Date
+Days To Expiry
+Expiry Risk
+Risk Level
+Storage Status
 Recommendation
 Last Synced At
-Sync Status       # single select: synced=green, pending=yellow, failed=red
+Sync Status
 Source Version
 ```
 
-`Source Version` is a lightweight idempotency marker such as `mock-api:sku_bag_1:wh_hk_1`.
-
-If an older table already shows white/plain text values in `Risk Level` or `Sync Status`, call the provision endpoint again after deploying this version. The adapter will inspect the existing fields and update those two fields to colored single-select fields.
+`Source Version` is a lightweight idempotency marker such as `mock-api:wh_sz_1:A1:item_vinda_tissue:BATCH-20260501`.
 
 ## Required Environment
 
@@ -111,11 +141,7 @@ FEISHU_INVENTORY_TABLE_URL=
 
 `FEISHU_INVENTORY_TABLE_ID` is optional. If it is configured, provision and sync use that table. If it is empty, the backend looks for `Warehouse Inventory Snapshot` by name, reuses it when found, or creates it when missing. The adapter remembers the resolved `table_id` for the current process, so sync can work without manual `.env` editing.
 
-For long-running demos, copying the returned `table_id` into `.env` is still useful because it survives container restarts and avoids a table-name lookup.
-
-`FEISHU_INVENTORY_TABLE_VIEW_ID` and `FEISHU_INVENTORY_TABLE_URL` are optional. The URL is only returned to users as a convenient link.
-
-## Manual Smoke Test
+## Manual Smoke Tests
 
 Provision:
 
@@ -125,27 +151,28 @@ Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/p
   -Body '{"table_name":"Warehouse Inventory Snapshot"}' | ConvertTo-Json -Depth 10
 ```
 
-Sync:
+Sync one item:
 
 ```powershell
 Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/sync `
   -ContentType "application/json" `
-  -Body '{"sku":"sku_bag_1"}' | ConvertTo-Json -Depth 10
+  -Body '{"item_id":"item_vinda_tissue"}' | ConvertTo-Json -Depth 10
 ```
 
-Schema:
+Sync a filtered warehouse/category/location scope:
 
 ```powershell
-Invoke-RestMethod http://localhost:8010/warehouse/inventory-table/schema |
-  ConvertTo-Json -Depth 10
-```
-
-Create or reuse a view:
-
-```powershell
-Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/views/create `
+Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/sync/filter `
   -ContentType "application/json" `
-  -Body '{"view_name":"High Risk Inventory","visible_fields":["SKU","Warehouse","Available","Risk Level","Recommendation"],"filters":[{"field":"Risk Level","operator":"is","value":"high"}],"sorts":[{"field":"Available","order":"asc"}]}' | ConvertTo-Json -Depth 10
+  -Body '{"warehouse_id":"wh_sz_1","location_code":"A1","category":"dairy","expiry_risk":"expiring_soon","limit":50}' | ConvertTo-Json -Depth 10
+```
+
+Create or reuse a view from a template:
+
+```powershell
+Invoke-RestMethod -Method Post http://localhost:8010/warehouse/inventory-table/views/from-template `
+  -ContentType "application/json" `
+  -Body '{"message":"帮我建一个深圳仓A1库位库存视图"}' | ConvertTo-Json -Depth 10
 ```
 
 Expected behavior:
@@ -153,8 +180,7 @@ Expected behavior:
 - Missing provision config returns `ok=false` and `missing_feishu_inventory_table_provision_config`.
 - Existing `FEISHU_INVENTORY_TABLE_ID` returns `ok=true` and `action=existing`.
 - Successful provisioning returns `ok=true`, `action=created` or `action=existing`, `table_id`, and the fixed field list.
-- Missing sync config returns `ok=false` and `missing_feishu_inventory_table_config`.
-- Valid sync config returns `ok=true`, auto-creates or reuses the table when needed, then returns `action=created` or `action=updated` plus a `record_id`.
+- Valid sync config returns `ok=true`, `synced_count`, and per-record `item_id`, `batch_no`, `warehouse_id`, `location_code`, `risk_level`, `action`, and `record_id`.
 - Schema returns `ok=true`, `table_id`, `fields`, and `views`.
-- View creation returns `ok=true`, `action=created` or `action=existing`, `view_id`, and `validated_plan`.
+- Template view creation returns `ok=true`, `action=created` or `action=existing`, `view_id`, and `validated_plan`.
 - Unknown fields return `ok=false`, `invalid_inventory_view_plan`, `missing_fields`, and no Feishu view creation call.
