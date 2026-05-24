@@ -1017,6 +1017,27 @@ def create_app(
             values = [value]
         return json.dumps(values, ensure_ascii=False)
 
+    def feishu_view_filter_operator(operator: str) -> str:
+        return {
+            "eq": "is",
+            "=": "is",
+            "ne": "isNot",
+            "!=": "isNot",
+            "lt": "isLess",
+            "<": "isLess",
+            "lte": "isLessEqual",
+            "<=": "isLessEqual",
+            "gt": "isGreater",
+            ">": "isGreater",
+            "gte": "isGreaterEqual",
+            ">=": "isGreaterEqual",
+            "contains": "contains",
+            "not_contains": "doesNotContain",
+            "does_not_contain": "doesNotContain",
+            "is_empty": "isEmpty",
+            "is_not_empty": "isNotEmpty",
+        }.get(operator, operator)
+
     def build_inventory_view_property(
         *,
         plan: dict[str, Any],
@@ -1029,7 +1050,7 @@ def create_app(
             conditions.append(
                 {
                     "field_id": str(field.get("field_id") or ""),
-                    "operator": filter_rule["operator"],
+                    "operator": feishu_view_filter_operator(filter_rule["operator"]),
                     "value": normalize_view_filter_value(filter_rule["value"]),
                 }
             )
