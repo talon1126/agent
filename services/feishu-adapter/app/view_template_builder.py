@@ -51,7 +51,19 @@ def render_filters(slots: dict[str, Any]) -> list[dict[str, Any]]:
         )
     if slots.get("warehouse"):
         filters.append(
-            {"field": "Warehouse", "operator": "is", "value": slots["warehouse"]}
+            {"field": "Warehouse ID", "operator": "is", "value": slots["warehouse"]}
+        )
+    if slots.get("category"):
+        filters.append(
+            {"field": "Category ID", "operator": "is", "value": slots["category"]}
+        )
+    if slots.get("location_code"):
+        filters.append(
+            {"field": "Location", "operator": "is", "value": slots["location_code"]}
+        )
+    if slots.get("expiry_risk"):
+        filters.append(
+            {"field": "Expiry Risk", "operator": "is", "value": slots["expiry_risk"]}
         )
     if slots.get("available_lt") is not None:
         try:
@@ -60,7 +72,7 @@ def render_filters(slots: dict[str, Any]) -> list[dict[str, Any]]:
             raise ValueError("available_lt must be an integer") from exc
         filters.append(
             {
-                "field": "Available",
+                "field": "Quantity Available",
                 "operator": "lt",
                 "value": available_lt,
             }
@@ -97,7 +109,14 @@ def match_warehouse_view_template(message: str) -> TemplateMatchResult:
         )
 
     slots = dict(template.defaults)
-    for extractor in (_extract_warehouse, _extract_risk_level, _extract_available_lt):
+    for extractor in (
+        _extract_warehouse,
+        _extract_category,
+        _extract_location_code,
+        _extract_risk_level,
+        _extract_expiry_risk,
+        _extract_available_lt,
+    ):
         key, value = extractor(message)
         if value is not None and key in template.slots:
             slots[key] = value
@@ -147,6 +166,37 @@ def _extract_risk_level(message: str) -> tuple[str, str | None]:
     return "risk_level", None
 
 
+def _extract_category(message: str) -> tuple[str, str | None]:
+    normalized_message = message.casefold()
+    category_aliases = {
+        "paper": ("纸品", "纸巾", "抽纸", "paper"),
+        "dairy": ("乳制品", "奶制品", "牛奶", "酸奶", "dairy", "milk", "yogurt"),
+        "beverage": ("饮料", "矿泉水", "可乐", "beverage", "drink"),
+        "daily_chemical": ("日化", "洗衣液", "daily chemical", "detergent"),
+        "office_supply": ("办公耗材", "办公用品", "文具", "office supply"),
+    }
+    for category, aliases in category_aliases.items():
+        if any(alias.casefold() in normalized_message for alias in aliases):
+            return "category", category
+    return "category", None
+
+
+def _extract_location_code(message: str) -> tuple[str, str | None]:
+    match = re.search(r"(?<![A-Z0-9])([A-Z]\d{1,2})(?![A-Z0-9])", message, flags=re.IGNORECASE)
+    if match:
+        return "location_code", match.group(1).upper()
+    return "location_code", None
+
+
+def _extract_expiry_risk(message: str) -> tuple[str, str | None]:
+    normalized_message = message.casefold()
+    if any(token in normalized_message for token in ("已过期", "过期", "expired")):
+        return "expiry_risk", "expired"
+    if any(token in normalized_message for token in ("临期", "快过期", "保质期", "expiring", "expiry")):
+        return "expiry_risk", "expiring_soon"
+    return "expiry_risk", None
+
+
 def _matches_risk_alias(normalized_message: str, alias: str) -> bool:
     normalized_alias = alias.casefold()
     if normalized_alias.isascii():
@@ -157,6 +207,7 @@ def _matches_risk_alias(normalized_message: str, alias: str) -> bool:
 def _extract_available_lt(message: str) -> tuple[str, int | None]:
     patterns = (
         r"(?:available|stock|库存|可用库存)\s*(?:<|低于|少于|小于|below|under)\s*(\d+)",
+        r"(?:below|under)\s*(\d+)\s*(?:件|个|pcs|units?)?",
         r"(\d+)\s*(?:件|个|pcs|units?)\s*(?:以下|以内|below|under)",
     )
     for pattern in patterns:
@@ -169,13 +220,17 @@ def _extract_available_lt(message: str) -> tuple[str, int | None]:
 def _build_view_name(template: WarehouseViewTemplate, slots: dict[str, Any]) -> str:
     prefix = _warehouse_view_name(slots.get("warehouse"))
     risk_level = _risk_level_view_name(slots.get("risk_level"))
+    category = _category_view_name(slots.get("category"))
+    location = str(slots.get("location_code") or "")
+    expiry = _expiry_risk_view_name(slots.get("expiry_risk"))
 
     template_names = {
-        "inventory_risk_view": f"{prefix}{risk_level}库存",
+        "category_inventory_view": f"{prefix}{category}库存",
         "low_stock_view": f"{prefix}缺货预警",
-        "warehouse_exception_view": f"{prefix}仓储异常",
+        "expiring_inventory_view": f"{prefix}{category}{expiry}库存",
+        "location_inventory_view": f"{prefix}{location}库位库存",
+        "batch_risk_view": f"{prefix}{risk_level}批次",
         "replenishment_candidate_view": f"{prefix}补货候选",
-        "fulfillment_block_view": f"{prefix}{risk_level}履约阻塞",
     }
     return template_names.get(template.template_id, template.display_name.removesuffix("视图"))
 
@@ -196,6 +251,26 @@ def _risk_level_view_name(risk_level: Any) -> str:
         "low": "低风险",
     }
     return risk_level_names.get(risk_level, "")
+
+
+def _category_view_name(category: Any) -> str:
+    category_names = {
+        "paper": "纸品",
+        "dairy": "乳制品",
+        "beverage": "饮料",
+        "daily_chemical": "日化",
+        "office_supply": "办公耗材",
+    }
+    return category_names.get(category, "")
+
+
+def _expiry_risk_view_name(expiry_risk: Any) -> str:
+    expiry_names = {
+        "expiring_soon": "临期",
+        "expired": "过期",
+        "normal": "正常保质期",
+    }
+    return expiry_names.get(expiry_risk, "")
 
 
 def _template_suggestions() -> list[str]:

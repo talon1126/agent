@@ -1589,7 +1589,8 @@ def test_inventory_table_view_templates_endpoint_lists_employee_templates() -> N
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert any(item["template_id"] == "inventory_risk_view" for item in body["templates"])
+    assert any(item["template_id"] == "batch_risk_view" for item in body["templates"])
+    assert any(item["template_id"] == "location_inventory_view" for item in body["templates"])
 
 
 def test_warehouse_intent_router_endpoint_routes_update_table_view_to_sync() -> None:
@@ -1624,9 +1625,14 @@ def test_inventory_table_view_from_template_creates_controlled_view() -> None:
                     "code": 0,
                     "data": {
                         "items": [
-                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1},
                             {"field_id": "fld_wh", "field_name": "Warehouse", "type": 1},
-                            {"field_id": "fld_available", "field_name": "Available", "type": 2},
+                            {"field_id": "fld_wh_id", "field_name": "Warehouse ID", "type": 1},
+                            {"field_id": "fld_location", "field_name": "Location", "type": 1},
+                            {"field_id": "fld_category", "field_name": "Category", "type": 1},
+                            {"field_id": "fld_item", "field_name": "Item Name", "type": 1},
+                            {"field_id": "fld_batch", "field_name": "Batch No", "type": 1},
+                            {"field_id": "fld_available", "field_name": "Quantity Available", "type": 2},
+                            {"field_id": "fld_expiry", "field_name": "Expiry Date", "type": 5},
                             {"field_id": "fld_risk", "field_name": "Risk Level", "type": 3},
                             {"field_id": "fld_rec", "field_name": "Recommendation", "type": 1},
                         ]
@@ -1662,10 +1668,10 @@ def test_inventory_table_view_from_template_creates_controlled_view() -> None:
     body = response.json()
     assert body["ok"] is True
     assert body["matched"] is True
-    assert body["template_id"] == "inventory_risk_view"
+    assert body["template_id"] == "batch_risk_view"
     assert body["slots"]["risk_level"] == "high"
     assert body["slots"]["warehouse"] == "wh_hk_1"
-    assert body["validated_plan"]["view_name"] == "香港仓高风险库存"
+    assert body["validated_plan"]["view_name"] == "香港仓高风险批次"
     create_requests = [
         request
         for request in requests
@@ -1673,7 +1679,7 @@ def test_inventory_table_view_from_template_creates_controlled_view() -> None:
     ]
     assert len(create_requests) == 1
     assert json.loads(create_requests[0].content) == {
-        "view_name": "香港仓高风险库存",
+        "view_name": "香港仓高风险批次",
         "view_type": "grid",
     }
     patch_requests = [
@@ -1684,16 +1690,16 @@ def test_inventory_table_view_from_template_creates_controlled_view() -> None:
     ]
     assert len(patch_requests) == 1
     assert json.loads(patch_requests[0].content) == {
-        "view_name": "香港仓高风险库存",
+        "view_name": "香港仓高风险批次",
         "property": {
             "filter_info": {
                 "conditions": [
                     {"field_id": "fld_risk", "operator": "is", "value": "[\"high\"]"},
-                    {"field_id": "fld_wh", "operator": "is", "value": "[\"wh_hk_1\"]"},
+                    {"field_id": "fld_wh_id", "operator": "is", "value": "[\"wh_hk_1\"]"},
                 ],
                 "conjunction": "and",
             },
-            "hidden_fields": [],
+            "hidden_fields": ["fld_wh_id"],
         },
     }
 
@@ -1712,11 +1718,14 @@ def test_inventory_table_view_from_template_maps_threshold_operator_to_feishu_op
                     "code": 0,
                     "data": {
                         "items": [
-                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1},
                             {"field_id": "fld_wh", "field_name": "Warehouse", "type": 1},
-                            {"field_id": "fld_available", "field_name": "Available", "type": 2},
-                            {"field_id": "fld_reserved", "field_name": "Reserved", "type": 2},
-                            {"field_id": "fld_pending", "field_name": "Pending Orders", "type": 2},
+                            {"field_id": "fld_wh_id", "field_name": "Warehouse ID", "type": 1},
+                            {"field_id": "fld_location", "field_name": "Location", "type": 1},
+                            {"field_id": "fld_category", "field_name": "Category", "type": 1},
+                            {"field_id": "fld_item", "field_name": "Item Name", "type": 1},
+                            {"field_id": "fld_batch", "field_name": "Batch No", "type": 1},
+                            {"field_id": "fld_available", "field_name": "Quantity Available", "type": 2},
+                            {"field_id": "fld_threshold", "field_name": "Reorder Threshold", "type": 2},
                             {"field_id": "fld_rec", "field_name": "Recommendation", "type": 1},
                         ]
                     },
@@ -1758,7 +1767,7 @@ def test_inventory_table_view_from_template_maps_threshold_operator_to_feishu_op
         and str(request.url).endswith("/tables/tbl_inventory/views/vew_low_stock")
     )
     assert json.loads(patch_request.content)["property"]["filter_info"]["conditions"] == [
-        {"field_id": "fld_wh", "operator": "is", "value": "[\"wh_sz_1\"]"},
+        {"field_id": "fld_wh_id", "operator": "is", "value": "[\"wh_sz_1\"]"},
         {"field_id": "fld_available", "operator": "isLess", "value": "[10]"},
     ]
 
@@ -1783,11 +1792,14 @@ def test_inventory_table_view_from_template_does_not_hide_primary_field() -> Non
                                 "type": 1,
                                 "is_primary": True,
                             },
-                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1},
                             {"field_id": "fld_wh", "field_name": "Warehouse", "type": 1},
-                            {"field_id": "fld_available", "field_name": "Available", "type": 2},
-                            {"field_id": "fld_reserved", "field_name": "Reserved", "type": 2},
-                            {"field_id": "fld_pending", "field_name": "Pending Orders", "type": 2},
+                            {"field_id": "fld_wh_id", "field_name": "Warehouse ID", "type": 1},
+                            {"field_id": "fld_location", "field_name": "Location", "type": 1},
+                            {"field_id": "fld_category", "field_name": "Category", "type": 1},
+                            {"field_id": "fld_item", "field_name": "Item Name", "type": 1},
+                            {"field_id": "fld_batch", "field_name": "Batch No", "type": 1},
+                            {"field_id": "fld_available", "field_name": "Quantity Available", "type": 2},
+                            {"field_id": "fld_threshold", "field_name": "Reorder Threshold", "type": 2},
                             {"field_id": "fld_rec", "field_name": "Recommendation", "type": 1},
                             {"field_id": "fld_status", "field_name": "Sync Status", "type": 3},
                         ]
