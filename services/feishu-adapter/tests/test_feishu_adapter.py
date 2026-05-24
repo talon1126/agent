@@ -474,7 +474,8 @@ def test_inventory_table_provision_returns_existing_table_when_table_id_is_confi
     assert body["view_id"] == "vew_existing"
     assert body["table_url"] == "https://example.feishu.cn/base/app_token?table=tbl_existing"
     assert "Risk Level" in body["fields"]
-    assert [request.method for request in requests] == ["POST", "GET"]
+    assert [request.method for request in requests] == ["GET", "POST", "GET"]
+    assert str(requests[0].url).endswith("/warehouse/inventory/table-schema")
 
 
 def test_inventory_table_provision_creates_inventory_table_with_fixed_schema() -> None:
@@ -603,6 +604,83 @@ def test_inventory_table_provision_creates_inventory_table_with_fixed_schema() -
         "Last Synced At",
         "Sync Status",
         "Source Version",
+    ]
+
+
+def test_inventory_table_provision_uses_backend_schema_when_available() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "http://mock-api.local/warehouse/inventory/table-schema":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "schema_id": "warehouse_inventory_snapshot",
+                    "fields": [
+                        {
+                            "name": "SKU",
+                            "type": "text",
+                            "source": "warehouse_inventory.sku",
+                            "comment": "商品 SKU",
+                        },
+                        {
+                            "name": "Risk Level",
+                            "type": "single_select",
+                            "source": "computed.risk_level",
+                            "comment": "风险等级",
+                            "options": [{"name": "high", "color": 17}],
+                        },
+                        {
+                            "name": "Backend Only Metric",
+                            "type": "number",
+                            "source": "computed.backend_only_metric",
+                            "comment": "后端新增指标",
+                        },
+                    ],
+                },
+            )
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"table_id": "tbl_inventory", "default_view_id": "vew_inventory"}},
+            )
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_created"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/warehouse/inventory-table/provision", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["fields"] == ["SKU", "Risk Level", "Backend Only Metric"]
+    field_requests = [
+        json.loads(request.content)
+        for request in requests
+        if request.method == "POST"
+        and str(request.url).endswith("/tables/tbl_inventory/fields")
+    ]
+    assert field_requests == [
+        {"field_name": "SKU", "type": 1},
+        {
+            "field_name": "Risk Level",
+            "type": 3,
+            "property": {"options": [{"name": "high", "color": 17}]},
+        },
+        {"field_name": "Backend Only Metric", "type": 2},
     ]
 
 
@@ -1042,6 +1120,83 @@ def test_inventory_table_sync_filter_updates_matching_inventory_records() -> Non
         if request.method == "POST" and str(request.url).endswith("/records")
     ]
     assert len(create_requests) == 2
+
+
+def test_inventory_table_sync_filter_uses_backend_table_rows() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "http://mock-api.local/warehouse/inventory/table-rows":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "schema_id": "warehouse_inventory_snapshot",
+                    "count": 1,
+                    "items": [
+                        {
+                            "sku": "sku_bag_1",
+                            "fields": {
+                                "SKU": "sku_bag_1",
+                                "Warehouse": "wh_hk_1",
+                                "Available": 5,
+                                "Risk Level": "high",
+                                "Backend Only Metric": 99,
+                                "Last Synced At": "2026-05-24T00:00:00+00:00",
+                                "Source Version": "mock-api:sku_bag_1:wh_hk_1",
+                            },
+                        }
+                    ],
+                },
+            )
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if str(request.url).startswith(
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/records?"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/records":
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_new"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_inventory",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/sync/filter",
+        json={"warehouse_id": "wh_hk_1", "risk_level": "high"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["synced_count"] == 1
+    table_row_requests = [
+        request for request in requests if str(request.url) == "http://mock-api.local/warehouse/inventory/table-rows"
+    ]
+    assert len(table_row_requests) == 1
+    assert json.loads(table_row_requests[0].content) == {
+        "sku": None,
+        "warehouse_id": "wh_hk_1",
+        "risk_level": "high",
+        "limit": 50,
+    }
+    create_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and str(request.url).endswith("/records")
+    )
+    assert json.loads(create_request.content)["fields"]["Backend Only Metric"] == 99
 
 
 def test_inventory_table_schema_returns_fields_and_views() -> None:

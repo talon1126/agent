@@ -1,4 +1,5 @@
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -6,7 +7,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.store import FIXTURE_DIR, find_by_id, load_json
-from app.warehouse_store import WarehouseRepository, create_warehouse_repository_from_env
+from app.warehouse_store import (
+    WAREHOUSE_COLUMN_COMMENTS,
+    WarehouseRepository,
+    create_warehouse_repository_from_env,
+)
 
 app = FastAPI(title="Ecommerce Mock Enterprise API")
 
@@ -33,6 +38,7 @@ class ApprovalRequest(BaseModel):
 
 
 class WarehouseInventorySearchRequest(BaseModel):
+    sku: str | None = None
     warehouse_id: str | None = None
     risk_level: str | None = None
     limit: int = 50
@@ -205,37 +211,167 @@ def warehouse_risk_level(inventory: dict, open_exceptions: list[dict[str, Any]])
     return "low"
 
 
+WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
+    {
+        "name": "SKU",
+        "source": "warehouse_inventory.sku",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_inventory"]["sku"],
+    },
+    {
+        "name": "Product Name",
+        "source": "computed.product_name",
+        "type": "text",
+        "comment": "商品展示名称；当前 mock 数据没有商品主数据时默认使用 SKU。",
+    },
+    {
+        "name": "Warehouse",
+        "source": "warehouse_locations.warehouse_id",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_locations"]["warehouse_id"],
+    },
+    {
+        "name": "Available",
+        "source": "warehouse_inventory.available",
+        "type": "number",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_inventory"]["available"],
+    },
+    {
+        "name": "Reserved",
+        "source": "warehouse_inventory.reserved",
+        "type": "number",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_inventory"]["reserved"],
+    },
+    {
+        "name": "Pending Orders",
+        "source": "warehouse_inventory.pending_orders",
+        "type": "number",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouse_inventory"]["pending_orders"],
+    },
+    {
+        "name": "Risk Level",
+        "source": "computed.risk_level",
+        "type": "single_select",
+        "comment": "根据库存、待履约订单、补货阈值和未关闭异常计算出的履约风险等级。",
+        "options": [
+            {"name": "low", "color": 28},
+            {"name": "medium", "color": 24},
+            {"name": "high", "color": 17},
+            {"name": "unknown", "color": 0},
+        ],
+    },
+    {
+        "name": "Open Exception Count",
+        "source": "warehouse_exceptions.status=open",
+        "type": "number",
+        "comment": "该 SKU 当前未关闭的仓储异常数量。",
+    },
+    {
+        "name": "Recommendation",
+        "source": "computed.recommendation",
+        "type": "text",
+        "comment": "根据风险等级生成的仓储处理建议。",
+    },
+    {
+        "name": "Last Synced At",
+        "source": "sync.last_synced_at",
+        "type": "text",
+        "comment": "同步到飞书多维表格的时间。",
+    },
+    {
+        "name": "Sync Status",
+        "source": "sync.status",
+        "type": "single_select",
+        "comment": "该行数据的同步状态。",
+        "options": [
+            {"name": "synced", "color": 28},
+            {"name": "pending", "color": 24},
+            {"name": "failed", "color": 17},
+        ],
+    },
+    {
+        "name": "Source Version",
+        "source": "computed.source_version",
+        "type": "text",
+        "comment": "用于追踪该行快照来源的版本标识。",
+    },
+]
+
+
+def warehouse_inventory_recommendation(risk_level: str) -> str:
+    if risk_level == "high":
+        return "库存或异常存在履约风险，建议仓库复核并通知采购。"
+    return "库存状态正常，可继续履约。"
+
+
+def enrich_warehouse_inventory(inventory: dict[str, Any]) -> dict[str, Any]:
+    sku = str(inventory.get("sku") or "")
+    locations = load_locations_for_sku(sku)
+    open_exceptions = load_exceptions_for_sku(sku, "open")
+    computed_risk = warehouse_risk_level(inventory, open_exceptions)
+    return {
+        "ok": True,
+        **inventory,
+        "locations": locations,
+        "open_exceptions": open_exceptions,
+        "risk_level": computed_risk,
+        "recommendation": warehouse_inventory_recommendation(computed_risk),
+    }
+
+
+def warehouse_inventory_table_fields(inventory: dict[str, Any]) -> dict[str, Any]:
+    sku = str(inventory.get("sku") or "").strip()
+    locations = inventory.get("locations") if isinstance(inventory.get("locations"), list) else []
+    first_location = locations[0] if locations and isinstance(locations[0], dict) else {}
+    warehouse_id = str(first_location.get("warehouse_id") or inventory.get("warehouse_id") or "unknown")
+    open_exceptions = inventory.get("open_exceptions") if isinstance(inventory.get("open_exceptions"), list) else []
+    return {
+        "SKU": sku,
+        "Product Name": str(inventory.get("product_name") or inventory.get("name") or sku),
+        "Warehouse": warehouse_id,
+        "Available": int(inventory.get("available", 0)),
+        "Reserved": int(inventory.get("reserved", 0)),
+        "Pending Orders": int(inventory.get("pending_orders", 0)),
+        "Risk Level": str(inventory.get("risk_level") or "unknown"),
+        "Open Exception Count": len(open_exceptions),
+        "Recommendation": str(inventory.get("recommendation") or ""),
+        "Last Synced At": datetime.now(UTC).isoformat(),
+        "Sync Status": "synced",
+        "Source Version": f"mock-api:{sku}:{warehouse_id}",
+    }
+
+
+@app.get("/warehouse/inventory/table-schema")
+def get_warehouse_inventory_table_schema() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "schema_id": "warehouse_inventory_snapshot",
+        "source": "mock-api",
+        "fields": WAREHOUSE_INVENTORY_TABLE_SCHEMA,
+    }
+
+
 @app.post("/warehouse/inventory/search")
 def search_warehouse_inventory(payload: WarehouseInventorySearchRequest) -> dict:
+    sku_filter = (payload.sku or "").strip().lower()
     warehouse_id = (payload.warehouse_id or "").strip()
     risk_level = (payload.risk_level or "").strip()
     limit = max(min(int(payload.limit or 50), 100), 1)
     matches: list[dict[str, Any]] = []
     for inventory in load_all_inventory():
         sku = str(inventory.get("sku") or "")
-        locations = load_locations_for_sku(sku)
+        if sku_filter and sku != sku_filter:
+            continue
+        enriched = enrich_warehouse_inventory(inventory)
+        locations = enriched["locations"]
         if warehouse_id and not any(
             item.get("warehouse_id") == warehouse_id for item in locations
         ):
             continue
-        open_exceptions = load_exceptions_for_sku(sku, "open")
-        computed_risk = warehouse_risk_level(inventory, open_exceptions)
+        computed_risk = enriched["risk_level"]
         if risk_level and computed_risk != risk_level:
             continue
-        matches.append(
-            {
-                "ok": True,
-                **inventory,
-                "locations": locations,
-                "open_exceptions": open_exceptions,
-                "risk_level": computed_risk,
-                "recommendation": (
-                    "库存或异常存在履约风险，建议仓库复核并通知采购。"
-                    if computed_risk == "high"
-                    else "库存状态正常，可继续履约。"
-                ),
-            }
-        )
+        matches.append(enriched)
         if len(matches) >= limit:
             break
     return {
@@ -247,26 +383,29 @@ def search_warehouse_inventory(payload: WarehouseInventorySearchRequest) -> dict
     }
 
 
+@app.post("/warehouse/inventory/table-rows")
+def get_warehouse_inventory_table_rows(payload: WarehouseInventorySearchRequest) -> dict[str, Any]:
+    search_result = search_warehouse_inventory(payload)
+    return {
+        "ok": True,
+        "schema_id": "warehouse_inventory_snapshot",
+        "count": search_result["count"],
+        "items": [
+            {
+                "sku": item["sku"],
+                "fields": warehouse_inventory_table_fields(item),
+            }
+            for item in search_result["items"]
+        ],
+    }
+
+
 @app.get("/warehouse/inventory/{sku}")
 def get_warehouse_inventory(sku: str) -> dict:
     inventory = load_inventory_for_sku(sku)
     if not inventory:
         raise HTTPException(status_code=404, detail="inventory not found")
-    locations = load_locations_for_sku(sku)
-    open_exceptions = load_exceptions_for_sku(sku, "open")
-    risk_level = warehouse_risk_level(inventory, open_exceptions)
-    return {
-        "ok": True,
-        **inventory,
-        "locations": locations,
-        "open_exceptions": open_exceptions,
-        "risk_level": risk_level,
-        "recommendation": (
-            "库存或异常存在履约风险，建议仓库复核并通知采购。"
-            if risk_level == "high"
-            else "库存状态正常，可继续履约。"
-        ),
-    }
+    return enrich_warehouse_inventory(inventory)
 
 
 @app.post("/warehouse/exceptions/search")

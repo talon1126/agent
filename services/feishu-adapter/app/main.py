@@ -481,6 +481,122 @@ def create_app(
             "Source Version": f"mock-api:{sku}:{warehouse_id}",
         }
 
+    def backend_field_to_feishu_field(field: dict[str, Any]) -> dict[str, Any]:
+        type_mapping = {
+            "text": 1,
+            "number": 2,
+            "single_select": 3,
+        }
+        field_name = str(field.get("name") or field.get("field_name") or "").strip()
+        field_type = str(field.get("type") or "text").strip()
+        spec: dict[str, Any] = {
+            "field_name": field_name,
+            "type": type_mapping.get(field_type, 1),
+        }
+        options = field.get("options")
+        if spec["type"] == 3 and isinstance(options, list):
+            spec["property"] = {
+                "options": [
+                    {
+                        "name": str(option.get("name") or ""),
+                        "color": option.get("color", 0),
+                    }
+                    for option in options
+                    if isinstance(option, dict) and option.get("name")
+                ]
+            }
+        return spec
+
+    def inventory_table_field_specs() -> list[dict[str, Any]]:
+        try:
+            response = client.get(f"{runtime_mock_api_url}/warehouse/inventory/table-schema")
+            response.raise_for_status()
+            payload = response.json()
+            fields = payload.get("fields", [])
+            if payload.get("ok") is not True or not isinstance(fields, list) or not fields:
+                return INVENTORY_TABLE_FIELD_SPECS
+            specs = [
+                backend_field_to_feishu_field(field)
+                for field in fields
+                if isinstance(field, dict) and str(field.get("name") or field.get("field_name") or "").strip()
+            ]
+            return specs or INVENTORY_TABLE_FIELD_SPECS
+        except (httpx.HTTPError, ValueError, TypeError) as error:
+            logger.warning("failed to load warehouse inventory table schema from backend: %s", error)
+            return INVENTORY_TABLE_FIELD_SPECS
+
+    def fetch_inventory_table_rows(
+        *,
+        sku: str | None = None,
+        warehouse_id: str | None = None,
+        risk_level: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        response = client.post(
+            f"{runtime_mock_api_url}/warehouse/inventory/table-rows",
+            json={
+                "sku": sku or None,
+                "warehouse_id": warehouse_id or None,
+                "risk_level": risk_level or None,
+                "limit": limit,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("ok") is not True:
+            raise RuntimeError(f"warehouse inventory table rows lookup failed: {payload}")
+        rows = payload.get("items", [])
+        if not isinstance(rows, list):
+            raise RuntimeError(f"warehouse inventory table rows returned invalid items: {payload}")
+        return [
+            row
+            for row in rows
+            if isinstance(row, dict) and isinstance(row.get("fields"), dict)
+        ]
+
+    def legacy_inventory_rows_from_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "sku": str(item.get("sku") or ""),
+                "fields": build_inventory_snapshot_fields(item),
+            }
+            for item in items
+        ]
+
+    def fetch_inventory_table_rows_with_fallback(
+        *,
+        sku: str | None = None,
+        warehouse_id: str | None = None,
+        risk_level: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        try:
+            return fetch_inventory_table_rows(
+                sku=sku,
+                warehouse_id=warehouse_id,
+                risk_level=risk_level,
+                limit=limit,
+            )
+        except (httpx.HTTPError, RuntimeError) as error:
+            logger.warning("failed to load warehouse table rows from backend contract: %s", error)
+        if sku:
+            inventory_response = client.get(
+                f"{runtime_mock_api_url}/warehouse/inventory/{sku}",
+            )
+            inventory_response.raise_for_status()
+            return legacy_inventory_rows_from_items([inventory_response.json()])
+        search_payload = {
+            "warehouse_id": warehouse_id or None,
+            "risk_level": risk_level or None,
+            "limit": limit,
+        }
+        inventory_response = client.post(
+            f"{runtime_mock_api_url}/warehouse/inventory/search",
+            json=search_payload,
+        )
+        inventory_response.raise_for_status()
+        return legacy_inventory_rows_from_items(inventory_response.json().get("items", []))
+
     def bitable_records_url(record_id: str | None = None) -> str:
         base = (
             f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}"
@@ -588,10 +704,11 @@ def create_app(
         *,
         token: str,
         table_identifier: str,
+        field_specs: list[dict[str, Any]],
         existing_fields: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         existing = existing_fields or {}
-        for field in INVENTORY_TABLE_FIELD_SPECS:
+        for field in field_specs:
             existing_field = existing.get(str(field["field_name"]))
             if existing_field:
                 field_id = str(existing_field.get("field_id") or "")
@@ -705,7 +822,12 @@ def create_app(
         missing_fields = list(dict.fromkeys(field for field in referenced_fields if field not in fields_by_name))
         return plan, missing_fields
 
-    def ensure_inventory_table_fields(*, token: str, table_identifier: str) -> None:
+    def ensure_inventory_table_fields(
+        *,
+        token: str,
+        table_identifier: str,
+        field_specs: list[dict[str, Any]],
+    ) -> None:
         try:
             existing_fields = fields_by_name_for_table(token=token, table_identifier=table_identifier)
         except httpx.HTTPStatusError as error:
@@ -715,6 +837,7 @@ def create_app(
         create_inventory_table_fields(
             token=token,
             table_identifier=table_identifier,
+            field_specs=field_specs,
             existing_fields=existing_fields,
         )
 
@@ -724,7 +847,13 @@ def create_app(
         if result.get("view_id"):
             inventory_table_state["view_id"] = result["view_id"]
 
-    def create_or_reuse_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
+    def create_or_reuse_inventory_table(
+        *,
+        token: str,
+        table_name: str,
+        field_specs: list[dict[str, Any]] | None = None,
+    ) -> dict[str, str]:
+        field_specs = field_specs or inventory_table_field_specs()
         response = client.post(
             bitable_tables_url(),
             headers={"Authorization": f"Bearer {token}"},
@@ -736,7 +865,11 @@ def create_app(
             if payload.get("code") == 1254013:
                 existing = find_inventory_table_by_name(token=token, table_name=table_name)
                 if existing["table_id"]:
-                    ensure_inventory_table_fields(token=token, table_identifier=existing["table_id"])
+                    ensure_inventory_table_fields(
+                        token=token,
+                        table_identifier=existing["table_id"],
+                        field_specs=field_specs,
+                    )
                     remember_inventory_table(existing)
                     return {**existing, "action": "existing"}
             raise RuntimeError(f"Feishu inventory table create failed: {payload}")
@@ -744,7 +877,11 @@ def create_app(
         created_table_id = str(data.get("table_id") or "")
         if not created_table_id:
             raise RuntimeError(f"Feishu inventory table create returned no table_id: {payload}")
-        create_inventory_table_fields(token=token, table_identifier=created_table_id)
+        create_inventory_table_fields(
+            token=token,
+            table_identifier=created_table_id,
+            field_specs=field_specs,
+        )
         result = {
             "table_id": created_table_id,
             "view_id": str(data.get("default_view_id") or data.get("view_id") or ""),
@@ -753,21 +890,39 @@ def create_app(
         remember_inventory_table(result)
         return result
 
-    def ensure_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
+    def ensure_inventory_table(
+        *,
+        token: str,
+        table_name: str,
+        field_specs: list[dict[str, Any]] | None = None,
+    ) -> dict[str, str]:
+        field_specs = field_specs or inventory_table_field_specs()
         if inventory_table_state["table_id"]:
             result = {
                 "table_id": inventory_table_state["table_id"],
                 "view_id": inventory_table_state["view_id"],
                 "action": "existing",
             }
-            ensure_inventory_table_fields(token=token, table_identifier=result["table_id"])
+            ensure_inventory_table_fields(
+                token=token,
+                table_identifier=result["table_id"],
+                field_specs=field_specs,
+            )
             return result
         existing = find_inventory_table_by_name(token=token, table_name=table_name)
         if existing["table_id"]:
-            ensure_inventory_table_fields(token=token, table_identifier=existing["table_id"])
+            ensure_inventory_table_fields(
+                token=token,
+                table_identifier=existing["table_id"],
+                field_specs=field_specs,
+            )
             remember_inventory_table(existing)
             return {**existing, "action": "existing"}
-        return create_or_reuse_inventory_table(token=token, table_name=table_name)
+        return create_or_reuse_inventory_table(
+            token=token,
+            table_name=table_name,
+            field_specs=field_specs,
+        )
 
     def create_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
         result = create_or_reuse_inventory_table(token=token, table_name=table_name)
@@ -1219,13 +1374,18 @@ def create_app(
             }
         table_name = request.table_name.strip() or "Warehouse Inventory Snapshot"
         try:
+            field_specs = inventory_table_field_specs()
             token = get_tenant_access_token(
                 client=client,
                 app_id=table_app_id,
                 app_secret=table_app_secret,
                 api_base_url=api_base_url,
             )
-            result = ensure_inventory_table(token=token, table_name=table_name)
+            result = ensure_inventory_table(
+                token=token,
+                table_name=table_name,
+                field_specs=field_specs,
+            )
             latency_ms = (perf_counter() - started) * 1000
             write_inventory_table_run_log(
                 event_id=f"inventory_table_provision:{result['table_id']}",
@@ -1246,7 +1406,7 @@ def create_app(
                 "action": result["action"],
                 **result,
                 "table_url": inventory_table_url_for(result["table_id"]),
-                "fields": [field["field_name"] for field in INVENTORY_TABLE_FIELD_SPECS],
+                "fields": [field["field_name"] for field in field_specs],
             }
         except (httpx.HTTPError, RuntimeError) as error:
             latency_ms = (perf_counter() - started) * 1000
@@ -1277,12 +1437,10 @@ def create_app(
                 "message": "Feishu inventory table sync is not configured.",
             }
         try:
-            inventory_response = client.get(
-                f"{runtime_mock_api_url}/warehouse/inventory/{sku}",
-            )
-            inventory_response.raise_for_status()
-            inventory = inventory_response.json()
-            fields = build_inventory_snapshot_fields(inventory)
+            rows = fetch_inventory_table_rows_with_fallback(sku=sku, limit=1)
+            if not rows:
+                raise RuntimeError(f"warehouse inventory table rows returned no data for sku={sku}")
+            fields = rows[0]["fields"]
             token = get_tenant_access_token(
                 client=client,
                 app_id=table_app_id,
@@ -1308,8 +1466,8 @@ def create_app(
                 **result,
                 "table_id": provision_result["table_id"],
                 "table_url": inventory_table_url_for(provision_result["table_id"]),
-                "last_synced_at": fields["Last Synced At"],
-                "source_version": fields["Source Version"],
+                "last_synced_at": fields.get("Last Synced At", ""),
+                "source_version": fields.get("Source Version", ""),
             }
         except (httpx.HTTPError, RuntimeError) as error:
             latency_ms = (perf_counter() - started) * 1000
@@ -1344,25 +1502,12 @@ def create_app(
                 "message": "Feishu inventory table sync is not configured.",
             }
         try:
-            search_payload = {
-                "warehouse_id": warehouse_id or None,
-                "risk_level": risk_level or None,
-                "limit": limit,
-            }
-            if sku:
-                inventory_response = client.get(
-                    f"{runtime_mock_api_url}/warehouse/inventory/{sku}",
-                )
-                inventory_response.raise_for_status()
-                inventory_items = [inventory_response.json()]
-            else:
-                inventory_response = client.post(
-                    f"{runtime_mock_api_url}/warehouse/inventory/search",
-                    json=search_payload,
-                )
-                inventory_response.raise_for_status()
-                inventory_items = inventory_response.json().get("items", [])
-
+            inventory_rows = fetch_inventory_table_rows_with_fallback(
+                sku=sku or None,
+                warehouse_id=warehouse_id or None,
+                risk_level=risk_level or None,
+                limit=limit,
+            )
             token = get_tenant_access_token(
                 client=client,
                 app_id=table_app_id,
@@ -1374,8 +1519,8 @@ def create_app(
                 table_name="Warehouse Inventory Snapshot",
             )
             synced_items: list[dict[str, Any]] = []
-            for inventory in inventory_items:
-                fields = build_inventory_snapshot_fields(inventory)
+            for row in inventory_rows:
+                fields = row["fields"]
                 result = upsert_inventory_table_record(token=token, fields=fields)
                 synced_items.append(
                     {

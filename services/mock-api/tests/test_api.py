@@ -130,6 +130,62 @@ def test_warehouse_inventory_search_filters_by_warehouse_and_risk():
     )
 
 
+def test_warehouse_inventory_table_schema_exposes_business_fields():
+    response = client.get("/warehouse/inventory/table-schema")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["schema_id"] == "warehouse_inventory_snapshot"
+    assert body["source"] == "mock-api"
+    assert body["fields"][0] == {
+        "name": "SKU",
+        "source": "warehouse_inventory.sku",
+        "type": "text",
+        "comment": "商品 SKU，库存记录的唯一业务标识。",
+    }
+    risk_field = next(item for item in body["fields"] if item["name"] == "Risk Level")
+    assert risk_field["type"] == "single_select"
+    assert risk_field["options"] == [
+        {"name": "low", "color": 28},
+        {"name": "medium", "color": 24},
+        {"name": "high", "color": 17},
+        {"name": "unknown", "color": 0},
+    ]
+
+
+def test_warehouse_inventory_table_rows_return_feishu_ready_fields():
+    response = client.post(
+        "/warehouse/inventory/table-rows",
+        json={"warehouse_id": "wh_hk_1", "risk_level": "high"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["schema_id"] == "warehouse_inventory_snapshot"
+    assert body["count"] >= 2
+    first = body["items"][0]
+    assert set(first["fields"]).issuperset(
+        {
+            "SKU",
+            "Product Name",
+            "Warehouse",
+            "Available",
+            "Reserved",
+            "Pending Orders",
+            "Risk Level",
+            "Open Exception Count",
+            "Recommendation",
+            "Last Synced At",
+            "Sync Status",
+            "Source Version",
+        }
+    )
+    assert first["fields"]["Risk Level"] == "high"
+    assert first["fields"]["Warehouse"] == "wh_hk_1"
+
+
 def test_warehouse_exception_search_returns_open_sku_exceptions():
     response = client.post(
         "/warehouse/exceptions/search",
