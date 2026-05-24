@@ -497,6 +497,9 @@ def create_app(
     def bitable_views_url(table_identifier: str) -> str:
         return f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables/{table_identifier}/views"
 
+    def bitable_view_url(table_identifier: str, view_id: str) -> str:
+        return f"{bitable_views_url(table_identifier)}/{view_id}"
+
     def bitable_field_url(table_identifier: str, field_id: str) -> str:
         return f"{bitable_fields_url(table_identifier)}/{field_id}"
 
@@ -850,6 +853,71 @@ def create_app(
             raise RuntimeError(f"Feishu inventory table view create returned no view_id: {payload}")
         return {"view_id": view_id, "action": "created"}
 
+    def normalize_view_filter_value(value: Any) -> str:
+        if isinstance(value, list):
+            values = value
+        elif value is None:
+            values = []
+        else:
+            values = [value]
+        return json.dumps(values, ensure_ascii=False)
+
+    def build_inventory_view_property(
+        *,
+        plan: dict[str, Any],
+        fields_by_name: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        property_payload: dict[str, Any] = {}
+        conditions: list[dict[str, Any]] = []
+        for filter_rule in plan["filters"]:
+            field = fields_by_name[filter_rule["field"]]
+            conditions.append(
+                {
+                    "field_id": str(field.get("field_id") or ""),
+                    "operator": filter_rule["operator"],
+                    "value": normalize_view_filter_value(filter_rule["value"]),
+                }
+            )
+        if conditions:
+            property_payload["filter_info"] = {
+                "conditions": conditions,
+                "conjunction": "and",
+            }
+        if plan["visible_fields"]:
+            visible = set(plan["visible_fields"])
+            property_payload["hidden_fields"] = [
+                str(field.get("field_id") or "")
+                for field_name, field in fields_by_name.items()
+                if field_name not in visible and field.get("field_id")
+            ]
+        return property_payload
+
+    def apply_inventory_view_plan(
+        *,
+        token: str,
+        table_identifier: str,
+        view_id: str,
+        plan: dict[str, Any],
+        fields_by_name: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        property_payload = build_inventory_view_property(
+            plan=plan,
+            fields_by_name=fields_by_name,
+        )
+        request_payload: dict[str, Any] = {"view_name": plan["view_name"]}
+        if property_payload:
+            request_payload["property"] = property_payload
+        response = client.patch(
+            bitable_view_url(table_identifier, view_id),
+            headers={"Authorization": f"Bearer {token}"},
+            json=request_payload,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table view update failed: {payload}")
+        return request_payload
+
     @app.get("/warehouse/inventory-table/schema")
     def get_inventory_table_schema(table_name: str = "Warehouse Inventory Snapshot") -> dict[str, Any]:
         started = perf_counter()
@@ -989,6 +1057,13 @@ def create_app(
                 }
             for view in views:
                 if view["view_name"] == plan["view_name"]:
+                    applied_view_property = apply_inventory_view_plan(
+                        token=token,
+                        table_identifier=table_result["table_id"],
+                        view_id=view["view_id"],
+                        plan=plan,
+                        fields_by_name=fields_by_name,
+                    )
                     latency_ms = (perf_counter() - started) * 1000
                     write_inventory_table_run_log(
                         event_id=f"inventory_table_view_create:{view['view_id']}",
@@ -999,7 +1074,11 @@ def create_app(
                             {
                                 "tool": "warehouse_view_create_tool",
                                 "input": request.model_dump(),
-                                "output": {"action": "existing", "view_id": view["view_id"]},
+                                "output": {
+                                    "action": "existing",
+                                    "view_id": view["view_id"],
+                                    "applied_view_property": applied_view_property,
+                                },
                             }
                         ],
                     )
@@ -1015,6 +1094,7 @@ def create_app(
                         "view_name": view["view_name"],
                         "view_type": view["view_type"],
                         "validated_plan": plan,
+                        "applied_view_property": applied_view_property,
                         "completion_message": (
                             f"Feishu inventory view {view['view_name']} already exists "
                             f"with view_id={view['view_id']}. Reply to the user now; "
@@ -1027,6 +1107,13 @@ def create_app(
                 view_name=plan["view_name"],
                 view_type=plan["view_type"],
             )
+            applied_view_property = apply_inventory_view_plan(
+                token=token,
+                table_identifier=table_result["table_id"],
+                view_id=result["view_id"],
+                plan=plan,
+                fields_by_name=fields_by_name,
+            )
             latency_ms = (perf_counter() - started) * 1000
             write_inventory_table_run_log(
                 event_id=f"inventory_table_view_create:{result['view_id']}",
@@ -1037,7 +1124,10 @@ def create_app(
                     {
                         "tool": "warehouse_view_create_tool",
                         "input": request.model_dump(),
-                        "output": result,
+                        "output": {
+                            **result,
+                            "applied_view_property": applied_view_property,
+                        },
                     }
                 ],
             )
@@ -1052,6 +1142,7 @@ def create_app(
                 "view_name": plan["view_name"],
                 "view_type": plan["view_type"],
                 "validated_plan": plan,
+                "applied_view_property": applied_view_property,
                 "completion_message": (
                     f"Feishu inventory view {plan['view_name']} was created "
                     f"with view_id={result['view_id']}. Reply to the user now; "

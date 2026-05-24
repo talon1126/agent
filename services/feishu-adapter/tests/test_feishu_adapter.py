@@ -1176,6 +1176,11 @@ def test_inventory_table_view_create_validates_fields_and_creates_view() -> None
                     "data": {"view": {"view_id": "vew_high_risk"}},
                 },
             )
+        if str(request.url) == (
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token"
+            "/tables/tbl_inventory/views/vew_high_risk"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"view": {"view_id": "vew_high_risk"}}})
         return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
 
     app = create_app(
@@ -1219,6 +1224,29 @@ def test_inventory_table_view_create_validates_fields_and_creates_view() -> None
     assert json.loads(create_requests[0].content) == {
         "view_name": "High Risk Inventory",
         "view_type": "grid",
+    }
+    patch_requests = [
+        request
+        for request in requests
+        if request.method == "PATCH"
+        and str(request.url).endswith("/tables/tbl_inventory/views/vew_high_risk")
+    ]
+    assert len(patch_requests) == 1
+    assert json.loads(patch_requests[0].content) == {
+        "view_name": "High Risk Inventory",
+        "property": {
+            "filter_info": {
+                "conditions": [
+                    {
+                        "field_id": "fld_risk",
+                        "operator": "is",
+                        "value": "[\"high\"]",
+                    }
+                ],
+                "conjunction": "and",
+            },
+            "hidden_fields": [],
+        },
     }
 
 
@@ -1296,6 +1324,11 @@ def test_inventory_table_view_create_returns_existing_when_view_name_exists() ->
                     },
                 },
             )
+        if str(request.url) == (
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token"
+            "/tables/tbl_inventory/views/vew_existing"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"view": {"view_id": "vew_existing"}}})
         return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
 
     app = create_app(
@@ -1317,6 +1350,13 @@ def test_inventory_table_view_create_returns_existing_when_view_name_exists() ->
     assert body["ok"] is True
     assert body["action"] == "existing"
     assert body["view_id"] == "vew_existing"
+    patch_requests = [
+        request
+        for request in requests
+        if request.method == "PATCH"
+        and str(request.url).endswith("/tables/tbl_inventory/views/vew_existing")
+    ]
+    assert len(patch_requests) == 1
     assert not [
         request
         for request in requests
@@ -1351,6 +1391,11 @@ def test_inventory_table_view_create_accepts_llm_shaped_filter_and_sort_payloads
             if request.method == "GET":
                 return httpx.Response(200, json={"code": 0, "data": {"items": []}})
             return httpx.Response(200, json={"code": 0, "data": {"view_id": "vew_high_risk"}})
+        if str(request.url) == (
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token"
+            "/tables/tbl_inventory/views/vew_high_risk"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"view": {"view_id": "vew_high_risk"}}})
         return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
 
     app = create_app(
@@ -1442,6 +1487,11 @@ def test_inventory_table_view_from_template_creates_controlled_view() -> None:
             if request.method == "GET":
                 return httpx.Response(200, json={"code": 0, "data": {"items": []}})
             return httpx.Response(200, json={"code": 0, "data": {"view_id": "vew_hk_high_risk"}})
+        if str(request.url) == (
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token"
+            "/tables/tbl_inventory/views/vew_hk_high_risk"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"view": {"view_id": "vew_hk_high_risk"}}})
         return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
 
     app = create_app(
@@ -1475,6 +1525,26 @@ def test_inventory_table_view_from_template_creates_controlled_view() -> None:
     assert json.loads(create_requests[0].content) == {
         "view_name": "香港仓高风险库存",
         "view_type": "grid",
+    }
+    patch_requests = [
+        request
+        for request in requests
+        if request.method == "PATCH"
+        and str(request.url).endswith("/tables/tbl_inventory/views/vew_hk_high_risk")
+    ]
+    assert len(patch_requests) == 1
+    assert json.loads(patch_requests[0].content) == {
+        "view_name": "香港仓高风险库存",
+        "property": {
+            "filter_info": {
+                "conditions": [
+                    {"field_id": "fld_risk", "operator": "is", "value": "[\"high\"]"},
+                    {"field_id": "fld_wh", "operator": "is", "value": "[\"wh_hk_1\"]"},
+                ],
+                "conjunction": "and",
+            },
+            "hidden_fields": [],
+        },
     }
 
 
