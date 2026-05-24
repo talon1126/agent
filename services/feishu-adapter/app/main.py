@@ -1038,6 +1038,14 @@ def create_app(
             "is_not_empty": "isNotEmpty",
         }.get(operator, operator)
 
+    def is_primary_inventory_field(field: dict[str, Any], index: int) -> bool:
+        return bool(
+            field.get("is_primary")
+            or field.get("primary")
+            or field.get("isPrimary")
+            or index == 0
+        )
+
     def build_inventory_view_property(
         *,
         plan: dict[str, Any],
@@ -1063,8 +1071,10 @@ def create_app(
             visible = set(plan["visible_fields"])
             property_payload["hidden_fields"] = [
                 str(field.get("field_id") or "")
-                for field_name, field in fields_by_name.items()
-                if field_name not in visible and field.get("field_id")
+                for index, (field_name, field) in enumerate(fields_by_name.items())
+                if field_name not in visible
+                and field.get("field_id")
+                and not is_primary_inventory_field(field, index)
             ]
         return property_payload
 

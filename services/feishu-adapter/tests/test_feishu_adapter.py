@@ -1768,6 +1768,74 @@ def test_inventory_table_view_from_template_maps_threshold_operator_to_feishu_op
     ]
 
 
+def test_inventory_table_view_from_template_does_not_hide_primary_field() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {
+                                "field_id": "fld_primary",
+                                "field_name": "默认主字段",
+                                "type": 1,
+                                "is_primary": True,
+                            },
+                            {"field_id": "fld_sku", "field_name": "SKU", "type": 1},
+                            {"field_id": "fld_wh", "field_name": "Warehouse", "type": 1},
+                            {"field_id": "fld_available", "field_name": "Available", "type": 2},
+                            {"field_id": "fld_reserved", "field_name": "Reserved", "type": 2},
+                            {"field_id": "fld_pending", "field_name": "Pending Orders", "type": 2},
+                            {"field_id": "fld_rec", "field_name": "Recommendation", "type": 1},
+                            {"field_id": "fld_status", "field_name": "Sync Status", "type": 3},
+                        ]
+                    },
+                },
+            )
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/views":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(200, json={"code": 0, "data": {"view_id": "vew_low_stock"}})
+        if str(request.url) == (
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token"
+            "/tables/tbl_inventory/views/vew_low_stock"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"view": {"view_id": "vew_low_stock"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_inventory",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/views/from-template",
+        json={"message": "帮我建一个深圳仓缺货预警视图"},
+    )
+
+    assert response.status_code == 200
+    patch_request = next(
+        request
+        for request in requests
+        if request.method == "PATCH"
+        and str(request.url).endswith("/tables/tbl_inventory/views/vew_low_stock")
+    )
+    hidden_fields = json.loads(patch_request.content)["property"]["hidden_fields"]
+    assert "fld_primary" not in hidden_fields
+    assert "fld_status" in hidden_fields
+
+
 def test_inventory_table_view_from_template_returns_suggestions_for_unknown_template() -> None:
     app = create_app()
     client = TestClient(app)
