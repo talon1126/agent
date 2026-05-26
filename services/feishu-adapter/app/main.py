@@ -981,6 +981,12 @@ def create_app(
             existing_fields=existing_fields,
         )
 
+    def is_missing_inventory_table_error(error: Exception) -> bool:
+        if isinstance(error, httpx.HTTPStatusError):
+            return error.response.status_code == 404
+        message = str(error).lower()
+        return "1254045" in message or "table not found" in message
+
     def remember_inventory_table(result: dict[str, str]) -> None:
         if result.get("table_id"):
             inventory_table_state["table_id"] = result["table_id"]
@@ -1043,12 +1049,18 @@ def create_app(
                 "view_id": inventory_table_state["view_id"],
                 "action": "existing",
             }
-            ensure_inventory_table_fields(
-                token=token,
-                table_identifier=result["table_id"],
-                field_specs=field_specs,
-            )
-            return result
+            try:
+                ensure_inventory_table_fields(
+                    token=token,
+                    table_identifier=result["table_id"],
+                    field_specs=field_specs,
+                )
+                return result
+            except (httpx.HTTPStatusError, RuntimeError) as error:
+                if not is_missing_inventory_table_error(error):
+                    raise
+                inventory_table_state["table_id"] = ""
+                inventory_table_state["view_id"] = ""
         existing = find_inventory_table_by_name(token=token, table_name=table_name)
         if existing["table_id"]:
             ensure_inventory_table_fields(

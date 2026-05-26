@@ -1103,6 +1103,68 @@ def test_inventory_table_sync_auto_provisions_table_when_table_id_is_missing() -
     assert body["record_id"] == "rec_auto"
 
 
+def test_inventory_table_sync_filter_recreates_table_when_configured_table_was_deleted() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/warehouse/inventory/table-rows":
+            return httpx.Response(200, json=batch_inventory_table_rows_response())
+        if url == "http://mock-api.local/warehouse/inventory/table-schema":
+            return httpx.Response(200, json={"ok": False, "fields": []})
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_deleted/fields":
+            return httpx.Response(404, json={"code": 1254045, "msg": "table not found"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"table_id": "tbl_recreated", "default_view_id": "vew_recreated"}},
+            )
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_recreated/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_created"}}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_recreated/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_recreated/records":
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_recreated"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_api_base_url="https://open.feishu.cn",
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_deleted",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/sync/filter",
+        json={
+            "item_id": "item_vinda_tissue",
+            "warehouse_id": "wh_sz_1",
+            "location_code": "A1",
+            "batch_no": "BATCH-20260501",
+            "limit": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["table_id"] == "tbl_recreated"
+    assert body["synced_count"] == 1
+    assert body["items"][0]["action"] == "created"
+    assert body["items"][0]["record_id"] == "rec_recreated"
+    assert any("/tables/tbl_deleted/fields" in str(request.url) for request in requests)
+    assert any(request.method == "POST" and str(request.url).endswith("/tables") for request in requests)
+
+
 def test_inventory_table_sync_creates_snapshot_record() -> None:
     requests: list[httpx.Request] = []
 

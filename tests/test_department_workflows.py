@@ -321,6 +321,8 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "pending_procurement_review" in replenishment_tool["parameters"]["jsCode"]
             assert "/warehouse/inventory-sync-jobs" in sync_jobs_tool["parameters"]["jsCode"]
             assert "/warehouse/inventory-table/sync/filter" in sync_jobs_tool["parameters"]["jsCode"]
+            assert "batch_no: job.batch_no" in sync_jobs_tool["parameters"]["jsCode"]
+            assert "limit: 1" in sync_jobs_tool["parameters"]["jsCode"]
             assert "/complete" in sync_jobs_tool["parameters"]["jsCode"]
             assert "/fail" in sync_jobs_tool["parameters"]["jsCode"]
             assert "syncResult.ok !== true" in sync_jobs_tool["parameters"]["jsCode"]
