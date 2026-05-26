@@ -1,0 +1,65 @@
+[
+  {
+    "supplier_id": "supplier_paper_sz",
+    "supplier_name": "深圳纸品供应商",
+    "item_id": "item_vinda_tissue",
+    "lead_time_days": 3,
+    "unit_price": 8,
+    "currency": "CNY",
+    "reliability_score": 96
+  },
+  {
+    "supplier_id": "supplier_dairy_hk",
+    "supplier_name": "香港乳品供应商",
+    "item_id": "item_milk_pure",
+    "lead_time_days": 2,
+    "unit_price": 12,
+    "currency": "CNY",
+    "reliability_score": 92
+  },
+  {
+    "supplier_id": "supplier_yogurt_hk",
+    "supplier_name": "香港冷链乳品供应商",
+    "item_id": "item_yogurt_plain",
+    "lead_time_days": 2,
+    "unit_price": 15,
+    "currency": "CNY",
+    "reliability_score": 91
+  },
+  {
+    "supplier_id": "supplier_beverage_sz",
+    "supplier_name": "深圳饮料供应商",
+    "item_id": "item_water_spring",
+    "lead_time_days": 4,
+    "unit_price": 18,
+    "currency": "CNY",
+    "reliability_score": 93
+  },
+  {
+    "supplier_id": "supplier_cola_sz",
+    "supplier_name": "深圳可乐经销商",
+    "item_id": "item_cola_zero",
+    "lead_time_days": 5,
+    "unit_price": 36,
+    "currency": "CNY",
+    "reliability_score": 90
+  },
+  {
+    "supplier_id": "supplier_daily_chemical_hk",
+    "supplier_name": "香港日化供应商",
+    "item_id": "item_detergent",
+    "lead_time_days": 6,
+    "unit_price": 42,
+    "currency": "CNY",
+    "reliability_score": 89
+  },
+  {
+    "supplier_id": "supplier_office_paper_hk",
+    "supplier_name": "香港办公纸品供应商",
+    "item_id": "item_copy_paper",
+    "lead_time_days": 4,
+    "unit_price": 28,
+    "currency": "CNY",
+    "reliability_score": 94
+  }
+]

@@ -37,6 +37,8 @@ def route_warehouse_intent(message: str) -> IntentRoute:
     slots = _extract_slots(normalized_message, config.get("slots", {}))
     _extract_item_id(normalized_message, signals, slots)
     _extract_location_code(normalized_message, slots)
+    if _is_inventory_sync_jobs_request(normalized_message):
+        return _fallback(signals, slots, [], "inventory_sync_jobs_agent_tool")
 
     candidates = sorted(
         (
@@ -85,6 +87,22 @@ def route_warehouse_intent(message: str) -> IntentRoute:
         signals=signals,
         candidates=candidates,
         reason="matched_by_business_signals",
+    )
+
+
+def _is_inventory_sync_jobs_request(message: str) -> bool:
+    return any(
+        alias in message
+        for alias in {
+            "库存同步任务",
+            "同步任务",
+            "采购到仓通知",
+            "到仓通知",
+            "待处理库存任务",
+            "warehouse_inventory_sync_requested",
+            "inventory sync job",
+            "inventory-sync-jobs",
+        }
     )
 
 

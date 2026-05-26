@@ -162,6 +162,25 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"message"
 
 飞书表格只是只读快照/read model，不要把表格编辑当作库存主数据。
 
+采购用户可以把补货请求和采购草稿单同步到同一个 Base 下的两张飞书表。复用 `FEISHU_INVENTORY_TABLE_APP_ID`、`FEISHU_INVENTORY_TABLE_APP_SECRET`、`FEISHU_INVENTORY_TABLE_APP_TOKEN`；也可以把返回的表 ID 填到 `FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_ID` 和 `FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_ID`。
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{}' http://localhost:8010/procurement/replenishment-requests-table/provision
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{}' http://localhost:8010/procurement/purchase-order-drafts-table/provision
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{}' http://localhost:8010/procurement/replenishment-requests-table/sync
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{}' http://localhost:8010/procurement/purchase-order-drafts-table/sync
+```
+
+Procurement bot 的端到端测试话术是：`@procurement 同步补货请求`、`@procurement 同步采购草稿`、`@procurement 批量批准生成采购草稿单`。
+
+采购草稿到货后，可以批量确认到仓。确认动作会把 `purchase_order_drafts.status` 更新为 `received_at_warehouse`，并在 `inventory_batches` 写入 `RCV-POD-*` 入库批次；返回值会包含需要 Warehouse 同步库存飞书视图的 `item_id`、仓库和库位。当前推荐由用户或后续事件任务通知 Warehouse，例如：`@warehouse 同步 item_vinda_tissue 库存到飞书`。
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"po_draft_ids":["POD-5001","POD-5002"],"received_by":"warehouse:user-001"}' http://localhost:8002/procurement/purchase-order-drafts/confirm-arrival-batch | ConvertTo-Json -Depth 10
+```
+
+Procurement bot 到仓确认测试话术是：`@procurement POD-5001,POD-5002 已到仓库`。
+
 本地模拟端点是：
 
 ```text

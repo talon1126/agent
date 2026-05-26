@@ -23,6 +23,15 @@ def test_update_inventory_table_view_routes_to_sync_without_clarification() -> N
     assert route.clarification_question is None
 
 
+def test_inventory_sync_jobs_request_falls_back_to_agent_tool() -> None:
+    route = route_warehouse_intent("处理库存同步任务")
+
+    assert route.status == "fallback"
+    assert route.intent == "unknown"
+    assert route.executor == "warehouse_agent"
+    assert route.clarification_question is None
+
+
 def test_update_high_risk_inventory_routes_to_filtered_sync() -> None:
     route = route_warehouse_intent("帮我更新下香港高风险库存")
 

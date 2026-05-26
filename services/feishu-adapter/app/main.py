@@ -65,6 +65,22 @@ class InventoryTableProvisionRequest(BaseModel):
     table_name: str = "Warehouse Inventory Snapshot"
 
 
+class ProcurementTableProvisionRequest(BaseModel):
+    table_name: str | None = None
+
+
+class ProcurementReplenishmentRequestTableSyncRequest(BaseModel):
+    status: str | None = None
+    request_id: str | None = None
+    limit: int = 100
+
+
+class ProcurementPurchaseOrderDraftTableSyncRequest(BaseModel):
+    request_id: str | None = None
+    po_draft_id: str | None = None
+    limit: int = 100
+
+
 class InventoryTableViewFilter(BaseModel):
     field: str
     operator: str = "is"
@@ -316,6 +332,12 @@ def create_app(
     inventory_table_id: str | None = None,
     inventory_table_view_id: str | None = None,
     inventory_table_url: str | None = None,
+    procurement_replenishment_request_table_id: str | None = None,
+    procurement_replenishment_request_table_view_id: str | None = None,
+    procurement_replenishment_request_table_url: str | None = None,
+    procurement_purchase_order_draft_table_id: str | None = None,
+    procurement_purchase_order_draft_table_view_id: str | None = None,
+    procurement_purchase_order_draft_table_url: str | None = None,
     long_connection_starter: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Feishu Adapter")
@@ -352,6 +374,40 @@ def create_app(
     inventory_table_state = {
         "table_id": table_id,
         "view_id": table_view_id,
+    }
+    procurement_replenishment_request_table_state = {
+        "table_id": (
+            procurement_replenishment_request_table_id
+            if procurement_replenishment_request_table_id is not None
+            else os.getenv("FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_ID", "")
+        ),
+        "view_id": (
+            procurement_replenishment_request_table_view_id
+            if procurement_replenishment_request_table_view_id is not None
+            else os.getenv("FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_VIEW_ID", "")
+        ),
+        "table_url": (
+            procurement_replenishment_request_table_url
+            if procurement_replenishment_request_table_url is not None
+            else os.getenv("FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_URL", "")
+        ),
+    }
+    procurement_purchase_order_draft_table_state = {
+        "table_id": (
+            procurement_purchase_order_draft_table_id
+            if procurement_purchase_order_draft_table_id is not None
+            else os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_ID", "")
+        ),
+        "view_id": (
+            procurement_purchase_order_draft_table_view_id
+            if procurement_purchase_order_draft_table_view_id is not None
+            else os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_VIEW_ID", "")
+        ),
+        "table_url": (
+            procurement_purchase_order_draft_table_url
+            if procurement_purchase_order_draft_table_url is not None
+            else os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_URL", "")
+        ),
     }
     bot_configs = parse_bot_configs(
         bots_json=bots_json,
@@ -493,10 +549,19 @@ def create_app(
     def inventory_table_provision_configured() -> bool:
         return bool(table_app_id and table_app_secret and table_app_token)
 
+    def procurement_table_configured() -> bool:
+        return bool(table_app_id and table_app_secret and table_app_token)
+
     def inventory_table_url_for(table_identifier: str) -> str:
         if not table_url:
             return ""
         return table_url.replace("{table_id}", table_identifier)
+
+    def procurement_table_url_for(state: dict[str, str], table_identifier: str) -> str:
+        configured_url = state.get("table_url") or ""
+        if not configured_url:
+            return ""
+        return configured_url.replace("{table_id}", table_identifier)
 
     def build_inventory_snapshot_fields(inventory: dict[str, Any]) -> dict[str, Any]:
         sku = str(inventory.get("sku") or "").strip()
@@ -1006,6 +1071,168 @@ def create_app(
             "view_id": result["view_id"],
             "action": result["action"],
         }
+
+    def procurement_table_field_specs(schema_endpoint: str) -> list[dict[str, Any]]:
+        response = client.get(f"{runtime_mock_api_url}{schema_endpoint}")
+        response.raise_for_status()
+        payload = response.json()
+        fields = payload.get("fields", [])
+        if payload.get("ok") is not True or not isinstance(fields, list) or not fields:
+            raise RuntimeError(f"procurement table schema lookup failed: {payload}")
+        return [
+            backend_field_to_feishu_field(field)
+            for field in fields
+            if isinstance(field, dict) and str(field.get("name") or field.get("field_name") or "").strip()
+        ]
+
+    def remember_procurement_table(state: dict[str, str], result: dict[str, str]) -> None:
+        if result.get("table_id"):
+            state["table_id"] = result["table_id"]
+        if result.get("view_id"):
+            state["view_id"] = result["view_id"]
+
+    def ensure_procurement_table(
+        *,
+        token: str,
+        table_name: str,
+        state: dict[str, str],
+        schema_endpoint: str,
+    ) -> dict[str, str]:
+        field_specs = procurement_table_field_specs(schema_endpoint)
+        if state["table_id"]:
+            result = {
+                "table_id": state["table_id"],
+                "view_id": state["view_id"],
+                "action": "existing",
+            }
+            ensure_inventory_table_fields(
+                token=token,
+                table_identifier=result["table_id"],
+                field_specs=field_specs,
+            )
+            return result
+        existing = find_inventory_table_by_name(token=token, table_name=table_name)
+        if existing["table_id"]:
+            ensure_inventory_table_fields(
+                token=token,
+                table_identifier=existing["table_id"],
+                field_specs=field_specs,
+            )
+            remember_procurement_table(state, existing)
+            return {**existing, "action": "existing"}
+        response = client.post(
+            bitable_tables_url(),
+            headers={"Authorization": f"Bearer {token}"},
+            json={"table": {"name": table_name}},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            if payload.get("code") == 1254013:
+                existing = find_inventory_table_by_name(token=token, table_name=table_name)
+                if existing["table_id"]:
+                    ensure_inventory_table_fields(
+                        token=token,
+                        table_identifier=existing["table_id"],
+                        field_specs=field_specs,
+                    )
+                    remember_procurement_table(state, existing)
+                    return {**existing, "action": "existing"}
+            raise RuntimeError(f"Feishu procurement table create failed: {payload}")
+        data = payload.get("data", {})
+        table_id = str(data.get("table_id") or "")
+        if not table_id:
+            raise RuntimeError(f"Feishu procurement table create returned no table_id: {payload}")
+        create_inventory_table_fields(
+            token=token,
+            table_identifier=table_id,
+            field_specs=field_specs,
+        )
+        result = {
+            "table_id": table_id,
+            "view_id": str(data.get("default_view_id") or data.get("view_id") or ""),
+            "action": "created",
+        }
+        remember_procurement_table(state, result)
+        return result
+
+    def procurement_records_url(
+        *,
+        table_identifier: str,
+        record_id: str | None = None,
+    ) -> str:
+        base = (
+            f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}"
+            f"/tables/{table_identifier}/records"
+        )
+        return f"{base}/{record_id}" if record_id else base
+
+    def find_procurement_table_record(
+        *,
+        token: str,
+        table_identifier: str,
+        identity_field: str,
+        identity_value: str,
+    ) -> str:
+        params = {
+            "page_size": 20,
+            "filter": (
+                f'AND(CurrentValue.[{identity_field}]="'
+                f'{bitable_filter_literal(identity_value)}")'
+            ),
+        }
+        response = client.get(
+            procurement_records_url(table_identifier=table_identifier),
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu procurement table record lookup failed: {payload}")
+        items = payload.get("data", {}).get("items", [])
+        if not items:
+            return ""
+        return str(items[0].get("record_id") or items[0].get("id") or "")
+
+    def upsert_procurement_table_record(
+        *,
+        token: str,
+        table_identifier: str,
+        identity_field: str,
+        fields: dict[str, Any],
+    ) -> dict[str, str]:
+        identity_value = str(fields.get(identity_field) or "").strip()
+        if not identity_value:
+            raise RuntimeError(f"procurement table row missing identity field: {identity_field}")
+        record_id = find_procurement_table_record(
+            token=token,
+            table_identifier=table_identifier,
+            identity_field=identity_field,
+            identity_value=identity_value,
+        )
+        if record_id:
+            response = client.put(
+                procurement_records_url(table_identifier=table_identifier, record_id=record_id),
+                headers={"Authorization": f"Bearer {token}"},
+                json={"fields": fields},
+            )
+            action = "updated"
+        else:
+            response = client.post(
+                procurement_records_url(table_identifier=table_identifier),
+                headers={"Authorization": f"Bearer {token}"},
+                json={"fields": fields},
+            )
+            action = "created"
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu procurement table upsert failed: {payload}")
+        data = payload.get("data", {})
+        record = data.get("record") if isinstance(data.get("record"), dict) else {}
+        returned_record_id = str(record.get("record_id") or data.get("record_id") or record_id)
+        return {"action": action, "record_id": returned_record_id}
 
     def inventory_record_identity(fields: dict[str, Any]) -> dict[str, str]:
         batch_identity = {
@@ -1760,6 +1987,230 @@ def create_app(
                 "error": "feishu_inventory_table_sync_filter_failed",
                 "message": message,
             }
+
+    def procurement_table_not_configured_response() -> dict[str, Any]:
+        return {
+            "ok": False,
+            "configured": False,
+            "error": "missing_feishu_procurement_table_config",
+            "message": "Feishu procurement table sync is not configured.",
+        }
+
+    def provision_procurement_table(
+        *,
+        request: ProcurementTableProvisionRequest,
+        default_table_name: str,
+        state: dict[str, str],
+        schema_endpoint: str,
+        workflow: str,
+    ) -> dict[str, Any]:
+        started = perf_counter()
+        if not procurement_table_configured():
+            return procurement_table_not_configured_response()
+        table_name = (request.table_name or default_table_name).strip() or default_table_name
+        try:
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            result = ensure_procurement_table(
+                token=token,
+                table_name=table_name,
+                state=state,
+                schema_endpoint=schema_endpoint,
+            )
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"procurement_table_provision:{result['table_id']}",
+                workflow=workflow,
+                status="succeeded",
+                latency_ms=latency_ms,
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                "table_name": table_name,
+                "table_url": procurement_table_url_for(state, result["table_id"]),
+                **result,
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+            write_inventory_table_run_log(
+                event_id="procurement_table_provision:failed",
+                workflow=workflow,
+                status="failed",
+                latency_ms=latency_ms,
+                error=message,
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "error": "feishu_procurement_table_provision_failed",
+                "message": message,
+            }
+
+    def sync_procurement_table(
+        *,
+        request_payload: dict[str, Any],
+        table_name: str,
+        state: dict[str, str],
+        schema_endpoint: str,
+        rows_endpoint: str,
+        identity_field: str,
+        workflow: str,
+    ) -> dict[str, Any]:
+        started = perf_counter()
+        if not procurement_table_configured():
+            return procurement_table_not_configured_response()
+        try:
+            rows_response = client.post(
+                f"{runtime_mock_api_url}{rows_endpoint}",
+                json=request_payload,
+            )
+            rows_response.raise_for_status()
+            rows_payload = rows_response.json()
+            if rows_payload.get("ok") is not True:
+                raise RuntimeError(f"procurement table rows lookup failed: {rows_payload}")
+            rows = rows_payload.get("items", [])
+            if not isinstance(rows, list):
+                raise RuntimeError(f"procurement table rows returned invalid items: {rows_payload}")
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            table_result = ensure_procurement_table(
+                token=token,
+                table_name=table_name,
+                state=state,
+                schema_endpoint=schema_endpoint,
+            )
+            synced_items: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict) or not isinstance(row.get("fields"), dict):
+                    continue
+                fields = row["fields"]
+                result = upsert_procurement_table_record(
+                    token=token,
+                    table_identifier=table_result["table_id"],
+                    identity_field=identity_field,
+                    fields=fields,
+                )
+                item: dict[str, Any] = {
+                    "status": fields.get("Status"),
+                    "action": result["action"],
+                    "record_id": result["record_id"],
+                    "source_version": fields.get("Source Version", ""),
+                }
+                if identity_field == "Request ID":
+                    item["request_id"] = fields.get("Request ID")
+                else:
+                    item["po_draft_id"] = fields.get("PO Draft ID")
+                    item["request_id"] = fields.get("Request ID")
+                synced_items.append(item)
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"procurement_table_sync:{table_result['table_id']}",
+                workflow=workflow,
+                status="succeeded",
+                latency_ms=latency_ms,
+                tool_calls=[
+                    {
+                        "tool": workflow.rsplit("/", 1)[-1],
+                        "input": request_payload,
+                        "output": {"synced_count": len(synced_items)},
+                    }
+                ],
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                "synced_count": len(synced_items),
+                "items": synced_items,
+                "table_id": table_result["table_id"],
+                "table_name": table_name,
+                "table_url": procurement_table_url_for(state, table_result["table_id"]),
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+            write_inventory_table_run_log(
+                event_id="procurement_table_sync:failed",
+                workflow=workflow,
+                status="failed",
+                latency_ms=latency_ms,
+                error=message,
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "error": "feishu_procurement_table_sync_failed",
+                "message": message,
+            }
+
+    @app.post("/procurement/replenishment-requests-table/provision")
+    def provision_procurement_replenishment_requests_table(
+        request: ProcurementTableProvisionRequest,
+    ) -> dict[str, Any]:
+        return provision_procurement_table(
+            request=request,
+            default_table_name="Procurement Replenishment Requests",
+            state=procurement_replenishment_request_table_state,
+            schema_endpoint="/procurement/replenishment-requests/table-schema",
+            workflow="/procurement/replenishment-requests-table/provision",
+        )
+
+    @app.post("/procurement/purchase-order-drafts-table/provision")
+    def provision_procurement_purchase_order_drafts_table(
+        request: ProcurementTableProvisionRequest,
+    ) -> dict[str, Any]:
+        return provision_procurement_table(
+            request=request,
+            default_table_name="Procurement Purchase Order Drafts",
+            state=procurement_purchase_order_draft_table_state,
+            schema_endpoint="/procurement/purchase-order-drafts/table-schema",
+            workflow="/procurement/purchase-order-drafts-table/provision",
+        )
+
+    @app.post("/procurement/replenishment-requests-table/sync")
+    def sync_procurement_replenishment_requests_table(
+        request: ProcurementReplenishmentRequestTableSyncRequest,
+    ) -> dict[str, Any]:
+        return sync_procurement_table(
+            request_payload={
+                "status": request.status,
+                "request_id": request.request_id,
+                "limit": max(min(int(request.limit or 100), 500), 1),
+            },
+            table_name="Procurement Replenishment Requests",
+            state=procurement_replenishment_request_table_state,
+            schema_endpoint="/procurement/replenishment-requests/table-schema",
+            rows_endpoint="/procurement/replenishment-requests/table-rows",
+            identity_field="Request ID",
+            workflow="/procurement/replenishment-requests-table/sync",
+        )
+
+    @app.post("/procurement/purchase-order-drafts-table/sync")
+    def sync_procurement_purchase_order_drafts_table(
+        request: ProcurementPurchaseOrderDraftTableSyncRequest,
+    ) -> dict[str, Any]:
+        return sync_procurement_table(
+            request_payload={
+                "request_id": request.request_id,
+                "po_draft_id": request.po_draft_id,
+                "limit": max(min(int(request.limit or 100), 500), 1),
+            },
+            table_name="Procurement Purchase Order Drafts",
+            state=procurement_purchase_order_draft_table_state,
+            schema_endpoint="/procurement/purchase-order-drafts/table-schema",
+            rows_endpoint="/procurement/purchase-order-drafts/table-rows",
+            identity_field="PO Draft ID",
+            workflow="/procurement/purchase-order-drafts-table/sync",
+        )
 
     def process_message(bot: BotConfig, message: Any) -> None:
         total_started = perf_counter()

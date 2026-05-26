@@ -162,6 +162,25 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"message"
 
 The table is a read-only snapshot/read model. Do not treat Feishu table edits as inventory source data.
 
+Procurement users can sync replenishment requests and purchase order drafts into two Feishu tables in the same Base. Reuse `FEISHU_INVENTORY_TABLE_APP_ID`, `FEISHU_INVENTORY_TABLE_APP_SECRET`, and `FEISHU_INVENTORY_TABLE_APP_TOKEN`; optionally set the returned IDs as `FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_ID` and `FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_ID`.
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{}' http://localhost:8010/procurement/replenishment-requests-table/provision
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{}' http://localhost:8010/procurement/purchase-order-drafts-table/provision
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{}' http://localhost:8010/procurement/replenishment-requests-table/sync
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{}' http://localhost:8010/procurement/purchase-order-drafts-table/sync
+```
+
+The Procurement bot user-facing smoke phrases are `@procurement 同步补货请求`, `@procurement 同步采购草稿`, and `@procurement 批量批准生成采购草稿单`.
+
+After purchase order drafts arrive, Procurement can batch-confirm warehouse arrival. The action updates `purchase_order_drafts.status` to `received_at_warehouse` and writes `RCV-POD-*` receipt batches into `inventory_batches`; the response includes the `item_id`, warehouse, and location that Warehouse should sync to the Feishu inventory view. For now, notify Warehouse manually or via a future event job, for example: `@warehouse 同步 item_vinda_tissue 库存到飞书`.
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"po_draft_ids":["POD-5001","POD-5002"],"received_by":"warehouse:user-001"}' http://localhost:8002/procurement/purchase-order-drafts/confirm-arrival-batch | ConvertTo-Json -Depth 10
+```
+
+The Procurement bot arrival-confirmation smoke phrase is `@procurement POD-5001,POD-5002 已到仓库`.
+
 The local simulation endpoint is:
 
 ```text
