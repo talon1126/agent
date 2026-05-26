@@ -42,8 +42,8 @@
         "parameters": {
           "text": "={{ $json.input_text }}",
           "options": {
-            "systemMessage": "你是 Procurement Agent，专门处理采购、补货、供应商和采购单问题。\n\n可用工具：\n- procurement_mock_tool：根据 SKU 和库存信号返回 mock 采购建议。涉及补货、采购建议、供应商、采购单或交期时必须调用。\n\n处理规则：\n1. 如果用户提供了 sku_ 开头的 SKU，必须调用 procurement_mock_tool。\n2. 如果用户没有提供 SKU，请要求用户提供 SKU，例如 sku_bag_1。\n3. 明确说明当前连接的是 mock-procurement，不是真实采购系统。\n4. 回复必须包含建议动作、库存依据和下一步。",
-            "maxIterations": 3,
+            "systemMessage": "你是 Procurement Agent，专门处理采购、补货、供应商和采购单问题。\n\n可用工具：\n- procurement_replenishment_request_tool：查看由 Warehouse Agent 创建的 pending_procurement_review 补货申请，返回商品、仓库、库位、当前库存、补货阈值和建议补货量。\n- procurement_mock_tool：根据 item_id 和库存信号返回 mock 采购建议。涉及补货、采购建议、供应商、采购单或交期时可以调用。\n\n处理规则：\n1. 如果用户要求查看待处理补货申请、补货需求或 warehouse 发来的申请，必须先调用 procurement_replenishment_request_tool。\n2. 如果用户提供了 item_ 开头的商品 ID，可以调用 procurement_mock_tool 生成采购建议。\n3. 如果用户没有提供商品 ID，但是在查看待处理补货申请，可以直接调用 procurement_replenishment_request_tool，不要要求 SKU。\n4. 明确说明当前连接的是 mock-procurement，不是真实采购系统。\n5. 回复必须包含 request_id、状态、商品、仓库、库位、当前库存、建议补货量和下一步。",
+            "maxIterations": 4,
             "returnIntermediateSteps": true
           },
           "promptType": "define"
@@ -105,8 +105,8 @@
       },
       {
         "parameters": {
-          "description": "Use this mock procurement API tool for SKU replenishment and purchase request recommendations.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractSku(input) {\n  const text = String(first(input.sku, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bsku_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const sku = extractSku(input);\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/mock',\n    body: { sku, query: String(first(input.query, input.text, input.input, query, '')) },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_mock_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "description": "Use this mock procurement API tool for item_id replenishment and purchase request recommendations.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractItemId(input) {\n  const text = String(first(input.item_id, input.itemId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\b(?:item|sku)_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const itemId = extractItemId(input);\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/mock',\n    body: { item_id: itemId, query: String(first(input.query, input.text, input.input, query, '')) },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_mock_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
         },
         "id": "procurement-mock-tool-node",
         "name": "procurement_mock_tool",
@@ -144,6 +144,20 @@
           944,
           80
         ]
+      },
+      {
+        "id": "procurement-replenishment-request-tool-node",
+        "name": "procurement_replenishment_request_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [
+          944,
+          320
+        ],
+        "parameters": {
+          "description": "Use this tool to list pending_procurement_review replenishment requests created by Warehouse Agent.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const status = String(first(input.status, 'pending_procurement_review')).trim();\n  const result = await helpers.httpRequest({\n    method: 'GET',\n    url: 'http://mock-api:8000/procurement/replenishment-requests',\n    qs: { status },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_replenishment_request_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+        }
       }
     ],
     "connections": {
@@ -214,6 +228,17 @@
         ]
       },
       "procurement_mock_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Procurement Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "procurement_replenishment_request_tool": {
         "ai_tool": [
           [
             {

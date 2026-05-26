@@ -21,6 +21,7 @@ RUN_LOGS: list[dict] = []
 DEAD_LETTERS: list[dict] = []
 REPLAYS: list[dict] = []
 INTERNAL_NOTIFICATIONS: list[dict] = []
+REPLENISHMENT_REQUESTS: list[dict] = []
 WAREHOUSE_REPOSITORY: WarehouseRepository | None | bool = False
 
 
@@ -48,6 +49,15 @@ class WarehouseInventorySearchRequest(BaseModel):
     expiry_risk: str | None = None
     risk_level: str | None = None
     limit: int = 50
+
+
+class ReplenishmentRequestCreate(BaseModel):
+    source: str = "warehouse"
+    warehouse_id: str
+    location_code: str | None = None
+    item_id: str
+    reason: str = "available_quantity_below_reorder_threshold"
+    created_by: str = "warehouse"
 
 
 class PolicySearchRequest(BaseModel):
@@ -438,6 +448,55 @@ def batch_recommendation(row: dict[str, Any]) -> str:
     return "库存状态正常，可继续履约。"
 
 
+def next_replenishment_request_id(repository: WarehouseRepository | None = None) -> str:
+    existing_count = (
+        repository.count_replenishment_requests()
+        if repository
+        else len(REPLENISHMENT_REQUESTS)
+    )
+    return f"REQ-{existing_count + 1001}"
+
+
+def build_replenishment_request(
+    payload: ReplenishmentRequestCreate,
+    repository: WarehouseRepository | None = None,
+) -> dict[str, Any]:
+    rows = [
+        enrich_batch_row(row)
+        for row in load_batch_inventory_rows(
+            item_id=payload.item_id,
+            warehouse_id=payload.warehouse_id,
+            location_code=payload.location_code,
+        )
+    ]
+    if not rows:
+        raise HTTPException(status_code=404, detail="inventory item not found for replenishment")
+
+    current_quantity = sum(int(row["quantity_available"]) for row in rows)
+    reorder_threshold = max(int(row["reorder_threshold"]) for row in rows)
+    suggested_quantity = max((reorder_threshold * 2) - current_quantity, reorder_threshold)
+    first = rows[0]
+    return {
+        "request_id": next_replenishment_request_id(repository),
+        "source": payload.source,
+        "status": "pending_procurement_review",
+        "warehouse_id": payload.warehouse_id,
+        "warehouse_name": first["warehouse_name"],
+        "location_code": payload.location_code,
+        "item_id": payload.item_id,
+        "item_name": first["item_name"],
+        "category_id": first["category_id"],
+        "category_name": first["category_name"],
+        "current_quantity": current_quantity,
+        "reorder_threshold": reorder_threshold,
+        "suggested_quantity": suggested_quantity,
+        "reason": payload.reason,
+        "created_by": payload.created_by,
+        "created_at": datetime.now(UTC).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+
+
 def enrich_batch_row(row: dict[str, Any]) -> dict[str, Any]:
     available = quantity_available(row)
     enriched = {
@@ -680,6 +739,31 @@ def procurement_mock(payload: dict) -> dict:
         "recommendation": "create_purchase_request" if should_replenish else "no_action",
         "message": "库存低于阈值，建议创建采购申请。" if should_replenish else "当前库存无需补货。",
     }
+
+
+@app.post("/procurement/replenishment-requests")
+def create_replenishment_request(payload: ReplenishmentRequestCreate) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    request = build_replenishment_request(payload, repository)
+    if repository:
+        request = repository.create_replenishment_request(request)
+    else:
+        REPLENISHMENT_REQUESTS.append(request)
+    return {"ok": True, "request": request}
+
+
+@app.get("/procurement/replenishment-requests")
+def list_replenishment_requests(status: str | None = None) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    if repository:
+        items = repository.list_replenishment_requests(status=status)
+    else:
+        items = [
+            request
+            for request in REPLENISHMENT_REQUESTS
+            if not status or request["status"] == status
+        ]
+    return {"ok": True, "count": len(items), "items": items}
 
 
 @app.post("/operations/summary/mock")

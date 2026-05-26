@@ -73,6 +73,45 @@ def test_procurement_mock_recommends_replenishment_for_low_batch_stock():
     assert body["system"] == "mock-procurement"
 
 
+def test_create_and_list_replenishment_requests_from_warehouse_signal():
+    create_response = client.post(
+        "/procurement/replenishment-requests",
+        json={
+            "source": "warehouse",
+            "warehouse_id": "wh_sz_1",
+            "location_code": "A1",
+            "item_id": "item_vinda_tissue",
+            "reason": "available_quantity_below_reorder_threshold",
+            "created_by": "warehouse:user-001",
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["ok"] is True
+    assert created["request"]["request_id"].startswith("REQ-")
+    assert created["request"]["status"] == "pending_procurement_review"
+    assert created["request"]["source"] == "warehouse"
+    assert created["request"]["warehouse_id"] == "wh_sz_1"
+    assert created["request"]["location_code"] == "A1"
+    assert created["request"]["item_id"] == "item_vinda_tissue"
+    assert created["request"]["current_quantity"] == 96
+    assert created["request"]["reorder_threshold"] == 100
+    assert created["request"]["suggested_quantity"] == 104
+    assert created["request"]["item_name"] == "维达纸巾"
+
+    list_response = client.get("/procurement/replenishment-requests?status=pending_procurement_review")
+
+    assert list_response.status_code == 200
+    listed = list_response.json()
+    assert listed["ok"] is True
+    assert any(
+        item["request_id"] == created["request"]["request_id"]
+        and item["status"] == "pending_procurement_review"
+        for item in listed["items"]
+    )
+
+
 def test_operations_summary_mock_returns_cross_domain_summary():
     response = client.post("/operations/summary/mock", json={"query": "帮我总结今天的运营异常"})
 

@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, select, text
+from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, func, select, text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger("mock_api.warehouse_store")
@@ -67,12 +67,35 @@ inventory_batches = Table(
     Column("storage_status", String, nullable=False),
 )
 
+replenishment_requests = Table(
+    "replenishment_requests",
+    metadata,
+    Column("request_id", String, primary_key=True),
+    Column("source", String, nullable=False),
+    Column("status", String, nullable=False, index=True),
+    Column("warehouse_id", String, nullable=False, index=True),
+    Column("warehouse_name", String, nullable=False),
+    Column("location_code", String, nullable=True, index=True),
+    Column("item_id", String, nullable=False, index=True),
+    Column("item_name", String, nullable=False),
+    Column("category_id", String, nullable=False, index=True),
+    Column("category_name", String, nullable=False),
+    Column("current_quantity", Integer, nullable=False),
+    Column("reorder_threshold", Integer, nullable=False),
+    Column("suggested_quantity", Integer, nullable=False),
+    Column("reason", String, nullable=False),
+    Column("created_by", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+)
+
 WAREHOUSE_TABLE_COMMENTS = {
     "warehouses": "仓库主数据表，保存企业仓库的编号、名称、城市和启用状态。",
     "storage_locations": "具体库位表，保存仓库内 A1、B1、C1 等可存储位置及容量属性。",
     "categories": "商品分类表，保存纸品、乳制品、饮料等业务分类和存储要求。",
     "items": "商品主数据表，保存每个商品的名称、品牌、规格、单位和条码。",
     "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
+    "replenishment_requests": "补货申请表，保存仓储发现低库存后交给采购审核的结构化需求。",
 }
 
 WAREHOUSE_COLUMN_COMMENTS = {
@@ -118,13 +141,39 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "reorder_threshold": "补货预警阈值。",
         "storage_status": "库存存储状态，例如 available、quality_hold。",
     },
+    "replenishment_requests": {
+        "request_id": "补货申请编号，例如 REQ-1001。",
+        "source": "申请来源，例如 warehouse。",
+        "status": "申请状态，例如 pending_procurement_review。",
+        "warehouse_id": "触发补货申请的仓库编号。",
+        "warehouse_name": "触发补货申请的仓库名称。",
+        "location_code": "触发补货申请的具体库位，可为空。",
+        "item_id": "需要补货的商品编号。",
+        "item_name": "需要补货的商品名称。",
+        "category_id": "商品分类编号。",
+        "category_name": "商品分类名称。",
+        "current_quantity": "当前可用库存数量。",
+        "reorder_threshold": "补货预警阈值。",
+        "suggested_quantity": "系统建议补货数量。",
+        "reason": "生成补货申请的业务原因。",
+        "created_by": "创建申请的用户或系统身份。",
+        "created_at": "申请创建时间。",
+        "updated_at": "申请更新时间。",
+    },
 }
 
 
 def init_warehouse_schema(engine: Engine) -> None:
     metadata.create_all(
         engine,
-        tables=[warehouses, storage_locations, categories, items, inventory_batches],
+        tables=[
+            warehouses,
+            storage_locations,
+            categories,
+            items,
+            inventory_batches,
+            replenishment_requests,
+        ],
     )
     apply_warehouse_comments(engine)
 
@@ -242,6 +291,33 @@ class WarehouseRepository:
             items.c.item_name,
             inventory_batches.c.batch_no,
         )
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [dict(row) for row in rows]
+
+    def count_replenishment_requests(self) -> int:
+        with self.engine.connect() as connection:
+            return int(connection.execute(select(func.count()).select_from(replenishment_requests)).scalar_one())
+
+    def create_replenishment_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self.engine.begin() as connection:
+            connection.execute(replenishment_requests.insert().values(**payload))
+            row = (
+                connection.execute(
+                    select(replenishment_requests).where(
+                        replenishment_requests.c.request_id == payload["request_id"]
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        return dict(row)
+
+    def list_replenishment_requests(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        statement = select(replenishment_requests)
+        if status:
+            statement = statement.where(replenishment_requests.c.status == status)
+        statement = statement.order_by(replenishment_requests.c.created_at, replenishment_requests.c.request_id)
         with self.engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
         return [dict(row) for row in rows]

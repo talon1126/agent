@@ -18,7 +18,9 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_table_sync_tool",
             "warehouse_table_schema_tool",
             "warehouse_view_create_tool",
+            "warehouse_replenishment_request_tool",
             "procurement_mock_tool",
+            "procurement_replenishment_request_tool",
             "operations_mock_tool",
             "echo_task_tool",
         },
@@ -37,6 +39,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_table_sync_tool",
             "warehouse_table_schema_tool",
             "warehouse_view_create_tool",
+            "warehouse_replenishment_request_tool",
         },
         "forbidden_tools": {
             "order_status_tool",
@@ -52,7 +55,7 @@ DEPARTMENT_WORKFLOWS = {
         "agent": "Procurement Agent",
         "model": "Procurement Qwen Chat Model",
         "memory": "Procurement Postgres Chat Memory",
-        "tools": {"procurement_mock_tool"},
+        "tools": {"procurement_mock_tool", "procurement_replenishment_request_tool"},
         "forbidden_tools": {
             "order_status_tool",
             "policy_search_tool",
@@ -63,6 +66,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_table_sync_tool",
             "warehouse_table_schema_tool",
             "warehouse_view_create_tool",
+            "warehouse_replenishment_request_tool",
             "operations_mock_tool",
             "echo_task_tool",
         },
@@ -85,6 +89,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_table_schema_tool",
             "warehouse_view_create_tool",
             "procurement_mock_tool",
+            "procurement_replenishment_request_tool",
             "echo_task_tool",
         },
     },
@@ -140,6 +145,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "warehouse_inventory_table_sync_tool" in system_message
             assert "warehouse_table_schema_tool" in system_message
             assert "warehouse_view_create_tool" in system_message
+            assert "warehouse_replenishment_request_tool" in system_message
             assert "创建、初始化或配置飞书库存表" in system_message
             assert "同步、导出、发布、表格、飞书表格或看板" in system_message
             assert "必须先调用 warehouse_table_schema_tool" in system_message
@@ -265,6 +271,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             exception_tool = node_by_name(workflow, "warehouse_exception_tool")
             fulfillment_tool = node_by_name(workflow, "warehouse_fulfillment_tool")
             table_sync_tool = node_by_name(workflow, "warehouse_inventory_table_sync_tool")
+            replenishment_tool = node_by_name(workflow, "warehouse_replenishment_request_tool")
             for tool in (inventory_tool, exception_tool, fulfillment_tool, table_sync_tool):
                 tool_code = tool["parameters"]["jsCode"]
                 assert "extractItemId" in tool_code
@@ -276,6 +283,20 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "body: { item_id: itemId" in exception_tool["parameters"]["jsCode"]
             assert "body: { item_id: itemId" in fulfillment_tool["parameters"]["jsCode"]
             assert "body: { item_id: itemId" in table_sync_tool["parameters"]["jsCode"]
+            assert "/procurement/replenishment-requests" in replenishment_tool["parameters"]["jsCode"]
+            assert "pending_procurement_review" in replenishment_tool["parameters"]["jsCode"]
+
+        if expected["agent"] == "Procurement Agent":
+            system_message = agent["parameters"]["options"]["systemMessage"]
+            assert "procurement_replenishment_request_tool" in system_message
+            assert "pending_procurement_review" in system_message
+            mock_tool = node_by_name(workflow, "procurement_mock_tool")
+            list_tool = node_by_name(workflow, "procurement_replenishment_request_tool")
+            assert "extractItemId" in mock_tool["parameters"]["jsCode"]
+            assert "item_id: itemId" in mock_tool["parameters"]["jsCode"]
+            assert "extractSku" not in mock_tool["parameters"]["jsCode"]
+            assert "/procurement/replenishment-requests" in list_tool["parameters"]["jsCode"]
+            assert "pending_procurement_review" in list_tool["parameters"]["jsCode"]
 
 
 def test_department_workflows_connect_directly_to_department_agent() -> None:
