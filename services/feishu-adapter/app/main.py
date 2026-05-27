@@ -22,6 +22,7 @@ from app.view_template_builder import (
 )
 
 DEFAULT_N8N_WEBHOOK_URL = "http://n8n:5678/webhook/chat-agent-inbound"
+MAX_INVENTORY_RECORD_LOOKUP_FILTER_LENGTH = 900
 logger = logging.getLogger("feishu_adapter")
 logger.setLevel(logging.INFO)
 if not logger.handlers:
@@ -59,6 +60,20 @@ class InventoryTableSyncFilterRequest(BaseModel):
     expiry_risk: str | None = None
     risk_level: str | None = None
     limit: int = 50
+
+
+class InventoryTableSyncJobItem(BaseModel):
+    job_id: str
+    item_id: str
+    warehouse_id: str | None = None
+    location_code: str | None = None
+    batch_no: str | None = None
+
+
+class InventoryTableSyncJobsRequest(BaseModel):
+    jobs: list[InventoryTableSyncJobItem]
+    table_name: str = "Warehouse Inventory Snapshot"
+    limit_per_job: int = 1
 
 
 class InventoryTableProvisionRequest(BaseModel):
@@ -241,6 +256,8 @@ INVENTORY_TABLE_FIELD_SPECS = [
     },
     {"field_name": "Source Version", "type": 1},
 ]
+DEFAULT_INVENTORY_TABLE_NAME = "Warehouse Inventory Snapshot"
+DEFAULT_INVENTORY_TABLE_ALIASES = ["库存表", DEFAULT_INVENTORY_TABLE_NAME]
 
 
 def _clean_bot_name(value: str) -> str:
@@ -375,6 +392,7 @@ def create_app(
         "table_id": table_id,
         "view_id": table_view_id,
     }
+    inventory_table_lock = threading.RLock()
     procurement_replenishment_request_table_state = {
         "table_id": (
             procurement_replenishment_request_table_id
@@ -739,6 +757,12 @@ def create_app(
         )
         return f"{base}/{record_id}" if record_id else base
 
+    def bitable_records_batch_create_url() -> str:
+        return f"{bitable_records_url()}/batch_create"
+
+    def bitable_records_batch_update_url() -> str:
+        return f"{bitable_records_url()}/batch_update"
+
     def bitable_tables_url() -> str:
         return f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables"
 
@@ -807,6 +831,34 @@ def create_app(
             signature["property"] = property_payload
         return signature
 
+    def desired_single_select_option_names(field: dict[str, Any]) -> set[str]:
+        options = field.get("property", {}).get("options", [])
+        if not isinstance(options, list):
+            return set()
+        return {
+            str(option.get("name") or "")
+            for option in options
+            if isinstance(option, dict) and option.get("name")
+        }
+
+    def existing_single_select_option_names(field: dict[str, Any]) -> set[str]:
+        return {
+            option["name"]
+            for option in inventory_field_options(field)
+            if option.get("name")
+        }
+
+    def inventory_field_compatible(desired: dict[str, Any], existing: dict[str, Any]) -> bool:
+        if desired.get("field_name") != existing.get("field_name"):
+            return False
+        if desired.get("type") != existing.get("type"):
+            return False
+        if desired.get("type") == 3:
+            return desired_single_select_option_names(desired).issubset(
+                existing_single_select_option_names(existing)
+            )
+        return True
+
     def fields_by_name_for_table(*, token: str, table_identifier: str) -> dict[str, dict[str, Any]]:
         response = client.get(
             bitable_fields_url(table_identifier),
@@ -852,7 +904,7 @@ def create_app(
             existing_field = existing.get(str(field["field_name"]))
             if existing_field:
                 field_id = str(existing_field.get("field_id") or "")
-                if field_id and field_signature(field) != field_signature(existing_field):
+                if field_id and not inventory_field_compatible(field, existing_field):
                     update_inventory_table_field(
                         token=token,
                         table_identifier=table_identifier,
@@ -882,6 +934,11 @@ def create_app(
         items = payload.get("data", {}).get("items", [])
         return [item for item in items if isinstance(item, dict)]
 
+    def inventory_table_candidate_names(table_name: str) -> list[str]:
+        if table_name == DEFAULT_INVENTORY_TABLE_NAME:
+            return DEFAULT_INVENTORY_TABLE_ALIASES
+        return [table_name]
+
     def list_inventory_table_views(*, token: str, table_identifier: str) -> list[dict[str, str]]:
         response = client.get(
             bitable_views_url(table_identifier),
@@ -896,25 +953,34 @@ def create_app(
         return [serialize_inventory_view(item) for item in items if isinstance(item, dict)]
 
     def find_inventory_table_by_name(*, token: str, table_name: str) -> dict[str, str]:
-        for item in list_inventory_tables(token=token):
-            if str(item.get("name") or item.get("table_name") or "") == table_name:
-                return {
-                    "table_id": str(item.get("table_id") or ""),
-                    "view_id": str(item.get("default_view_id") or item.get("view_id") or ""),
-                }
+        tables = list_inventory_tables(token=token)
+        for candidate_name in inventory_table_candidate_names(table_name):
+            for item in tables:
+                if str(item.get("name") or item.get("table_name") or "") == candidate_name:
+                    return {
+                        "table_id": str(item.get("table_id") or ""),
+                        "view_id": str(item.get("default_view_id") or item.get("view_id") or ""),
+                    }
         return {"table_id": "", "view_id": ""}
 
+    def find_inventory_table_by_name_safe(*, token: str, table_name: str) -> dict[str, str]:
+        try:
+            return find_inventory_table_by_name(token=token, table_name=table_name)
+        except (httpx.HTTPError, RuntimeError) as error:
+            logger.warning("failed to list inventory tables before resolving table id: %s", error)
+            return {"table_id": "", "view_id": ""}
+
     def resolve_inventory_table_for_schema(*, token: str, table_name: str) -> dict[str, str]:
+        existing = find_inventory_table_by_name_safe(token=token, table_name=table_name)
+        if existing["table_id"]:
+            remember_inventory_table(existing)
+            return {**existing, "action": "existing"}
         if inventory_table_state["table_id"]:
             return {
                 "table_id": inventory_table_state["table_id"],
                 "view_id": inventory_table_state["view_id"],
                 "action": "existing",
             }
-        existing = find_inventory_table_by_name(token=token, table_name=table_name)
-        if existing["table_id"]:
-            remember_inventory_table(existing)
-            return {**existing, "action": "existing"}
         return create_or_reuse_inventory_table(token=token, table_name=table_name)
 
     def build_inventory_table_schema(*, token: str, table_name: str) -> dict[str, Any]:
@@ -981,6 +1047,17 @@ def create_app(
             existing_fields=existing_fields,
         )
 
+    def is_missing_inventory_table_error(error: Exception) -> bool:
+        if isinstance(error, httpx.HTTPStatusError):
+            return error.response.status_code == 404
+        message = str(error).lower()
+        return (
+            "1254041" in message
+            or "1254045" in message
+            or "tableidnotfound" in message
+            or "table not found" in message
+        )
+
     def remember_inventory_table(result: dict[str, str]) -> None:
         if result.get("table_id"):
             inventory_table_state["table_id"] = result["table_id"]
@@ -993,42 +1070,52 @@ def create_app(
         table_name: str,
         field_specs: list[dict[str, Any]] | None = None,
     ) -> dict[str, str]:
-        field_specs = field_specs or inventory_table_field_specs()
-        response = client.post(
-            bitable_tables_url(),
-            headers={"Authorization": f"Bearer {token}"},
-            json={"table": {"name": table_name}},
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("code") not in {0, None}:
-            if payload.get("code") == 1254013:
-                existing = find_inventory_table_by_name(token=token, table_name=table_name)
-                if existing["table_id"]:
-                    ensure_inventory_table_fields(
-                        token=token,
-                        table_identifier=existing["table_id"],
-                        field_specs=field_specs,
-                    )
-                    remember_inventory_table(existing)
-                    return {**existing, "action": "existing"}
-            raise RuntimeError(f"Feishu inventory table create failed: {payload}")
-        data = payload.get("data", {})
-        created_table_id = str(data.get("table_id") or "")
-        if not created_table_id:
-            raise RuntimeError(f"Feishu inventory table create returned no table_id: {payload}")
-        create_inventory_table_fields(
-            token=token,
-            table_identifier=created_table_id,
-            field_specs=field_specs,
-        )
-        result = {
-            "table_id": created_table_id,
-            "view_id": str(data.get("default_view_id") or data.get("view_id") or ""),
-            "action": "created",
-        }
-        remember_inventory_table(result)
-        return result
+        with inventory_table_lock:
+            field_specs = field_specs or inventory_table_field_specs()
+            existing = find_inventory_table_by_name_safe(token=token, table_name=table_name)
+            if existing["table_id"]:
+                ensure_inventory_table_fields(
+                    token=token,
+                    table_identifier=existing["table_id"],
+                    field_specs=field_specs,
+                )
+                remember_inventory_table(existing)
+                return {**existing, "action": "existing"}
+            response = client.post(
+                bitable_tables_url(),
+                headers={"Authorization": f"Bearer {token}"},
+                json={"table": {"name": table_name}},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in {0, None}:
+                if payload.get("code") == 1254013:
+                    existing = find_inventory_table_by_name(token=token, table_name=table_name)
+                    if existing["table_id"]:
+                        ensure_inventory_table_fields(
+                            token=token,
+                            table_identifier=existing["table_id"],
+                            field_specs=field_specs,
+                        )
+                        remember_inventory_table(existing)
+                        return {**existing, "action": "existing"}
+                raise RuntimeError(f"Feishu inventory table create failed: {payload}")
+            data = payload.get("data", {})
+            created_table_id = str(data.get("table_id") or "")
+            if not created_table_id:
+                raise RuntimeError(f"Feishu inventory table create returned no table_id: {payload}")
+            create_inventory_table_fields(
+                token=token,
+                table_identifier=created_table_id,
+                field_specs=field_specs,
+            )
+            result = {
+                "table_id": created_table_id,
+                "view_id": str(data.get("default_view_id") or data.get("view_id") or ""),
+                "action": "created",
+            }
+            remember_inventory_table(result)
+            return result
 
     def ensure_inventory_table(
         *,
@@ -1036,33 +1123,40 @@ def create_app(
         table_name: str,
         field_specs: list[dict[str, Any]] | None = None,
     ) -> dict[str, str]:
-        field_specs = field_specs or inventory_table_field_specs()
-        if inventory_table_state["table_id"]:
-            result = {
-                "table_id": inventory_table_state["table_id"],
-                "view_id": inventory_table_state["view_id"],
-                "action": "existing",
-            }
-            ensure_inventory_table_fields(
+        with inventory_table_lock:
+            field_specs = field_specs or inventory_table_field_specs()
+            existing = find_inventory_table_by_name_safe(token=token, table_name=table_name)
+            if existing["table_id"]:
+                ensure_inventory_table_fields(
+                    token=token,
+                    table_identifier=existing["table_id"],
+                    field_specs=field_specs,
+                )
+                remember_inventory_table(existing)
+                return {**existing, "action": "existing"}
+            if inventory_table_state["table_id"]:
+                result = {
+                    "table_id": inventory_table_state["table_id"],
+                    "view_id": inventory_table_state["view_id"],
+                    "action": "existing",
+                }
+                try:
+                    ensure_inventory_table_fields(
+                        token=token,
+                        table_identifier=result["table_id"],
+                        field_specs=field_specs,
+                    )
+                    return result
+                except (httpx.HTTPStatusError, RuntimeError) as error:
+                    if not is_missing_inventory_table_error(error):
+                        raise
+                    inventory_table_state["table_id"] = ""
+                    inventory_table_state["view_id"] = ""
+            return create_or_reuse_inventory_table(
                 token=token,
-                table_identifier=result["table_id"],
+                table_name=table_name,
                 field_specs=field_specs,
             )
-            return result
-        existing = find_inventory_table_by_name(token=token, table_name=table_name)
-        if existing["table_id"]:
-            ensure_inventory_table_fields(
-                token=token,
-                table_identifier=existing["table_id"],
-                field_specs=field_specs,
-            )
-            remember_inventory_table(existing)
-            return {**existing, "action": "existing"}
-        return create_or_reuse_inventory_table(
-            token=token,
-            table_name=table_name,
-            field_specs=field_specs,
-        )
 
     def create_inventory_table(*, token: str, table_name: str) -> dict[str, str]:
         result = create_or_reuse_inventory_table(token=token, table_name=table_name)
@@ -1254,33 +1348,136 @@ def create_app(
             "Warehouse ID, Location, Item ID, Batch No"
         )
 
+    def inventory_identity_key(identity: dict[str, str]) -> tuple[tuple[str, str], ...]:
+        return tuple(identity.items())
+
     def bitable_filter_literal(value: str) -> str:
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
-    def find_inventory_table_record(*, token: str, identity: dict[str, str]) -> str:
+    def inventory_record_filter_expression(identity: dict[str, str]) -> str:
         conditions = [
             f'CurrentValue.[{field_name}]="{bitable_filter_literal(value)}"'
             for field_name, value in identity.items()
         ]
-        params: dict[str, Any] = {
-            "page_size": 20,
-            "filter": f"AND({','.join(conditions)})",
-        }
-        if table_view_id:
-            params["view_id"] = table_view_id
-        response = client.get(
-            bitable_records_url(),
-            headers={"Authorization": f"Bearer {token}"},
-            params=params,
+        return f"AND({','.join(conditions)})"
+
+    def inventory_record_filter_chunks(
+        identities: list[dict[str, str]],
+    ) -> list[tuple[list[dict[str, str]], str]]:
+        chunks: list[tuple[list[dict[str, str]], str]] = []
+        current_identities: list[dict[str, str]] = []
+        current_expressions: list[str] = []
+
+        for identity in identities:
+            expression = inventory_record_filter_expression(identity)
+            candidate_expressions = [*current_expressions, expression]
+            candidate_filter = (
+                candidate_expressions[0]
+                if len(candidate_expressions) == 1
+                else f"OR({','.join(candidate_expressions)})"
+            )
+            if (
+                current_expressions
+                and len(candidate_filter) > MAX_INVENTORY_RECORD_LOOKUP_FILTER_LENGTH
+            ):
+                chunks.append(
+                    (
+                        current_identities,
+                        current_expressions[0]
+                        if len(current_expressions) == 1
+                        else f"OR({','.join(current_expressions)})",
+                    )
+                )
+                current_identities = [identity]
+                current_expressions = [expression]
+                continue
+            current_identities.append(identity)
+            current_expressions.append(expression)
+
+        if current_expressions:
+            chunks.append(
+                (
+                    current_identities,
+                    current_expressions[0]
+                    if len(current_expressions) == 1
+                    else f"OR({','.join(current_expressions)})",
+                )
+            )
+        return chunks
+
+    def single_select_record_value(field: dict[str, Any], value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        text_value = value.strip()
+        if not text_value:
+            return value
+        for option in inventory_field_options(field):
+            option_id = str(option.get("id") or "")
+            option_name = str(option.get("name") or "")
+            if text_value in {option_id, option_name}:
+                return option_name or option_id
+        return value
+
+    def normalize_inventory_record_fields(
+        fields: dict[str, Any],
+        table_fields: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        normalized = dict(fields)
+        for field_name, value in fields.items():
+            field = table_fields.get(field_name)
+            if isinstance(field, dict) and field.get("type") == 3:
+                normalized[field_name] = single_select_record_value(field, value)
+        return normalized
+
+    def find_inventory_table_records(
+        *,
+        token: str,
+        identities: list[dict[str, str]],
+    ) -> dict[tuple[tuple[str, str], ...], str]:
+        if not identities:
+            return {}
+        records: dict[tuple[tuple[str, str], ...], str] = {}
+        for identity_chunk, filter_expression in inventory_record_filter_chunks(identities):
+            params: dict[str, Any] = {
+                "page_size": min(max(len(identity_chunk), 20), 500),
+                "filter": filter_expression,
+            }
+            if table_view_id:
+                params["view_id"] = table_view_id
+            response = client.get(
+                bitable_records_url(),
+                headers={"Authorization": f"Bearer {token}"},
+                params=params,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in {0, None}:
+                raise RuntimeError(f"Feishu inventory table record lookup failed: {payload}")
+            items = payload.get("data", {}).get("items", [])
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                record_fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+                record_id = str(item.get("record_id") or item.get("id") or "")
+                if not record_id:
+                    continue
+                if len(identity_chunk) == 1 and not record_fields:
+                    records[inventory_identity_key(identity_chunk[0])] = record_id
+                    continue
+                for identity in identity_chunk:
+                    if all(
+                        str(record_fields.get(field) or "").strip() == value
+                        for field, value in identity.items()
+                    ):
+                        records[inventory_identity_key(identity)] = record_id
+                        break
+        return records
+
+    def find_inventory_table_record(*, token: str, identity: dict[str, str]) -> str:
+        return find_inventory_table_records(token=token, identities=[identity]).get(
+            inventory_identity_key(identity),
+            "",
         )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("code") not in {0, None}:
-            raise RuntimeError(f"Feishu inventory table record lookup failed: {payload}")
-        items = payload.get("data", {}).get("items", [])
-        if not items:
-            return ""
-        return str(items[0].get("record_id") or items[0].get("id") or "")
 
     def upsert_inventory_table_record(*, token: str, fields: dict[str, Any]) -> dict[str, str]:
         identity = inventory_record_identity(fields)
@@ -1307,6 +1504,159 @@ def create_app(
         record = data.get("record") if isinstance(data.get("record"), dict) else {}
         returned_record_id = str(record.get("record_id") or data.get("record_id") or record_id)
         return {"action": action, "record_id": returned_record_id}
+
+    def response_record_ids(payload: dict[str, Any]) -> list[str]:
+        data = payload.get("data", {})
+        records = data.get("records") or data.get("items") or []
+        if not isinstance(records, list):
+            return []
+        return [
+            str(record.get("record_id") or record.get("id") or "")
+            for record in records
+            if isinstance(record, dict)
+        ]
+
+    def create_inventory_table_records_batch(
+        *,
+        token: str,
+        records: list[dict[str, Any]],
+    ) -> list[str]:
+        if not records:
+            return []
+        try:
+            response = client.post(
+                bitable_records_batch_create_url(),
+                headers={"Authorization": f"Bearer {token}"},
+                json={"records": [{"fields": fields} for fields in records]},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code not in {404, 405}:
+                raise
+            return [
+                upsert_inventory_table_record(token=token, fields=fields).get("record_id", "")
+                for fields in records
+            ]
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table batch create failed: {payload}")
+        return response_record_ids(payload)
+
+    def update_inventory_table_records_batch(
+        *,
+        token: str,
+        records: list[dict[str, Any]],
+    ) -> list[str]:
+        if not records:
+            return []
+        try:
+            response = client.post(
+                bitable_records_batch_update_url(),
+                headers={"Authorization": f"Bearer {token}"},
+                json={"records": records},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code not in {404, 405}:
+                raise
+            updated_ids = []
+            for record in records:
+                record_id = str(record.get("record_id") or "")
+                response = client.put(
+                    bitable_records_url(record_id),
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"fields": record.get("fields", {})},
+                )
+                response.raise_for_status()
+                updated_ids.append(record_id)
+            return updated_ids
+        payload = response.json()
+        if payload.get("code") not in {0, None}:
+            raise RuntimeError(f"Feishu inventory table batch update failed: {payload}")
+        returned_ids = response_record_ids(payload)
+        if returned_ids:
+            return returned_ids
+        return [str(record.get("record_id") or "") for record in records]
+
+    def upsert_inventory_table_records(
+        *,
+        token: str,
+        field_rows: list[dict[str, Any]],
+        table_fields: dict[str, dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        prepared = []
+        for index, fields in enumerate(field_rows):
+            identity = inventory_record_identity(fields)
+            prepared.append(
+                {
+                    "index": index,
+                    "identity": identity,
+                    "fields": normalize_inventory_record_fields(fields, table_fields),
+                }
+            )
+        existing_records = find_inventory_table_records(
+            token=token,
+            identities=[item["identity"] for item in prepared],
+        )
+        create_items = []
+        update_items = []
+        results: list[dict[str, str]] = [{} for _ in prepared]
+        for item in prepared:
+            record_id = existing_records.get(inventory_identity_key(item["identity"]), "")
+            if record_id:
+                update_items.append(
+                    {
+                        "index": item["index"],
+                        "record_id": record_id,
+                        "fields": item["fields"],
+                    }
+                )
+            else:
+                create_items.append(item)
+
+        updated_ids = update_inventory_table_records_batch(
+            token=token,
+            records=[
+                {"record_id": item["record_id"], "fields": item["fields"]}
+                for item in update_items
+            ],
+        )
+        for index, item in enumerate(update_items):
+            record_id = updated_ids[index] if index < len(updated_ids) else item["record_id"]
+            results[item["index"]] = {"action": "updated", "record_id": record_id or item["record_id"]}
+
+        created_ids = create_inventory_table_records_batch(
+            token=token,
+            records=[item["fields"] for item in create_items],
+        )
+        for index, item in enumerate(create_items):
+            record_id = created_ids[index] if index < len(created_ids) else ""
+            results[item["index"]] = {"action": "created", "record_id": record_id}
+
+        return results
+
+    def inventory_sync_result_item(row: dict[str, Any], result: dict[str, str]) -> dict[str, Any]:
+        fields = row["fields"]
+        return {
+            "batch_key": row.get("batch_key"),
+            "item_id": fields.get("Item ID") or row.get("item_id"),
+            "warehouse_id": fields.get("Warehouse ID"),
+            "location_code": fields.get("Location"),
+            "batch_no": fields.get("Batch No") or row.get("batch_no"),
+            "risk_level": fields.get("Risk Level"),
+            "action": result.get("action"),
+            "record_id": result.get("record_id"),
+            "source_version": fields.get("Source Version", ""),
+        }
+
+    def inventory_sync_job_payload(job: InventoryTableSyncJobItem) -> dict[str, Any]:
+        return {
+            "job_id": job.job_id,
+            "item_id": job.item_id,
+            "warehouse_id": job.warehouse_id,
+            "location_code": job.location_code,
+            "batch_no": job.batch_no,
+        }
 
     def create_inventory_table_view(
         *,
@@ -1825,7 +2175,14 @@ def create_app(
                 token=token,
                 table_name="Warehouse Inventory Snapshot",
             )
-            result = upsert_inventory_table_record(token=token, fields=fields)
+            table_fields = fields_by_name_for_table(
+                token=token,
+                table_identifier=provision_result["table_id"],
+            )
+            result = upsert_inventory_table_record(
+                token=token,
+                fields=normalize_inventory_record_fields(fields, table_fields),
+            )
             latency_ms = (perf_counter() - started) * 1000
             write_sync_run_log(
                 sku=item_id,
@@ -1914,23 +2271,19 @@ def create_app(
                 token=token,
                 table_name="Warehouse Inventory Snapshot",
             )
-            synced_items: list[dict[str, Any]] = []
-            for row in inventory_rows:
-                fields = row["fields"]
-                result = upsert_inventory_table_record(token=token, fields=fields)
-                synced_items.append(
-                    {
-                        "batch_key": row.get("batch_key"),
-                        "item_id": fields.get("Item ID") or row.get("item_id"),
-                        "warehouse_id": fields.get("Warehouse ID"),
-                        "location_code": fields.get("Location"),
-                        "batch_no": fields.get("Batch No") or row.get("batch_no"),
-                        "risk_level": fields.get("Risk Level"),
-                        "action": result.get("action"),
-                        "record_id": result.get("record_id"),
-                        "source_version": fields.get("Source Version", ""),
-                    }
-                )
+            table_fields = fields_by_name_for_table(
+                token=token,
+                table_identifier=provision_result["table_id"],
+            )
+            upsert_results = upsert_inventory_table_records(
+                token=token,
+                field_rows=[row["fields"] for row in inventory_rows],
+                table_fields=table_fields,
+            )
+            synced_items: list[dict[str, Any]] = [
+                inventory_sync_result_item(row, result)
+                for row, result in zip(inventory_rows, upsert_results, strict=False)
+            ]
             latency_ms = (perf_counter() - started) * 1000
             write_inventory_table_run_log(
                 event_id=f"inventory_table_sync_filter:{warehouse_id or risk_level or sku or 'all'}",
@@ -1985,6 +2338,158 @@ def create_app(
                 "expiry_risk": expiry_risk or None,
                 "risk_level": risk_level or None,
                 "error": "feishu_inventory_table_sync_filter_failed",
+                "message": message,
+            }
+
+    @app.post("/warehouse/inventory-table/sync/jobs")
+    def sync_inventory_table_jobs(request: InventoryTableSyncJobsRequest) -> dict[str, Any]:
+        started = perf_counter()
+        jobs = request.jobs[:100]
+        limit_per_job = max(min(int(request.limit_per_job or 1), 10), 1)
+        if not inventory_table_sync_configured():
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "missing_feishu_inventory_table_config",
+                "message": "Feishu inventory table sync is not configured.",
+            }
+        if not jobs:
+            return {
+                "ok": True,
+                "configured": True,
+                "processed_count": 0,
+                "completed_count": 0,
+                "failed_count": 0,
+                "completed": [],
+                "failed": [],
+            }
+
+        failed: list[dict[str, Any]] = []
+        row_contexts: list[dict[str, Any]] = []
+        for job in jobs:
+            try:
+                rows = fetch_inventory_table_rows_with_fallback(
+                    item_id=(job.item_id or "").strip() or None,
+                    warehouse_id=(job.warehouse_id or "").strip() or None,
+                    location_code=(job.location_code or "").strip() or None,
+                    batch_no=(job.batch_no or "").strip() or None,
+                    limit=limit_per_job,
+                )
+                if not rows:
+                    raise RuntimeError(f"warehouse inventory table rows returned no data for job_id={job.job_id}")
+                for row in rows:
+                    row_contexts.append({"job": job, "row": row})
+            except (httpx.HTTPError, RuntimeError) as error:
+                message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+                failed.append(
+                    {
+                        **inventory_sync_job_payload(job),
+                        "error": message,
+                    }
+                )
+
+        try:
+            completed_by_job: dict[str, dict[str, Any]] = {}
+            provision_result: dict[str, str] | None = None
+            if row_contexts:
+                token = get_tenant_access_token(
+                    client=client,
+                    app_id=table_app_id,
+                    app_secret=table_app_secret,
+                    api_base_url=api_base_url,
+                )
+                table_name = request.table_name.strip() or DEFAULT_INVENTORY_TABLE_NAME
+                provision_result = ensure_inventory_table(
+                    token=token,
+                    table_name=table_name,
+                )
+                table_fields = fields_by_name_for_table(
+                    token=token,
+                    table_identifier=provision_result["table_id"],
+                )
+                upsert_results = upsert_inventory_table_records(
+                    token=token,
+                    field_rows=[context["row"]["fields"] for context in row_contexts],
+                    table_fields=table_fields,
+                )
+                table_url = inventory_table_url_for(provision_result["table_id"])
+                for context, result in zip(row_contexts, upsert_results, strict=False):
+                    job = context["job"]
+                    row = context["row"]
+                    entry = completed_by_job.setdefault(
+                        job.job_id,
+                        {
+                            **inventory_sync_job_payload(job),
+                            "sync": {
+                                "ok": True,
+                                "configured": True,
+                                "synced_count": 0,
+                                "items": [],
+                                "table_id": provision_result["table_id"],
+                                "table_url": table_url,
+                            },
+                        },
+                    )
+                    entry["sync"]["items"].append(inventory_sync_result_item(row, result))
+                    entry["sync"]["synced_count"] = len(entry["sync"]["items"])
+
+            completed = list(completed_by_job.values())
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"inventory_table_sync_jobs:{len(jobs)}",
+                workflow="/warehouse/inventory-table/sync/jobs",
+                status="succeeded" if not failed else "partial_failed",
+                latency_ms=latency_ms,
+                tool_calls=[
+                    {
+                        "tool": "warehouse_inventory_sync_jobs_tool",
+                        "input": {
+                            "job_count": len(jobs),
+                            "limit_per_job": limit_per_job,
+                        },
+                        "output": {
+                            "completed_count": len(completed),
+                            "failed_count": len(failed),
+                        },
+                    }
+                ],
+            )
+            return {
+                "ok": not failed,
+                "configured": True,
+                "processed_count": len(jobs),
+                "completed_count": len(completed),
+                "failed_count": len(failed),
+                "completed": completed,
+                "failed": failed,
+                "table_id": provision_result["table_id"] if provision_result else None,
+                "table_url": inventory_table_url_for(provision_result["table_id"]) if provision_result else None,
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+            write_inventory_table_run_log(
+                event_id="inventory_table_sync_jobs:failed",
+                workflow="/warehouse/inventory-table/sync/jobs",
+                status="failed",
+                latency_ms=latency_ms,
+                error=message,
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "processed_count": len(jobs),
+                "completed_count": 0,
+                "failed_count": len(jobs),
+                "completed": [],
+                "failed": [
+                    {
+                        **inventory_sync_job_payload(job),
+                        "error": message,
+                    }
+                    for job in jobs
+                ],
+                "error": "feishu_inventory_table_sync_jobs_failed",
                 "message": message,
             }
 

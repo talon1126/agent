@@ -320,10 +320,12 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "/procurement/replenishment-requests" in replenishment_tool["parameters"]["jsCode"]
             assert "pending_procurement_review" in replenishment_tool["parameters"]["jsCode"]
             assert "/warehouse/inventory-sync-jobs" in sync_jobs_tool["parameters"]["jsCode"]
-            assert "/warehouse/inventory-table/sync/filter" in sync_jobs_tool["parameters"]["jsCode"]
+            assert "/warehouse/inventory-table/sync/jobs" in sync_jobs_tool["parameters"]["jsCode"]
+            assert "/warehouse/inventory-table/sync/filter" not in sync_jobs_tool["parameters"]["jsCode"]
+            assert "jobs: jobs.map" in sync_jobs_tool["parameters"]["jsCode"]
             assert "/complete" in sync_jobs_tool["parameters"]["jsCode"]
             assert "/fail" in sync_jobs_tool["parameters"]["jsCode"]
-            assert "syncResult.ok !== true" in sync_jobs_tool["parameters"]["jsCode"]
+            assert "syncJobsResult.ok !== true" in sync_jobs_tool["parameters"]["jsCode"]
             assert "warehouse_inventory_sync_failed" in sync_jobs_tool["parameters"]["jsCode"]
 
         if expected["agent"] == "Procurement Agent":
