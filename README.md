@@ -1,204 +1,153 @@
-# Internal Ecommerce Operations Copilot
+# 仓储agent
 
-Docker-first portfolio project for an internal ecommerce operations copilot. It uses one Feishu Gateway Adapter, multiple department-specific n8n workflows, FastAPI services for AI logic and mock enterprise APIs, and scripted events for repeatable demos.
+## 汇总
 
-## What This Demonstrates
+- 仓储 Agent 以“批次 + 库位”为核心模型处理库存，不再只看旧的 SKU 快照；回复中会保留商品、仓库、库位、批次、可用库存、临期风险和处理建议。
+- 支持仓储库存查询、仓储异常查询、履约风险判断、补货申请创建、飞书库存表同步、飞书库存视图创建等完整仓储工作流。
+- 飞书库存表是只读 read model：系统库存事实仍在 mock-api / Postgres 中，飞书表用于运营查看、筛选和同步展示。
+- 采购确认到货后会创建 `RCV-POD-*` 入库批次，并生成 `warehouse_inventory_sync_requested` 同步任务；Warehouse Agent 消费这些任务后再同步到飞书库存表。
+- 库存同步已按 sync job 精确同步实现：只处理本次任务对应的批次数据；表存在时插入或更新，表不存在时自动创建后写入。
+- 对飞书批量写入做了优化：多条 sync job 合并为一次后端同步流程，写入使用 batch create/update；查询已有记录时会按 filter 长度分块，避免触发飞书 `FilterLengthExceedLimit`。
 
-- n8n workflow orchestration for enterprise-style automation.
-- One Feishu gateway adapter that can connect multiple department bots to separate n8n workflows.
-- FastAPI AI service with structured outputs and deterministic test mode.
-- Mock enterprise APIs for orders, inventory, logistics, support, approvals, run logs, and replay.
-- Docker Compose local deployment.
-- AI Ops patterns: schema validation, approval guardrails, run logging, dead-letter, replay.
-
-## Architecture
+## workflow 架构
 
 ```mermaid
 flowchart LR
-    Event["Demo event JSON"] --> N8N["n8n workflow"]
-    Feishu["Department Feishu bots"] --> Adapter["feishu-gateway-adapter"]
-    Adapter --> CS["customer-support workflow"]
-    Adapter --> WH["warehouse workflow"]
-    Adapter --> PR["procurement workflow"]
-    Adapter --> OPS["operations workflow"]
-    CS --> N8N["n8n"]
-    WH --> N8N
-    PR --> N8N
-    OPS --> N8N
-    N8N --> MockRead["mock-api read endpoints"]
-    MockRead --> N8N
-    N8N --> AI["ai-service /decide"]
-    AI --> N8N
-    N8N --> Actions["approval, ticket, notification"]
-    N8N --> Logs["run logs"]
-    Actions --> MockWrite["mock-api write endpoints"]
-    Logs --> MockWrite
-    MockWrite --> Postgres["Postgres container"]
+    User["飞书仓储用户"] --> Gateway["feishu-adapter 多机器人网关"]
+    Gateway --> Workflow["n8n Warehouse Workflow"]
+    Workflow --> Router["Warehouse Intent Router"]
+    Router --> FastSync["库存表/视图 fast path"]
+    Router --> Agent["Warehouse Agent"]
+
+    Agent --> InventoryTool["warehouse_inventory_tool"]
+    Agent --> ExceptionTool["warehouse_exception_tool"]
+    Agent --> FulfillmentTool["warehouse_fulfillment_tool"]
+    Agent --> ReplenishmentTool["warehouse_replenishment_request_tool"]
+    Agent --> SyncJobsTool["warehouse_inventory_sync_jobs_tool"]
+
+    InventoryTool --> MockAPI["mock-api 仓储库存事实"]
+    ExceptionTool --> MockAPI
+    FulfillmentTool --> MockAPI
+    ReplenishmentTool --> MockAPI
+    SyncJobsTool --> MockAPI
+    SyncJobsTool --> AdapterSync["feishu-adapter sync/jobs"]
+    FastSync --> AdapterSync
+    AdapterSync --> Bitable["飞书多维表格库存表"]
+
+    MockAPI --> Postgres["Postgres 仓储/采购数据"]
 ```
 
-The current implementation keeps business state in memory for a lightweight local demo while running Postgres in Compose as the operational store target for the next phase.
+仓储 workflow 的入口是 `n8n/workflows/warehouse-workflow.json`。飞书消息先进入 `feishu-adapter`，再路由到 Warehouse Workflow。Workflow 会先做意图识别：明确的库存表同步、视图创建会走 fast path；其余仓储问题进入 Warehouse Agent，由 Agent 根据工具说明调用库存、异常、履约、补货或同步任务工具。
 
-## Quick Start
+采购到仓链路由 Procurement Workflow 触发，但库存同步完成权在 Warehouse Workflow。采购确认 `POD-*` 到货后，mock-api 会生成入库批次和 pending sync job；用户在飞书中要求“处理库存同步任务”时，`warehouse_inventory_sync_jobs_tool` 拉取 pending job，调用 feishu-adapter 的批量 sync jobs 能力，最后把任务标记为 completed 或 failed。
 
-```powershell
-docker compose up --build -d
+## 功能
+
+- 查询库存：`@warehouse 查询 item_vinda_tissue 库存` 会返回商品在不同仓库、库位和批次上的库存、可用数量、预留数量、临期状态和风险等级。
+- 查询仓储异常：`@warehouse 查询 item_vinda_tissue 仓储异常` 会检查库存不足、临期、过期、质检冻结、库位异常等风险，并返回处理建议。
+- 判断履约风险：`@warehouse item_vinda_tissue 能否发货` 会根据可用库存、预留库存、存储状态和临期风险判断是否可以出库。
+- 创建补货申请：当库存低于补货阈值且用户要求补货时，Warehouse Agent 会创建 `pending_procurement_review` 补货申请，交给 Procurement Agent 后续审批。
+- 同步库存表：`@warehouse 同步 item_vinda_tissue 库存到飞书` 会把匹配的批次库存快照同步到飞书 `Warehouse Inventory Snapshot` 表。
+- 创建库存视图：`@warehouse 创建高风险库存视图` 会读取真实飞书表字段，并按受控模板创建或复用库存视图。
+- 处理同步任务：`@warehouse 处理库存同步任务` 会消费采购到仓生成的 pending sync jobs，只同步对应 `RCV-POD-*` 批次，并把任务标记为 completed 或 failed。
+
+## mock-api
+
+`mock-api` 是仓储和采购事实数据的模拟企业系统，仓储 Agent 的多数业务工具最终都落到这里：
+
+- 初始化并维护仓储主数据：仓库、库位、分类、商品、批次库存。
+- 提供批次库存查询能力：按 `item_id`、仓库、库位、分类、批次、风险等维度返回库存事实。
+- 计算仓储派生字段：可用库存、临期状态、风险等级、处理建议、履约阻塞原因。
+- 支持仓储异常和履约判断：用于回答库存差异、临期、过期、质检冻结、缺货和能否发货等问题。
+- 承接补货申请：Warehouse 创建 `pending_procurement_review` 补货申请，Procurement 后续审批。
+- 支持采购到仓后的库存事实更新：确认 `POD-*` 到货会创建 `RCV-POD-*` 入库批次。
+- 管理仓储库存同步任务：创建、查询、完成或失败 `warehouse_inventory_sync_requested` job。
+
+在配置 `DATABASE_URL` 时，这些仓储与采购记录优先落 Postgres；本地轻量 mock 模式下仍保留内存 fallback。
+
+## feishu-adapter
+
+`feishu-adapter` 负责飞书协议、多机器人网关和飞书多维表格读模型同步：
+
+- 多机器人网关：通过 `FEISHU_BOTS_JSON` 配置客户、仓储、采购、运营等部门 bot，每个 bot 转发到自己的 n8n webhook。
+- 长连接收消息：默认使用飞书长连接模式，归一化飞书消息，按 `bot_name + message_id` 去重，并把 n8n 回复发回飞书。
+- 仓储意图路由：识别库存表同步、视图模板创建等明确意图，让简单请求走 fast path，减少 Agent 循环。
+- 飞书库存表创建：在已有多维表格 app/base 中创建或复用固定 schema 的 `Warehouse Inventory Snapshot` 表。
+- 飞书库存同步：支持按商品、仓库、库位、分类、风险过滤同步，也支持按 sync job 精确同步本次采购到仓批次。
+- 批量写入优化：对多条 sync job 聚合处理，统一获取 token、建表、取字段和写入；使用 batch create/update 写飞书记录。
+- 防止飞书 filter 超限：查询已有记录时按 filter 字符串长度拆分为多次小查询，避免 20 条以上批次同步时触发 `FilterLengthExceedLimit`。
+- 视图创建能力：读取真实表字段和已有视图，根据自然语言模板创建高风险库存、低库存预警等受控 grid 视图。
+- 运行日志：向 mock-api 写入结构化 run log，方便排查同步成功、失败和耗时。
+
+# 采购agent
+
+## 汇总
+
+- 采购 Agent 以 `replenishment_requests` 和 `purchase_order_drafts` 为核心模型处理补货申请、采购草稿单和到仓确认。
+- 支持同步补货请求到飞书、同步采购草稿单到飞书、单条批准/驳回 `REQ-*`、批量批准全部 pending 补货申请、确认 `POD-*` 到仓等完整采购工作流。
+- 飞书采购表是只读 read model：系统事实仍在 mock-api / Postgres 中，飞书表用于采购人员 review、筛选和跟踪。
+- 批准补货申请后会创建或复用 `POD-*` 采购草稿单，状态从 `pending_procurement_review` 进入 `purchase_order_draft_created`；重复批准不会重复创建草稿。
+- 批量批准默认处理全部 `pending_procurement_review` 申请；某个商品缺少默认供应商时会跳过该申请并返回异常明细，不中断整批任务。
+- 采购确认 `POD-*` 到仓后，会创建 `RCV-POD-*` 入库批次和 Warehouse 库存同步 job；库存飞书表刷新由 Warehouse Agent 负责。
+
+## workflow 架构
+
+```mermaid
+flowchart LR
+    User["飞书采购用户"] --> Gateway["feishu-adapter 多机器人网关"]
+    Gateway --> Workflow["n8n Procurement Workflow"]
+    Workflow --> Agent["Procurement Agent"]
+
+    Agent --> SyncReqTool["procurement_sync_replenishment_requests_tool"]
+    Agent --> SyncDraftTool["procurement_sync_purchase_order_drafts_tool"]
+    Agent --> BatchApproveTool["procurement_approve_replenishment_batch_tool"]
+    Agent --> ApproveTool["procurement_approve_replenishment_tool"]
+    Agent --> RejectTool["procurement_reject_replenishment_tool"]
+    Agent --> ArrivalTool["procurement_confirm_arrival_batch_tool"]
+    Agent --> MockTool["procurement_mock_tool"]
+
+    SyncReqTool --> AdapterReq["feishu-adapter 补货请求表同步"]
+    SyncDraftTool --> AdapterDraft["feishu-adapter 采购草稿表同步"]
+    BatchApproveTool --> MockAPI["mock-api 采购事实"]
+    ApproveTool --> MockAPI
+    RejectTool --> MockAPI
+    ArrivalTool --> MockAPI
+    MockTool --> MockAPI
+
+    AdapterReq --> ReqTable["飞书 Procurement Replenishment Requests"]
+    AdapterDraft --> DraftTable["飞书 Procurement Purchase Order Drafts"]
+    MockAPI --> Postgres["Postgres 仓储/采购数据"]
+    MockAPI --> WarehouseJob["Warehouse 库存同步 job"]
 ```
 
-Open n8n at `http://localhost:5678`.
+采购 workflow 的入口是 `n8n/workflows/procurement-workflow.json`。飞书消息先进入 `feishu-adapter`，再路由到 Procurement Workflow。采购 Agent 根据用户表达选择同步、审批、驳回、批量生成采购草稿或到仓确认工具；涉及飞书视图的请求会调用 feishu-adapter，涉及采购事实的请求会调用 mock-api。
 
-Health checks:
+仓储到采购链路从 Warehouse Workflow 创建补货申请开始。仓储侧只创建 `pending_procurement_review` 申请，不做采购决策；采购侧 review 后批准或驳回。采购草稿到仓后，采购侧只负责生成入库批次和库存同步 job，后续库存表同步仍交给 Warehouse Workflow。
 
-```powershell
-Invoke-RestMethod http://localhost:8001/health
-Invoke-RestMethod http://localhost:8002/health
-Invoke-RestMethod http://localhost:8010/health/details | ConvertTo-Json -Depth 10
-Invoke-RestMethod http://localhost:8002/orders/ord_100
-```
+## 功能
 
-## Import n8n Workflow
+- 同步补货请求：`@procurement 同步补货请求` 会把数据库补货申请同步到飞书 `Procurement Replenishment Requests` 表。
+- 批量批准：`@procurement 批量批准生成采购草稿单` 会批准全部 pending 补货申请，生成或复用采购草稿单，并刷新两张采购飞书表。
+- 同步采购草稿：`@procurement 同步采购草稿` 会把采购草稿单同步到飞书 `Procurement Purchase Order Drafts` 表。
+- 单条批准：`@procurement 批准 REQ-1001 生成采购草稿单` 会批准指定补货申请，并返回 `POD-*` 草稿单。
+- 单条驳回：`@procurement 驳回 REQ-1001，原因：库存已调拨覆盖` 会把申请状态更新为 `rejected`，并记录拒绝原因。
+- 到仓确认：`@procurement POD-5001 已到仓库` 会确认采购草稿到仓，创建入库批次和 Warehouse 库存同步 job。
 
-The workflow file is `n8n/workflows/ecommerce-after-sales.json`. It exposes:
+## mock-api
 
-```text
-POST /webhook/after-sales-event
-```
+采购 Agent 的事实数据由 `mock-api` 提供：
 
-CLI import:
+- 管理 `replenishment_requests`，承接 Warehouse 创建的 `pending_procurement_review` 补货申请。
+- 管理 mock 默认供应商，按 `item_id` 匹配供应商、单价和交期。
+- 管理 `purchase_order_drafts`，记录供应商、数量、单价、预计总价、交期和预计到达日期。
+- 提供补货请求和采购草稿单的 table schema / rows API，作为飞书采购表同步数据源。
+- 确认 `POD-*` 到仓时创建 `RCV-POD-*` 入库批次，并创建 Warehouse 库存同步 job。
 
-```powershell
-docker compose exec -T n8n n8n import:workflow --input=/workflows/ecommerce-after-sales.json
-docker compose exec -T n8n n8n publish:workflow --id=wf_ecommerce_after_sales
-docker compose exec -T n8n n8n update:workflow --id=wf_ecommerce_after_sales --active=true
-docker compose restart n8n
-```
+## feishu-adapter
 
-## Demo
+采购飞书表同步由 `feishu-adapter` 负责：
 
-Send a high-value refund event:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\send_event.ps1 -EventFile fixtures/events/refund_high_value.json
-```
-
-Expected result: the workflow returns a structured AI decision, creates a pending approval request, and writes a succeeded run log.
-
-Replay a failed event:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\replay_failed_event.ps1 -EventId evt_mock_api_failure
-```
-
-Expected result: `queued_for_replay`.
-
-## Message Agent Demo
-
-The second workflow is `n8n/workflows/message-agent.json`. It exposes:
-
-```text
-POST /webhook/message-agent
-```
-
-It accepts text or audio-shaped message payloads, calls `ai-service /message/handle`, and lets the agent invoke the first tool: `get_order_status`.
-
-Import it with:
-
-```powershell
-docker compose exec -T n8n n8n import:workflow --input=/workflows/message-agent.json
-docker compose exec -T n8n n8n publish:workflow --id=wf_message_agent
-docker compose restart n8n
-```
-
-Send a text message:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\send_message.ps1 -MessageFile fixtures\messages\order_status_text.json
-```
-
-Audio support is adapter-based. The current default is `TRANSCRIPTION_PROVIDER=mock`. To connect Qwen, provide `QWEN_API_ENDPOINT`, `QWEN_API_KEY`, the confirmed model name, the expected audio input format, and an example response JSON.
-
-## Feishu Gateway Adapter
-
-`feishu-adapter` is a dedicated container for Feishu/Lark protocol handling. It can run as a gateway for multiple department bots through `FEISHU_BOTS_JSON`. Each configured bot opens its own Feishu long connection, forwards messages to its own n8n webhook, deduplicates by `bot_name + message_id`, and replies with that bot's own credentials.
-
-Leave `FEISHU_BOTS_JSON` empty to keep the legacy single-bot fallback with `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, and `N8N_CHAT_WEBHOOK_URL`.
-
-Local simulation endpoint:
-
-```text
-POST http://localhost:8010/feishu/events
-```
-
-Department bot target example:
-
-```text
-FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"}]
-```
-
-For real Feishu long connection subscriptions, keep `FEISHU_EVENT_MODE=long_connection`, enable the app's event subscription for `im.message.receive_v1`, install the bot in the target chat, and start Docker. The adapter logs `connected to wss://msg-frontier.feishu.cn/...` when the long connection is live.
-
-## Department Chat Workflows
-
-The recommended internal chat architecture uses independent department workflows, not a parent/son dispatch graph:
-
-- `n8n/workflows/customer-support-workflow.json` exposes `/webhook/customer-support-inbound`.
-- `n8n/workflows/warehouse-workflow.json` exposes `/webhook/warehouse-inbound`.
-- `n8n/workflows/procurement-workflow.json` exposes `/webhook/procurement-inbound`.
-- `n8n/workflows/operations-workflow.json` exposes `/webhook/operations-inbound`.
-
-`n8n/workflows/chat-parent-son-agent.json` remains in the repository as a compatibility artifact, but it is no longer the recommended primary chat path.
-
-Import and publish:
-
-```powershell
-docker compose exec -T n8n n8n import:workflow --input=/workflows/customer-support-workflow.json
-docker compose exec -T n8n n8n import:workflow --input=/workflows/warehouse-workflow.json
-docker compose exec -T n8n n8n import:workflow --input=/workflows/procurement-workflow.json
-docker compose exec -T n8n n8n import:workflow --input=/workflows/operations-workflow.json
-docker compose exec -T n8n n8n publish:workflow --id=customer-support-workflow
-docker compose exec -T n8n n8n publish:workflow --id=warehouse-workflow
-docker compose exec -T n8n n8n publish:workflow --id=procurement-workflow
-docker compose exec -T n8n n8n publish:workflow --id=operations-workflow
-docker compose restart n8n
-```
-
-## Useful Endpoints
-
-- `GET http://localhost:8001/health`
-- `POST http://localhost:8001/decide`
-- `POST http://localhost:8001/message/handle`
-- `GET http://localhost:8010/health`
-- `GET http://localhost:8010/health/details`
-- `POST http://localhost:8010/feishu/events`
-- `POST http://localhost:8010/warehouse/inventory-table/sync`
-- `GET http://localhost:8002/orders/{order_id}`
-- `GET http://localhost:8002/customers/{customer_id}`
-- `GET http://localhost:8002/shipments/{shipment_id}`
-- `GET http://localhost:8002/inventory/{sku}`
-- `GET http://localhost:8002/approval-requests`
-- `GET http://localhost:8002/tickets`
-- `GET http://localhost:8002/internal-notifications`
-- `GET http://localhost:8002/run-logs`
-- `GET http://localhost:8002/dead-letter`
-
-## Test
-
-Run service tests separately to avoid duplicate `test_api.py` import names across service packages:
-
-```powershell
-pytest services\ai-service\tests
-pytest services\mock-api\tests
-pytest services\feishu-adapter\tests
-pytest tests\test_chat_parent_son_workflow.py
-pytest tests\test_department_workflows.py
-```
-
-## Project Documents
-
-- [Architecture](docs/architecture.md)
-- [Demo Script](docs/demo-script.md)
-- [Deployment and Operations](docs/deployment.md)
-- [Warehouse Inventory Feishu Table Sync](docs/warehouse-inventory-table-sync.md)
-- [Warehouse View Template Builder](docs/warehouse-view-template-builder.md)
-- [Local Runbook](docs/local-runbook.md)
-- [n8n Workflow Contract](docs/n8n-workflow-contract.md)
-- [中文 README](README.zh.md)
+- 创建或复用 `Procurement Replenishment Requests`，按 `Request ID` upsert。
+- 创建或复用 `Procurement Purchase Order Drafts`，按 `PO Draft ID` upsert。
+- 复用同一个飞书 Base/app 凭据；未配置 table id 时自动建表。
+- 同步结果会返回表链接、写入数量和错误信息，供采购 Agent 回复用户。
