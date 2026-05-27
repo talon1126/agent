@@ -22,6 +22,7 @@ from app.view_template_builder import (
 )
 
 DEFAULT_N8N_WEBHOOK_URL = "http://n8n:5678/webhook/chat-agent-inbound"
+MAX_INVENTORY_RECORD_LOOKUP_FILTER_LENGTH = 900
 logger = logging.getLogger("feishu_adapter")
 logger.setLevel(logging.INFO)
 if not logger.handlers:
@@ -1360,6 +1361,50 @@ def create_app(
         ]
         return f"AND({','.join(conditions)})"
 
+    def inventory_record_filter_chunks(
+        identities: list[dict[str, str]],
+    ) -> list[tuple[list[dict[str, str]], str]]:
+        chunks: list[tuple[list[dict[str, str]], str]] = []
+        current_identities: list[dict[str, str]] = []
+        current_expressions: list[str] = []
+
+        for identity in identities:
+            expression = inventory_record_filter_expression(identity)
+            candidate_expressions = [*current_expressions, expression]
+            candidate_filter = (
+                candidate_expressions[0]
+                if len(candidate_expressions) == 1
+                else f"OR({','.join(candidate_expressions)})"
+            )
+            if (
+                current_expressions
+                and len(candidate_filter) > MAX_INVENTORY_RECORD_LOOKUP_FILTER_LENGTH
+            ):
+                chunks.append(
+                    (
+                        current_identities,
+                        current_expressions[0]
+                        if len(current_expressions) == 1
+                        else f"OR({','.join(current_expressions)})",
+                    )
+                )
+                current_identities = [identity]
+                current_expressions = [expression]
+                continue
+            current_identities.append(identity)
+            current_expressions.append(expression)
+
+        if current_expressions:
+            chunks.append(
+                (
+                    current_identities,
+                    current_expressions[0]
+                    if len(current_expressions) == 1
+                    else f"OR({','.join(current_expressions)})",
+                )
+            )
+        return chunks
+
     def single_select_record_value(field: dict[str, Any], value: Any) -> Any:
         if not isinstance(value, str):
             return value
@@ -1391,38 +1436,41 @@ def create_app(
     ) -> dict[tuple[tuple[str, str], ...], str]:
         if not identities:
             return {}
-        expressions = [inventory_record_filter_expression(identity) for identity in identities]
-        params: dict[str, Any] = {
-            "page_size": min(max(len(identities), 20), 500),
-            "filter": expressions[0] if len(expressions) == 1 else f"OR({','.join(expressions)})",
-        }
-        if table_view_id:
-            params["view_id"] = table_view_id
-        response = client.get(
-            bitable_records_url(),
-            headers={"Authorization": f"Bearer {token}"},
-            params=params,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("code") not in {0, None}:
-            raise RuntimeError(f"Feishu inventory table record lookup failed: {payload}")
-        items = payload.get("data", {}).get("items", [])
         records: dict[tuple[tuple[str, str], ...], str] = {}
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            record_fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
-            record_id = str(item.get("record_id") or item.get("id") or "")
-            if not record_id:
-                continue
-            if len(identities) == 1 and not record_fields:
-                records[inventory_identity_key(identities[0])] = record_id
-                continue
-            for identity in identities:
-                if all(str(record_fields.get(field) or "").strip() == value for field, value in identity.items()):
-                    records[inventory_identity_key(identity)] = record_id
-                    break
+        for identity_chunk, filter_expression in inventory_record_filter_chunks(identities):
+            params: dict[str, Any] = {
+                "page_size": min(max(len(identity_chunk), 20), 500),
+                "filter": filter_expression,
+            }
+            if table_view_id:
+                params["view_id"] = table_view_id
+            response = client.get(
+                bitable_records_url(),
+                headers={"Authorization": f"Bearer {token}"},
+                params=params,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in {0, None}:
+                raise RuntimeError(f"Feishu inventory table record lookup failed: {payload}")
+            items = payload.get("data", {}).get("items", [])
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                record_fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+                record_id = str(item.get("record_id") or item.get("id") or "")
+                if not record_id:
+                    continue
+                if len(identity_chunk) == 1 and not record_fields:
+                    records[inventory_identity_key(identity_chunk[0])] = record_id
+                    continue
+                for identity in identity_chunk:
+                    if all(
+                        str(record_fields.get(field) or "").strip() == value
+                        for field, value in identity.items()
+                    ):
+                        records[inventory_identity_key(identity)] = record_id
+                        break
         return records
 
     def find_inventory_table_record(*, token: str, identity: dict[str, str]) -> str:
