@@ -43,6 +43,18 @@ def batch_inventory_table_rows_response() -> dict:
     }
 
 
+def batch_inventory_table_rows_response_for(batch_no: str, item_id: str = "item_vinda_tissue") -> dict:
+    payload = batch_inventory_table_rows_response()
+    row = payload["items"][0]
+    row["batch_key"] = f"wh_sz_1:A1:{item_id}:{batch_no}"
+    row["item_id"] = item_id
+    row["batch_no"] = batch_no
+    row["fields"]["Item ID"] = item_id
+    row["fields"]["Batch No"] = batch_no
+    row["fields"]["Source Version"] = f"mock-api:wh_sz_1:A1:{item_id}:{batch_no}"
+    return payload
+
+
 def procurement_replenishment_table_rows_response() -> dict:
     return {
         "ok": True,
@@ -1165,6 +1177,127 @@ def test_inventory_table_sync_filter_recreates_table_when_configured_table_was_d
     assert any(request.method == "POST" and str(request.url).endswith("/tables") for request in requests)
 
 
+def test_inventory_table_sync_jobs_batches_feishu_setup_and_writes() -> None:
+    requests: list[httpx.Request] = []
+    fields_payload = {
+        "code": 0,
+        "data": {
+            "items": [
+                {
+                    "field_id": f"fld_{index}",
+                    "field_name": field["field_name"],
+                    "type": field["type"],
+                    "property": field.get("property", {}),
+                }
+                for index, field in enumerate(INVENTORY_TABLE_FIELD_SPECS)
+            ]
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/warehouse/inventory/table-rows":
+            body = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json=batch_inventory_table_rows_response_for(
+                    body["batch_no"],
+                    body["item_id"],
+                ),
+            )
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {
+                                "name": "库存表",
+                                "table_id": "tbl_inventory",
+                                "default_view_id": "vew_inventory",
+                            }
+                        ]
+                    },
+                },
+            )
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            return httpx.Response(200, json=fields_payload)
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/records/batch_create":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "records": [
+                            {"record_id": "rec_batch_1"},
+                            {"record_id": "rec_batch_2"},
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_api_base_url="https://open.feishu.cn",
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/sync/jobs",
+        json={
+            "jobs": [
+                {
+                    "job_id": "WSJ-POD-6001",
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "location_code": "A1",
+                    "batch_no": "RCV-POD-6001",
+                },
+                {
+                    "job_id": "WSJ-POD-6002",
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "location_code": "A1",
+                    "batch_no": "RCV-POD-6002",
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["processed_count"] == 2
+    assert body["completed_count"] == 2
+    assert body["failed_count"] == 0
+    assert [item["job_id"] for item in body["completed"]] == ["WSJ-POD-6001", "WSJ-POD-6002"]
+    assert [item["sync"]["items"][0]["record_id"] for item in body["completed"]] == [
+        "rec_batch_1",
+        "rec_batch_2",
+    ]
+    assert sum(str(request.url).endswith("/tenant_access_token/internal") for request in requests) == 1
+    assert sum(str(request.url).endswith("/tables/tbl_inventory/fields") for request in requests) == 2
+    assert sum("/tables/tbl_inventory/records?" in str(request.url) for request in requests) == 1
+    create_requests = [
+        request
+        for request in requests
+        if str(request.url).endswith("/tables/tbl_inventory/records/batch_create")
+    ]
+    assert len(create_requests) == 1
+    assert len(json.loads(create_requests[0].content)["records"]) == 2
+
+
 def test_inventory_table_sync_creates_snapshot_record() -> None:
     requests: list[httpx.Request] = []
 
@@ -1457,6 +1590,296 @@ def test_inventory_table_sync_filter_updates_matching_inventory_records() -> Non
     assert len(create_requests) == 2
 
 
+def test_inventory_table_sync_filter_batch_creates_records_with_single_select_option_ids() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/warehouse/inventory/table-rows":
+            second_response = batch_inventory_table_rows_response()
+            first_item = {
+                **second_response["items"][0],
+                "fields": {
+                    **second_response["items"][0]["fields"],
+                    "Expiry Risk": "normal",
+                    "Risk Level": "high",
+                    "Storage Status": "available",
+                    "Sync Status": "synced",
+                },
+            }
+            second_item = {
+                **second_response["items"][0],
+                "batch_key": "wh_sz_1:B1:item_vinda_tissue:BATCH-20260401",
+                "batch_no": "BATCH-20260401",
+                "fields": {
+                    **second_response["items"][0]["fields"],
+                    "Location": "B1",
+                    "Batch No": "BATCH-20260401",
+                    "Expiry Risk": "expiring_soon",
+                    "Risk Level": "medium",
+                    "Storage Status": "quality_hold",
+                    "Sync Status": "synced",
+                    "Source Version": "mock-api:wh_sz_1:B1:item_vinda_tissue:BATCH-20260401",
+                },
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "schema_id": "warehouse_batch_inventory",
+                    "count": 2,
+                    "items": [first_item, second_item],
+                },
+            )
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields":
+            if request.method == "POST":
+                return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_created"}}})
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {
+                                "field_name": "Expiry Risk",
+                                "type": 3,
+                                "property": {
+                                    "options": [
+                                        {"id": "opt_exp_normal", "name": "normal", "color": 28},
+                                        {"id": "opt_exp_soon", "name": "expiring_soon", "color": 24},
+                                    ]
+                                },
+                            },
+                            {
+                                "field_name": "Risk Level",
+                                "type": 3,
+                                "property": {
+                                    "options": [
+                                        {"id": "opt_risk_high", "name": "high", "color": 17},
+                                        {"id": "opt_risk_medium", "name": "medium", "color": 24},
+                                    ]
+                                },
+                            },
+                            {
+                                "field_name": "Storage Status",
+                                "type": 3,
+                                "property": {
+                                    "options": [
+                                        {"id": "opt_storage_available", "name": "available", "color": 28},
+                                        {"id": "opt_storage_hold", "name": "quality_hold", "color": 17},
+                                    ]
+                                },
+                            },
+                            {
+                                "field_name": "Sync Status",
+                                "type": 3,
+                                "property": {
+                                    "options": [
+                                        {"id": "opt_sync_synced", "name": "synced", "color": 28},
+                                    ]
+                                },
+                            },
+                        ]
+                    },
+                },
+            )
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/records/batch_create":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "records": [
+                            {"record_id": "rec_first"},
+                            {"record_id": "rec_second"},
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_inventory",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/sync/filter",
+        json={"warehouse_id": "wh_sz_1", "category": "paper", "limit": 2},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["synced_count"] == 2
+    batch_create_request = next(
+        request for request in requests if request.method == "POST" and str(request.url).endswith("/records/batch_create")
+    )
+    records = json.loads(batch_create_request.content)["records"]
+    assert [record["fields"]["Risk Level"] for record in records] == ["high", "medium"]
+    assert [record["fields"]["Expiry Risk"] for record in records] == ["normal", "expiring_soon"]
+    assert [record["fields"]["Storage Status"] for record in records] == [
+        "available",
+        "quality_hold",
+    ]
+    assert [record["fields"]["Sync Status"] for record in records] == ["synced", "synced"]
+    assert body["items"][0]["record_id"] == "rec_first"
+    assert body["items"][1]["record_id"] == "rec_second"
+
+
+def test_inventory_table_sync_filter_prefers_exact_table_over_configured_conflict_table() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/warehouse/inventory/table-rows":
+            return httpx.Response(200, json=batch_inventory_table_rows_response())
+        if url == "http://mock-api.local/warehouse/inventory/table-schema":
+            return httpx.Response(200, json={"ok": False, "fields": []})
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {
+                                "table_id": "tbl_conflict",
+                                "name": "Warehouse Inventory Snapshot_conflict_tblAAA",
+                            },
+                            {
+                                "table_id": "tbl_canonical",
+                                "name": "Warehouse Inventory Snapshot",
+                            },
+                        ]
+                    },
+                },
+            )
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_canonical/fields":
+            if request.method == "POST":
+                return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_created"}}})
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_canonical/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_canonical/records/batch_create":
+            return httpx.Response(200, json={"code": 0, "data": {"records": [{"record_id": "rec_canonical"}]}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_table_id="tbl_conflict",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/sync/filter",
+        json={
+            "item_id": "item_vinda_tissue",
+            "warehouse_id": "wh_sz_1",
+            "location_code": "A1",
+            "batch_no": "BATCH-20260501",
+            "limit": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["table_id"] == "tbl_canonical"
+    assert body["items"][0]["record_id"] == "rec_canonical"
+    assert not any("/tables/tbl_conflict/" in str(request.url) for request in requests)
+    assert not any(request.method == "POST" and str(request.url).endswith("/tables") for request in requests)
+
+
+def test_inventory_table_sync_filter_prefers_existing_chinese_inventory_table_alias() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/warehouse/inventory/table-rows":
+            return httpx.Response(200, json=batch_inventory_table_rows_response())
+        if url == "http://mock-api.local/warehouse/inventory/table-schema":
+            return httpx.Response(200, json={"ok": False, "fields": []})
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {
+                                "table_id": "tbl_chinese",
+                                "name": "库存表",
+                            },
+                            {
+                                "table_id": "tbl_english",
+                                "name": "Warehouse Inventory Snapshot",
+                            },
+                        ]
+                    },
+                },
+            )
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_chinese/fields":
+            if request.method == "POST":
+                return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_created"}}})
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_chinese/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_chinese/records/batch_create":
+            return httpx.Response(200, json={"code": 0, "data": {"records": [{"record_id": "rec_chinese"}]}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/inventory-table/sync/filter",
+        json={
+            "item_id": "item_vinda_tissue",
+            "warehouse_id": "wh_sz_1",
+            "location_code": "A1",
+            "batch_no": "BATCH-20260501",
+            "limit": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["table_id"] == "tbl_chinese"
+    assert body["items"][0]["record_id"] == "rec_chinese"
+    assert not any("/tables/tbl_english/" in str(request.url) for request in requests)
+    assert not any(request.method == "POST" and str(request.url).endswith("/tables") for request in requests)
+
+
 def test_inventory_table_sync_filter_uses_backend_table_rows() -> None:
     requests: list[httpx.Request] = []
 
@@ -1668,7 +2091,7 @@ def test_inventory_table_schema_returns_fields_and_views() -> None:
             }
         ],
     }
-    assert [request.method for request in requests] == ["POST", "GET", "GET"]
+    assert [request.method for request in requests] == ["POST", "GET", "GET", "GET"]
 
 
 def test_inventory_table_view_create_validates_fields_and_creates_view() -> None:
