@@ -985,7 +985,12 @@ def create_app(
         if isinstance(error, httpx.HTTPStatusError):
             return error.response.status_code == 404
         message = str(error).lower()
-        return "1254045" in message or "table not found" in message
+        return (
+            "1254041" in message
+            or "1254045" in message
+            or "tableidnotfound" in message
+            or "table not found" in message
+        )
 
     def remember_inventory_table(result: dict[str, str]) -> None:
         if result.get("table_id"):

@@ -1116,7 +1116,7 @@ def test_inventory_table_sync_filter_recreates_table_when_configured_table_was_d
         if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
         if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_deleted/fields":
-            return httpx.Response(404, json={"code": 1254045, "msg": "table not found"})
+            return httpx.Response(200, json={"code": 1254041, "msg": "TableIdNotFound"})
         if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
             if request.method == "GET":
                 return httpx.Response(200, json={"code": 0, "data": {"items": []}})
