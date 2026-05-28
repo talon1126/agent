@@ -151,3 +151,44 @@ flowchart LR
 - 创建或复用 `Procurement Purchase Order Drafts`，按 `PO Draft ID` upsert。
 - 复用同一个飞书 Base/app 凭据；未配置 table id 时自动建表。
 - 同步结果会返回表链接、写入数量和错误信息，供采购 Agent 回复用户。
+
+# 物流agent
+
+## 汇总
+
+- 物流 Agent 负责查询订单或运单配送状态、承运商、延迟天数、风险等级和处理建议。
+- 支持查询延迟、丢件等 mock 物流异常列表，也支持在用户明确要求时创建物流跟进 case。
+- 物流 Agent 不处理退款、赔偿或售后政策决策；这类请求只建议转交 Customer Support。
+
+## workflow 架构
+
+```mermaid
+flowchart LR
+    User["飞书物流用户"] --> Gateway["feishu-adapter 多机器人网关"]
+    Gateway --> Workflow["n8n Delivery Workflow"]
+    Workflow --> Agent["Delivery Agent"]
+
+    Agent --> StatusTool["delivery_status_tool"]
+    Agent --> ExceptionTool["delivery_exception_tool"]
+    Agent --> CaseTool["delivery_case_tool"]
+
+    StatusTool --> MockAPI["mock-api mock-delivery"]
+    ExceptionTool --> MockAPI
+    CaseTool --> MockAPI
+```
+
+物流 workflow 的入口是 `n8n/workflows/delivery-workflow.json`，webhook 是 `/webhook/delivery-inbound`。飞书消息经 `feishu-adapter` 多机器人网关进入 Delivery Workflow 后，由 Delivery Agent 按需调用 `delivery_status_tool`、`delivery_exception_tool` 或 `delivery_case_tool`。
+
+## 功能
+
+- 查询物流状态：`@delivery 查询 ord_101 物流` 会返回订单/运单、承运商、状态、预计送达、延迟天数、风险等级和建议动作。
+- 汇总物流异常：`@delivery 当前有哪些延迟物流` 会按延迟、丢件或承运商筛选异常运单。
+- 创建物流 case：`@delivery 为 ord_101 创建物流延迟跟进 case` 会创建 mock delivery case，供后续人工或系统跟进。
+
+## mock-api
+
+物流 mock 能力由 `mock-api` 提供：
+
+- `POST /delivery/status/lookup`：按 `order_id` 或 `shipment_id` 查询物流状态。
+- `POST /delivery/exceptions/search`：查询延迟、丢件或异常运单。
+- `POST /delivery/cases`：创建物流跟进 case。

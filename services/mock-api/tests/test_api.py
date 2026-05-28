@@ -3,16 +3,18 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import RECEIVED_INVENTORY_BATCHES, WAREHOUSE_INVENTORY_SYNC_JOBS, app
+from app.main import DELIVERY_CASES, RECEIVED_INVENTORY_BATCHES, WAREHOUSE_INVENTORY_SYNC_JOBS, app
 
 client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
 def clear_received_inventory_batches():
+    DELIVERY_CASES.clear()
     RECEIVED_INVENTORY_BATCHES.clear()
     WAREHOUSE_INVENTORY_SYNC_JOBS.clear()
     yield
+    DELIVERY_CASES.clear()
     RECEIVED_INVENTORY_BATCHES.clear()
     WAREHOUSE_INVENTORY_SYNC_JOBS.clear()
 
@@ -485,6 +487,53 @@ def test_operations_summary_mock_returns_cross_domain_summary():
     assert body["system"] == "mock-operations"
     assert body["summary"]
     assert any(item["domain"] == "warehouse" for item in body["incidents"])
+
+
+def test_delivery_status_lookup_accepts_order_id_and_returns_shipment_context():
+    response = client.post("/delivery/status/lookup", json={"order_id": "ord_300"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["system"] == "mock-delivery"
+    assert body["order"]["order_id"] == "ord_300"
+    assert body["shipment"]["shipment_id"] == "ship_300"
+    assert body["shipment"]["status"] == "delayed"
+    assert body["risk_level"] == "high"
+    assert "延迟" in body["recommendation"]
+
+
+def test_delivery_exceptions_search_returns_delayed_shipments():
+    response = client.post("/delivery/exceptions/search", json={"status": "delayed"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["system"] == "mock-delivery"
+    assert body["count"] == 1
+    assert body["items"][0]["shipment_id"] == "ship_300"
+    assert body["items"][0]["order_id"] == "ord_300"
+    assert body["items"][0]["exception_type"] == "delivery_delay"
+
+
+def test_delivery_case_create_records_follow_up_case():
+    response = client.post(
+        "/delivery/cases",
+        json={
+            "shipment_id": "ship_300",
+            "case_type": "delivery_delay",
+            "reason": "客户催促，超过预计时效",
+            "created_by": "delivery-agent",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["case"]["case_id"].startswith("DCASE-")
+    assert body["case"]["shipment_id"] == "ship_300"
+    assert body["case"]["status"] == "open"
+    assert DELIVERY_CASES[0]["case_id"] == body["case"]["case_id"]
 
 
 def test_warehouse_inventory_returns_batches_locations_and_risk():

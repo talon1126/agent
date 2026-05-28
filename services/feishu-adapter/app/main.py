@@ -2844,6 +2844,11 @@ def create_app(
     def handle_feishu_event(bot: BotConfig, payload: dict[str, Any]) -> None:
         message = normalize_feishu_event(payload)
         if message.chat_type == "group":
+            mention_suffixes = [
+                value[-8:] if len(value) > 8 else value
+                for value in message.mention_open_ids
+            ]
+            bot_open_id_suffix = bot.bot_open_id[-8:] if len(bot.bot_open_id) > 8 else bot.bot_open_id
             if not message.mention_open_ids:
                 logger.info(
                     "skipping unmentioned group feishu event bot=%s message_id=%s chat_id=%s",
@@ -2861,9 +2866,11 @@ def create_app(
                 return
             if bot.bot_open_id not in message.mention_open_ids:
                 logger.info(
-                    "skipping group feishu event bot=%s message_id=%s because bot was not mentioned",
+                    "skipping group feishu event bot=%s message_id=%s because bot was not mentioned bot_open_id_suffix=%s mention_open_id_suffixes=%s",
                     bot.name,
                     message.message_id,
+                    bot_open_id_suffix,
+                    mention_suffixes,
                 )
                 return
 

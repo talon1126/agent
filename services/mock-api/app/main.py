@@ -21,6 +21,7 @@ RUN_LOGS: list[dict] = []
 DEAD_LETTERS: list[dict] = []
 REPLAYS: list[dict] = []
 INTERNAL_NOTIFICATIONS: list[dict] = []
+DELIVERY_CASES: list[dict] = []
 REPLENISHMENT_REQUESTS: list[dict] = []
 PURCHASE_ORDER_DRAFTS: list[dict] = []
 RECEIVED_INVENTORY_BATCHES: list[dict] = []
@@ -161,6 +162,29 @@ class PurchaseOrderDraftTableRowsRequest(BaseModel):
     limit: int = 100
 
 
+class DeliveryStatusLookupRequest(BaseModel):
+    order_id: str | None = None
+    shipment_id: str | None = None
+    query: str | None = None
+    text: str | None = None
+    input: str | None = None
+
+
+class DeliveryExceptionSearchRequest(BaseModel):
+    status: str | None = None
+    carrier: str | None = None
+    min_delay_days: int = 1
+    limit: int = 50
+
+
+class DeliveryCaseCreateRequest(BaseModel):
+    shipment_id: str | None = None
+    order_id: str | None = None
+    case_type: str = "delivery_follow_up"
+    reason: str = "delivery follow-up requested"
+    created_by: str = "delivery-agent"
+
+
 class PolicySearchRequest(BaseModel):
     query: str
     locale: str = "zh"
@@ -273,6 +297,163 @@ def get_shipment(shipment_id: str) -> dict:
     if not shipment:
         raise HTTPException(status_code=404, detail="shipment not found")
     return shipment
+
+
+def extract_id_from_text(*values: str | None, prefix: str) -> str | None:
+    for value in values:
+        if not value:
+            continue
+        match = re.search(rf"\b{re.escape(prefix)}[0-9A-Za-z_]+\b", str(value), re.IGNORECASE)
+        if match:
+            return match.group(0).lower()
+    return None
+
+
+def find_order_by_shipment_id(shipment_id: str) -> dict[str, Any] | None:
+    for order in load_json("orders.json"):
+        if order.get("shipment_id") == shipment_id:
+            return order
+    return None
+
+
+def delivery_risk_level(shipment: dict[str, Any]) -> str:
+    delay_days = int(shipment.get("delay_days") or 0)
+    status = str(shipment.get("status") or "").lower()
+    if status in {"lost", "delayed"} or delay_days >= 5:
+        return "high"
+    if delay_days > 0 or status in {"exception", "in_transit"}:
+        return "medium"
+    return "low"
+
+
+def delivery_exception_type(shipment: dict[str, Any]) -> str:
+    status = str(shipment.get("status") or "").lower()
+    if status == "lost":
+        return "package_lost"
+    if status == "delayed" or int(shipment.get("delay_days") or 0) > 0:
+        return "delivery_delay"
+    return "none"
+
+
+def delivery_recommendation(shipment: dict[str, Any]) -> str:
+    status = str(shipment.get("status") or "").lower()
+    delay_days = int(shipment.get("delay_days") or 0)
+    if status == "lost":
+        return "建议创建物流丢件 case，并通知客服同步客户。"
+    if status == "delayed" or delay_days >= 5:
+        return "物流已明显延迟，建议创建物流跟进 case，并让客服同步安抚客户。"
+    if delay_days > 0:
+        return "物流存在轻微延迟，建议继续跟踪承运商状态。"
+    return "物流状态正常，无需创建处理 case。"
+
+
+def build_delivery_status(order: dict[str, Any] | None, shipment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "system": "mock-delivery",
+        "order": order,
+        "shipment": shipment,
+        "risk_level": delivery_risk_level(shipment),
+        "exception_type": delivery_exception_type(shipment),
+        "recommendation": delivery_recommendation(shipment),
+    }
+
+
+@app.post("/delivery/status/lookup")
+def delivery_status_lookup(payload: DeliveryStatusLookupRequest) -> dict[str, Any]:
+    order_id = payload.order_id or extract_id_from_text(payload.query, payload.text, payload.input, prefix="ord_")
+    shipment_id = payload.shipment_id or extract_id_from_text(payload.query, payload.text, payload.input, prefix="ship_")
+
+    order: dict[str, Any] | None = None
+    if order_id:
+        order = get_order(order_id)
+        shipment_id = str(order.get("shipment_id") or shipment_id or "")
+
+    if not shipment_id:
+        raise HTTPException(status_code=400, detail="order_id or shipment_id is required")
+
+    shipment = get_shipment(shipment_id)
+    if order is None:
+        order = find_order_by_shipment_id(shipment_id)
+
+    return build_delivery_status(order, shipment)
+
+
+@app.post("/delivery/exceptions/search")
+def delivery_exceptions_search(payload: DeliveryExceptionSearchRequest) -> dict[str, Any]:
+    status = str(payload.status or "").lower()
+    carrier = str(payload.carrier or "").lower()
+    min_delay_days = max(int(payload.min_delay_days or 1), 0)
+    limit = max(min(int(payload.limit or 50), 500), 1)
+    items: list[dict[str, Any]] = []
+
+    for shipment in load_json("shipments.json"):
+        shipment_status = str(shipment.get("status") or "").lower()
+        shipment_carrier = str(shipment.get("carrier") or "").lower()
+        delay_days = int(shipment.get("delay_days") or 0)
+        exception_type = delivery_exception_type(shipment)
+        if exception_type == "none":
+            continue
+        if status and shipment_status != status:
+            continue
+        if carrier and shipment_carrier != carrier:
+            continue
+        if delay_days < min_delay_days and shipment_status != "lost":
+            continue
+        order = find_order_by_shipment_id(str(shipment["shipment_id"]))
+        items.append({
+            "shipment_id": shipment["shipment_id"],
+            "order_id": order["order_id"] if order else None,
+            "carrier": shipment.get("carrier"),
+            "status": shipment.get("status"),
+            "delay_days": delay_days,
+            "exception_type": exception_type,
+            "risk_level": delivery_risk_level(shipment),
+            "recommendation": delivery_recommendation(shipment),
+        })
+
+    return {
+        "ok": True,
+        "system": "mock-delivery",
+        "count": len(items[:limit]),
+        "items": items[:limit],
+    }
+
+
+@app.post("/delivery/cases")
+def create_delivery_case(payload: DeliveryCaseCreateRequest) -> dict[str, Any]:
+    shipment_id = payload.shipment_id
+    order: dict[str, Any] | None = None
+    if payload.order_id:
+        order = get_order(payload.order_id)
+        shipment_id = str(order.get("shipment_id") or shipment_id or "")
+    if not shipment_id:
+        raise HTTPException(status_code=400, detail="shipment_id or order_id is required")
+
+    shipment = get_shipment(shipment_id)
+    if order is None:
+        order = find_order_by_shipment_id(shipment_id)
+    now = datetime.now(UTC).isoformat()
+    case = {
+        "case_id": f"DCASE-{len(DELIVERY_CASES) + 1:04d}",
+        "case_type": payload.case_type,
+        "status": "open",
+        "shipment_id": shipment_id,
+        "order_id": order["order_id"] if order else None,
+        "carrier": shipment.get("carrier"),
+        "reason": payload.reason,
+        "risk_level": delivery_risk_level(shipment),
+        "created_by": payload.created_by,
+        "created_at": now,
+        "updated_at": now,
+    }
+    DELIVERY_CASES.append(case)
+    return {
+        "ok": True,
+        "system": "mock-delivery",
+        "case": case,
+        "recommendation": "物流 case 已创建，请跟进承运商并同步客服。",
+    }
 
 
 @app.get("/inventory/{sku}")

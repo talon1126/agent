@@ -51,14 +51,16 @@ docker compose exec -T n8n n8n import:workflow --input=/workflows/customer-suppo
 docker compose exec -T n8n n8n import:workflow --input=/workflows/warehouse-workflow.json
 docker compose exec -T n8n n8n import:workflow --input=/workflows/procurement-workflow.json
 docker compose exec -T n8n n8n import:workflow --input=/workflows/operations-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/delivery-workflow.json
 docker compose exec -T n8n n8n publish:workflow --id=customer-support-workflow
 docker compose exec -T n8n n8n publish:workflow --id=warehouse-workflow
 docker compose exec -T n8n n8n publish:workflow --id=procurement-workflow
 docker compose exec -T n8n n8n publish:workflow --id=operations-workflow
+docker compose exec -T n8n n8n publish:workflow --id=delivery-workflow
 docker compose restart n8n
 ```
 
-`n8n/workflows/chat-parent-son-agent.json` remains available as a legacy compatibility workflow, but new internal chat integrations should use the four department workflows.
+`n8n/workflows/chat-parent-son-agent.json` remains available as a legacy compatibility workflow, but new internal chat integrations should use the department workflows.
 
 ## Send Demo Event
 
@@ -101,7 +103,7 @@ FEISHU_EVENT_MODE=long_connection
 For multiple department bots, configure one gateway adapter with `FEISHU_BOTS_JSON`:
 
 ```text
-FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","bot_open_id":"ou_customer_bot","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","bot_open_id":"ou_warehouse_bot","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","bot_open_id":"ou_procurement_bot","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","bot_open_id":"ou_operations_bot","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"}]
+FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","bot_open_id":"ou_customer_bot","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","bot_open_id":"ou_warehouse_bot","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","bot_open_id":"ou_procurement_bot","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","bot_open_id":"ou_operations_bot","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"},{"name":"delivery","app_id":"cli_delivery","app_secret":"secret_delivery","bot_open_id":"ou_delivery_bot","n8n_webhook_url":"http://n8n:5678/webhook/delivery-inbound"}]
 ```
 
 Leave `FEISHU_BOTS_JSON` empty to use the legacy single-bot fallback with `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, and `N8N_CHAT_WEBHOOK_URL`.
@@ -181,6 +183,16 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"po_draft
 
 The Procurement bot arrival-confirmation smoke phrase is `@procurement POD-5001,POD-5002 已到仓库`.
 
+Delivery users can query mock logistics status, list delayed or lost shipments, and create delivery follow-up cases:
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"order_id":"ord_101"}' http://localhost:8002/delivery/status/lookup
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"status":"delayed","min_delay_days":1}' http://localhost:8002/delivery/exceptions/search
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"order_id":"ord_101","case_type":"delivery_delay","reason":"客户要求跟进延迟配送","created_by":"delivery:user-001"}' http://localhost:8002/delivery/cases
+```
+
+The Delivery bot user-facing smoke phrases are `@delivery 查询 ord_101 物流`, `@delivery 当前有哪些延迟物流`, and `@delivery 为 ord_101 创建物流延迟跟进 case`.
+
 The local simulation endpoint is:
 
 ```text
@@ -210,9 +222,10 @@ Test department routes through n8n directly:
 ```powershell
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/customer-support-inbound
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_item_vinda_tissue","text":"item_vinda_tissue 今天能发货吗"}' http://localhost:5678/webhook/warehouse-inbound
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_delivery_ord_101","text":"查询 ord_101 物流状态"}' http://localhost:5678/webhook/delivery-inbound
 ```
 
-Expected local result: the customer-support reply uses `order_status_tool`, and the warehouse reply uses the warehouse tools. These direct n8n checks may call the configured LLM; use mock-api endpoint checks when avoiding model quota.
+Expected local result: the customer-support reply uses `order_status_tool`, the warehouse reply uses the warehouse tools, and the delivery reply uses the delivery tools. These direct n8n checks may call the configured LLM; use mock-api endpoint checks when avoiding model quota.
 
 ## Replay Failed Event
 

@@ -5,8 +5,8 @@ Use this file first when working in this repository. It is intentionally short s
 ## Project Root
 
 - User-facing root: `D:\Project\agent`
-- Active implementation worktree: `D:\Project\agent\.worktrees\after-sales-implementation`
-- Main branch in use for current work: `after-sales-implementation`
+- Active implementation worktree: `D:\Project\agent`
+- Main branch in use for current work: `master` with workflow-specific feature branches such as `codex-procurement`, `codex-warehouse`, and `codex-delivery`
 - Remote: `https://github.com/talon1126/agent.git`
 
 ## Runtime Shape
@@ -20,7 +20,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 - `feishu-adapter` can publish structured message run logs to `FEISHU_RUN_LOG_URL`; the default Docker target is `mock-api /run-logs`.
 - `postgres` is the operational store target. `mock-api` now creates and seeds the warehouse batch + location model (`warehouses`, `storage_locations`, `categories`, `items`, and `inventory_batches`) from fixtures when `DATABASE_URL` is configured, while some action records still remain in in-memory mock endpoints.
 - `ai-service` creates `session_state` and `user_profile` in Postgres when `DATABASE_URL` is configured. Fast path stores `last_order_id` in `session_state` and mirrors it into `user_profile.profile` when `sender_id` is available.
-- The recommended chat architecture is now one Feishu Gateway Adapter plus independent department workflows: `Customer Support Workflow`, `Warehouse Workflow`, `Procurement Workflow`, and `Operations Workflow`.
+- The recommended chat architecture is now one Feishu Gateway Adapter plus independent department workflows: `Customer Support Workflow`, `Warehouse Workflow`, `Procurement Workflow`, `Operations Workflow`, and `Delivery Workflow`.
 - `chat-parent-son-agent.json` remains as a legacy compatibility artifact, but the main internal chat path should use department workflows instead of Parent -> son dispatch.
 
 ## Key Entry Points
@@ -30,7 +30,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 - Warehouse inventory table provisioning, sync, and view tooling: `POST /warehouse/inventory-table/provision` creates or reuses a fixed-schema table inside an existing Feishu Bitable app/base; `POST /warehouse/inventory-table/sync` auto-provisions when needed and publishes a one-way item snapshot from `mock-api /warehouse/inventory/{item_id}`; `POST /warehouse/inventory-table/sync/filter` publishes filtered batch records by warehouse, location, category, item, or expiry risk; `GET /warehouse/inventory-table/schema` and `POST /warehouse/inventory-table/views/from-template` let Warehouse Agent create controlled Feishu grid views from natural-language templates and validated field plans.
 - Warehouse view template builder: employees can ask for views such as high-risk inventory or low-stock warning in plain language. `feishu-adapter` maps the message to `template + slots`, validates schema, and calls the controlled view creation endpoint.
 - Fast path: Feishu -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> Feishu reply. If the fast path declines, the workflow falls back to Parent Agent.
-- Department workflow exports: `n8n/workflows/customer-support-workflow.json`, `n8n/workflows/warehouse-workflow.json`, `n8n/workflows/procurement-workflow.json`, and `n8n/workflows/operations-workflow.json`
+- Department workflow exports: `n8n/workflows/customer-support-workflow.json`, `n8n/workflows/warehouse-workflow.json`, `n8n/workflows/procurement-workflow.json`, `n8n/workflows/operations-workflow.json`, and `n8n/workflows/delivery-workflow.json`
 - Parent/son workflow export: `n8n/workflows/chat-parent-son-agent.json` is legacy compatibility.
 - Message-agent workflow export: `n8n/workflows/message-agent.json`
 - Event workflow export: `n8n/workflows/ecommerce-after-sales.json`
@@ -39,7 +39,9 @@ The project is a Docker-first internal ecommerce operations copilot.
 - Order status tool code: `services/ai-service/app/order_status_tool.py`
 - n8n customer-support tools: `order_status_tool` and `policy_search_tool` inside `n8n/workflows/customer-support-workflow.json`
 - n8n warehouse tools: `warehouse_inventory_tool`, `warehouse_exception_tool`, `warehouse_fulfillment_tool`, `warehouse_inventory_table_provision_tool`, `warehouse_inventory_table_sync_tool`, `warehouse_table_schema_tool`, and `warehouse_view_create_tool` inside `n8n/workflows/warehouse-workflow.json`
-- n8n procurement and operations tools: `procurement_mock_tool` and `operations_mock_tool` inside their department workflows.
+- n8n procurement tools: `procurement_mock_tool`, `procurement_replenishment_request_tool`, `procurement_approve_replenishment_tool`, `procurement_reject_replenishment_tool`, `procurement_sync_replenishment_requests_tool`, `procurement_sync_purchase_order_drafts_tool`, `procurement_approve_replenishment_batch_tool`, and `procurement_confirm_arrival_batch_tool` inside `n8n/workflows/procurement-workflow.json`.
+- n8n operations tools: `operations_mock_tool` inside `n8n/workflows/operations-workflow.json`.
+- n8n delivery tools: `delivery_status_tool`, `delivery_exception_tool`, and `delivery_case_tool` inside `n8n/workflows/delivery-workflow.json`.
 - n8n memory nodes: `Parent Postgres Chat Memory` and `Customer Support Postgres Chat Memory`
 - Parent and son memory may share the same physical table, but their `sessionKey` values must be namespaced separately (`parent:` and `customer_support:`) to avoid cross-agent context pollution.
 - n8n policy RAG tool: `policy_search_tool` inside `n8n/workflows/chat-parent-son-agent.json`
@@ -102,6 +104,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 - Use `warehouse_inventory_table_sync_tool` only when users explicitly ask to sync/export/publish/show a Feishu table snapshot. It can sync by `item_id` or by filtered scope such as warehouse, location, category, and expiry risk. If no table id is configured, the backend may auto-provision or reuse the table before syncing. Feishu table data is a read model, not the inventory source of truth.
 - Use `warehouse_table_schema_tool` before any request to create a Feishu inventory view. It returns the real field names, types, select colors, and existing views.
 - Use `warehouse_view_create_tool` only after schema discovery. Its input must be JSON with `view_name`, `visible_fields`, `filters`, and `sorts`; the backend rejects unknown fields before calling Feishu. The MVP creates or reuses a grid view and returns the validated plan instead of letting the Agent run direct Feishu CLI/API commands.
+- Delivery Agent owns logistics status lookup, carrier delay/lost-package exception summaries, and mock delivery case creation. It should not decide refunds or compensation policy; those remain Customer Support responsibilities.
 - `Procurement Agent` and `Operations Agent` are backed by deterministic mock endpoints in their own department workflows.
 - Do not commit `.env` or print secrets.
 - When adding an English Markdown document, add the Chinese `.zh.md` counterpart.
@@ -109,7 +112,7 @@ The project is a Docker-first internal ecommerce operations copilot.
 
 ## Common Verification
 
-Run from `D:\Project\agent\.worktrees\after-sales-implementation`:
+Run from `D:\Project\agent`:
 
 ```powershell
 pytest services\ai-service\tests -v
@@ -123,7 +126,7 @@ docker compose ps
 
 Useful smoke paths:
 
-- n8n department chat webhooks: `http://localhost:5678/webhook/customer-support-inbound`, `http://localhost:5678/webhook/warehouse-inbound`, `http://localhost:5678/webhook/procurement-inbound`, and `http://localhost:5678/webhook/operations-inbound`
+- n8n department chat webhooks: `http://localhost:5678/webhook/customer-support-inbound`, `http://localhost:5678/webhook/warehouse-inbound`, `http://localhost:5678/webhook/procurement-inbound`, `http://localhost:5678/webhook/operations-inbound`, and `http://localhost:5678/webhook/delivery-inbound`
 - ai-service local port: `http://localhost:8001`
 - mock-api local port: `http://localhost:8002`
 - feishu-adapter local port: `http://localhost:8010`
@@ -132,5 +135,8 @@ Useful smoke paths:
 - warehouse inventory table sync: `http://localhost:8010/warehouse/inventory-table/sync`
 - warehouse inventory table schema: `http://localhost:8010/warehouse/inventory-table/schema`
 - warehouse inventory view create: `http://localhost:8010/warehouse/inventory-table/views/create`
+- mock delivery lookup: `http://localhost:8002/delivery/status/lookup`
+- mock delivery exceptions: `http://localhost:8002/delivery/exceptions/search`
+- mock delivery cases: `http://localhost:8002/delivery/cases`
 
 Expected order smoke phrase for `ord_100`: `Order ord_100 is delivered. Shipment status is delivered.`

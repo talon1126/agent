@@ -3170,6 +3170,76 @@ def test_multi_bot_group_message_routes_only_to_mentioned_bot() -> None:
     assert n8n_urls == ["http://n8n.local/webhook/warehouse-inbound"]
 
 
+def test_multi_bot_group_message_routes_when_mention_id_is_string() -> None:
+    requests: list[httpx.Request] = []
+    captured_listeners: list[dict[str, object]] = []
+    bots_json = json.dumps(
+        [
+            {
+                "name": "customer_support",
+                "app_id": "cli_customer",
+                "app_secret": "secret_customer",
+                "bot_open_id": "ou_customer_bot",
+                "n8n_webhook_url": "http://n8n.local/webhook/customer-support-inbound",
+            },
+            {
+                "name": "delivery",
+                "app_id": "cli_delivery",
+                "app_secret": "secret_delivery",
+                "bot_open_id": "ou_delivery_bot",
+                "n8n_webhook_url": "http://n8n.local/webhook/delivery-inbound",
+            },
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"reply": ""})
+
+    def fake_long_connection_starter(**kwargs: object) -> object:
+        captured_listeners.append(kwargs)
+        return object()
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_bots_json=bots_json,
+        feishu_event_mode="long_connection",
+        long_connection_starter=fake_long_connection_starter,
+    )
+    payload = {
+        "schema": "2.0",
+        "header": {"event_id": "evt_group_mention_string_id"},
+        "event": {
+            "sender": {"sender_id": {"open_id": "ou_sender"}},
+            "message": {
+                "message_id": "om_group_mention_string_id",
+                "chat_id": "oc_group",
+                "chat_type": "group",
+                "message_type": "text",
+                "content": '{"text":"@Delivery 查询 ord_300 物流"}',
+                "mentions": [
+                    {
+                        "id": "ou_delivery_bot",
+                        "key": "@_user_1",
+                        "name": "Delivery",
+                    }
+                ],
+            },
+        },
+    }
+
+    with TestClient(app):
+        for listener in captured_listeners:
+            listener["on_event"](payload)
+
+    n8n_urls = [
+        str(request.url)
+        for request in requests
+        if str(request.url).startswith("http://n8n.local/webhook/")
+    ]
+    assert n8n_urls == ["http://n8n.local/webhook/delivery-inbound"]
+
+
 def test_multi_bot_group_message_without_mention_is_ignored() -> None:
     requests: list[httpx.Request] = []
     captured_listeners: list[dict[str, object]] = []

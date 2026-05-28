@@ -51,14 +51,16 @@ docker compose exec -T n8n n8n import:workflow --input=/workflows/customer-suppo
 docker compose exec -T n8n n8n import:workflow --input=/workflows/warehouse-workflow.json
 docker compose exec -T n8n n8n import:workflow --input=/workflows/procurement-workflow.json
 docker compose exec -T n8n n8n import:workflow --input=/workflows/operations-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/delivery-workflow.json
 docker compose exec -T n8n n8n publish:workflow --id=customer-support-workflow
 docker compose exec -T n8n n8n publish:workflow --id=warehouse-workflow
 docker compose exec -T n8n n8n publish:workflow --id=procurement-workflow
 docker compose exec -T n8n n8n publish:workflow --id=operations-workflow
+docker compose exec -T n8n n8n publish:workflow --id=delivery-workflow
 docker compose restart n8n
 ```
 
-`n8n/workflows/chat-parent-son-agent.json` 仍保留为历史兼容 workflow，新内部聊天接入建议使用这 4 个部门 workflow。
+`n8n/workflows/chat-parent-son-agent.json` 仍保留为历史兼容 workflow，新内部聊天接入建议使用部门 workflow。
 
 ## 发送 Demo 事件
 
@@ -101,7 +103,7 @@ FEISHU_EVENT_MODE=long_connection
 多个部门机器人使用一个 gateway adapter，通过 `FEISHU_BOTS_JSON` 配置：
 
 ```text
-FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","bot_open_id":"ou_customer_bot","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","bot_open_id":"ou_warehouse_bot","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","bot_open_id":"ou_procurement_bot","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","bot_open_id":"ou_operations_bot","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"}]
+FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret":"secret_customer","bot_open_id":"ou_customer_bot","n8n_webhook_url":"http://n8n:5678/webhook/customer-support-inbound"},{"name":"warehouse","app_id":"cli_warehouse","app_secret":"secret_warehouse","bot_open_id":"ou_warehouse_bot","n8n_webhook_url":"http://n8n:5678/webhook/warehouse-inbound"},{"name":"procurement","app_id":"cli_procurement","app_secret":"secret_procurement","bot_open_id":"ou_procurement_bot","n8n_webhook_url":"http://n8n:5678/webhook/procurement-inbound"},{"name":"operations","app_id":"cli_operations","app_secret":"secret_operations","bot_open_id":"ou_operations_bot","n8n_webhook_url":"http://n8n:5678/webhook/operations-inbound"},{"name":"delivery","app_id":"cli_delivery","app_secret":"secret_delivery","bot_open_id":"ou_delivery_bot","n8n_webhook_url":"http://n8n:5678/webhook/delivery-inbound"}]
 ```
 
 `FEISHU_BOTS_JSON` 留空时，adapter 会继续使用旧的单机器人 fallback：`FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和 `N8N_CHAT_WEBHOOK_URL`。
@@ -181,6 +183,16 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"po_draft
 
 Procurement bot 到仓确认测试话术是：`@procurement POD-5001,POD-5002 已到仓库`。
 
+物流用户可以查询 mock 物流状态、汇总延迟或丢件运单，并创建物流跟进 case：
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"order_id":"ord_101"}' http://localhost:8002/delivery/status/lookup
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"status":"delayed","min_delay_days":1}' http://localhost:8002/delivery/exceptions/search
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"order_id":"ord_101","case_type":"delivery_delay","reason":"客户要求跟进延迟配送","created_by":"delivery:user-001"}' http://localhost:8002/delivery/cases
+```
+
+Delivery bot 的端到端测试话术是：`@delivery 查询 ord_101 物流`、`@delivery 当前有哪些延迟物流` 和 `@delivery 为 ord_101 创建物流延迟跟进 case`。
+
 本地模拟端点是：
 
 ```text
@@ -210,9 +222,10 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"schema":
 ```powershell
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_ord_100","text":"帮我查一下订单 ord_100"}' http://localhost:5678/webhook/customer-support-inbound
 Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_item_vinda_tissue","text":"item_vinda_tissue 今天能发货吗"}' http://localhost:5678/webhook/warehouse-inbound
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"platform":"feishu","message_type":"text","sender_id":"local","chat_id":"local","message_id":"local_delivery_ord_101","text":"查询 ord_101 物流状态"}' http://localhost:5678/webhook/delivery-inbound
 ```
 
-预期本地结果：客服 workflow 会调用 `order_status_tool`，仓储 workflow 会调用仓储工具。这类直接 n8n 检查可能调用已配置的 LLM；如果要避免模型额度，优先检查 mock-api endpoint。
+预期本地结果：客服 workflow 会调用 `order_status_tool`，仓储 workflow 会调用仓储工具，物流 workflow 会调用物流工具。这类直接 n8n 检查可能调用已配置的 LLM；如果要避免模型额度，优先检查 mock-api endpoint。
 
 ## Replay 失败事件
 

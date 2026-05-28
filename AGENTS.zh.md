@@ -5,8 +5,8 @@
 ## 项目根目录
 
 - 用户视角根目录：`D:\Project\agent`
-- 当前实现 worktree：`D:\Project\agent\.worktrees\after-sales-implementation`
-- 当前工作分支：`after-sales-implementation`
+- 当前实现 worktree：`D:\Project\agent`
+- 当前工作分支：`master`，配合 `codex-procurement`、`codex-warehouse`、`codex-delivery` 等 workflow 专项分支
 - 远程仓库：`https://github.com/talon1126/agent.git`
 
 ## 运行结构
@@ -20,7 +20,7 @@
 - `feishu-adapter` 可以把结构化消息 run log 写到 `FEISHU_RUN_LOG_URL`；Docker 默认目标是 `mock-api /run-logs`。
 - `postgres` 是运维存储目标。配置 `DATABASE_URL` 后，`mock-api` 现在会从 fixtures 创建并 seed 仓储“批次 + 库位”模型（`warehouses`、`storage_locations`、`categories`、`items`、`inventory_batches`）；部分动作记录仍保留在 mock endpoint 内存中。
 - 配置 `DATABASE_URL` 后，`ai-service` 会在 Postgres 中创建 `session_state` 和 `user_profile`。fast path 会把 `last_order_id` 存到 `session_state`，如果有 `sender_id`，也会同步到 `user_profile.profile`。
-- 当前推荐聊天架构是一个 Feishu Gateway Adapter 加多个独立部门 workflow：`Customer Support Workflow`、`Warehouse Workflow`、`Procurement Workflow` 和 `Operations Workflow`。
+- 当前推荐聊天架构是一个 Feishu Gateway Adapter 加多个独立部门 workflow：`Customer Support Workflow`、`Warehouse Workflow`、`Procurement Workflow`、`Operations Workflow` 和 `Delivery Workflow`。
 - `chat-parent-son-agent.json` 仍作为历史兼容文件保留，但主内部聊天链路应使用部门 workflow，而不是 Parent -> son 分发。
 
 ## 关键入口
@@ -30,7 +30,7 @@
 - 仓储库存表格创建、同步和视图工具：`feishu-adapter` 的 `POST /warehouse/inventory-table/provision` 会在已有飞书多维表格 app/base 里创建或复用固定 schema 的数据表；`POST /warehouse/inventory-table/sync` 会在需要时自动建表，并基于 `mock-api /warehouse/inventory/{item_id}` 发布单个商品的单向快照；`POST /warehouse/inventory-table/sync/filter` 可以按仓库、库位、分类、商品或临期风险同步批次记录；`GET /warehouse/inventory-table/schema` 和 `POST /warehouse/inventory-table/views/from-template` 让 Warehouse Agent 可以基于自然语言模板和校验后的字段计划创建受控飞书 grid 视图。
 - 仓储视图模板构建器：员工可以用“高风险库存”“缺货预警”等自然语言创建视图。`feishu-adapter` 会把消息映射为 `template + slots`，校验 schema，再调用受控视图创建接口。
 - fast path 链路：飞书 -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> 飞书回复。如果 fast path 拒绝处理，workflow 会回退到 Parent Agent。
-- 部门 workflow 导出：`n8n/workflows/customer-support-workflow.json`、`n8n/workflows/warehouse-workflow.json`、`n8n/workflows/procurement-workflow.json` 和 `n8n/workflows/operations-workflow.json`
+- 部门 workflow 导出：`n8n/workflows/customer-support-workflow.json`、`n8n/workflows/warehouse-workflow.json`、`n8n/workflows/procurement-workflow.json`、`n8n/workflows/operations-workflow.json` 和 `n8n/workflows/delivery-workflow.json`
 - Parent/son workflow 导出：`n8n/workflows/chat-parent-son-agent.json` 是历史兼容文件。
 - Message-agent workflow 导出：`n8n/workflows/message-agent.json`
 - Event workflow 导出：`n8n/workflows/ecommerce-after-sales.json`
@@ -39,7 +39,9 @@
 - 订单状态工具代码：`services/ai-service/app/order_status_tool.py`
 - n8n 客服工具：`n8n/workflows/customer-support-workflow.json` 中的 `order_status_tool` 和 `policy_search_tool`
 - n8n 仓储工具：`n8n/workflows/warehouse-workflow.json` 中的 `warehouse_inventory_tool`、`warehouse_exception_tool`、`warehouse_fulfillment_tool`、`warehouse_inventory_table_provision_tool`、`warehouse_inventory_table_sync_tool`、`warehouse_table_schema_tool` 和 `warehouse_view_create_tool`
-- n8n 采购和运营工具：分别位于自己的部门 workflow 中的 `procurement_mock_tool` 和 `operations_mock_tool`
+- n8n 采购工具：`n8n/workflows/procurement-workflow.json` 中的 `procurement_mock_tool`、`procurement_replenishment_request_tool`、`procurement_approve_replenishment_tool`、`procurement_reject_replenishment_tool`、`procurement_sync_replenishment_requests_tool`、`procurement_sync_purchase_order_drafts_tool`、`procurement_approve_replenishment_batch_tool` 和 `procurement_confirm_arrival_batch_tool`
+- n8n 运营工具：`n8n/workflows/operations-workflow.json` 中的 `operations_mock_tool`
+- n8n 物流工具：`n8n/workflows/delivery-workflow.json` 中的 `delivery_status_tool`、`delivery_exception_tool` 和 `delivery_case_tool`
 - n8n memory 节点：`Parent Postgres Chat Memory` 和 `Customer Support Postgres Chat Memory`
 - Parent 和 son memory 可以共用同一张物理表，但 `sessionKey` 必须分别加命名空间（`parent:` 和 `customer_support:`），避免跨 Agent 上下文污染。
 - n8n 政策 RAG 工具：`n8n/workflows/chat-parent-son-agent.json` 中的 `policy_search_tool`
@@ -102,6 +104,7 @@
 - 只有用户明确要求同步、导出、发布或展示飞书表格快照时，才使用 `warehouse_inventory_table_sync_tool`。它可以按 `item_id` 同步，也可以按仓库、库位、分类、临期风险等过滤条件同步。如果没有配置 table id，后端可以先自动创建或复用表格再同步。飞书表格是 read model，不是库存主数据源。
 - 创建飞书库存视图前，必须先使用 `warehouse_table_schema_tool`。它返回真实字段名、字段类型、单选项颜色和已有视图。
 - 只有 schema discovery 之后，才使用 `warehouse_view_create_tool`。它的输入必须是包含 `view_name`、`visible_fields`、`filters` 和 `sorts` 的 JSON；后端会在调用飞书前拒绝不存在的字段。MVP 只创建或复用 grid 视图并返回校验后的计划，不允许 Agent 直接执行飞书 CLI/API 命令。
+- Delivery Agent 负责物流状态查询、承运商延迟/丢件异常汇总，以及 mock 物流 case 创建。它不负责退款、赔付或售后政策决策，这些仍归 Customer Support。
 - `Procurement Agent` 和 `Operations Agent` 在自己的部门 workflow 中使用确定性 mock endpoint。
 - 不要提交 `.env`，不要打印 secrets。
 - 每新增一份英文 Markdown 文档，都要同时新增中文 `.zh.md` 版本。
@@ -109,7 +112,7 @@
 
 ## 常用验证
 
-从 `D:\Project\agent\.worktrees\after-sales-implementation` 执行：
+从 `D:\Project\agent` 执行：
 
 ```powershell
 pytest services\ai-service\tests -v
@@ -123,7 +126,7 @@ docker compose ps
 
 常用 smoke 路径：
 
-- n8n 部门 chat webhook：`http://localhost:5678/webhook/customer-support-inbound`、`http://localhost:5678/webhook/warehouse-inbound`、`http://localhost:5678/webhook/procurement-inbound` 和 `http://localhost:5678/webhook/operations-inbound`
+- n8n 部门 chat webhook：`http://localhost:5678/webhook/customer-support-inbound`、`http://localhost:5678/webhook/warehouse-inbound`、`http://localhost:5678/webhook/procurement-inbound`、`http://localhost:5678/webhook/operations-inbound` 和 `http://localhost:5678/webhook/delivery-inbound`
 - ai-service 本地端口：`http://localhost:8001`
 - mock-api 本地端口：`http://localhost:8002`
 - feishu-adapter 本地端口：`http://localhost:8010`
@@ -132,5 +135,8 @@ docker compose ps
 - 仓储库存表格同步：`http://localhost:8010/warehouse/inventory-table/sync`
 - 仓储库存表格 schema：`http://localhost:8010/warehouse/inventory-table/schema`
 - 仓储库存视图创建：`http://localhost:8010/warehouse/inventory-table/views/create`
+- mock 物流查询：`http://localhost:8002/delivery/status/lookup`
+- mock 物流异常：`http://localhost:8002/delivery/exceptions/search`
+- mock 物流 case：`http://localhost:8002/delivery/cases`
 
 `ord_100` 的预期订单 smoke 片段：`Order ord_100 is delivered. Shipment status is delivered.`

@@ -28,6 +28,9 @@ DEPARTMENT_WORKFLOWS = {
             "procurement_approve_replenishment_batch_tool",
             "procurement_confirm_arrival_batch_tool",
             "operations_mock_tool",
+            "delivery_status_tool",
+            "delivery_exception_tool",
+            "delivery_case_tool",
             "echo_task_tool",
         },
     },
@@ -60,6 +63,9 @@ DEPARTMENT_WORKFLOWS = {
             "procurement_approve_replenishment_batch_tool",
             "procurement_confirm_arrival_batch_tool",
             "operations_mock_tool",
+            "delivery_status_tool",
+            "delivery_exception_tool",
+            "delivery_case_tool",
             "echo_task_tool",
         },
     },
@@ -92,6 +98,9 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_replenishment_request_tool",
             "warehouse_inventory_sync_jobs_tool",
             "operations_mock_tool",
+            "delivery_status_tool",
+            "delivery_exception_tool",
+            "delivery_case_tool",
             "echo_task_tool",
         },
     },
@@ -120,6 +129,44 @@ DEPARTMENT_WORKFLOWS = {
             "procurement_sync_purchase_order_drafts_tool",
             "procurement_approve_replenishment_batch_tool",
             "procurement_confirm_arrival_batch_tool",
+            "delivery_status_tool",
+            "delivery_exception_tool",
+            "delivery_case_tool",
+            "echo_task_tool",
+        },
+    },
+    "delivery-workflow.json": {
+        "workflow_name": "Delivery Workflow",
+        "webhook_path": "delivery-inbound",
+        "agent": "Delivery Agent",
+        "model": "Delivery Qwen Chat Model",
+        "memory": "Delivery Postgres Chat Memory",
+        "tools": {
+            "delivery_status_tool",
+            "delivery_exception_tool",
+            "delivery_case_tool",
+        },
+        "forbidden_tools": {
+            "order_status_tool",
+            "policy_search_tool",
+            "warehouse_inventory_tool",
+            "warehouse_exception_tool",
+            "warehouse_fulfillment_tool",
+            "warehouse_inventory_table_provision_tool",
+            "warehouse_inventory_table_sync_tool",
+            "warehouse_table_schema_tool",
+            "warehouse_view_create_tool",
+            "warehouse_replenishment_request_tool",
+            "warehouse_inventory_sync_jobs_tool",
+            "procurement_mock_tool",
+            "procurement_replenishment_request_tool",
+            "procurement_approve_replenishment_tool",
+            "procurement_reject_replenishment_tool",
+            "procurement_sync_replenishment_requests_tool",
+            "procurement_sync_purchase_order_drafts_tool",
+            "procurement_approve_replenishment_batch_tool",
+            "procurement_confirm_arrival_batch_tool",
+            "operations_mock_tool",
             "echo_task_tool",
         },
     },
@@ -375,6 +422,25 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "extractPoDraftIds" in arrival_tool["parameters"]["jsCode"]
             assert "extractRequestId" in approve_tool["parameters"]["jsCode"]
             assert "extractRequestId" in reject_tool["parameters"]["jsCode"]
+
+        if expected["agent"] == "Delivery Agent":
+            system_message = agent["parameters"]["options"]["systemMessage"]
+            assert "delivery_status_tool" in system_message
+            assert "delivery_exception_tool" in system_message
+            assert "delivery_case_tool" in system_message
+            assert "不要直接执行其他部门动作" in system_message
+            assert "Customer Support" in system_message
+            assert "mock-delivery" in system_message
+            status_tool = node_by_name(workflow, "delivery_status_tool")
+            exception_tool = node_by_name(workflow, "delivery_exception_tool")
+            case_tool = node_by_name(workflow, "delivery_case_tool")
+            assert "/delivery/status/lookup" in status_tool["parameters"]["jsCode"]
+            assert "/delivery/exceptions/search" in exception_tool["parameters"]["jsCode"]
+            assert "/delivery/cases" in case_tool["parameters"]["jsCode"]
+            assert "extractOrderId" in status_tool["parameters"]["jsCode"]
+            assert "extractShipmentId" in case_tool["parameters"]["jsCode"]
+            assert "case_type" in case_tool["parameters"]["jsCode"]
+            assert "refund" not in case_tool["parameters"]["jsCode"].lower()
 
 
 def test_department_workflows_connect_directly_to_department_agent() -> None:

@@ -50,6 +50,7 @@ def _extract_mention_open_ids(value: Any) -> list[str]:
         mention_id = mention.get("id") or {}
         open_id = _first(
             mention_id.get("open_id") if isinstance(mention_id, dict) else None,
+            mention_id if isinstance(mention_id, str) else None,
             mention.get("open_id"),
         )
         if open_id:

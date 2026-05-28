@@ -21,10 +21,12 @@ flowchart LR
     Adapter --> WH["warehouse workflow"]
     Adapter --> PR["procurement workflow"]
     Adapter --> OPS["operations workflow"]
+    Adapter --> DEL["delivery workflow"]
     CS --> N8N["n8n"]
     WH --> N8N
     PR --> N8N
     OPS --> N8N
+    DEL --> N8N
     N8N --> MockRead["mock-api read endpoints"]
     MockRead --> N8N
     N8N --> AI["ai-service /decide"]
@@ -144,6 +146,7 @@ FEISHU_BOTS_JSON=[{"name":"customer_support","app_id":"cli_customer","app_secret
 - `n8n/workflows/warehouse-workflow.json` 暴露 `/webhook/warehouse-inbound`。
 - `n8n/workflows/procurement-workflow.json` 暴露 `/webhook/procurement-inbound`。
 - `n8n/workflows/operations-workflow.json` 暴露 `/webhook/operations-inbound`。
+- `n8n/workflows/delivery-workflow.json` 暴露 `/webhook/delivery-inbound`。
 
 `n8n/workflows/chat-parent-son-agent.json` 仍保留在仓库中作为兼容历史文件，但不再推荐作为主要聊天链路。
 
@@ -154,10 +157,12 @@ docker compose exec -T n8n n8n import:workflow --input=/workflows/customer-suppo
 docker compose exec -T n8n n8n import:workflow --input=/workflows/warehouse-workflow.json
 docker compose exec -T n8n n8n import:workflow --input=/workflows/procurement-workflow.json
 docker compose exec -T n8n n8n import:workflow --input=/workflows/operations-workflow.json
+docker compose exec -T n8n n8n import:workflow --input=/workflows/delivery-workflow.json
 docker compose exec -T n8n n8n publish:workflow --id=customer-support-workflow
 docker compose exec -T n8n n8n publish:workflow --id=warehouse-workflow
 docker compose exec -T n8n n8n publish:workflow --id=procurement-workflow
 docker compose exec -T n8n n8n publish:workflow --id=operations-workflow
+docker compose exec -T n8n n8n publish:workflow --id=delivery-workflow
 docker compose restart n8n
 ```
 
@@ -170,6 +175,9 @@ docker compose restart n8n
 - `GET http://localhost:8010/health/details`
 - `POST http://localhost:8010/feishu/events`
 - `POST http://localhost:8010/warehouse/inventory-table/sync`
+- `POST http://localhost:8002/delivery/status/lookup`
+- `POST http://localhost:8002/delivery/exceptions/search`
+- `POST http://localhost:8002/delivery/cases`
 - `GET http://localhost:8002/orders/{order_id}`
 - `GET http://localhost:8002/customers/{customer_id}`
 - `GET http://localhost:8002/shipments/{shipment_id}`
