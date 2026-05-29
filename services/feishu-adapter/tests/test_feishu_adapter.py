@@ -65,7 +65,7 @@ def procurement_replenishment_table_rows_response() -> dict:
                 "request_id": "REQ-1001",
                 "fields": {
                     "Request ID": "REQ-1001",
-                    "Status": "pending_procurement_review",
+                    "Status": "未审批",
                     "Warehouse": "深圳仓",
                     "Warehouse ID": "wh_sz_1",
                     "Location": "A1",
@@ -799,7 +799,7 @@ def test_procurement_replenishment_table_provision_creates_table_from_backend_sc
                         {
                             "name": "Status",
                             "type": "single_select",
-                            "options": [{"name": "pending_procurement_review", "color": 24}],
+                            "options": [{"name": "未审批", "color": 24}],
                         },
                         {"name": "Suggested Quantity", "type": "number"},
                     ],
@@ -844,7 +844,7 @@ def test_procurement_replenishment_table_provision_creates_table_from_backend_sc
         {
             "field_name": "Status",
             "type": 3,
-            "property": {"options": [{"name": "pending_procurement_review", "color": 24}]},
+            "property": {"options": [{"name": "未审批", "color": 24}]},
         },
         {"field_name": "Suggested Quantity", "type": 2},
     ]
@@ -1564,7 +1564,7 @@ def test_procurement_replenishment_request_table_sync_upserts_by_request_id() ->
     )
     client = TestClient(app)
 
-    response = client.post("/procurement/replenishment-requests-table/sync", json={"status": "pending_procurement_review"})
+    response = client.post("/procurement/replenishment-requests-table/sync", json={"status": "未审批"})
 
     assert response.status_code == 200
     body = response.json()
@@ -1573,7 +1573,7 @@ def test_procurement_replenishment_request_table_sync_upserts_by_request_id() ->
     assert body["items"] == [
         {
             "request_id": "REQ-1001",
-            "status": "pending_procurement_review",
+            "status": "未审批",
             "action": "updated",
             "record_id": "rec_req",
             "source_version": "mock-api:REQ-1001",
@@ -2540,6 +2540,23 @@ def test_warehouse_intent_router_endpoint_routes_update_table_view_to_sync() -> 
     assert body["executor"] == "warehouse_inventory_table_sync"
     assert body["slots"]["warehouse"] == "wh_hk_1"
     assert body["clarification_question"] is None
+
+
+def test_warehouse_intent_router_endpoint_routes_purchase_arrival_sync_fast_path() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/intents/route",
+        json={"message": "@warehouse 同步采购到仓库存"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "matched"
+    assert body["intent"] == "sync_purchase_order_arrivals"
+    assert body["executor"] == "warehouse_purchase_order_arrival_sync"
+    assert body["reason"] == "matched_purchase_order_arrival_sync"
 
 
 def test_inventory_table_view_from_template_creates_controlled_view() -> None:

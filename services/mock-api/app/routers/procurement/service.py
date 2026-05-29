@@ -11,12 +11,29 @@ from .schemas import ReplenishmentApproveRequest, ReplenishmentRequestCreate
 from .state import PURCHASE_ORDERS, REPLENISHMENT_REQUESTS
 
 
+REPLENISHMENT_STATUS_UNAPPROVED = "未审批"
+REPLENISHMENT_STATUS_APPROVED = "已审批"
+
+_LEGACY_REPLENISHMENT_STATUS_MAP = {
+    "pending_procurement_review": REPLENISHMENT_STATUS_UNAPPROVED,
+    "rejected": REPLENISHMENT_STATUS_UNAPPROVED,
+    "purchase_order_created": REPLENISHMENT_STATUS_APPROVED,
+    "purchase_order_draft_created": REPLENISHMENT_STATUS_APPROVED,
+}
+
+
+def normalize_replenishment_status(status: str | None) -> str | None:
+    if status is None:
+        return None
+    stripped = str(status).strip()
+    return _LEGACY_REPLENISHMENT_STATUS_MAP.get(stripped, stripped)
+
+
 PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_SCHEMA = [
     {"name": "Request ID", "type": "text"},
     {"name": "Status", "type": "single_select", "options": [
-        {"name": "pending_procurement_review", "color": 24},
-        {"name": "purchase_order_created", "color": 28},
-        {"name": "rejected", "color": 17},
+        {"name": REPLENISHMENT_STATUS_UNAPPROVED, "color": 24},
+        {"name": REPLENISHMENT_STATUS_APPROVED, "color": 28},
     ]},
     {"name": "Source", "type": "text"},
     {"name": "Warehouse", "type": "text"},
@@ -66,6 +83,7 @@ PROCUREMENT_PURCHASE_ORDER_TABLE_SCHEMA = [
     {"name": "Estimated Total Price", "type": "number"},
     {"name": "Lead Time Days", "type": "number"},
     {"name": "Estimated Arrival Date", "type": "text"},
+    {"name": "Arrived At", "type": "text"},
     {"name": "Created By", "type": "text"},
     {"name": "Created At", "type": "text"},
     {"name": "Updated At", "type": "text"},
@@ -119,7 +137,7 @@ def build_replenishment_request(
     return {
         "request_id": next_replenishment_request_id(repository),
         "source": payload.source,
-        "status": "pending_procurement_review",
+        "status": REPLENISHMENT_STATUS_UNAPPROVED,
         "warehouse_id": payload.warehouse_id,
         "warehouse_name": first["warehouse_name"],
         "location_code": payload.location_code,
@@ -191,6 +209,7 @@ def list_purchase_orders(
     *,
     warehouse_sync_status: str | None = None,
     purchase_order_id: str | None = None,
+    payment_status: str | None = None,
     repository: WarehouseRepository | None = None,
 ) -> list[dict[str, Any]]:
     if repository:
@@ -198,6 +217,7 @@ def list_purchase_orders(
             request_id=request_id,
             warehouse_sync_status=warehouse_sync_status,
             purchase_order_id=purchase_order_id,
+            payment_status=payment_status,
         )
     return [
         order
@@ -205,6 +225,7 @@ def list_purchase_orders(
         if (not request_id or order["request_id"] == request_id)
         and (not warehouse_sync_status or order["warehouse_sync_status"] == warehouse_sync_status)
         and (not purchase_order_id or order["purchase_order_id"] == purchase_order_id)
+        and (not payment_status or order["payment_status"] == payment_status)
     ]
 
 
@@ -241,6 +262,7 @@ def create_purchase_order(
         "estimated_arrival_date": estimated_arrival_date_for_request(request, supplier),
         "payment_status": "unpaid",
         "warehouse_sync_status": "pending_arrival",
+        "arrived_at": "",
         "created_by": payload.created_by,
         "created_at": now,
         "updated_at": now,
@@ -268,7 +290,7 @@ def approve_replenishment_request_data(
 
     updated = update_replenishment_request_status(
         request["request_id"],
-        status="purchase_order_created",
+        status=REPLENISHMENT_STATUS_APPROVED,
         repository=repository,
     )
     return updated or request, order, created
@@ -290,6 +312,7 @@ def update_purchase_order_warehouse_sync_status(
     purchase_order_id: str,
     *,
     warehouse_sync_status: str,
+    arrived_at: str | None = None,
     repository: WarehouseRepository | None = None,
 ) -> dict[str, Any] | None:
     updated_at = datetime.now(UTC).isoformat()
@@ -298,11 +321,14 @@ def update_purchase_order_warehouse_sync_status(
             purchase_order_id,
             warehouse_sync_status=warehouse_sync_status,
             updated_at=updated_at,
+            arrived_at=arrived_at,
         )
     order = get_purchase_order_by_id(purchase_order_id)
     if not order:
         return None
     order["warehouse_sync_status"] = warehouse_sync_status
+    if arrived_at is not None:
+        order["arrived_at"] = arrived_at
     order["updated_at"] = updated_at
     return order
 
@@ -320,9 +346,11 @@ def confirm_purchase_order_arrival(
         return order, None, "replenishment_request_not_found"
 
     action = "reused" if order.get("warehouse_sync_status") in {"arrived_unsynced", "synced"} else "updated"
+    arrived_at = order.get("arrived_at") or datetime.now(UTC).isoformat()
     updated_order = update_purchase_order_warehouse_sync_status(
         purchase_order_id,
         warehouse_sync_status="arrived_unsynced",
+        arrived_at=arrived_at,
         repository=repository,
     )
     return updated_order or order, request, action
@@ -359,6 +387,7 @@ def procurement_purchase_order_table_fields(order: dict[str, Any]) -> dict[str, 
         "Request ID": order["request_id"],
         "Payment Status": order["payment_status"],
         "Warehouse Sync Status": order["warehouse_sync_status"],
+        "Arrived At": order.get("arrived_at") or "",
         "Supplier ID": order["supplier_id"],
         "Supplier Name": order["supplier_name"],
         "Item ID": order["item_id"],

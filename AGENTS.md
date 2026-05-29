@@ -4,9 +4,9 @@
 
 ## 业务边界
 
-仓储 agent 负责库存、仓库、库位、批次、临期风险、仓储异常、履约风险、补货申请发起，以及采购到货后的库存同步任务处理。
+仓储 agent 负责库存、仓库、库位、批次、临期风险、仓储异常、履约风险、补货申请发起，以及采购到货后的仓库库存同步处理。
 
-仓储 agent 不负责供应商选择、采购单审批、退款/赔付、物流承运商决策。需要采购时只生成补货申请或消费采购到货同步任务，后续采购动作由采购 agent 处理。
+仓储 agent 不负责供应商选择、采购单审批、退款/赔付、物流承运商决策。需要采购时只生成补货申请；采购单到仓后，仓储后续消费 `purchase_orders.warehouse_sync_status=arrived_unsynced` 的采购单并同步库存事实。
 
 ## workflow 入口
 
@@ -22,7 +22,8 @@
   - `warehouse_inventory_table_sync_tool`：按商品、仓库、库位、分类、批次或风险范围同步库存快照到飞书。
   - `warehouse_table_schema_tool`：创建飞书库存视图前读取真实字段和视图。
   - `warehouse_view_create_tool`：按受控 JSON 创建或复用飞书库存视图。
-  - `warehouse_inventory_sync_jobs_tool`：处理采购到货后产生的待同步库存任务。
+  - `warehouse_purchase_order_arrival_sync_tool`：扫描已支付且到仓未同步的采购单，写入库存批次表和库存余额表。
+  - `warehouse_inventory_sync_jobs_tool`：处理旧链路遗留的待同步库存任务；新采购到仓链路以 `purchase_orders.warehouse_sync_status=arrived_unsynced` 为交接点。
 
 ## ai-service
 
@@ -96,26 +97,32 @@
 - `POST /warehouse/orders/{order_id}/return`
   - 用途：已到货后退货，按 `order_items` 原批次加回 `inventory_location_balances`。
 
+- `POST /warehouse/purchase-orders/sync-arrivals`
+  - 用途：Warehouse 扫描采购单中 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的记录，同步到库存事实。
+  - 写入规则：`batch_no` 使用 `BATCH-YYYYMMDD`，日期来自采购单 `arrived_at`；`expiry_date` 按商品主数据 `items.shelf_life_days` 计算；`storage_status=available`；`reorder_threshold` 在合理范围内生成。
+  - 库位规则：同一 `item_id + warehouse_id` 只保留一个 `location_code`；已有余额时复用已有库位，没有则用采购单库位，再没有则用仓库第一个库位。
+  - 影响：写入 `inventory_batches`，更新或新增 `inventory_location_balances`，成功后把采购单 `warehouse_sync_status` 标记为 `synced`。
+
 ### 补货和采购交接接口
 
 - `POST /procurement/replenishment-requests`
   - 用途：仓储发现低库存后创建补货申请。
-  - 默认状态：`pending_procurement_review`。
-  - 采购 agent 后续负责审批、拒绝和创建采购单草稿。
+  - 默认状态：`未审批`。
+  - 采购 agent 后续负责审批、驳回原因记录和创建采购单。
 
-- `GET /procurement/replenishment-requests?status=pending_procurement_review`
+- `GET /procurement/replenishment-requests?status=未审批`
   - 用途：采购 agent 查询待审核补货申请。
 
-- `POST /procurement/purchase-order-drafts/confirm-arrival-batch`
+- `POST /procurement/purchase-orders/confirm-arrival-batch`
   - 用途：采购人员批量确认采购单到仓。
-  - 影响：创建 `RCV-POD-*` 入库批次，并创建 `warehouse_inventory_sync_jobs` 待处理任务。
-  - 返回重点：`confirmed_items`、`warehouse_inventory_sync_requests`、`warehouse_inventory_sync_jobs`、`next_action`。
+  - 影响：只把 `purchase_orders.warehouse_sync_status` 更新为 `arrived_unsynced`，不直接创建库存批次或 Warehouse sync job。
+  - 返回重点：`confirmed_items`、`errors`、`next_action`。
 
 ### 库存同步任务接口
 
 - `GET /warehouse/inventory-sync-jobs?status=pending`
-  - 用途：仓储 agent 拉取待处理库存同步任务。
-  - 任务来源：采购到货确认后产生的 `warehouse_inventory_sync_requested`。
+  - 用途：仓储 agent 拉取旧链路遗留的待处理库存同步任务。
+  - 任务来源：历史采购到货确认产生的 `warehouse_inventory_sync_requested`。
 
 - `POST /warehouse/inventory-sync-jobs/{job_id}/complete`
   - 用途：飞书库存表同步成功后标记任务完成。
@@ -153,10 +160,10 @@
   - 适合人工要求“同步香港仓高风险库存”这类范围同步。
 
 - `POST /warehouse/inventory-table/sync/jobs`
-  - 用途：批量处理仓储库存同步任务。
+  - 用途：批量处理旧链路仓储库存同步任务。
   - 入参重点：`jobs`、`limit_per_job`、`table_name`。
   - 当前实现按 job 的 `item_id + warehouse_id + location_code + batch_no` 精确取行，再批量 upsert 到飞书表。
-  - 这是采购到货后增量同步的主路径。
+  - 当前采购到仓主路径已转为 Warehouse 读取 `purchase_orders` 并先写库存事实；飞书库存表仍通过库存读模型同步展示。
 
 - `GET /warehouse/inventory-table/schema`
   - 用途：读取真实飞书库存表字段、字段类型、选项颜色和已有视图。
@@ -192,7 +199,7 @@
 
 - `items`
   - 商品主数据。
-  - 关键字段：`item_id`、`category_id`、`item_name`、`brand`、`spec`、`unit`、`barcode`。
+  - 关键字段：`item_id`、`category_id`、`item_name`、`brand`、`spec`、`unit`、`barcode`、`shelf_life_days`。
 
 - `inventory_batches`
   - 批次入库事实表，用于进货记录和商品批次溯源，不再被订单扣减。
@@ -202,6 +209,7 @@
   - 批次级库位库存余额表，订单付款扣减、取消或退货加回。
   - 关键字段：`id`、`warehouse_id`、`location_code`、`item_id`、`batch_no`、`quantity_on_hand`、`reorder_threshold`、`storage_status`。
   - 初始化来源：按 `inventory_batches.quantity_on_hand` 建立余额，忽略旧模型的 `quantity_reserved`。
+  - 当前约束：同一 `item_id + warehouse_id` 后续采购入库复用同一个 `location_code`，避免同仓同商品分散到多个库位。
 
 - `orders`
   - 订单主表，记录下单、付款、发货、到货、取消和退货状态。
@@ -214,37 +222,39 @@
 - `replenishment_requests`
   - 仓储发起、采购处理的补货申请。
   - 关键字段：`request_id`、`status`、`warehouse_id`、`location_code`、`item_id`、`current_quantity`、`reorder_threshold`、`suggested_quantity`、`reason`、`created_by`。
-  - 主要状态：`pending_procurement_review`、`purchase_order_draft_created`、`rejected`。
+  - 主要状态：`未审批`、`已审批`。
+  - 驳回补货申请时仍保持 `未审批`，拒绝原因写入 `reason`。
 
-- `purchase_order_drafts`
-  - 采购单草稿，由采购 agent 负责，但到货后会影响仓储库存。
-  - 关键字段：`po_draft_id`、`request_id`、`supplier_id`、`item_id`、`quantity`、`status`、`estimated_arrival_date`。
-  - 到货后状态会进入 `received_at_warehouse`。
+- `purchase_orders`
+  - 采购单表，由采购 agent 负责，但到货后会影响仓储库存同步。
+  - 关键字段：`purchase_order_id`、`request_id`、`supplier_id`、`item_id`、`warehouse_id`、`location_code`、`quantity`、`payment_status`、`warehouse_sync_status`、`estimated_arrival_date`、`arrived_at`。
+  - 到仓后 `warehouse_sync_status` 会进入 `arrived_unsynced` 并写入 `arrived_at`；Warehouse 只同步已支付采购单，成功后改为 `synced`。
 
 - `warehouse_inventory_sync_jobs`
-  - 仓储库存同步任务表。
+  - 旧链路仓储库存同步任务表。
   - 关键字段：`job_id`、`event`、`po_draft_id`、`request_id`、`item_id`、`warehouse_id`、`location_code`、`batch_no`、`quantity`、`status`、`processed_by`、`processed_at`、`result_json`、`error`。
-  - 采购确认到货后新增 `pending` 任务；仓储处理完成后改为 `completed` 或 `failed`。
+  - 历史任务会保留 `pending`、`completed`、`failed` 状态；新采购到仓链路不再由采购直接创建该任务。
 
 ## 其他 workflow 可能会用到的契约
 
-- 采购 agent 如果确认采购单到货，必须通过 `POST /procurement/purchase-order-drafts/confirm-arrival-batch` 产生仓储同步任务，不要直接写飞书库存表。
+- 采购 agent 如果确认采购单到货，必须通过 `POST /procurement/purchase-orders/confirm-arrival-batch` 把采购单标记为 `arrived_unsynced`，不要直接写 `inventory_batches`、`inventory_location_balances` 或飞书库存表。
 - 物流 agent 如果只需要判断是否能出库，可以调用 `POST /warehouse/fulfillment/check`，不要自行推断批次库存。
 - 订单付款后必须调用 `POST /warehouse/orders/{order_id}/pay` 扣减 `inventory_location_balances`；发货和到货只更新订单状态；取消或退货调用 `/cancel` 或 `/return` 按原批次加回库存。
 - 客服 agent 如果需要解释“为什么不能发货”，可以引用 `warehouse/fulfillment/check` 的 `blockers` 和 `next_action`，但不要承诺退款或补偿。
 - 运营 agent 如果要做库存风险汇总，可以调用 `POST /warehouse/inventory/search`，按 `risk_level`、`expiry_risk`、`warehouse_id`、`category` 聚合。
 - 任何 agent 需要飞书库存表、视图或同步状态，都应调用 `feishu-adapter` 的 `/warehouse/inventory-table/*` 接口，不要直接访问飞书开放平台。
 - 飞书库存表是读模型，不是库存源数据；库存源数据始终是 `mock-api` 暴露的仓储事实接口和背后的业务表。
+- Warehouse 扫描未同步采购单时，应使用 `BATCH-YYYYMMDD` 作为入库批次号，同一天到达的采购入库共享同一批次号，并在成功写入库存余额后把 `warehouse_sync_status` 更新为 `synced`。
 
 ## 常见业务对象
 
 - 商品 ID 示例：`item_vinda_tissue`、`item_milk_pure`、`item_cola_zero`、`item_copy_paper`。
 - 仓库 ID 示例：`wh_sz_1`、`wh_hk_1`、`wh_sg_1`。
 - 库位示例：`A1`、`B1`、`C1`。
-- 批次号示例：`RCV-POD-*` 表示采购到货生成的入库批次。
+- 批次号示例：`BATCH-20260529` 表示 2026-05-29 到仓生成的入库批次。
 - 同步任务 ID 示例：`WSJ-POD-*`。
 - 补货申请 ID 示例：`REQ-*`。
-- 采购单草稿 ID 示例：`POD-*`。
+- 采购单 ID 示例：`PO-*`。
 
 ## 维护原则
 
@@ -273,9 +283,9 @@
 - 当前主要工具：
   - `procurement_sync_replenishment_requests_tool`：把数据库补货申请同步到飞书采购补货请求表。
   - `procurement_sync_purchase_orders_tool`：把采购单同步到飞书采购单表。
-  - `procurement_approve_replenishment_batch_tool`：批量批准全部 pending 补货申请，生成或复用采购单，并刷新两张采购飞书表。
+  - `procurement_approve_replenishment_batch_tool`：批量批准全部 `未审批` 补货申请，生成或复用采购单，并刷新两张采购飞书表。
   - `procurement_confirm_purchase_order_arrival_tool`：确认一个或多个 `PO-*` 到仓，把采购单标记为 `arrived_unsynced`，并刷新采购单表。
-  - `procurement_replenishment_request_tool`：查询 Warehouse 创建的 `pending_procurement_review` 补货申请。
+  - `procurement_replenishment_request_tool`：查询 Warehouse 创建的 `未审批` 补货申请。
   - `procurement_approve_replenishment_tool`：批准单个 `REQ-*` 补货申请，生成或复用采购单。
   - `procurement_reject_replenishment_tool`：驳回单个 `REQ-*` 补货申请，并记录拒绝原因。
   - `procurement_mock_tool`：按 `item_id` 生成基础 mock 采购建议。
@@ -311,28 +321,28 @@
 - `POST /procurement/replenishment-requests`
   - 用途：创建补货申请。
   - 主要调用方：Warehouse Agent 在确认低库存后调用。
-  - 默认状态：`pending_procurement_review`。
+  - 默认状态：`未审批`。
   - 入参重点：`source`、`warehouse_id`、`location_code`、`item_id`、`reason`、`created_by`。
 
-- `GET /procurement/replenishment-requests?status=pending_procurement_review`
+- `GET /procurement/replenishment-requests?status=未审批`
   - 用途：查询补货申请，可按状态过滤。
   - 主要调用方：Procurement Agent、采购飞书表同步。
 
 - `POST /procurement/replenishment-requests/{request_id}/approve`
   - 用途：批准单个 `REQ-*` 补货申请。
-  - 影响：申请状态更新为 `purchase_order_created`，创建或复用 `PO-*` 采购单。
+  - 影响：申请状态更新为 `已审批`，创建或复用 `PO-*` 采购单。
   - 幂等规则：重复批准同一个 `REQ-*` 必须复用已有采购单，不重复创建。
   - 采购单会继承补货申请的 `warehouse_id`、`warehouse_name`、`location_code`。
   - 异常：商品没有默认供应商时返回明确错误。
 
 - `POST /procurement/replenishment-requests/{request_id}/reject`
   - 用途：驳回单个 `REQ-*` 补货申请。
-  - 影响：申请状态更新为 `rejected`，记录拒绝原因。
+  - 影响：申请状态保持 `未审批`，拒绝原因写入 `reason`。
   - 不会创建采购单。
 
 - `POST /procurement/replenishment-requests/approve-batch`
   - 用途：批量批准补货申请。
-  - 默认范围：全部 `pending_procurement_review`。
+  - 默认范围：全部 `未审批`。
   - 返回重点：`processed_count`、`approved_count`、`skipped_count`、`created_or_reused_orders`、`errors`。
   - 异常策略：某个商品没有默认供应商时跳过该申请并写入 `errors`，不中断整批任务。
 
@@ -412,7 +422,8 @@
 - `replenishment_requests`
   - 补货申请表，由 Warehouse 创建、Procurement 审核。
   - 关键字段：`request_id`、`source`、`status`、`warehouse_id`、`warehouse_name`、`location_code`、`item_id`、`item_name`、`category_id`、`category_name`、`current_quantity`、`reorder_threshold`、`suggested_quantity`、`reason`、`created_by`、`created_at`、`updated_at`。
-  - 主要状态：`pending_procurement_review`、`purchase_order_created`、`rejected`。
+  - 主要状态：`未审批`、`已审批`。
+  - 驳回不会产生第三种状态；拒绝原因写入 `reason`。
 
 - `procurement_suppliers`
   - mock 采购供应商表，按 `item_id` 匹配默认供应商。

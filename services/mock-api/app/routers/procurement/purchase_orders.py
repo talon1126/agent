@@ -19,12 +19,14 @@ router = APIRouter()
 def list_procurement_purchase_orders(
     request_id: str | None = None,
     warehouse_sync_status: str | None = None,
+    payment_status: str | None = None,
     purchase_order_id: str | None = None,
 ) -> dict[str, Any]:
     repository = get_warehouse_repository()
     items = list_purchase_orders(
         request_id,
         warehouse_sync_status=warehouse_sync_status,
+        payment_status=payment_status,
         purchase_order_id=purchase_order_id,
         repository=repository,
     )
@@ -67,6 +69,7 @@ def confirm_purchase_order_arrival_batch(
                 "request_id": order["request_id"],
                 "payment_status": order["payment_status"],
                 "warehouse_sync_status": order["warehouse_sync_status"],
+                "arrived_at": order.get("arrived_at") or "",
                 "item_id": order["item_id"],
                 "warehouse_id": order["warehouse_id"],
                 "warehouse_name": order["warehouse_name"],
@@ -105,6 +108,7 @@ def get_procurement_purchase_order_table_rows(
     items = list_purchase_orders(
         payload.request_id,
         warehouse_sync_status=payload.warehouse_sync_status,
+        payment_status=payload.payment_status,
         purchase_order_id=payload.purchase_order_id,
         repository=repository,
     )

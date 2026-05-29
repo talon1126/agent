@@ -21,7 +21,7 @@ class ReplenishmentRejectRequest(BaseModel):
 
 class ReplenishmentApproveBatchRequest(BaseModel):
     created_by: str = "procurement"
-    status: str = "pending_procurement_review"
+    status: str = "未审批"
 
 
 class PurchaseOrderConfirmArrivalBatchRequest(BaseModel):
@@ -39,4 +39,5 @@ class PurchaseOrderTableRowsRequest(BaseModel):
     request_id: str | None = None
     purchase_order_id: str | None = None
     warehouse_sync_status: str | None = None
+    payment_status: str | None = None
     limit: int = 100

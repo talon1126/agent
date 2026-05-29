@@ -322,7 +322,7 @@
           "promptType": "define",
           "text": "={{ $json.input_text }}",
           "options": {
-            "systemMessage": "你是 Warehouse Agent，专门处理企业内部仓储、库存、库位、批次、履约和发货作业问题。当前库存模型是批次 + 库位模型，不再以旧 SKU 快照作为主对象。\n\n核心字段：\n- item_id：商品 ID，例如 item_vinda_tissue。\n- warehouse_id：仓库 ID，例如 wh_sz_1、wh_hk_1、wh_sg_1。\n- location_code：具体库位，例如 A1、B1、C1。\n- category：商品分类，例如 paper、dairy、beverage、daily_chemical、office_supply。\n- batch_no：批次号。\n- quantity_available：可用库存。\n- expiry_risk：保质期风险，例如 normal、expiring_soon、expired。\n- risk_level：仓储风险，例如 low、medium、high。\n\n可用工具：\n- warehouse_inventory_tool：按 item_id 查询商品在不同仓库、库位、批次上的库存、可用库存、预留库存、临期状态和风险等级。\n- warehouse_exception_tool：按 item_id 查询高风险、临期、过期、库存不足等仓储异常。\n- warehouse_fulfillment_tool：按 item_id 判断商品是否可以发货，并返回阻塞原因和下一步动作。\n- warehouse_inventory_table_provision_tool：仅在用户明确要求创建、初始化或配置飞书库存表时，创建固定 schema 的飞书表格。\n- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 item_id、仓库、库位、分类、批次或风险范围内的库存快照同步到飞书表格。\n- warehouse_table_schema_tool：当用户要求创建飞书库存视图时，先读取当前表字段、字段类型、颜色选项和已有视图。\n- warehouse_view_create_tool：读取 schema 后，用受控 JSON 创建或复用飞书库存视图。\n- warehouse_replenishment_request_tool：当库存低于补货阈值且用户要求生成补货申请时，创建 pending_procurement_review 状态的补货申请，交给 Procurement Agent 后续处理。\n- warehouse_inventory_sync_jobs_tool：当用户说处理库存同步任务、消费采购到仓通知、同步待处理库存任务或处理 warehouse_inventory_sync_requested 时，消费 pending 的仓库库存同步任务，调用飞书库存表同步，并把任务标记 completed 或 failed。\n- warehouse_order_tool：当用户要求创建订单、订单付款、发货、到货、取消订单或退货时，按订单状态驱动库存余额扣减或加回。\n\n处理规则：\n1. 如果用户询问某个商品的库存、现货、库位、批次、临期、缺货或补货阈值，必须调用 warehouse_inventory_tool。\n2. 如果用户询问库存差异、破损、待上架、找不到库位、拣货延迟、临期、过期或仓储异常，必须调用 warehouse_exception_tool。\n3. 如果用户询问能否发货、履约风险、出库阻塞或发货作业状态，必须调用 warehouse_fulfillment_tool。\n4. 如果用户要求创建、初始化或配置飞书库存表，调用 warehouse_inventory_table_provision_tool；如果同时要求同步库存，再调用 warehouse_inventory_table_sync_tool。\n5. 如果用户要求同步、导出、发布、表格、飞书表格或看板，优先按用户提供的 item_id、仓库、库位、分类、临期或风险条件调用 warehouse_inventory_table_sync_tool。\n6. 如果用户要求创建某个飞书库存视图，必须先调用 warehouse_table_schema_tool，再调用 warehouse_view_create_tool；warehouse_view_create_tool 的输入必须是 JSON，包含 view_name、visible_fields、filters 和 sorts；不要编造 schema 中不存在的字段。\n7. warehouse_view_create_tool 返回 ok=true 后，立即根据返回的 action、view_id 和 validated_plan 回复用户；同一个 view_name 不要重复调用 warehouse_view_create_tool。\n8. 如果用户说处理库存同步任务、消费采购到仓通知、同步待处理库存任务或 warehouse_inventory_sync_requested，调用 warehouse_inventory_sync_jobs_tool；成功回复必须包含处理任务数、完成数、失败数、job_id、item_id、仓库、库位和飞书同步结果。\n9. 如果用户要求创建订单、付款、发货、到货、取消或退货，调用 warehouse_order_tool。付款 paid 会扣减 inventory_location_balances；发货 shipped 和到货 arrived 只更新订单状态；取消 cancelled 或退货 returned 会按 order_items 原批次加回库存。\n10. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool、warehouse_inventory_table_sync_tool、warehouse_table_schema_tool 或 warehouse_view_create_tool。\n11. 如果工具需要具体商品但用户没有提供，请要求用户提供商品 item_id，例如 item_vinda_tissue；如果用户只给了分类、仓库或库位，则可以按这些范围进行表格同步或视图创建。\n12. 回复必须保留工具返回的 item_id、商品名称、仓库、库位、批次、可用库存、预留库存、临期状态、风险等级和行动建议等关键字段。\n13. 不要创建采购单；采购归 Procurement Agent 处理。仓储只允许在库存低于补货阈值时调用 warehouse_replenishment_request_tool 生成补货申请，不直接决定供应商、价格或采购单。\n14. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。\n15. 回复必须简洁，适合直接发回飞书。",
+            "systemMessage": "你是 Warehouse Agent，专门处理企业内部仓储、库存、库位、批次、履约和发货作业问题。当前库存模型是批次 + 库位模型，不再以旧 SKU 快照作为主对象。\n\n核心字段：\n- item_id：商品 ID，例如 item_vinda_tissue。\n- warehouse_id：仓库 ID，例如 wh_sz_1、wh_hk_1、wh_sg_1。\n- location_code：具体库位，例如 A1、B1、C1。\n- category：商品分类，例如 paper、dairy、beverage、daily_chemical、office_supply。\n- batch_no：批次号。\n- quantity_available：可用库存。\n- expiry_risk：保质期风险，例如 normal、expiring_soon、expired。\n- risk_level：仓储风险，例如 low、medium、high。\n\n可用工具：\n- warehouse_inventory_tool：按 item_id 查询商品在不同仓库、库位、批次上的库存、可用库存、预留库存、临期状态和风险等级。\n- warehouse_exception_tool：按 item_id 查询高风险、临期、过期、库存不足等仓储异常。\n- warehouse_fulfillment_tool：按 item_id 判断商品是否可以发货，并返回阻塞原因和下一步动作。\n- warehouse_inventory_table_provision_tool：仅在用户明确要求创建、初始化或配置飞书库存表时，创建固定 schema 的飞书表格。\n- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 item_id、仓库、库位、分类、批次或风险范围内的库存快照同步到飞书表格。\n- warehouse_table_schema_tool：当用户要求创建飞书库存视图时，先读取当前表字段、字段类型、颜色选项和已有视图。\n- warehouse_view_create_tool：读取 schema 后，用受控 JSON 创建或复用飞书库存视图。\n- warehouse_replenishment_request_tool：当库存低于补货阈值且用户要求生成补货申请时，创建 未审批 状态的补货申请，交给 Procurement Agent 后续处理。\n- warehouse_purchase_order_arrival_sync_tool：当用户要求把已支付且已到仓但未同步的采购单同步到仓储库存时，扫描 purchase_orders 中 payment_status=paid 且 warehouse_sync_status=arrived_unsynced 的记录，写入库存批次表和库存余额表，并把采购单标记 synced。\n- warehouse_inventory_sync_jobs_tool：仅用于处理旧链路遗留的 warehouse_inventory_sync_requested pending 任务，调用飞书库存表同步，并把任务标记 completed 或 failed。\n- warehouse_order_tool：当用户要求创建订单、订单付款、发货、到货、取消订单或退货时，按订单状态驱动库存余额扣减或加回。\n\n处理规则：\n1. 如果用户询问某个商品的库存、现货、库位、批次、临期、缺货或补货阈值，必须调用 warehouse_inventory_tool。\n2. 如果用户询问库存差异、破损、待上架、找不到库位、拣货延迟、临期、过期或仓储异常，必须调用 warehouse_exception_tool。\n3. 如果用户询问能否发货、履约风险、出库阻塞或发货作业状态，必须调用 warehouse_fulfillment_tool。\n4. 如果用户要求创建、初始化或配置飞书库存表，调用 warehouse_inventory_table_provision_tool；如果同时要求同步库存，再调用 warehouse_inventory_table_sync_tool。\n5. 如果用户要求同步、导出、发布、表格、飞书表格或看板，优先按用户提供的 item_id、仓库、库位、分类、临期或风险条件调用 warehouse_inventory_table_sync_tool。\n6. 如果用户要求创建某个飞书库存视图，必须先调用 warehouse_table_schema_tool，再调用 warehouse_view_create_tool；warehouse_view_create_tool 的输入必须是 JSON，包含 view_name、visible_fields、filters 和 sorts；不要编造 schema 中不存在的字段。\n7. warehouse_view_create_tool 返回 ok=true 后，立即根据返回的 action、view_id 和 validated_plan 回复用户；同一个 view_name 不要重复调用 warehouse_view_create_tool。\n8. 如果用户要求同步采购到仓库存、扫描未同步采购单、处理已支付未同步采购单或同步 purchase_orders arrived_unsynced，调用 warehouse_purchase_order_arrival_sync_tool；成功回复必须包含处理采购单数、同步数、purchase_order_id、item_id、仓库、库位、batch_no 和库存落库结果。\n9. 如果用户明确说处理库存同步任务（旧链路）、处理 warehouse_inventory_sync_requested 或消费历史 sync job，调用 warehouse_inventory_sync_jobs_tool；成功回复必须包含处理任务数、完成数、失败数、job_id、item_id、仓库、库位和飞书同步结果。\n10. 如果用户要求创建订单、付款、发货、到货、取消或退货，调用 warehouse_order_tool。付款 paid 会扣减 inventory_location_balances；发货 shipped 和到货 arrived 只更新订单状态；取消 cancelled 或退货 returned 会按 order_items 原批次加回库存。\n11. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool、warehouse_inventory_table_sync_tool、warehouse_table_schema_tool 或 warehouse_view_create_tool。\n12. 如果工具需要具体商品但用户没有提供，请要求用户提供商品 item_id，例如 item_vinda_tissue；如果用户只给了分类、仓库或库位，则可以按这些范围进行表格同步或视图创建。\n13. 回复必须保留工具返回的 item_id、商品名称、仓库、库位、批次、可用库存、预留库存、临期状态、风险等级和行动建议等关键字段。\n14. 不要创建采购单；采购归 Procurement Agent 处理。仓储只允许在库存低于补货阈值时调用 warehouse_replenishment_request_tool 生成补货申请，不直接决定供应商、价格或采购单。\n15. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。\n16. 回复必须简洁，适合直接发回飞书。",
             "maxIterations": 6,
             "returnIntermediateSteps": true
           }
@@ -519,7 +519,7 @@
         ],
         "parameters": {
           "description": "Use this tool when warehouse has confirmed low stock and the user asks to create a replenishment request for procurement review.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractItemId(input) {\n  const text = String(first(input.item_id, input.itemId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\b(?:item|sku)_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const itemId = extractItemId(input);\n  if (!itemId) {\n    return JSON.stringify({ ok: false, error: 'missing_item_id', message: '请提供商品 item_id，例如 item_vinda_tissue。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/replenishment-requests',\n    body: {\n      source: 'warehouse',\n      warehouse_id: String(first(input.warehouse_id, input.warehouseId, 'wh_sz_1')).trim(),\n      location_code: String(first(input.location_code, input.locationCode, '')).trim() || null,\n      item_id: itemId,\n      reason: String(first(input.reason, 'available_quantity_below_reorder_threshold')).trim(),\n      created_by: String(first(input.created_by, input.createdBy, 'warehouse-agent')).trim()\n    },\n    json: true\n  });\n\n  return JSON.stringify({\n    ok: Boolean(result.ok),\n    status: result.request && result.request.status ? result.request.status : 'pending_procurement_review',\n    ...result\n  });\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'warehouse_replenishment_request_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractItemId(input) {\n  const text = String(first(input.item_id, input.itemId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\b(?:item|sku)_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const itemId = extractItemId(input);\n  if (!itemId) {\n    return JSON.stringify({ ok: false, error: 'missing_item_id', message: '请提供商品 item_id，例如 item_vinda_tissue。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/replenishment-requests',\n    body: {\n      source: 'warehouse',\n      warehouse_id: String(first(input.warehouse_id, input.warehouseId, 'wh_sz_1')).trim(),\n      location_code: String(first(input.location_code, input.locationCode, '')).trim() || null,\n      item_id: itemId,\n      reason: String(first(input.reason, 'available_quantity_below_reorder_threshold')).trim(),\n      created_by: String(first(input.created_by, input.createdBy, 'warehouse-agent')).trim()\n    },\n    json: true\n  });\n\n  return JSON.stringify({\n    ok: Boolean(result.ok),\n    status: result.request && result.request.status ? result.request.status : '未审批',\n    ...result\n  });\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'warehouse_replenishment_request_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
         }
       },
       {
@@ -537,6 +537,20 @@
         }
       },
       {
+        "id": "warehouse-purchase-order-arrival-sync-tool-node",
+        "name": "warehouse_purchase_order_arrival_sync_tool",
+        "type": "@n8n/n8n-nodes-langchain.toolCode",
+        "typeVersion": 1.3,
+        "position": [
+          2840,
+          1248
+        ],
+        "parameters": {
+          "description": "Use this tool to sync paid and arrived-but-unsynced purchase_orders into warehouse inventory batches and location balances.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try { return JSON.parse(value); } catch (error) { return { query: value }; }\n}\nfunction first(...values) { return values.find((value) => value !== undefined && value !== null && String(value).trim() !== ''); }\ntry {\n  const input = parseMaybeJson(query);\n  const limit = Number(first(input.limit, 50));\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/warehouse/purchase-orders/sync-arrivals',\n    body: {\n      processed_by: String(first(input.processed_by, input.processedBy, 'warehouse-agent')).trim(),\n      limit: Number.isFinite(limit) && limit > 0 ? limit : 50\n    },\n    json: true\n  });\n  return JSON.stringify({\n    ok: Boolean(result.ok),\n    system: 'mock-warehouse-purchase-order-arrival-sync',\n    ...result\n  });\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'warehouse_purchase_order_arrival_sync_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+        }
+      },
+      {
         "id": "warehouse-order-tool-node",
         "name": "warehouse_order_tool",
         "type": "@n8n/n8n-nodes-langchain.toolCode",
@@ -549,6 +563,79 @@
           "description": "Use this tool when the user asks to create an order, pay an order, ship, arrive, cancel, refund before shipping, or return after arrival. It updates orders/order_items and inventory_location_balances by batch.",
           "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  const trimmed = value.trim();\n  try { return JSON.parse(trimmed); } catch (error) { return { query: trimmed }; }\n}\nfunction first(...values) { return values.find((value) => value !== undefined && value !== null && String(value).trim() !== ''); }\nfunction extractText(input) { return String(first(input.query, input.text, input.input, '')).trim(); }\nfunction extractAction(input, text) {\n  const explicit = String(first(input.action, input.operation, '')).trim().toLowerCase();\n  if (explicit) return explicit;\n  if (/退货|return/i.test(text)) return 'return';\n  if (/取消|退款|cancel|refund/i.test(text)) return 'cancel';\n  if (/到货|签收|arrive|delivered/i.test(text)) return 'arrive';\n  if (/发货|ship/i.test(text)) return 'ship';\n  if (/付款|支付|pay|paid/i.test(text) && /创建|下单|create/i.test(text)) return 'create_and_pay';\n  if (/付款|支付|pay|paid/i.test(text)) return 'pay';\n  if (/创建|下单|create/i.test(text)) return 'create';\n  return '';\n}\nfunction extractOrderId(input, text) {\n  const explicit = String(first(input.order_id, input.orderId, '')).trim();\n  if (explicit) return explicit;\n  const match = text.match(/\\bORD-[0-9A-Za-z_-]+\\b/i);\n  return match ? match[0].toUpperCase() : '';\n}\nfunction extractItemId(input, text) {\n  const explicit = String(first(input.item_id, input.itemId, '')).trim();\n  if (explicit) return explicit;\n  const match = text.match(/\\bitem_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\nfunction extractWarehouseId(input, text) {\n  const explicit = String(first(input.warehouse_id, input.warehouseId, '')).trim();\n  if (explicit) return explicit;\n  const match = text.match(/\\bwh_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : 'wh_sz_1';\n}\nfunction extractQuantity(input, text) {\n  const explicit = Number(first(input.quantity, input.qty, ''));\n  if (Number.isFinite(explicit) && explicit > 0) return explicit;\n  const matches = Array.from(text.matchAll(/(\\d+)\\s*(?:件|个|箱|瓶|包)?/g));\n  return matches.length ? Number(matches[matches.length - 1][1]) : 1;\n}\nfunction normalizeItems(input, text) {\n  if (Array.isArray(input.items) && input.items.length > 0) {\n    return input.items.map((item) => ({\n      item_id: String(first(item.item_id, item.itemId, '')).trim(),\n      warehouse_id: String(first(item.warehouse_id, item.warehouseId, 'wh_sz_1')).trim(),\n      location_code: String(first(item.location_code, item.locationCode, '')).trim(),\n      quantity: Number(first(item.quantity, item.qty, 1))\n    }));\n  }\n  const itemId = extractItemId(input, text);\n  if (!itemId) return [];\n  return [{ item_id: itemId, warehouse_id: extractWarehouseId(input, text), location_code: String(first(input.location_code, input.locationCode, '')).trim(), quantity: extractQuantity(input, text) }];\n}\ntry {\n  const input = parseMaybeJson(query);\n  const text = extractText(input);\n  const action = extractAction(input, text);\n  const orderId = extractOrderId(input, text);\n  const body = { ...input, action };\n  if (orderId) body.order_id = orderId;\n  if (action === 'create' || action === 'create_and_pay' || action === 'paid') {\n    body.customer_id = String(first(input.customer_id, input.customerId, 'cus_test')).trim();\n    body.items = normalizeItems(input, text);\n    if (body.items.length === 0) return JSON.stringify({ ok: false, error: 'missing_items', message: '请提供 item_id、warehouse_id 和 quantity，例如 item_vinda_tissue wh_sz_1 20。' });\n  }\n  if (!body.action) return JSON.stringify({ ok: false, error: 'missing_order_action', message: '请说明创建订单、付款、发货、到货、取消或退货。' });\n  const result = await helpers.httpRequest({ method: 'POST', url: 'http://mock-api:8000/warehouse/order-tool', body, json: true });\n  return JSON.stringify({ ok: Boolean(result.ok), system: 'mock-warehouse-order', action, ...result });\n} catch (error) {\n  return JSON.stringify({ ok: false, error: 'warehouse_order_tool_runtime_error', message: error && error.message ? error.message : String(error) });\n}"
         }
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 3
+            },
+            "conditions": [
+              {
+                "id": "warehouse-purchase-order-arrival-sync-intent",
+                "leftValue": "={{ $json.executor }}",
+                "rightValue": "warehouse_purchase_order_arrival_sync",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "is-warehouse-purchase-order-arrival-sync-intent-node",
+        "name": "Is Warehouse Purchase Order Arrival Sync Intent",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [
+          496,
+          704
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://mock-api:8000/warehouse/purchase-orders/sync-arrivals",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ { processed_by: 'warehouse-agent', limit: 50 } }}",
+          "options": {}
+        },
+        "id": "sync-purchase-order-arrivals-from-intent-node",
+        "name": "Sync Purchase Order Arrivals From Intent",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          832,
+          608
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const source = $items('Normalize Inbound Message')[0]?.json ?? {};\nconst route = $items('Warehouse Intent Router')[0]?.json ?? {};\n\nfunction itemLine(entry) {\n  const po = entry.purchase_order_id || '未知采购单';\n  const item = entry.item_id || '未知商品';\n  const warehouse = entry.warehouse_name || entry.warehouse_id || '未知仓库';\n  const location = entry.location_code || '未知库位';\n  const batch = entry.batch_no || '未知批次';\n  const quantity = Number(entry.quantity || 0);\n  return `- ${po}: ${item} | ${warehouse} (${entry.warehouse_id || ''}) / ${location} | ${batch} | 数量 ${quantity}`;\n}\n\nreturn $input.all().map((item) => {\n  const result = item.json;\n  const processedCount = Number(result.processed_count || 0);\n  const syncedCount = Number(result.synced_count || 0);\n  const skippedCount = Number(result.skipped_count || 0);\n  const syncedItems = Array.isArray(result.synced_items) ? result.synced_items : [];\n  const detailLines = syncedItems.slice(0, 20).map(itemLine);\n  const moreLine = syncedItems.length > 20 ? `- 另有 ${syncedItems.length - 20} 条已同步，未在消息中展开。` : '';\n  const reply = result.ok\n    ? [\n        '**采购到仓库存同步**',\n        '',\n        `- **处理采购单数**：${processedCount} | **同步数**：${syncedCount} | **跳过数**：${skippedCount}`,\n        syncedCount > 0 ? '- **写入结果**：已写入库存批次表和库存余额表，并将采购单标记为 synced。' : '- **状态**：当前没有待处理的采购到仓库存同步任务。',\n        detailLines.length ? '- **同步明细**：' : '',\n        ...detailLines,\n        moreLine,\n        result.next_action ? `- **下一步**：${result.next_action}` : '',\n      ].filter(Boolean).join('\\n')\n    : `**采购到仓库存同步失败**\\n\\n- **错误原因**：${result.error || 'unknown_error'} ${result.message || ''}`.trim();\n\n  return {\n    json: {\n      ok: Boolean(result.ok),\n      platform: source.platform,\n      chat_id: source.chat_id,\n      sender_id: source.sender_id,\n      message_id: source.message_id,\n      reply,\n      tool_trace: [\n        { tool: 'warehouse_purchase_order_arrival_sync_fast_path', input: route, output: result }\n      ],\n      raw_agent_output: result,\n    }\n  };\n});"
+        },
+        "id": "format-purchase-order-arrival-sync-reply-node",
+        "name": "Format Purchase Order Arrival Sync Reply",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1168,
+          608
+        ]
       }
     ],
     "connections": {
@@ -632,7 +719,7 @@
           ],
           [
             {
-              "node": "Restore Warehouse Intent Router Source",
+              "node": "Is Warehouse Purchase Order Arrival Sync Intent",
               "type": "main",
               "index": 0
             }
@@ -883,6 +970,57 @@
             {
               "node": "Warehouse Agent",
               "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "warehouse_purchase_order_arrival_sync_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Warehouse Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Warehouse Purchase Order Arrival Sync Intent": {
+        "main": [
+          [
+            {
+              "node": "Sync Purchase Order Arrivals From Intent",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Restore Warehouse Intent Router Source",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Sync Purchase Order Arrivals From Intent": {
+        "main": [
+          [
+            {
+              "node": "Format Purchase Order Arrival Sync Reply",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Purchase Order Arrival Sync Reply": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
               "index": 0
             }
           ]

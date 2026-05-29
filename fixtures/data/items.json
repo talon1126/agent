@@ -6,7 +6,8 @@
     "brand": "维达",
     "spec": "3层抽纸 24包",
     "unit": "包",
-    "barcode": "6901234567001"
+    "barcode": "6901234567001",
+    "shelf_life_days": 365
   },
   {
     "item_id": "item_milk_pure",
@@ -15,7 +16,8 @@
     "brand": "蒙牛",
     "spec": "250ml*24盒",
     "unit": "箱",
-    "barcode": "6901234567002"
+    "barcode": "6901234567002",
+    "shelf_life_days": 45
   },
   {
     "item_id": "item_yogurt_plain",
@@ -24,7 +26,8 @@
     "brand": "伊利",
     "spec": "180g*12杯",
     "unit": "箱",
-    "barcode": "6901234567003"
+    "barcode": "6901234567003",
+    "shelf_life_days": 18
   },
   {
     "item_id": "item_water_spring",
@@ -33,7 +36,8 @@
     "brand": "农夫山泉",
     "spec": "550ml*24瓶",
     "unit": "箱",
-    "barcode": "6901234567004"
+    "barcode": "6901234567004",
+    "shelf_life_days": 730
   },
   {
     "item_id": "item_cola_zero",
@@ -42,7 +46,8 @@
     "brand": "可口可乐",
     "spec": "330ml*24罐",
     "unit": "箱",
-    "barcode": "6901234567005"
+    "barcode": "6901234567005",
+    "shelf_life_days": 365
   },
   {
     "item_id": "item_detergent",
@@ -51,7 +56,8 @@
     "brand": "蓝月亮",
     "spec": "3kg",
     "unit": "瓶",
-    "barcode": "6901234567006"
+    "barcode": "6901234567006",
+    "shelf_life_days": 1095
   },
   {
     "item_id": "item_office_pen",
@@ -60,7 +66,8 @@
     "brand": "晨光",
     "spec": "0.5mm 黑色 12支",
     "unit": "盒",
-    "barcode": "6901234567007"
+    "barcode": "6901234567007",
+    "shelf_life_days": 1460
   },
   {
     "item_id": "item_copy_paper",
@@ -69,6 +76,7 @@
     "brand": "得力",
     "spec": "80g 500张",
     "unit": "包",
-    "barcode": "6901234567008"
+    "barcode": "6901234567008",
+    "shelf_life_days": 1460
   }
 ]

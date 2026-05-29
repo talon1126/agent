@@ -13,9 +13,11 @@ from .schemas import (
 )
 from .service import (
     PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_SCHEMA,
+    REPLENISHMENT_STATUS_UNAPPROVED,
     approve_replenishment_request_data,
     build_replenishment_request,
     find_replenishment_request,
+    normalize_replenishment_status,
     procurement_replenishment_request_table_fields,
     update_replenishment_request_status,
 )
@@ -38,13 +40,14 @@ def create_replenishment_request(payload: ReplenishmentRequestCreate) -> dict[st
 @router.get("/procurement/replenishment-requests")
 def list_replenishment_requests(status: str | None = None) -> dict[str, Any]:
     repository = get_warehouse_repository()
+    normalized_status = normalize_replenishment_status(status)
     if repository:
-        items = repository.list_replenishment_requests(status=status)
+        items = repository.list_replenishment_requests(status=normalized_status)
     else:
         items = [
             request
             for request in REPLENISHMENT_REQUESTS
-            if not status or request["status"] == status
+            if not normalized_status or request["status"] == normalized_status
         ]
     return {"ok": True, "count": len(items), "items": items}
 
@@ -73,13 +76,14 @@ def approve_replenishment_requests_batch(
     payload: ReplenishmentApproveBatchRequest,
 ) -> dict[str, Any]:
     repository = get_warehouse_repository()
+    normalized_status = normalize_replenishment_status(payload.status)
     requests = (
-        repository.list_replenishment_requests(status=payload.status)
+        repository.list_replenishment_requests(status=normalized_status)
         if repository
         else [
             request
             for request in REPLENISHMENT_REQUESTS
-            if request["status"] == payload.status
+            if request["status"] == normalized_status
         ]
     )
     approved: list[dict[str, Any]] = []
@@ -124,7 +128,7 @@ def approve_replenishment_requests_batch(
         )
     return {
         "ok": True,
-        "status": payload.status,
+        "status": normalized_status,
         "processed_count": len(requests),
         "approved_count": len(approved),
         "skipped_count": len(errors),
@@ -144,7 +148,7 @@ def reject_replenishment_request(
         raise HTTPException(status_code=404, detail="replenishment request not found")
     updated = update_replenishment_request_status(
         request_id,
-        status="rejected",
+        status=REPLENISHMENT_STATUS_UNAPPROVED,
         reason=payload.reason,
         repository=repository,
     )
@@ -166,13 +170,14 @@ def get_procurement_replenishment_request_table_rows(
     payload: ReplenishmentRequestTableRowsRequest,
 ) -> dict[str, Any]:
     repository = get_warehouse_repository()
+    normalized_status = normalize_replenishment_status(payload.status)
     if repository:
-        items = repository.list_replenishment_requests(status=payload.status)
+        items = repository.list_replenishment_requests(status=normalized_status)
     else:
         items = [
             request
             for request in REPLENISHMENT_REQUESTS
-            if not payload.status or request["status"] == payload.status
+            if not normalized_status or request["status"] == normalized_status
         ]
     if payload.request_id:
         items = [request for request in items if request["request_id"] == payload.request_id]
