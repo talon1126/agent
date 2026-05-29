@@ -17,7 +17,6 @@ from app.routers.warehouse.state import (
     WAREHOUSE_ORDERS,
     get_warehouse_repository,
 )
-from app.routers.warehouse.sync_jobs import upsert_warehouse_inventory_sync_job
 from app.warehouse_store import WarehouseRepository
 
 app = FastAPI(title="Ecommerce Mock Enterprise API")
@@ -40,13 +39,13 @@ REPLAYS: list[dict] = []
 INTERNAL_NOTIFICATIONS: list[dict] = []
 DELIVERY_CASES: list[dict] = []
 REPLENISHMENT_REQUESTS: list[dict] = []
-PURCHASE_ORDER_DRAFTS: list[dict] = []
+PURCHASE_ORDERS: list[dict] = []
 
 PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_SCHEMA = [
     {"name": "Request ID", "type": "text"},
     {"name": "Status", "type": "single_select", "options": [
         {"name": "pending_procurement_review", "color": 24},
-        {"name": "purchase_order_draft_created", "color": 28},
+        {"name": "purchase_order_created", "color": 28},
         {"name": "rejected", "color": 17},
     ]},
     {"name": "Source", "type": "text"},
@@ -73,18 +72,24 @@ PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_SCHEMA = [
     {"name": "Source Version", "type": "text"},
 ]
 
-PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_SCHEMA = [
-    {"name": "PO Draft ID", "type": "text"},
+PROCUREMENT_PURCHASE_ORDER_TABLE_SCHEMA = [
+    {"name": "Purchase Order ID", "type": "text"},
     {"name": "Request ID", "type": "text"},
-    {"name": "Status", "type": "single_select", "options": [
-        {"name": "draft", "color": 24},
-        {"name": "submitted", "color": 28},
-        {"name": "received_at_warehouse", "color": 28},
-        {"name": "cancelled", "color": 17},
+    {"name": "Payment Status", "type": "single_select", "options": [
+        {"name": "unpaid", "color": 24},
+        {"name": "paid", "color": 28},
+    ]},
+    {"name": "Warehouse Sync Status", "type": "single_select", "options": [
+        {"name": "pending_arrival", "color": 24},
+        {"name": "arrived_unsynced", "color": 17},
+        {"name": "synced", "color": 28},
     ]},
     {"name": "Supplier ID", "type": "text"},
     {"name": "Supplier Name", "type": "text"},
     {"name": "Item ID", "type": "text"},
+    {"name": "Warehouse", "type": "text"},
+    {"name": "Warehouse ID", "type": "text"},
+    {"name": "Location", "type": "text"},
     {"name": "Quantity", "type": "number"},
     {"name": "Unit Price", "type": "number"},
     {"name": "Currency", "type": "text"},
@@ -135,8 +140,8 @@ class ReplenishmentApproveBatchRequest(BaseModel):
     status: str = "pending_procurement_review"
 
 
-class PurchaseOrderDraftConfirmArrivalBatchRequest(BaseModel):
-    po_draft_ids: list[str]
+class PurchaseOrderConfirmArrivalBatchRequest(BaseModel):
+    purchase_order_ids: list[str]
     received_by: str = "warehouse"
 
 
@@ -170,9 +175,10 @@ class ReplenishmentRequestTableRowsRequest(BaseModel):
     limit: int = 100
 
 
-class PurchaseOrderDraftTableRowsRequest(BaseModel):
+class PurchaseOrderTableRowsRequest(BaseModel):
     request_id: str | None = None
-    po_draft_id: str | None = None
+    purchase_order_id: str | None = None
+    warehouse_sync_status: str | None = None
     limit: int = 100
 
 
@@ -489,13 +495,13 @@ def next_replenishment_request_id(repository: WarehouseRepository | None = None)
     return f"REQ-{existing_count + 1001}"
 
 
-def next_purchase_order_draft_id(repository: WarehouseRepository | None = None) -> str:
+def next_purchase_order_id(repository: WarehouseRepository | None = None) -> str:
     existing_count = (
-        repository.count_purchase_order_drafts()
+        repository.count_purchase_orders()
         if repository
-        else len(PURCHASE_ORDER_DRAFTS)
+        else len(PURCHASE_ORDERS)
     )
-    return f"POD-{existing_count + 5001}"
+    return f"PO-{existing_count + 5001}"
 
 
 def build_replenishment_request(
@@ -587,16 +593,25 @@ def find_default_supplier(
     )
 
 
-def list_purchase_order_drafts_for_request(
+def list_purchase_orders(
     request_id: str | None = None,
+    *,
+    warehouse_sync_status: str | None = None,
+    purchase_order_id: str | None = None,
     repository: WarehouseRepository | None = None,
 ) -> list[dict[str, Any]]:
     if repository:
-        return repository.list_purchase_order_drafts(request_id=request_id)
+        return repository.list_purchase_orders(
+            request_id=request_id,
+            warehouse_sync_status=warehouse_sync_status,
+            purchase_order_id=purchase_order_id,
+        )
     return [
-        draft
-        for draft in PURCHASE_ORDER_DRAFTS
-        if not request_id or draft["request_id"] == request_id
+        order
+        for order in PURCHASE_ORDERS
+        if (not request_id or order["request_id"] == request_id)
+        and (not warehouse_sync_status or order["warehouse_sync_status"] == warehouse_sync_status)
+        and (not purchase_order_id or order["purchase_order_id"] == purchase_order_id)
     ]
 
 
@@ -609,34 +624,38 @@ def estimated_arrival_date_for_request(request: dict[str, Any], supplier: dict[s
     return (request_date + timedelta(days=int(supplier["lead_time_days"]))).isoformat()
 
 
-def create_purchase_order_draft(
+def create_purchase_order(
     request: dict[str, Any],
     supplier: dict[str, Any],
     payload: ReplenishmentApproveRequest,
     repository: WarehouseRepository | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
-    draft = {
-        "po_draft_id": next_purchase_order_draft_id(repository),
+    order = {
+        "purchase_order_id": next_purchase_order_id(repository),
         "request_id": request["request_id"],
         "supplier_id": supplier["supplier_id"],
         "supplier_name": supplier["supplier_name"],
         "item_id": request["item_id"],
+        "warehouse_id": request["warehouse_id"],
+        "warehouse_name": request["warehouse_name"],
+        "location_code": request.get("location_code") or "",
         "quantity": int(request["suggested_quantity"]),
         "unit_price": int(supplier["unit_price"]),
         "currency": supplier["currency"],
         "estimated_total_price": int(request["suggested_quantity"]) * int(supplier["unit_price"]),
         "lead_time_days": int(supplier["lead_time_days"]),
         "estimated_arrival_date": estimated_arrival_date_for_request(request, supplier),
-        "status": "draft",
+        "payment_status": "unpaid",
+        "warehouse_sync_status": "pending_arrival",
         "created_by": payload.created_by,
         "created_at": now,
         "updated_at": now,
     }
     if repository:
-        return repository.create_purchase_order_draft(draft)
-    PURCHASE_ORDER_DRAFTS.append(draft)
-    return draft
+        return repository.create_purchase_order(order)
+    PURCHASE_ORDERS.append(order)
+    return order
 
 
 def approve_replenishment_request_data(
@@ -644,55 +663,55 @@ def approve_replenishment_request_data(
     payload: ReplenishmentApproveRequest,
     repository: WarehouseRepository | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
-    drafts = list_purchase_order_drafts_for_request(request["request_id"], repository)
-    draft = drafts[0] if drafts else None
+    orders = list_purchase_orders(request["request_id"], repository=repository)
+    order = orders[0] if orders else None
     created = False
-    if not draft:
+    if not order:
         supplier = find_default_supplier(request["item_id"], repository)
         if not supplier:
             raise ValueError("default_supplier_not_found")
-        draft = create_purchase_order_draft(request, supplier, payload, repository)
+        order = create_purchase_order(request, supplier, payload, repository)
         created = True
 
     updated = update_replenishment_request_status(
         request["request_id"],
-        status="purchase_order_draft_created",
+        status="purchase_order_created",
         repository=repository,
     )
-    return updated or request, draft, created
+    return updated or request, order, created
 
 
-def get_purchase_order_draft_by_id(
-    po_draft_id: str,
+def get_purchase_order_by_id(
+    purchase_order_id: str,
     repository: WarehouseRepository | None = None,
 ) -> dict[str, Any] | None:
     if repository:
-        return repository.get_purchase_order_draft(po_draft_id)
+        return repository.get_purchase_order(purchase_order_id)
     return next(
-        (draft for draft in PURCHASE_ORDER_DRAFTS if draft["po_draft_id"] == po_draft_id),
+        (order for order in PURCHASE_ORDERS if order["purchase_order_id"] == purchase_order_id),
         None,
     )
 
 
-def update_purchase_order_draft_status(
-    po_draft_id: str,
+def update_purchase_order_warehouse_sync_status(
+    purchase_order_id: str,
     *,
-    status: str,
+    warehouse_sync_status: str,
     repository: WarehouseRepository | None = None,
 ) -> dict[str, Any] | None:
     updated_at = datetime.now(UTC).isoformat()
     if repository:
-        return repository.update_purchase_order_draft_status(
-            po_draft_id,
-            status=status,
+        return repository.update_purchase_order_warehouse_sync_status(
+            purchase_order_id,
+            warehouse_sync_status=warehouse_sync_status,
             updated_at=updated_at,
         )
-    draft = get_purchase_order_draft_by_id(po_draft_id)
-    if not draft:
+    order = get_purchase_order_by_id(purchase_order_id)
+    if not order:
         return None
-    draft["status"] = status
-    draft["updated_at"] = updated_at
-    return draft
+    order["warehouse_sync_status"] = warehouse_sync_status
+    order["updated_at"] = updated_at
+    return order
 
 
 def shelf_life_days_for_category(category_id: str) -> int:
@@ -706,20 +725,20 @@ def shelf_life_days_for_category(category_id: str) -> int:
 
 
 def build_receipt_inventory_batch(
-    draft: dict[str, Any],
+    order: dict[str, Any],
     request: dict[str, Any],
     *,
     received_at: date,
 ) -> dict[str, Any]:
     expiry_date = received_at + timedelta(days=shelf_life_days_for_category(request["category_id"]))
     return {
-        "warehouse_id": request["warehouse_id"],
-        "location_code": request.get("location_code") or "A1",
-        "item_id": draft["item_id"],
-        "batch_no": f"RCV-{draft['po_draft_id']}",
+        "warehouse_id": order["warehouse_id"],
+        "location_code": order.get("location_code") or "A1",
+        "item_id": order["item_id"],
+        "batch_no": f"RCV-{order['purchase_order_id']}",
         "production_date": received_at.isoformat(),
         "expiry_date": expiry_date.isoformat(),
-        "quantity_on_hand": int(draft["quantity"]),
+        "quantity_on_hand": int(order["quantity"]),
         "quantity_reserved": 0,
         "reorder_threshold": int(request["reorder_threshold"]),
         "storage_status": "available",
@@ -760,59 +779,25 @@ def next_fallback_inventory_batch_id() -> int:
     return max([len(fixture_batches), *received_ids]) + 1
 
 
-def warehouse_sync_request_for_receipt(
-    draft: dict[str, Any],
-    request: dict[str, Any],
-    batch: dict[str, Any],
-) -> dict[str, Any]:
-    item_id = draft["item_id"]
-    return {
-        "team": "warehouse",
-        "event": "warehouse_inventory_sync_requested",
-        "po_draft_id": draft["po_draft_id"],
-        "request_id": draft["request_id"],
-        "item_id": item_id,
-        "warehouse_id": request["warehouse_id"],
-        "warehouse_name": request["warehouse_name"],
-        "location_code": request.get("location_code") or "",
-        "batch_no": batch["batch_no"],
-        "quantity": int(draft["quantity"]),
-        "next_action": "notify_warehouse_to_sync_inventory_table",
-        "suggested_message": f"@warehouse 同步 {item_id} 库存到飞书",
-    }
-
-
-def confirm_purchase_order_draft_arrival(
-    po_draft_id: str,
+def confirm_purchase_order_arrival(
+    purchase_order_id: str,
     *,
     repository: WarehouseRepository | None = None,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None, str]:
-    draft = get_purchase_order_draft_by_id(po_draft_id, repository)
-    if not draft:
-        return None, None, None, "purchase_order_draft_not_found"
-    request = find_replenishment_request(draft["request_id"], repository)
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+    order = get_purchase_order_by_id(purchase_order_id, repository)
+    if not order:
+        return None, None, "purchase_order_not_found"
+    request = find_replenishment_request(order["request_id"], repository)
     if not request:
-        return draft, None, None, "replenishment_request_not_found"
+        return order, None, "replenishment_request_not_found"
 
-    batch_no = f"RCV-{draft['po_draft_id']}"
-    existing_batch = find_inventory_batch_by_batch_no(batch_no, repository)
-    action = "reused"
-    batch = existing_batch
-    if not batch:
-        receipt_batch = build_receipt_inventory_batch(
-            draft,
-            request,
-            received_at=datetime.now(UTC).date(),
-        )
-        batch = create_inventory_receipt_batch(receipt_batch, repository)
-        action = "created"
-
-    updated_draft = update_purchase_order_draft_status(
-        po_draft_id,
-        status="received_at_warehouse",
+    action = "reused" if order.get("warehouse_sync_status") in {"arrived_unsynced", "synced"} else "updated"
+    updated_order = update_purchase_order_warehouse_sync_status(
+        purchase_order_id,
+        warehouse_sync_status="arrived_unsynced",
         repository=repository,
     )
-    return updated_draft or draft, request, batch, action
+    return updated_order or order, request, action
 
 
 def procurement_replenishment_request_table_fields(request: dict[str, Any]) -> dict[str, Any]:
@@ -840,26 +825,30 @@ def procurement_replenishment_request_table_fields(request: dict[str, Any]) -> d
     }
 
 
-def procurement_purchase_order_draft_table_fields(draft: dict[str, Any]) -> dict[str, Any]:
+def procurement_purchase_order_table_fields(order: dict[str, Any]) -> dict[str, Any]:
     return {
-        "PO Draft ID": draft["po_draft_id"],
-        "Request ID": draft["request_id"],
-        "Status": draft["status"],
-        "Supplier ID": draft["supplier_id"],
-        "Supplier Name": draft["supplier_name"],
-        "Item ID": draft["item_id"],
-        "Quantity": int(draft["quantity"]),
-        "Unit Price": int(draft["unit_price"]),
-        "Currency": draft["currency"],
-        "Estimated Total Price": int(draft["estimated_total_price"]),
-        "Lead Time Days": int(draft["lead_time_days"]),
-        "Estimated Arrival Date": draft["estimated_arrival_date"],
-        "Created By": draft["created_by"],
-        "Created At": draft["created_at"],
-        "Updated At": draft["updated_at"],
+        "Purchase Order ID": order["purchase_order_id"],
+        "Request ID": order["request_id"],
+        "Payment Status": order["payment_status"],
+        "Warehouse Sync Status": order["warehouse_sync_status"],
+        "Supplier ID": order["supplier_id"],
+        "Supplier Name": order["supplier_name"],
+        "Item ID": order["item_id"],
+        "Warehouse": order["warehouse_name"],
+        "Warehouse ID": order["warehouse_id"],
+        "Location": order.get("location_code") or "",
+        "Quantity": int(order["quantity"]),
+        "Unit Price": int(order["unit_price"]),
+        "Currency": order["currency"],
+        "Estimated Total Price": int(order["estimated_total_price"]),
+        "Lead Time Days": int(order["lead_time_days"]),
+        "Estimated Arrival Date": order["estimated_arrival_date"],
+        "Created By": order["created_by"],
+        "Created At": order["created_at"],
+        "Updated At": order["updated_at"],
         "Last Synced At": datetime.now(UTC).isoformat(),
         "Sync Status": "synced",
-        "Source Version": f"mock-api:{draft['po_draft_id']}:{draft['updated_at']}",
+        "Source Version": f"mock-api:{order['purchase_order_id']}:{order['updated_at']}",
     }
 
 
@@ -926,12 +915,12 @@ def approve_replenishment_request(
         raise HTTPException(status_code=404, detail="replenishment request not found")
 
     try:
-        updated, draft, _created = approve_replenishment_request_data(request, payload, repository)
+        updated, order, _created = approve_replenishment_request_data(request, payload, repository)
     except ValueError as error:
         if str(error) == "default_supplier_not_found":
             raise HTTPException(status_code=400, detail="default supplier not found for item") from error
         raise
-    return {"ok": True, "request": updated, "draft": draft}
+    return {"ok": True, "request": updated, "purchase_order": order}
 
 
 @app.post("/procurement/replenishment-requests/approve-batch")
@@ -953,7 +942,7 @@ def approve_replenishment_requests_batch(
     approve_payload = ReplenishmentApproveRequest(created_by=payload.created_by)
     for request in requests:
         try:
-            updated, draft, created = approve_replenishment_request_data(
+            updated, order, created = approve_replenishment_request_data(
                 request,
                 approve_payload,
                 repository,
@@ -975,12 +964,16 @@ def approve_replenishment_requests_batch(
             {
                 "request_id": updated["request_id"],
                 "status": updated["status"],
-                "po_draft_id": draft["po_draft_id"],
-                "item_id": draft["item_id"],
-                "supplier_id": draft["supplier_id"],
-                "supplier_name": draft["supplier_name"],
-                "quantity": draft["quantity"],
-                "estimated_arrival_date": draft["estimated_arrival_date"],
+                "purchase_order_id": order["purchase_order_id"],
+                "item_id": order["item_id"],
+                "warehouse_id": order["warehouse_id"],
+                "location_code": order.get("location_code") or "",
+                "supplier_id": order["supplier_id"],
+                "supplier_name": order["supplier_name"],
+                "quantity": order["quantity"],
+                "payment_status": order["payment_status"],
+                "warehouse_sync_status": order["warehouse_sync_status"],
+                "estimated_arrival_date": order["estimated_arrival_date"],
                 "action": "created" if created else "reused",
             }
         )
@@ -990,7 +983,7 @@ def approve_replenishment_requests_batch(
         "processed_count": len(requests),
         "approved_count": len(approved),
         "skipped_count": len(errors),
-        "created_or_reused_drafts": approved,
+        "created_or_reused_orders": approved,
         "errors": errors,
     }
 
@@ -1013,89 +1006,75 @@ def reject_replenishment_request(
     return {"ok": True, "request": updated}
 
 
-@app.get("/procurement/purchase-order-drafts")
-def list_purchase_order_drafts(request_id: str | None = None) -> dict[str, Any]:
+@app.get("/procurement/purchase-orders")
+def list_procurement_purchase_orders(
+    request_id: str | None = None,
+    warehouse_sync_status: str | None = None,
+    purchase_order_id: str | None = None,
+) -> dict[str, Any]:
     repository = get_warehouse_repository()
-    items = list_purchase_order_drafts_for_request(request_id, repository)
+    items = list_purchase_orders(
+        request_id,
+        warehouse_sync_status=warehouse_sync_status,
+        purchase_order_id=purchase_order_id,
+        repository=repository,
+    )
     return {"ok": True, "count": len(items), "items": items}
 
 
-@app.post("/procurement/purchase-order-drafts/confirm-arrival-batch")
-def confirm_purchase_order_draft_arrival_batch(
-    payload: PurchaseOrderDraftConfirmArrivalBatchRequest,
+@app.post("/procurement/purchase-orders/confirm-arrival-batch")
+def confirm_purchase_order_arrival_batch(
+    payload: PurchaseOrderConfirmArrivalBatchRequest,
 ) -> dict[str, Any]:
     repository = get_warehouse_repository()
-    po_draft_ids = []
-    for value in payload.po_draft_ids:
+    purchase_order_ids = []
+    for value in payload.purchase_order_ids:
         normalized = str(value).strip().upper()
-        if normalized and normalized not in po_draft_ids:
-            po_draft_ids.append(normalized)
-    if not po_draft_ids:
-        raise HTTPException(status_code=400, detail="po_draft_ids required")
+        if normalized and normalized not in purchase_order_ids:
+            purchase_order_ids.append(normalized)
+    if not purchase_order_ids:
+        raise HTTPException(status_code=400, detail="purchase_order_ids required")
 
     confirmed_items: list[dict[str, Any]] = []
-    sync_requests: list[dict[str, Any]] = []
-    sync_jobs: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    for po_draft_id in po_draft_ids:
-        draft, request, batch, action = confirm_purchase_order_draft_arrival(
-            po_draft_id,
+    for purchase_order_id in purchase_order_ids:
+        order, request, action = confirm_purchase_order_arrival(
+            purchase_order_id,
             repository=repository,
         )
-        if not draft or not request or not batch:
+        if not order or not request:
             errors.append(
                 {
-                    "po_draft_id": po_draft_id,
+                    "purchase_order_id": purchase_order_id,
                     "error": action,
                     "message": action.replace("_", " "),
                 }
             )
             continue
 
-        sync_request = warehouse_sync_request_for_receipt(draft, request, batch)
-        sync_requests.append(sync_request)
-        sync_job = upsert_warehouse_inventory_sync_job(
-            sync_request,
-            created_by=payload.received_by,
-            repository=repository,
-        )
-        sync_jobs.append(sync_job)
-        INTERNAL_NOTIFICATIONS.append(
-            {
-                "event_id": f"warehouse_inventory_sync_requested:{po_draft_id}",
-                "team": "warehouse",
-                "status": "pending",
-                "payload": sync_request,
-                "created_by": payload.received_by,
-                "created_at": datetime.now(UTC).isoformat(),
-            }
-        )
         confirmed_items.append(
             {
-                "po_draft_id": draft["po_draft_id"],
-                "request_id": draft["request_id"],
-                "status": draft["status"],
-                "item_id": draft["item_id"],
-                "warehouse_id": request["warehouse_id"],
-                "warehouse_name": request["warehouse_name"],
-                "location_code": request.get("location_code") or "",
-                "quantity": int(draft["quantity"]),
-                "batch_no": batch["batch_no"],
-                "sync_job_id": sync_job["job_id"],
+                "purchase_order_id": order["purchase_order_id"],
+                "request_id": order["request_id"],
+                "payment_status": order["payment_status"],
+                "warehouse_sync_status": order["warehouse_sync_status"],
+                "item_id": order["item_id"],
+                "warehouse_id": order["warehouse_id"],
+                "warehouse_name": order["warehouse_name"],
+                "location_code": order.get("location_code") or "",
+                "quantity": int(order["quantity"]),
                 "action": action,
             }
         )
 
     return {
         "ok": True,
-        "processed_count": len(po_draft_ids),
+        "processed_count": len(purchase_order_ids),
         "confirmed_count": len(confirmed_items),
         "skipped_count": len(errors),
         "confirmed_items": confirmed_items,
-        "warehouse_inventory_sync_requests": sync_requests,
-        "warehouse_inventory_sync_jobs": sync_jobs,
         "errors": errors,
-        "next_action": "通知 Warehouse 根据 warehouse_inventory_sync_requests 同步库存飞书视图。",
+        "next_action": "Warehouse 后续查询 warehouse_sync_status=arrived_unsynced 的采购单并同步到库存批次。",
     }
 
 
@@ -1140,37 +1119,40 @@ def get_procurement_replenishment_request_table_rows(
     }
 
 
-@app.get("/procurement/purchase-order-drafts/table-schema")
-def get_procurement_purchase_order_draft_table_schema() -> dict[str, Any]:
+@app.get("/procurement/purchase-orders/table-schema")
+def get_procurement_purchase_order_table_schema() -> dict[str, Any]:
     return {
         "ok": True,
-        "schema_id": "procurement_purchase_order_drafts",
+        "schema_id": "procurement_purchase_orders",
         "source": "mock-api",
-        "fields": PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_SCHEMA,
+        "fields": PROCUREMENT_PURCHASE_ORDER_TABLE_SCHEMA,
     }
 
 
-@app.post("/procurement/purchase-order-drafts/table-rows")
-def get_procurement_purchase_order_draft_table_rows(
-    payload: PurchaseOrderDraftTableRowsRequest,
+@app.post("/procurement/purchase-orders/table-rows")
+def get_procurement_purchase_order_table_rows(
+    payload: PurchaseOrderTableRowsRequest,
 ) -> dict[str, Any]:
     repository = get_warehouse_repository()
-    items = list_purchase_order_drafts_for_request(payload.request_id, repository)
-    if payload.po_draft_id:
-        items = [draft for draft in items if draft["po_draft_id"] == payload.po_draft_id]
+    items = list_purchase_orders(
+        payload.request_id,
+        warehouse_sync_status=payload.warehouse_sync_status,
+        purchase_order_id=payload.purchase_order_id,
+        repository=repository,
+    )
     limit = max(min(int(payload.limit or 100), 500), 1)
     items = items[:limit]
     return {
         "ok": True,
-        "schema_id": "procurement_purchase_order_drafts",
+        "schema_id": "procurement_purchase_orders",
         "count": len(items),
         "items": [
             {
-                "po_draft_id": draft["po_draft_id"],
-                "request_id": draft["request_id"],
-                "fields": procurement_purchase_order_draft_table_fields(draft),
+                "purchase_order_id": order["purchase_order_id"],
+                "request_id": order["request_id"],
+                "fields": procurement_purchase_order_table_fields(order),
             }
-            for draft in items
+            for order in items
         ],
     }
 

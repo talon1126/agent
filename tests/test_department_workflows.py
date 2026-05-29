@@ -24,9 +24,9 @@ DEPARTMENT_WORKFLOWS = {
             "procurement_approve_replenishment_tool",
             "procurement_reject_replenishment_tool",
             "procurement_sync_replenishment_requests_tool",
-            "procurement_sync_purchase_order_drafts_tool",
+            "procurement_sync_purchase_orders_tool",
             "procurement_approve_replenishment_batch_tool",
-            "procurement_confirm_arrival_batch_tool",
+            "procurement_confirm_purchase_order_arrival_tool",
             "operations_mock_tool",
             "delivery_status_tool",
             "delivery_exception_tool",
@@ -59,9 +59,9 @@ DEPARTMENT_WORKFLOWS = {
             "procurement_approve_replenishment_tool",
             "procurement_reject_replenishment_tool",
             "procurement_sync_replenishment_requests_tool",
-            "procurement_sync_purchase_order_drafts_tool",
+            "procurement_sync_purchase_orders_tool",
             "procurement_approve_replenishment_batch_tool",
-            "procurement_confirm_arrival_batch_tool",
+            "procurement_confirm_purchase_order_arrival_tool",
             "operations_mock_tool",
             "delivery_status_tool",
             "delivery_exception_tool",
@@ -81,9 +81,9 @@ DEPARTMENT_WORKFLOWS = {
             "procurement_approve_replenishment_tool",
             "procurement_reject_replenishment_tool",
             "procurement_sync_replenishment_requests_tool",
-            "procurement_sync_purchase_order_drafts_tool",
+            "procurement_sync_purchase_orders_tool",
             "procurement_approve_replenishment_batch_tool",
-            "procurement_confirm_arrival_batch_tool",
+            "procurement_confirm_purchase_order_arrival_tool",
         },
         "forbidden_tools": {
             "order_status_tool",
@@ -126,9 +126,9 @@ DEPARTMENT_WORKFLOWS = {
             "procurement_approve_replenishment_tool",
             "procurement_reject_replenishment_tool",
             "procurement_sync_replenishment_requests_tool",
-            "procurement_sync_purchase_order_drafts_tool",
+            "procurement_sync_purchase_orders_tool",
             "procurement_approve_replenishment_batch_tool",
-            "procurement_confirm_arrival_batch_tool",
+            "procurement_confirm_purchase_order_arrival_tool",
             "delivery_status_tool",
             "delivery_exception_tool",
             "delivery_case_tool",
@@ -163,9 +163,9 @@ DEPARTMENT_WORKFLOWS = {
             "procurement_approve_replenishment_tool",
             "procurement_reject_replenishment_tool",
             "procurement_sync_replenishment_requests_tool",
-            "procurement_sync_purchase_order_drafts_tool",
+            "procurement_sync_purchase_orders_tool",
             "procurement_approve_replenishment_batch_tool",
-            "procurement_confirm_arrival_batch_tool",
+            "procurement_confirm_purchase_order_arrival_tool",
             "operations_mock_tool",
             "echo_task_tool",
         },
@@ -381,30 +381,30 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "procurement_approve_replenishment_tool" in system_message
             assert "procurement_reject_replenishment_tool" in system_message
             assert "procurement_sync_replenishment_requests_tool" in system_message
-            assert "procurement_sync_purchase_order_drafts_tool" in system_message
+            assert "procurement_sync_purchase_orders_tool" in system_message
             assert "procurement_approve_replenishment_batch_tool" in system_message
-            assert "procurement_confirm_arrival_batch_tool" in system_message
+            assert "procurement_confirm_purchase_order_arrival_tool" in system_message
             assert "pending_procurement_review" in system_message
-            assert "purchase_order_draft_created" in system_message
-            assert "received_at_warehouse" in system_message
+            assert "purchase_order_created" in system_message
+            assert "arrived_unsynced" in system_message
             assert "同步补货请求" in system_message
             assert "批量批准" in system_message
             assert "已到仓库" in system_message
-            assert "POD-" in system_message
+            assert "PO-" in system_message
             assert "通知 Warehouse" in system_message
             assert "刷新飞书视图" in system_message
             assert "批准" in system_message
             assert "驳回" in system_message
             assert "REQ-" in system_message
-            assert "采购单草稿" in system_message
+            assert "采购单表" in system_message
             mock_tool = node_by_name(workflow, "procurement_mock_tool")
             list_tool = node_by_name(workflow, "procurement_replenishment_request_tool")
             approve_tool = node_by_name(workflow, "procurement_approve_replenishment_tool")
             reject_tool = node_by_name(workflow, "procurement_reject_replenishment_tool")
             sync_requests_tool = node_by_name(workflow, "procurement_sync_replenishment_requests_tool")
-            sync_drafts_tool = node_by_name(workflow, "procurement_sync_purchase_order_drafts_tool")
+            sync_orders_tool = node_by_name(workflow, "procurement_sync_purchase_orders_tool")
             batch_tool = node_by_name(workflow, "procurement_approve_replenishment_batch_tool")
-            arrival_tool = node_by_name(workflow, "procurement_confirm_arrival_batch_tool")
+            arrival_tool = node_by_name(workflow, "procurement_confirm_purchase_order_arrival_tool")
             assert "extractItemId" in mock_tool["parameters"]["jsCode"]
             assert "item_id: itemId" in mock_tool["parameters"]["jsCode"]
             assert "extractSku" not in mock_tool["parameters"]["jsCode"]
@@ -413,13 +413,13 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "/approve" in approve_tool["parameters"]["jsCode"]
             assert "/reject" in reject_tool["parameters"]["jsCode"]
             assert "/procurement/replenishment-requests-table/sync" in sync_requests_tool["parameters"]["jsCode"]
-            assert "/procurement/purchase-order-drafts-table/sync" in sync_drafts_tool["parameters"]["jsCode"]
+            assert "/procurement/purchase-orders-table/sync" in sync_orders_tool["parameters"]["jsCode"]
             assert "/approve-batch" in batch_tool["parameters"]["jsCode"]
             assert "/procurement/replenishment-requests-table/sync" in batch_tool["parameters"]["jsCode"]
-            assert "/procurement/purchase-order-drafts-table/sync" in batch_tool["parameters"]["jsCode"]
-            assert "/procurement/purchase-order-drafts/confirm-arrival-batch" in arrival_tool["parameters"]["jsCode"]
-            assert "/procurement/purchase-order-drafts-table/sync" in arrival_tool["parameters"]["jsCode"]
-            assert "extractPoDraftIds" in arrival_tool["parameters"]["jsCode"]
+            assert "/procurement/purchase-orders-table/sync" in batch_tool["parameters"]["jsCode"]
+            assert "/procurement/purchase-orders/confirm-arrival-batch" in arrival_tool["parameters"]["jsCode"]
+            assert "/procurement/purchase-orders-table/sync" in arrival_tool["parameters"]["jsCode"]
+            assert "extractPurchaseOrderIds" in arrival_tool["parameters"]["jsCode"]
             assert "extractRequestId" in approve_tool["parameters"]["jsCode"]
             assert "extractRequestId" in reject_tool["parameters"]["jsCode"]
 

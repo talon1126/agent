@@ -90,9 +90,10 @@ class ProcurementReplenishmentRequestTableSyncRequest(BaseModel):
     limit: int = 100
 
 
-class ProcurementPurchaseOrderDraftTableSyncRequest(BaseModel):
+class ProcurementPurchaseOrderTableSyncRequest(BaseModel):
     request_id: str | None = None
-    po_draft_id: str | None = None
+    purchase_order_id: str | None = None
+    warehouse_sync_status: str | None = None
     limit: int = 100
 
 
@@ -352,6 +353,9 @@ def create_app(
     procurement_replenishment_request_table_id: str | None = None,
     procurement_replenishment_request_table_view_id: str | None = None,
     procurement_replenishment_request_table_url: str | None = None,
+    procurement_purchase_order_table_id: str | None = None,
+    procurement_purchase_order_table_view_id: str | None = None,
+    procurement_purchase_order_table_url: str | None = None,
     procurement_purchase_order_draft_table_id: str | None = None,
     procurement_purchase_order_draft_table_view_id: str | None = None,
     procurement_purchase_order_draft_table_url: str | None = None,
@@ -410,21 +414,42 @@ def create_app(
             else os.getenv("FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_URL", "")
         ),
     }
-    procurement_purchase_order_draft_table_state = {
+    procurement_purchase_order_table_state = {
         "table_id": (
-            procurement_purchase_order_draft_table_id
-            if procurement_purchase_order_draft_table_id is not None
-            else os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_ID", "")
+            procurement_purchase_order_table_id
+            if procurement_purchase_order_table_id is not None
+            else (
+                procurement_purchase_order_draft_table_id
+                if procurement_purchase_order_draft_table_id is not None
+                else os.getenv(
+                    "FEISHU_PROCUREMENT_PURCHASE_ORDER_TABLE_ID",
+                    os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_ID", ""),
+                )
+            )
         ),
         "view_id": (
-            procurement_purchase_order_draft_table_view_id
-            if procurement_purchase_order_draft_table_view_id is not None
-            else os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_VIEW_ID", "")
+            procurement_purchase_order_table_view_id
+            if procurement_purchase_order_table_view_id is not None
+            else (
+                procurement_purchase_order_draft_table_view_id
+                if procurement_purchase_order_draft_table_view_id is not None
+                else os.getenv(
+                    "FEISHU_PROCUREMENT_PURCHASE_ORDER_TABLE_VIEW_ID",
+                    os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_VIEW_ID", ""),
+                )
+            )
         ),
         "table_url": (
-            procurement_purchase_order_draft_table_url
-            if procurement_purchase_order_draft_table_url is not None
-            else os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_URL", "")
+            procurement_purchase_order_table_url
+            if procurement_purchase_order_table_url is not None
+            else (
+                procurement_purchase_order_draft_table_url
+                if procurement_purchase_order_draft_table_url is not None
+                else os.getenv(
+                    "FEISHU_PROCUREMENT_PURCHASE_ORDER_TABLE_URL",
+                    os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_URL", ""),
+                )
+            )
         ),
     }
     bot_configs = parse_bot_configs(
@@ -2606,7 +2631,7 @@ def create_app(
                     fields=fields,
                 )
                 item: dict[str, Any] = {
-                    "status": fields.get("Status"),
+                    "status": fields.get("Status") or fields.get("Warehouse Sync Status"),
                     "action": result["action"],
                     "record_id": result["record_id"],
                     "source_version": fields.get("Source Version", ""),
@@ -2614,8 +2639,10 @@ def create_app(
                 if identity_field == "Request ID":
                     item["request_id"] = fields.get("Request ID")
                 else:
-                    item["po_draft_id"] = fields.get("PO Draft ID")
+                    item["purchase_order_id"] = fields.get("Purchase Order ID")
                     item["request_id"] = fields.get("Request ID")
+                    item["payment_status"] = fields.get("Payment Status")
+                    item["warehouse_sync_status"] = fields.get("Warehouse Sync Status")
                 synced_items.append(item)
             latency_ms = (perf_counter() - started) * 1000
             write_inventory_table_run_log(
@@ -2669,16 +2696,16 @@ def create_app(
             workflow="/procurement/replenishment-requests-table/provision",
         )
 
-    @app.post("/procurement/purchase-order-drafts-table/provision")
-    def provision_procurement_purchase_order_drafts_table(
+    @app.post("/procurement/purchase-orders-table/provision")
+    def provision_procurement_purchase_orders_table(
         request: ProcurementTableProvisionRequest,
     ) -> dict[str, Any]:
         return provision_procurement_table(
             request=request,
-            default_table_name="Procurement Purchase Order Drafts",
-            state=procurement_purchase_order_draft_table_state,
-            schema_endpoint="/procurement/purchase-order-drafts/table-schema",
-            workflow="/procurement/purchase-order-drafts-table/provision",
+            default_table_name="Procurement Purchase Orders",
+            state=procurement_purchase_order_table_state,
+            schema_endpoint="/procurement/purchase-orders/table-schema",
+            workflow="/procurement/purchase-orders-table/provision",
         )
 
     @app.post("/procurement/replenishment-requests-table/sync")
@@ -2699,22 +2726,23 @@ def create_app(
             workflow="/procurement/replenishment-requests-table/sync",
         )
 
-    @app.post("/procurement/purchase-order-drafts-table/sync")
-    def sync_procurement_purchase_order_drafts_table(
-        request: ProcurementPurchaseOrderDraftTableSyncRequest,
+    @app.post("/procurement/purchase-orders-table/sync")
+    def sync_procurement_purchase_orders_table(
+        request: ProcurementPurchaseOrderTableSyncRequest,
     ) -> dict[str, Any]:
         return sync_procurement_table(
             request_payload={
                 "request_id": request.request_id,
-                "po_draft_id": request.po_draft_id,
+                "purchase_order_id": request.purchase_order_id,
+                "warehouse_sync_status": request.warehouse_sync_status,
                 "limit": max(min(int(request.limit or 100), 500), 1),
             },
-            table_name="Procurement Purchase Order Drafts",
-            state=procurement_purchase_order_draft_table_state,
-            schema_endpoint="/procurement/purchase-order-drafts/table-schema",
-            rows_endpoint="/procurement/purchase-order-drafts/table-rows",
-            identity_field="PO Draft ID",
-            workflow="/procurement/purchase-order-drafts-table/sync",
+            table_name="Procurement Purchase Orders",
+            state=procurement_purchase_order_table_state,
+            schema_endpoint="/procurement/purchase-orders/table-schema",
+            rows_endpoint="/procurement/purchase-orders/table-rows",
+            identity_field="Purchase Order ID",
+            workflow="/procurement/purchase-orders-table/sync",
         )
 
     def process_message(bot: BotConfig, message: Any) -> None:

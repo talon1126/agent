@@ -81,22 +81,25 @@ def procurement_replenishment_table_rows_response() -> dict:
     }
 
 
-def procurement_purchase_order_draft_table_rows_response() -> dict:
+def procurement_purchase_order_table_rows_response() -> dict:
     return {
         "ok": True,
-        "schema_id": "procurement_purchase_order_drafts",
+        "schema_id": "procurement_purchase_orders",
         "count": 1,
         "items": [
             {
-                "po_draft_id": "POD-5001",
+                "purchase_order_id": "PO-5001",
                 "request_id": "REQ-1001",
                 "fields": {
-                    "PO Draft ID": "POD-5001",
+                    "Purchase Order ID": "PO-5001",
                     "Request ID": "REQ-1001",
-                    "Status": "draft",
+                    "Payment Status": "unpaid",
+                    "Warehouse Sync Status": "pending_arrival",
                     "Supplier ID": "supplier_paper_sz",
                     "Supplier Name": "深圳纸品供应商",
                     "Item ID": "item_vinda_tissue",
+                    "Warehouse ID": "wh_sz_1",
+                    "Location": "A1",
                     "Quantity": 104,
                     "Unit Price": 8,
                     "Currency": "CNY",
@@ -105,7 +108,7 @@ def procurement_purchase_order_draft_table_rows_response() -> dict:
                     "Estimated Arrival Date": "2026-05-29",
                     "Last Synced At": "2026-05-26T00:00:00+00:00",
                     "Sync Status": "synced",
-                    "Source Version": "mock-api:POD-5001",
+                    "Source Version": "mock-api:PO-5001",
                 },
             }
         ],
@@ -491,7 +494,7 @@ def test_procurement_table_sync_returns_not_configured_without_table_settings() 
     client = TestClient(app)
 
     request_response = client.post("/procurement/replenishment-requests-table/sync", json={})
-    draft_response = client.post("/procurement/purchase-order-drafts-table/sync", json={})
+    order_response = client.post("/procurement/purchase-orders-table/sync", json={})
 
     assert request_response.status_code == 200
     assert request_response.json() == {
@@ -500,8 +503,8 @@ def test_procurement_table_sync_returns_not_configured_without_table_settings() 
         "error": "missing_feishu_procurement_table_config",
         "message": "Feishu procurement table sync is not configured.",
     }
-    assert draft_response.status_code == 200
-    assert draft_response.json() == {
+    assert order_response.status_code == 200
+    assert order_response.json() == {
         "ok": False,
         "configured": False,
         "error": "missing_feishu_procurement_table_config",
@@ -847,19 +850,19 @@ def test_procurement_replenishment_table_provision_creates_table_from_backend_sc
     ]
 
 
-def test_procurement_purchase_order_draft_table_provision_reuses_configured_table() -> None:
+def test_procurement_purchase_order_table_provision_reuses_configured_table() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         url = str(request.url)
-        if url == "http://mock-api.local/procurement/purchase-order-drafts/table-schema":
+        if url == "http://mock-api.local/procurement/purchase-orders/table-schema":
             return httpx.Response(
                 200,
                 json={
                     "ok": True,
                     "fields": [
-                        {"name": "PO Draft ID", "type": "text"},
+                        {"name": "Purchase Order ID", "type": "text"},
                         {"name": "Estimated Arrival Date", "type": "text"},
                     ],
                 },
@@ -875,14 +878,14 @@ def test_procurement_purchase_order_draft_table_provision_reuses_configured_tabl
         inventory_table_app_id="cli_table",
         inventory_table_app_secret="secret_table",
         inventory_table_app_token="app_token",
-        procurement_purchase_order_draft_table_id="tbl_po",
-        procurement_purchase_order_draft_table_view_id="vew_po",
-        procurement_purchase_order_draft_table_url="https://example.feishu.cn/base/app_token?table=tbl_po",
+        procurement_purchase_order_table_id="tbl_po",
+        procurement_purchase_order_table_view_id="vew_po",
+        procurement_purchase_order_table_url="https://example.feishu.cn/base/app_token?table=tbl_po",
         mock_api_url="http://mock-api.local",
     )
     client = TestClient(app)
 
-    response = client.post("/procurement/purchase-order-drafts-table/provision", json={})
+    response = client.post("/procurement/purchase-orders-table/provision", json={})
 
     assert response.status_code == 200
     body = response.json()
@@ -892,7 +895,7 @@ def test_procurement_purchase_order_draft_table_provision_reuses_configured_tabl
     assert body["view_id"] == "vew_po"
     assert body["table_url"] == "https://example.feishu.cn/base/app_token?table=tbl_po"
     assert any(
-        str(request.url).endswith("/procurement/purchase-order-drafts/table-schema")
+        str(request.url).endswith("/procurement/purchase-orders/table-schema")
         for request in requests
     )
 
@@ -1583,19 +1586,19 @@ def test_procurement_replenishment_request_table_sync_upserts_by_request_id() ->
     assert requests[-1].method == "PUT"
 
 
-def test_procurement_purchase_order_draft_table_sync_upserts_by_po_draft_id() -> None:
+def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         url = str(request.url)
-        if url == "http://mock-api.local/procurement/purchase-order-drafts/table-schema":
+        if url == "http://mock-api.local/procurement/purchase-orders/table-schema":
             return httpx.Response(
                 200,
-                json={"ok": True, "fields": [{"name": "PO Draft ID", "type": "text"}]},
+                json={"ok": True, "fields": [{"name": "Purchase Order ID", "type": "text"}]},
             )
-        if url == "http://mock-api.local/procurement/purchase-order-drafts/table-rows":
-            return httpx.Response(200, json=procurement_purchase_order_draft_table_rows_response())
+        if url == "http://mock-api.local/procurement/purchase-orders/table-rows":
+            return httpx.Response(200, json=procurement_purchase_order_table_rows_response())
         if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
         if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/fields":
@@ -1611,12 +1614,12 @@ def test_procurement_purchase_order_draft_table_sync_upserts_by_po_draft_id() ->
         inventory_table_app_id="cli_table",
         inventory_table_app_secret="secret_table",
         inventory_table_app_token="app_token",
-        procurement_purchase_order_draft_table_id="tbl_po",
+        procurement_purchase_order_table_id="tbl_po",
         mock_api_url="http://mock-api.local",
     )
     client = TestClient(app)
 
-    response = client.post("/procurement/purchase-order-drafts-table/sync", json={"request_id": "REQ-1001"})
+    response = client.post("/procurement/purchase-orders-table/sync", json={"request_id": "REQ-1001"})
 
     assert response.status_code == 200
     body = response.json()
@@ -1624,18 +1627,20 @@ def test_procurement_purchase_order_draft_table_sync_upserts_by_po_draft_id() ->
     assert body["synced_count"] == 1
     assert body["items"] == [
         {
-            "po_draft_id": "POD-5001",
+            "purchase_order_id": "PO-5001",
             "request_id": "REQ-1001",
-            "status": "draft",
+            "status": "pending_arrival",
+            "payment_status": "unpaid",
+            "warehouse_sync_status": "pending_arrival",
             "action": "created",
             "record_id": "rec_po",
-            "source_version": "mock-api:POD-5001",
+            "source_version": "mock-api:PO-5001",
         }
     ]
     lookup_request = next(
         request for request in requests if request.method == "GET" and "/records?" in str(request.url)
     )
-    assert 'CurrentValue.[PO Draft ID]="POD-5001"' in str(lookup_request.url.params["filter"])
+    assert 'CurrentValue.[Purchase Order ID]="PO-5001"' in str(lookup_request.url.params["filter"])
     create_request = next(
         request for request in requests if request.method == "POST" and str(request.url).endswith("/records")
     )

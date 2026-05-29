@@ -87,12 +87,12 @@ flowchart LR
 
 ## 汇总
 
-- 采购 Agent 以 `replenishment_requests` 和 `purchase_order_drafts` 为核心模型处理补货申请、采购草稿单和到仓确认。
-- 支持同步补货请求到飞书、同步采购草稿单到飞书、单条批准/驳回 `REQ-*`、批量批准全部 pending 补货申请、确认 `POD-*` 到仓等完整采购工作流。
+- 采购 Agent 以 `replenishment_requests`、`procurement_suppliers` 和 `purchase_orders` 为核心模型处理补货申请、采购单生成和到仓确认。
+- 支持同步补货请求到飞书、同步采购单到飞书、单条批准/驳回 `REQ-*`、批量批准全部 pending 补货申请、确认 `PO-*` 到仓等完整采购工作流。
 - 飞书采购表是只读 read model：系统事实仍在 mock-api / Postgres 中，飞书表用于采购人员 review、筛选和跟踪。
-- 批准补货申请后会创建或复用 `POD-*` 采购草稿单，状态从 `pending_procurement_review` 进入 `purchase_order_draft_created`；重复批准不会重复创建草稿。
-- 批量批准默认处理全部 `pending_procurement_review` 申请；某个商品缺少默认供应商时会跳过该申请并返回异常明细，不中断整批任务。
-- 采购确认 `POD-*` 到仓后，会创建 `RCV-POD-*` 入库批次和 Warehouse 库存同步 job；库存飞书表刷新由 Warehouse Agent 负责。
+- 批准补货申请后会创建或复用 `PO-*` 采购单，申请状态从 `pending_procurement_review` 进入 `purchase_order_created`；重复批准不会重复创建采购单。
+- 采购单有两个独立状态：`payment_status` 表示未支付/已支付，`warehouse_sync_status` 表示待到仓、到库未同步、已同步。
+- 采购确认 `PO-*` 到仓后，只把采购单标记为 `arrived_unsynced` 并刷新采购单飞书表；库存批次同步由 Warehouse 后续检查未同步采购单后完成。
 
 ## workflow 架构
 
@@ -103,15 +103,15 @@ flowchart LR
     Workflow --> Agent["Procurement Agent"]
 
     Agent --> SyncReqTool["procurement_sync_replenishment_requests_tool"]
-    Agent --> SyncDraftTool["procurement_sync_purchase_order_drafts_tool"]
+    Agent --> SyncOrderTool["procurement_sync_purchase_orders_tool"]
     Agent --> BatchApproveTool["procurement_approve_replenishment_batch_tool"]
     Agent --> ApproveTool["procurement_approve_replenishment_tool"]
     Agent --> RejectTool["procurement_reject_replenishment_tool"]
-    Agent --> ArrivalTool["procurement_confirm_arrival_batch_tool"]
+    Agent --> ArrivalTool["procurement_confirm_purchase_order_arrival_tool"]
     Agent --> MockTool["procurement_mock_tool"]
 
     SyncReqTool --> AdapterReq["feishu-adapter 补货请求表同步"]
-    SyncDraftTool --> AdapterDraft["feishu-adapter 采购草稿表同步"]
+    SyncOrderTool --> AdapterOrder["feishu-adapter 采购单表同步"]
     BatchApproveTool --> MockAPI["mock-api 采购事实"]
     ApproveTool --> MockAPI
     RejectTool --> MockAPI
@@ -119,23 +119,22 @@ flowchart LR
     MockTool --> MockAPI
 
     AdapterReq --> ReqTable["飞书 Procurement Replenishment Requests"]
-    AdapterDraft --> DraftTable["飞书 Procurement Purchase Order Drafts"]
+    AdapterOrder --> OrderTable["飞书 Procurement Purchase Orders"]
     MockAPI --> Postgres["Postgres 仓储/采购数据"]
-    MockAPI --> WarehouseJob["Warehouse 库存同步 job"]
 ```
 
-采购 workflow 的入口是 `n8n/workflows/procurement-workflow.json`。飞书消息先进入 `feishu-adapter`，再路由到 Procurement Workflow。采购 Agent 根据用户表达选择同步、审批、驳回、批量生成采购草稿或到仓确认工具；涉及飞书视图的请求会调用 feishu-adapter，涉及采购事实的请求会调用 mock-api。
+采购 workflow 的入口是 `n8n/workflows/procurement-workflow.json`。飞书消息先进入 `feishu-adapter`，再路由到 Procurement Workflow。采购 Agent 根据用户表达选择同步、审批、驳回、批量生成采购单或到仓确认工具；涉及飞书视图的请求会调用 feishu-adapter，涉及采购事实的请求会调用 mock-api。
 
-仓储到采购链路从 Warehouse Workflow 创建补货申请开始。仓储侧只创建 `pending_procurement_review` 申请，不做采购决策；采购侧 review 后批准或驳回。采购草稿到仓后，采购侧只负责生成入库批次和库存同步 job，后续库存表同步仍交给 Warehouse Workflow。
+仓储到采购链路从 Warehouse Workflow 创建补货申请开始。仓储侧只创建 `pending_procurement_review` 申请，不做采购决策；采购侧 review 后批准或驳回。采购单到仓后，采购侧只维护采购单的仓库同步状态，不直接写库存批次，不创建 Warehouse sync job。
 
 ## 功能
 
 - 同步补货请求：`@procurement 同步补货请求` 会把数据库补货申请同步到飞书 `Procurement Replenishment Requests` 表。
-- 批量批准：`@procurement 批量批准生成采购草稿单` 会批准全部 pending 补货申请，生成或复用采购草稿单，并刷新两张采购飞书表。
-- 同步采购草稿：`@procurement 同步采购草稿` 会把采购草稿单同步到飞书 `Procurement Purchase Order Drafts` 表。
-- 单条批准：`@procurement 批准 REQ-1001 生成采购草稿单` 会批准指定补货申请，并返回 `POD-*` 草稿单。
+- 批量批准：`@procurement 批量批准生成采购单` 会批准全部 pending 补货申请，生成或复用采购单，并刷新两张采购飞书表。
+- 同步采购单：`@procurement 同步采购单` 会把采购单同步到飞书 `Procurement Purchase Orders` 表。
+- 单条批准：`@procurement 批准 REQ-1001 生成采购单` 会批准指定补货申请，并返回 `PO-*` 采购单。
 - 单条驳回：`@procurement 驳回 REQ-1001，原因：库存已调拨覆盖` 会把申请状态更新为 `rejected`，并记录拒绝原因。
-- 到仓确认：`@procurement POD-5001 已到仓库` 会确认采购草稿到仓，创建入库批次和 Warehouse 库存同步 job。
+- 到仓确认：`@procurement PO-5001 已到仓库` 会确认采购单到仓，把 `warehouse_sync_status` 更新为 `arrived_unsynced`，并刷新采购单飞书表。
 
 ## mock-api
 
@@ -143,16 +142,16 @@ flowchart LR
 
 - 管理 `replenishment_requests`，承接 Warehouse 创建的 `pending_procurement_review` 补货申请。
 - 管理 mock 默认供应商，按 `item_id` 匹配供应商、单价和交期。
-- 管理 `purchase_order_drafts`，记录供应商、数量、单价、预计总价、交期和预计到达日期。
-- 提供补货请求和采购草稿单的 table schema / rows API，作为飞书采购表同步数据源。
-- 确认 `POD-*` 到仓时创建 `RCV-POD-*` 入库批次，并创建 Warehouse 库存同步 job。
+- 管理 `purchase_orders`，记录供应商、商品、仓库、库位、数量、单价、预计总价、交期、预计到达日期、支付状态和仓库同步状态。
+- 提供补货请求和采购单的 table schema / rows API，作为飞书采购表同步数据源。
+- 确认 `PO-*` 到仓时只更新采购单的 `warehouse_sync_status=arrived_unsynced`，不直接创建库存批次或 Warehouse sync job。
 
 ## feishu-adapter
 
 采购飞书表同步由 `feishu-adapter` 负责：
 
 - 创建或复用 `Procurement Replenishment Requests`，按 `Request ID` upsert。
-- 创建或复用 `Procurement Purchase Order Drafts`，按 `PO Draft ID` upsert。
+- 创建或复用 `Procurement Purchase Orders`，按 `Purchase Order ID` upsert。
 - 复用同一个飞书 Base/app 凭据；未配置 table id 时自动建表。
 - 同步结果会返回表链接、写入数量和错误信息，供采购 Agent 回复用户。
 
