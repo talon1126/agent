@@ -40,6 +40,15 @@
 
 `mock-api` 是仓储事实数据和采购交接数据的后端模拟系统。其他 workflow 如果需要仓储数据，应优先调用这些接口，不要直接访问 Postgres。
 
+### 路由实现结构
+
+- 仓储 HTTP 路由已从 `services/mock-api/app/main.py` 拆到 `services/mock-api/app/routers/warehouse/`，由 `main.py` 通过 `warehouse_router` 统一注册。
+- `inventory.py`：库存查询、异常、履约、飞书表格行和库位余额接口。
+- `orders.py`：订单创建、付款、发货、到货、取消、退货和 `warehouse_order_tool`。
+- `sync_jobs.py`：仓储库存同步任务查询、完成、失败，以及采购到仓链路复用的 sync job upsert/update helper。
+- `schemas.py`：仓储请求模型；`state.py`：仓储 repository 获取和内存 fallback 状态。
+- `/procurement/*` 仍保留在 `main.py`，但会复用仓储 router 中的库存读模型、repository 和 sync job helper；不要把采购职责混入仓储 router。
+
 ### 库存与履约接口
 
 - `GET /warehouse/inventory/{item_id}`
