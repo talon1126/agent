@@ -1,6 +1,8 @@
 import logging
 import os
 import json
+import hashlib
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +52,7 @@ items = Table(
     Column("spec", String, nullable=False),
     Column("unit", String, nullable=False),
     Column("barcode", String, nullable=False),
+    Column("shelf_life_days", Integer, nullable=False, default=365),
 )
 
 inventory_batches = Table(
@@ -198,6 +201,7 @@ purchase_orders = Table(
     Column("estimated_arrival_date", String, nullable=False),
     Column("payment_status", String, nullable=False, index=True),
     Column("warehouse_sync_status", String, nullable=False, index=True),
+    Column("arrived_at", String, nullable=False, default=""),
     Column("created_by", String, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
@@ -251,6 +255,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "spec": "商品规格。",
         "unit": "库存计量单位。",
         "barcode": "商品条码。",
+        "shelf_life_days": "商品实际保质期天数，用于采购到仓同步时计算批次过期日期。",
     },
     "inventory_batches": {
         "batch_id": "库存批次自增整数主键。",
@@ -324,6 +329,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "estimated_arrival_date": "预计到达日期，格式为 YYYY-MM-DD。",
         "payment_status": "支付状态，例如 unpaid、paid。",
         "warehouse_sync_status": "仓库同步状态，例如 pending_arrival、arrived_unsynced、synced。",
+        "arrived_at": "采购单实际确认到仓时间。",
         "created_by": "创建采购单的用户或系统身份。",
         "created_at": "采购单创建时间。",
         "updated_at": "采购单更新时间。",
@@ -420,11 +426,16 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
         "location_code": "ALTER TABLE purchase_orders ADD COLUMN location_code VARCHAR",
         "payment_status": "ALTER TABLE purchase_orders ADD COLUMN payment_status VARCHAR NOT NULL DEFAULT 'unpaid'",
         "warehouse_sync_status": "ALTER TABLE purchase_orders ADD COLUMN warehouse_sync_status VARCHAR NOT NULL DEFAULT 'pending_arrival'",
+        "arrived_at": "ALTER TABLE purchase_orders ADD COLUMN arrived_at VARCHAR NOT NULL DEFAULT ''",
     }
     with engine.begin() as connection:
         for column_name, statement in missing_column_sql.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
+        if inspector.has_table(items.name):
+            item_columns = {column["name"] for column in inspector.get_columns(items.name)}
+            if "shelf_life_days" not in item_columns:
+                connection.execute(text("ALTER TABLE items ADD COLUMN shelf_life_days INTEGER NOT NULL DEFAULT 365"))
         if inspector.has_table(replenishment_requests.name):
             connection.execute(
                 text(
@@ -524,6 +535,18 @@ def inventory_location_balance_rows_from_batches(rows: list[dict[str, Any]]) -> 
     ]
 
 
+def _date_from_iso(value: str) -> date:
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except ValueError:
+        return date.today()
+
+
+def _deterministic_reorder_threshold(*parts: str) -> int:
+    digest = hashlib.sha256(":".join(str(part) for part in parts).encode("utf-8")).hexdigest()
+    return 20 + (int(digest[:8], 16) % 101)
+
+
 def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
     init_warehouse_schema(engine)
     with engine.begin() as connection:
@@ -594,6 +617,7 @@ class WarehouseRepository:
                 items.c.spec,
                 items.c.unit,
                 items.c.barcode,
+                items.c.shelf_life_days,
             )
             .join(warehouses, warehouses.c.warehouse_id == inventory_location_balances.c.warehouse_id)
             .join(
@@ -771,6 +795,8 @@ class WarehouseRepository:
         return self.count_purchase_orders()
 
     def create_purchase_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload = {**payload}
+        payload.setdefault("arrived_at", "")
         with self.engine.begin() as connection:
             connection.execute(purchase_orders.insert().values(**payload))
             row = (
@@ -793,6 +819,7 @@ class WarehouseRepository:
         payload.setdefault("location_code", "")
         payload.setdefault("payment_status", "unpaid")
         payload.setdefault("warehouse_sync_status", payload.pop("status", "pending_arrival"))
+        payload.setdefault("arrived_at", "")
         return self.create_purchase_order(payload)
 
     def get_purchase_order(self, purchase_order_id: str) -> dict[str, Any] | None:
@@ -817,12 +844,16 @@ class WarehouseRepository:
         *,
         warehouse_sync_status: str,
         updated_at: str,
+        arrived_at: str | None = None,
     ) -> dict[str, Any] | None:
+        values = {"warehouse_sync_status": warehouse_sync_status, "updated_at": updated_at}
+        if arrived_at is not None:
+            values["arrived_at"] = arrived_at
         with self.engine.begin() as connection:
             connection.execute(
                 purchase_orders.update()
                 .where(purchase_orders.c.purchase_order_id == purchase_order_id)
-                .values(warehouse_sync_status=warehouse_sync_status, updated_at=updated_at)
+                .values(**values)
             )
             row = (
                 connection.execute(
@@ -854,6 +885,7 @@ class WarehouseRepository:
         request_id: str | None = None,
         warehouse_sync_status: str | None = None,
         purchase_order_id: str | None = None,
+        payment_status: str | None = None,
     ) -> list[dict[str, Any]]:
         statement = select(purchase_orders)
         if request_id:
@@ -862,6 +894,8 @@ class WarehouseRepository:
             statement = statement.where(purchase_orders.c.warehouse_sync_status == warehouse_sync_status)
         if purchase_order_id:
             statement = statement.where(purchase_orders.c.purchase_order_id == purchase_order_id)
+        if payment_status:
+            statement = statement.where(purchase_orders.c.payment_status == payment_status)
         statement = statement.order_by(purchase_orders.c.created_at, purchase_orders.c.purchase_order_id)
         with self.engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
@@ -869,6 +903,155 @@ class WarehouseRepository:
 
     def list_purchase_order_drafts(self, *, request_id: str | None = None) -> list[dict[str, Any]]:
         return self.list_purchase_orders(request_id=request_id)
+
+    def sync_arrived_purchase_orders(
+        self,
+        *,
+        limit: int,
+        processed_by: str,
+        processed_at: str,
+    ) -> list[dict[str, Any]]:
+        statement = (
+            select(purchase_orders)
+            .where(purchase_orders.c.payment_status == "paid")
+            .where(purchase_orders.c.warehouse_sync_status == "arrived_unsynced")
+            .order_by(purchase_orders.c.arrived_at, purchase_orders.c.purchase_order_id)
+            .limit(limit)
+        )
+        synced_items: list[dict[str, Any]] = []
+        with self.engine.begin() as connection:
+            rows = connection.execute(statement).mappings().all()
+            for row in rows:
+                order = dict(row)
+                item_row = connection.execute(
+                    select(items).where(items.c.item_id == order["item_id"])
+                ).mappings().one_or_none()
+                if not item_row:
+                    continue
+                location_code = self._resolve_purchase_order_location(connection, order)
+                arrived_at = order.get("arrived_at") or processed_at
+                production_day = _date_from_iso(arrived_at)
+                batch_no = f"BATCH-{production_day:%Y%m%d}"
+                expiry_day = production_day.toordinal() + int(item_row["shelf_life_days"])
+                expiry_date = date.fromordinal(expiry_day).isoformat()
+                reorder_threshold = _deterministic_reorder_threshold(
+                    order["purchase_order_id"],
+                    order["item_id"],
+                    order["warehouse_id"],
+                )
+                quantity = int(order["quantity"])
+                connection.execute(
+                    inventory_batches.insert().values(
+                        warehouse_id=order["warehouse_id"],
+                        location_code=location_code,
+                        item_id=order["item_id"],
+                        batch_no=batch_no,
+                        production_date=production_day.isoformat(),
+                        expiry_date=expiry_date,
+                        quantity_on_hand=quantity,
+                        quantity_reserved=0,
+                        reorder_threshold=reorder_threshold,
+                        storage_status="available",
+                    )
+                )
+                existing_balance = (
+                    connection.execute(
+                        select(inventory_location_balances)
+                        .where(inventory_location_balances.c.warehouse_id == order["warehouse_id"])
+                        .where(inventory_location_balances.c.location_code == location_code)
+                        .where(inventory_location_balances.c.item_id == order["item_id"])
+                        .where(inventory_location_balances.c.batch_no == batch_no)
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing_balance:
+                    connection.execute(
+                        inventory_location_balances.update()
+                        .where(inventory_location_balances.c.id == existing_balance["id"])
+                        .values(
+                            quantity_on_hand=inventory_location_balances.c.quantity_on_hand + quantity,
+                            reorder_threshold=reorder_threshold,
+                            storage_status="available",
+                            updated_at=processed_at,
+                        )
+                    )
+                else:
+                    connection.execute(
+                        inventory_location_balances.insert().values(
+                            warehouse_id=order["warehouse_id"],
+                            location_code=location_code,
+                            item_id=order["item_id"],
+                            batch_no=batch_no,
+                            production_date=production_day.isoformat(),
+                            expiry_date=expiry_date,
+                            quantity_on_hand=quantity,
+                            reorder_threshold=reorder_threshold,
+                            storage_status="available",
+                            created_at=processed_at,
+                            updated_at=processed_at,
+                        )
+                    )
+                connection.execute(
+                    purchase_orders.update()
+                    .where(purchase_orders.c.purchase_order_id == order["purchase_order_id"])
+                    .values(
+                        location_code=location_code,
+                        warehouse_sync_status="synced",
+                        updated_at=processed_at,
+                    )
+                )
+                synced_items.append(
+                    {
+                        "purchase_order_id": order["purchase_order_id"],
+                        "request_id": order["request_id"],
+                        "item_id": order["item_id"],
+                        "warehouse_id": order["warehouse_id"],
+                        "warehouse_name": order["warehouse_name"],
+                        "location_code": location_code,
+                        "batch_no": batch_no,
+                        "production_date": production_day.isoformat(),
+                        "expiry_date": expiry_date,
+                        "quantity": quantity,
+                        "reorder_threshold": reorder_threshold,
+                        "storage_status": "available",
+                        "payment_status": "paid",
+                        "warehouse_sync_status": "synced",
+                        "processed_by": processed_by,
+                        "processed_at": processed_at,
+                    }
+                )
+        return synced_items
+
+    @staticmethod
+    def _resolve_purchase_order_location(connection: Any, order: dict[str, Any]) -> str:
+        existing_location = (
+            connection.execute(
+                select(inventory_location_balances.c.location_code)
+                .where(inventory_location_balances.c.item_id == order["item_id"])
+                .where(inventory_location_balances.c.warehouse_id == order["warehouse_id"])
+                .order_by(inventory_location_balances.c.location_code)
+            )
+            .scalars()
+            .first()
+        )
+        if existing_location:
+            return str(existing_location)
+        requested_location = str(order.get("location_code") or "").strip()
+        if requested_location:
+            return requested_location
+        first_location = (
+            connection.execute(
+                select(storage_locations.c.location_code)
+                .where(storage_locations.c.warehouse_id == order["warehouse_id"])
+                .order_by(storage_locations.c.location_code)
+            )
+            .scalars()
+            .first()
+        )
+        if not first_location:
+            raise ValueError("warehouse_location_not_found")
+        return str(first_location)
 
     def upsert_warehouse_inventory_sync_job(self, payload: dict[str, Any]) -> dict[str, Any]:
         values = self._warehouse_inventory_sync_job_values(payload)

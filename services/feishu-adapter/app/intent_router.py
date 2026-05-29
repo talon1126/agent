@@ -37,6 +37,17 @@ def route_warehouse_intent(message: str) -> IntentRoute:
     slots = _extract_slots(normalized_message, config.get("slots", {}))
     _extract_item_id(normalized_message, signals, slots)
     _extract_location_code(normalized_message, slots)
+    if _is_purchase_order_arrival_sync_request(normalized_message):
+        return IntentRoute(
+            status="matched",
+            intent="sync_purchase_order_arrivals",
+            executor="warehouse_purchase_order_arrival_sync",
+            confidence=1.0,
+            slots=slots,
+            signals=signals,
+            candidates=[],
+            reason="matched_purchase_order_arrival_sync",
+        )
     if _is_inventory_sync_jobs_request(normalized_message):
         return _fallback(signals, slots, [], "inventory_sync_jobs_agent_tool")
 
@@ -102,6 +113,24 @@ def _is_inventory_sync_jobs_request(message: str) -> bool:
             "warehouse_inventory_sync_requested",
             "inventory sync job",
             "inventory-sync-jobs",
+        }
+    )
+
+
+def _is_purchase_order_arrival_sync_request(message: str) -> bool:
+    return any(
+        alias in message
+        for alias in {
+            "同步采购到仓库存",
+            "采购到仓库存",
+            "采购到仓入库",
+            "同步到仓采购单",
+            "扫描未同步采购单",
+            "已支付未同步采购单",
+            "arrived_unsynced",
+            "purchase_orders",
+            "sync arrivals",
+            "sync-arrivals",
         }
     )
 

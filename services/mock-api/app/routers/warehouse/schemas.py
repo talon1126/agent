@@ -39,3 +39,8 @@ class WarehouseOrderCreate(BaseModel):
 class WarehouseOrderStatusUpdateRequest(BaseModel):
     updated_by: str = "warehouse-agent"
 
+
+class WarehousePurchaseOrderArrivalSyncRequest(BaseModel):
+    processed_by: str = "warehouse-agent"
+    limit: int = 50
+

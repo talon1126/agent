@@ -22,6 +22,7 @@
   - `warehouse_inventory_table_sync_tool`：按商品、仓库、库位、分类、批次或风险范围同步库存快照到飞书。
   - `warehouse_table_schema_tool`：创建飞书库存视图前读取真实字段和视图。
   - `warehouse_view_create_tool`：按受控 JSON 创建或复用飞书库存视图。
+  - `warehouse_purchase_order_arrival_sync_tool`：扫描已支付且到仓未同步的采购单，写入库存批次表和库存余额表。
   - `warehouse_inventory_sync_jobs_tool`：处理旧链路遗留的待同步库存任务；新采购到仓链路以 `purchase_orders.warehouse_sync_status=arrived_unsynced` 为交接点。
 
 ## ai-service
@@ -96,6 +97,12 @@
 - `POST /warehouse/orders/{order_id}/return`
   - 用途：已到货后退货，按 `order_items` 原批次加回 `inventory_location_balances`。
 
+- `POST /warehouse/purchase-orders/sync-arrivals`
+  - 用途：Warehouse 扫描采购单中 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的记录，同步到库存事实。
+  - 写入规则：`batch_no` 使用 `BATCH-YYYYMMDD`，日期来自采购单 `arrived_at`；`expiry_date` 按商品主数据 `items.shelf_life_days` 计算；`storage_status=available`；`reorder_threshold` 在合理范围内生成。
+  - 库位规则：同一 `item_id + warehouse_id` 只保留一个 `location_code`；已有余额时复用已有库位，没有则用采购单库位，再没有则用仓库第一个库位。
+  - 影响：写入 `inventory_batches`，更新或新增 `inventory_location_balances`，成功后把采购单 `warehouse_sync_status` 标记为 `synced`。
+
 ### 补货和采购交接接口
 
 - `POST /procurement/replenishment-requests`
@@ -156,7 +163,7 @@
   - 用途：批量处理旧链路仓储库存同步任务。
   - 入参重点：`jobs`、`limit_per_job`、`table_name`。
   - 当前实现按 job 的 `item_id + warehouse_id + location_code + batch_no` 精确取行，再批量 upsert 到飞书表。
-  - 当前采购到仓主路径已转为读取 `purchase_orders.warehouse_sync_status=arrived_unsynced`，该扫描入库链路仍待 Warehouse 后续实现。
+  - 当前采购到仓主路径已转为 Warehouse 读取 `purchase_orders` 并先写库存事实；飞书库存表仍通过库存读模型同步展示。
 
 - `GET /warehouse/inventory-table/schema`
   - 用途：读取真实飞书库存表字段、字段类型、选项颜色和已有视图。
@@ -192,7 +199,7 @@
 
 - `items`
   - 商品主数据。
-  - 关键字段：`item_id`、`category_id`、`item_name`、`brand`、`spec`、`unit`、`barcode`。
+  - 关键字段：`item_id`、`category_id`、`item_name`、`brand`、`spec`、`unit`、`barcode`、`shelf_life_days`。
 
 - `inventory_batches`
   - 批次入库事实表，用于进货记录和商品批次溯源，不再被订单扣减。
@@ -202,6 +209,7 @@
   - 批次级库位库存余额表，订单付款扣减、取消或退货加回。
   - 关键字段：`id`、`warehouse_id`、`location_code`、`item_id`、`batch_no`、`quantity_on_hand`、`reorder_threshold`、`storage_status`。
   - 初始化来源：按 `inventory_batches.quantity_on_hand` 建立余额，忽略旧模型的 `quantity_reserved`。
+  - 当前约束：同一 `item_id + warehouse_id` 后续采购入库复用同一个 `location_code`，避免同仓同商品分散到多个库位。
 
 - `orders`
   - 订单主表，记录下单、付款、发货、到货、取消和退货状态。
@@ -219,8 +227,8 @@
 
 - `purchase_orders`
   - 采购单表，由采购 agent 负责，但到货后会影响仓储库存同步。
-  - 关键字段：`purchase_order_id`、`request_id`、`supplier_id`、`item_id`、`warehouse_id`、`location_code`、`quantity`、`payment_status`、`warehouse_sync_status`、`estimated_arrival_date`。
-  - 到仓后 `warehouse_sync_status` 会进入 `arrived_unsynced`，等待 Warehouse 后续扫描并同步库存余额。
+  - 关键字段：`purchase_order_id`、`request_id`、`supplier_id`、`item_id`、`warehouse_id`、`location_code`、`quantity`、`payment_status`、`warehouse_sync_status`、`estimated_arrival_date`、`arrived_at`。
+  - 到仓后 `warehouse_sync_status` 会进入 `arrived_unsynced` 并写入 `arrived_at`；Warehouse 只同步已支付采购单，成功后改为 `synced`。
 
 - `warehouse_inventory_sync_jobs`
   - 旧链路仓储库存同步任务表。
@@ -236,14 +244,14 @@
 - 运营 agent 如果要做库存风险汇总，可以调用 `POST /warehouse/inventory/search`，按 `risk_level`、`expiry_risk`、`warehouse_id`、`category` 聚合。
 - 任何 agent 需要飞书库存表、视图或同步状态，都应调用 `feishu-adapter` 的 `/warehouse/inventory-table/*` 接口，不要直接访问飞书开放平台。
 - 飞书库存表是读模型，不是库存源数据；库存源数据始终是 `mock-api` 暴露的仓储事实接口和背后的业务表。
-- Warehouse 后续扫描未同步采购单时，应以 `purchase_orders.purchase_order_id` 生成可追踪入库批次，并在成功写入库存余额后把 `warehouse_sync_status` 更新为 `synced`。
+- Warehouse 扫描未同步采购单时，应使用 `BATCH-YYYYMMDD` 作为入库批次号，同一天到达的采购入库共享同一批次号，并在成功写入库存余额后把 `warehouse_sync_status` 更新为 `synced`。
 
 ## 常见业务对象
 
 - 商品 ID 示例：`item_vinda_tissue`、`item_milk_pure`、`item_cola_zero`、`item_copy_paper`。
 - 仓库 ID 示例：`wh_sz_1`、`wh_hk_1`、`wh_sg_1`。
 - 库位示例：`A1`、`B1`、`C1`。
-- 批次号示例：`RCV-PO-*` 表示采购到货生成的入库批次。
+- 批次号示例：`BATCH-20260529` 表示 2026-05-29 到仓生成的入库批次。
 - 同步任务 ID 示例：`WSJ-POD-*`。
 - 补货申请 ID 示例：`REQ-*`。
 - 采购单 ID 示例：`PO-*`。

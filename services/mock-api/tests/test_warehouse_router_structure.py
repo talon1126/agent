@@ -7,6 +7,7 @@ def test_warehouse_routes_are_registered_from_module_router() -> None:
 
     assert "/warehouse/inventory/{item_id}" in route_paths
     assert "/warehouse/orders/{order_id}/pay" in route_paths
+    assert "/warehouse/purchase-orders/sync-arrivals" in route_paths
     assert "/warehouse/inventory-sync-jobs/{job_id}/complete" in route_paths
 
     app_paths = {route.path for route in app.routes}

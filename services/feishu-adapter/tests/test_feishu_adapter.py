@@ -2542,6 +2542,23 @@ def test_warehouse_intent_router_endpoint_routes_update_table_view_to_sync() -> 
     assert body["clarification_question"] is None
 
 
+def test_warehouse_intent_router_endpoint_routes_purchase_arrival_sync_fast_path() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/intents/route",
+        json={"message": "@warehouse 同步采购到仓库存"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "matched"
+    assert body["intent"] == "sync_purchase_order_arrivals"
+    assert body["executor"] == "warehouse_purchase_order_arrival_sync"
+    assert body["reason"] == "matched_purchase_order_arrival_sync"
+
+
 def test_inventory_table_view_from_template_creates_controlled_view() -> None:
     requests: list[httpx.Request] = []
 

@@ -23,6 +23,7 @@ flowchart LR
     Agent --> ExceptionTool["warehouse_exception_tool"]
     Agent --> FulfillmentTool["warehouse_fulfillment_tool"]
     Agent --> ReplenishmentTool["warehouse_replenishment_request_tool"]
+    Agent --> PurchaseArrivalSyncTool["warehouse_purchase_order_arrival_sync_tool"]
     Agent --> SyncJobsTool["warehouse_inventory_sync_jobs_tool"]
     Agent --> OrderTool["warehouse_order_tool"]
 
@@ -30,6 +31,7 @@ flowchart LR
     ExceptionTool --> MockAPI
     FulfillmentTool --> MockAPI
     ReplenishmentTool --> MockAPI
+    PurchaseArrivalSyncTool --> MockAPI
     SyncJobsTool --> MockAPI
     OrderTool --> MockAPI
     SyncJobsTool --> AdapterSync["feishu-adapter sync/jobs"]
@@ -41,7 +43,7 @@ flowchart LR
 
 仓储 workflow 的入口是 `n8n/workflows/warehouse-workflow.json`。飞书消息先进入 `feishu-adapter`，再路由到 Warehouse Workflow。Workflow 会先做意图识别：明确的库存表同步、视图创建会走 fast path；其余仓储问题进入 Warehouse Agent，由 Agent 根据工具说明调用库存、异常、履约、补货或同步任务工具。
 
-采购到仓链路由 Procurement Workflow 触发，但库存同步完成权在 Warehouse Workflow。采购确认 `PO-*` 到货后，mock-api 只把采购单标记为 `warehouse_sync_status=arrived_unsynced`，不直接创建库存批次或 Warehouse sync job；Warehouse 后续需要扫描这些未同步采购单并写入 `inventory_location_balances`。旧的 `warehouse_inventory_sync_jobs_tool` 仍用于处理历史 pending sync job。
+采购到仓链路由 Procurement Workflow 触发，但库存同步完成权在 Warehouse Workflow。采购确认 `PO-*` 到货后，mock-api 只把采购单标记为 `warehouse_sync_status=arrived_unsynced` 并写入 `arrived_at`，不直接创建库存批次或 Warehouse sync job；Warehouse 后续扫描 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的采购单，按 `BATCH-YYYYMMDD` 写入 `inventory_batches` 和 `inventory_location_balances`，完成后把采购单标记为 `synced`。旧的 `warehouse_inventory_sync_jobs_tool` 仍用于处理历史 pending sync job。
 
 ## 功能
 
@@ -51,6 +53,7 @@ flowchart LR
 - 创建补货申请：当库存低于补货阈值且用户要求补货时，Warehouse Agent 会创建 `未审批` 补货申请，交给 Procurement Agent 后续审批。
 - 同步库存表：`@warehouse 同步 item_vinda_tissue 库存到飞书` 会把匹配的批次库存快照同步到飞书 `Warehouse Inventory Snapshot` 表。
 - 创建库存视图：`@warehouse 创建高风险库存视图` 会读取真实飞书表字段，并按受控模板创建或复用库存视图。
+- 同步采购到仓库存：`@warehouse 同步采购到仓库存` 会扫描已支付且到仓未同步的 `PO-*`，按实际到仓日期生成 `BATCH-YYYYMMDD` 批次，写入批次事实表和库位余额表。
 - 处理历史同步任务：`@warehouse 处理库存同步任务` 会消费旧链路遗留的 pending sync jobs，只同步对应批次，并把任务标记为 completed 或 failed。
 - 订单驱动库存扣减：订单付款后按 FEFO 扣减 `inventory_location_balances`，发货和到货只更新状态，取消或退货按 `order_items` 原批次加回。
 
@@ -64,7 +67,9 @@ flowchart LR
 - 支持仓储异常和履约判断：用于回答库存差异、临期、过期、质检冻结、缺货和能否发货等问题。
 - 提供批次级库位余额和订单状态流转能力：`inventory_batches` 只保留入库事实，当前库存由 `inventory_location_balances` 承担，订单付款按 FEFO 扣减。
 - 承接补货申请：Warehouse 创建 `未审批` 补货申请，Procurement 批准后更新为 `已审批`。
-- 支持采购到仓后的库存事实更新规划：确认 `PO-*` 到货后，Warehouse 后续扫描 `arrived_unsynced` 采购单并同步到库存余额表。
+- 支持采购到仓后的库存事实更新：确认 `PO-*` 到货后，Warehouse 扫描 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的采购单，同步到 `inventory_batches` 和 `inventory_location_balances`。
+- 维护每仓唯一库位规则：同一 `item_id + warehouse_id` 后续入库复用首次确定的 `location_code`；若采购单没有库位，则使用该仓第一个可用库位。
+- 采购入库批次规则：`batch_no` 使用 `BATCH-YYYYMMDD`，日期来自采购单 `arrived_at`；过期日期按商品主数据 `shelf_life_days` 计算，补货阈值按合理范围生成。
 - 管理历史仓储库存同步任务：查询、完成或失败旧链路 `warehouse_inventory_sync_requested` job。
 
 在配置 `DATABASE_URL` 时，这些仓储与采购记录优先落 Postgres；本地轻量 mock 模式下仍保留内存 fallback。

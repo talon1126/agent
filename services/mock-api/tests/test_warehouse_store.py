@@ -112,7 +112,7 @@ def test_warehouse_repository_reads_batch_inventory_rows(tmp_path: Path) -> None
     assert rows[0]["category_name"] == "纸品"
     assert rows[0]["item_id"] == "item_vinda_tissue"
     assert rows[0]["item_name"] == "维达纸巾"
-    assert rows[0]["batch_no"] == "BATCH-20260501"
+    assert rows[0]["batch_no"] == "BATCH-20260401"
 
 
 def test_inventory_batch_ids_are_autoincrementing_integers(tmp_path: Path) -> None:
@@ -218,6 +218,55 @@ def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_p
     assert created["payment_status"] == "unpaid"
     assert created["warehouse_sync_status"] == "pending_arrival"
     assert listed == [created]
+
+
+def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_balances(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+    supplier = repository.get_default_supplier("item_vinda_tissue")
+    repository.create_purchase_order(
+        {
+            "purchase_order_id": "PO-6001",
+            "request_id": "REQ-3001",
+            "supplier_id": supplier["supplier_id"],
+            "supplier_name": supplier["supplier_name"],
+            "item_id": "item_vinda_tissue",
+            "warehouse_id": "wh_sz_1",
+            "warehouse_name": "深圳仓",
+            "location_code": "B1",
+            "quantity": 104,
+            "unit_price": supplier["unit_price"],
+            "currency": supplier["currency"],
+            "estimated_total_price": 832,
+            "lead_time_days": supplier["lead_time_days"],
+            "estimated_arrival_date": "2026-05-29",
+            "payment_status": "paid",
+            "warehouse_sync_status": "arrived_unsynced",
+            "arrived_at": "2026-05-29T10:00:00+00:00",
+            "created_by": "procurement:user-001",
+            "created_at": "2026-05-29T09:00:00+00:00",
+            "updated_at": "2026-05-29T10:00:00+00:00",
+        }
+    )
+
+    synced = repository.sync_arrived_purchase_orders(
+        limit=10,
+        processed_by="warehouse-agent",
+        processed_at="2026-05-29T10:01:00+00:00",
+    )
+
+    assert len(synced) == 1
+    assert synced[0]["batch_no"] == "BATCH-20260529"
+    assert synced[0]["location_code"] == "A1"
+    assert synced[0]["expiry_date"] == "2027-05-29"
+    assert 20 <= synced[0]["reorder_threshold"] <= 120
+    order = repository.get_purchase_order("PO-6001")
+    assert order["warehouse_sync_status"] == "synced"
+    balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
+    assert {item["location_code"] for item in balances} == {"A1"}
+    assert sum(item["quantity_on_hand"] for item in balances) == 240
 
 
 def test_warehouse_repository_persists_inventory_sync_jobs(tmp_path: Path) -> None:

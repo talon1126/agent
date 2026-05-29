@@ -32,6 +32,16 @@ def test_inventory_sync_jobs_request_falls_back_to_agent_tool() -> None:
     assert route.clarification_question is None
 
 
+def test_purchase_order_arrival_sync_request_routes_to_deterministic_sync() -> None:
+    route = route_warehouse_intent("@warehouse 同步采购到仓库存")
+
+    assert route.status == "matched"
+    assert route.intent == "sync_purchase_order_arrivals"
+    assert route.executor == "warehouse_purchase_order_arrival_sync"
+    assert route.reason == "matched_purchase_order_arrival_sync"
+    assert route.clarification_question is None
+
+
 def test_update_high_risk_inventory_routes_to_filtered_sync() -> None:
     route = route_warehouse_intent("帮我更新下香港高风险库存")
 

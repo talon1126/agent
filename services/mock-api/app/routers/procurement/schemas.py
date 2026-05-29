@@ -39,4 +39,5 @@ class PurchaseOrderTableRowsRequest(BaseModel):
     request_id: str | None = None
     purchase_order_id: str | None = None
     warehouse_sync_status: str | None = None
+    payment_status: str | None = None
     limit: int = 100
