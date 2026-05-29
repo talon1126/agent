@@ -1,136 +1,449 @@
-# Agent Context Summary
+# 仓储agent
 
-Use this file first when working in this repository. It is intentionally short so future Codex sessions do not need to rescan the full project before small tasks.
+本文档用于和其他 workflow / agent 协作时快速说明仓储 agent 的业务边界、可复用接口、数据表和交接契约。后续维护时，仓储 agent 只维护本章节；其他 workflow 可以按同级大标题追加自己的章节。
 
-## Project Root
+## 业务边界
 
-- User-facing root: `D:\Project\agent`
-- Active implementation worktree: `D:\Project\agent\.worktrees\after-sales-implementation`
-- Main branch in use for current work: `after-sales-implementation`
-- Remote: `https://github.com/talon1126/agent.git`
+仓储 agent 负责库存、仓库、库位、批次、临期风险、仓储异常、履约风险、补货申请发起，以及采购到货后的库存同步任务处理。
 
-## Runtime Shape
+仓储 agent 不负责供应商选择、采购单审批、退款/赔付、物流承运商决策。需要采购时只生成补货申请或消费采购到货同步任务，后续采购动作由采购 agent 处理。
 
-The project is a Docker-first internal ecommerce operations copilot.
+## workflow 入口
 
-- `n8n` owns workflow orchestration, department webhook routing, and calls between services.
-- `feishu-adapter` owns Feishu/Lark protocol handling. It supports a multi-bot gateway mode with `FEISHU_BOTS_JSON`, uses long connection mode by default, normalizes inbound messages, forwards each bot to its department n8n webhook, deduplicates by `bot_name + message_id`, and replies to Feishu.
-- `ai-service` owns backend AI logic that should be testable without n8n. It currently exposes deterministic decisioning and a message handling endpoint.
-- `mock-api` simulates enterprise systems: orders, customers, shipments, inventory, warehouse operations, approvals, tickets, internal notifications, run logs, dead letters, and replay.
-- `feishu-adapter` can publish structured message run logs to `FEISHU_RUN_LOG_URL`; the default Docker target is `mock-api /run-logs`.
-- `postgres` is the operational store target. `mock-api` now creates and seeds the warehouse batch + location model (`warehouses`, `storage_locations`, `categories`, `items`, and `inventory_batches`) from fixtures when `DATABASE_URL` is configured, while some action records still remain in in-memory mock endpoints.
-- `ai-service` creates `session_state` and `user_profile` in Postgres when `DATABASE_URL` is configured. Fast path stores `last_order_id` in `session_state` and mirrors it into `user_profile.profile` when `sender_id` is available.
-- The recommended chat architecture is now one Feishu Gateway Adapter plus independent department workflows: `Customer Support Workflow`, `Warehouse Workflow`, `Procurement Workflow`, and `Operations Workflow`.
-- `chat-parent-son-agent.json` remains as a legacy compatibility artifact, but the main internal chat path should use department workflows instead of Parent -> son dispatch.
+- Feishu 仓储机器人消息进入 `feishu-adapter`，再转发到 n8n `Warehouse Workflow`。
+- n8n webhook：`POST /webhook/warehouse-inbound`。
+- workflow 文件：`n8n/workflows/warehouse-workflow.json`。
+- 当前主要工具：
+  - `warehouse_inventory_tool`：查询商品批次库存。
+  - `warehouse_exception_tool`：查询高风险、临期、过期、质检冻结等仓储异常。
+  - `warehouse_fulfillment_tool`：判断商品是否可发货，返回履约阻塞原因。
+  - `warehouse_replenishment_request_tool`：低库存时创建补货申请，交给采购 agent。
+  - `warehouse_inventory_table_provision_tool`：显式创建或初始化飞书库存表。
+  - `warehouse_inventory_table_sync_tool`：按商品、仓库、库位、分类、批次或风险范围同步库存快照到飞书。
+  - `warehouse_table_schema_tool`：创建飞书库存视图前读取真实字段和视图。
+  - `warehouse_view_create_tool`：按受控 JSON 创建或复用飞书库存视图。
+  - `warehouse_inventory_sync_jobs_tool`：处理采购到货后产生的待同步库存任务。
 
-## Key Entry Points
+## ai-service
 
-- Feishu department chat path: department bot -> `feishu-adapter` -> department n8n webhook -> department Agent -> tool/API -> Feishu reply.
-- Feishu gateway diagnostics: `GET /health/details` on `feishu-adapter` reports bot configuration, listener count, processed message count, and run-log status without secrets.
-- Warehouse inventory table provisioning, sync, and view tooling: `POST /warehouse/inventory-table/provision` creates or reuses a fixed-schema table inside an existing Feishu Bitable app/base; `POST /warehouse/inventory-table/sync` auto-provisions when needed and publishes a one-way item snapshot from `mock-api /warehouse/inventory/{item_id}`; `POST /warehouse/inventory-table/sync/filter` publishes filtered batch records by warehouse, location, category, item, or expiry risk; `GET /warehouse/inventory-table/schema` and `POST /warehouse/inventory-table/views/from-template` let Warehouse Agent create controlled Feishu grid views from natural-language templates and validated field plans.
-- Warehouse view template builder: employees can ask for views such as high-risk inventory or low-stock warning in plain language. `feishu-adapter` maps the message to `template + slots`, validates schema, and calls the controlled view creation endpoint.
-- Fast path: Feishu -> `feishu-adapter` -> `n8n /webhook/chat-agent-inbound` -> `ai-service /after-sales/fast-path` -> Feishu reply. If the fast path declines, the workflow falls back to Parent Agent.
-- Department workflow exports: `n8n/workflows/customer-support-workflow.json`, `n8n/workflows/warehouse-workflow.json`, `n8n/workflows/procurement-workflow.json`, and `n8n/workflows/operations-workflow.json`
-- Parent/son workflow export: `n8n/workflows/chat-parent-son-agent.json` is legacy compatibility.
-- Message-agent workflow export: `n8n/workflows/message-agent.json`
-- Event workflow export: `n8n/workflows/ecommerce-after-sales.json`
-- AI message endpoint: `POST /message/handle` in `services/ai-service/app/main.py`
-- AI decision endpoint: `POST /decide` in `services/ai-service/app/main.py`
-- Order status tool code: `services/ai-service/app/order_status_tool.py`
-- n8n customer-support tools: `order_status_tool` and `policy_search_tool` inside `n8n/workflows/customer-support-workflow.json`
-- n8n warehouse tools: `warehouse_inventory_tool`, `warehouse_exception_tool`, `warehouse_fulfillment_tool`, `warehouse_inventory_table_provision_tool`, `warehouse_inventory_table_sync_tool`, `warehouse_table_schema_tool`, and `warehouse_view_create_tool` inside `n8n/workflows/warehouse-workflow.json`
-- n8n procurement and operations tools: `procurement_mock_tool` and `operations_mock_tool` inside their department workflows.
-- n8n memory nodes: `Parent Postgres Chat Memory` and `Customer Support Postgres Chat Memory`
-- Parent and son memory may share the same physical table, but their `sessionKey` values must be namespaced separately (`parent:` and `customer_support:`) to avoid cross-agent context pollution.
-- n8n policy RAG tool: `policy_search_tool` inside `n8n/workflows/chat-parent-son-agent.json`
-- Policy search API: `POST /policies/search` in `services/mock-api/app/main.py`
-- Policy RAG eval cases: `fixtures/evals/policy_rag_eval.json`
+当前仓储业务没有在 `ai-service` 暴露专用 HTTP 接口。仓储的业务判断主要走 n8n agent + `mock-api` 工具接口，飞书表格能力走 `feishu-adapter`。
 
-## ai-service Structure
+`ai-service` 现有能力主要是客服/售后通用能力，例如：
 
-- `services/ai-service/app/main.py`: FastAPI app and HTTP endpoints.
-- `services/ai-service/app/message_agent.py`: deterministic message intent handling, order-id extraction, audio transcript handling, and order status tool invocation.
-- `services/ai-service/app/order_status_tool.py`: calls `mock-api /orders/{order_id}` and `/shipments/{shipment_id}` and returns a structured summary.
-- `services/ai-service/app/decision_engine.py`: deterministic after-sales event decision rules.
-- `services/ai-service/app/schemas.py`: event decision request/response schemas.
-- `services/ai-service/app/message_schemas.py`: message-agent request/response schemas.
-- `services/ai-service/app/transcription.py`: audio transcription adapter boundary with mock and Qwen-ready modes.
+- `POST /message/handle`：消息处理入口。
+- `POST /decide`：售后事件确定性决策。
+- `POST /after-sales/fast-path`：售后快路径。
 
-## mock-api Structure
+如果其他 agent 需要把仓储逻辑下沉到 `ai-service`，需要先明确是否要新增“模型可测试的仓储决策层”，不要绕过 `mock-api` 直接读仓储数据库。
 
-- `services/mock-api/app/main.py`: FastAPI mock enterprise API.
-- `services/mock-api/app/store.py`: fixture loading helpers.
-- `services/mock-api/app/warehouse_store.py`: Postgres-first warehouse repository, schema creation, Chinese table/column comments, and fixture seeding for the batch + location inventory model.
-- `fixtures/data/orders.json`: order fixture data.
-- `fixtures/data/customers.json`: customer fixture data.
-- `fixtures/data/shipments.json`: shipment fixture data.
-- `fixtures/data/inventory.json`: legacy inventory fixture data for non-warehouse mock endpoints.
-- `fixtures/data/warehouses.json`: warehouse master data, such as Shenzhen and Hong Kong warehouses.
-- `fixtures/data/storage_locations.json`: warehouse location data, such as A1, B1, and C1 storage positions.
-- `fixtures/data/categories.json`: item category data, such as paper, dairy, beverages, and home care.
-- `fixtures/data/items.json`: item master data, such as `item_vinda_tissue` and other sellable goods.
-- `fixtures/data/inventory_batches.json`: batch-level inventory facts by warehouse, location, item, batch number, quantity, expiry date, and storage status.
-- `fixtures/policies/after_sales_policy.md` and `fixtures/policies/after_sales_policy.zh.md`: current after-sales policy documents with stable clause IDs such as `REFUND-001`.
+## mock-api
 
-## Docs Structure
+`mock-api` 是仓储事实数据和采购交接数据的后端模拟系统。其他 workflow 如果需要仓储数据，应优先调用这些接口，不要直接访问 Postgres。
 
-- `README.md` and `README.zh.md`: top-level usage and workflow import notes.
-- `docs/architecture.md` and `docs/architecture.zh.md`: service boundaries and architecture explanation.
-- `docs/local-runbook.md` and `docs/local-runbook.zh.md`: local Docker/n8n/Feishu verification steps.
-- `docs/n8n-workflow-contract.md` and `docs/n8n-workflow-contract.zh.md`: workflow payload contracts.
-- `docs/superpowers/specs/`: design specs. Keep English and Chinese versions together.
-- `docs/superpowers/plans/`: implementation plans. Keep English and Chinese versions together.
+### 库存与履约接口
 
-## Current Design Constraints
+- `GET /warehouse/inventory/{item_id}`
+  - 用途：查询某个商品在多个仓库、库位、批次上的库存汇总和明细。
+  - 返回重点：`total_quantity_on_hand`、`total_quantity_reserved`、`total_quantity_available`、`risk_level`、`recommendation`、`batches`。
 
-- Keep Feishu protocol handling in `feishu-adapter`.
-- Keep orchestration in n8n.
-- Keep model-facing logic and deterministic testable behavior in `ai-service`.
-- Keep enterprise API simulations in `mock-api`.
-- Keep warehouse facts behind `mock-api`/future warehouse-service APIs. Do not let n8n or `feishu-adapter` read warehouse Postgres tables directly.
-- Use n8n Postgres Chat Memory for conversational references such as "this order".
-- Use `session_state` for durable short-term backend state that must survive `ai-service` restarts, such as the fast path `last_order_id`.
-- Use `user_profile` for durable user-level facts and future summaries/preferences; keep it compact and avoid storing full chat transcripts there.
-- Use department Feishu bots and department workflows for the main internal chat path; do not add new business features to the legacy Parent/Son graph unless preserving compatibility.
-- The fast path may handle refund-only follow-ups like "How do I refund?" only when the same session already has a remembered `last_order_id`; otherwise it must decline so the workflow falls back to the Parent Agent.
-- Use `policy_search_tool` and `/policies/search` for company-policy answers that require `source_file`, `section`, and `clause_id` metadata.
-- Warehouse Agent owns inventory availability, warehouse locations, batch stock, expiry risk, storage exceptions, and fulfillment-risk questions.
-- Use `warehouse_inventory_tool` and `/warehouse/inventory/{item_id}` for item stock, reserved quantity, warehouse, location, category, batch, expiry, storage status, and risk lookup.
-- Use `warehouse_exception_tool` and `/warehouse/exceptions/search` for stock mismatch, pending putaway, damage, missing-location, and picking-delay questions.
-- Use `warehouse_fulfillment_tool` and `/warehouse/fulfillment/check` for shipping eligibility, fulfillment blockers, and next warehouse actions.
-- Use `warehouse_inventory_table_provision_tool` only when users explicitly ask to create, initialize, or configure the Feishu inventory table. It creates or reuses a table in an existing Bitable app/base, adds colored single-select fields for risk/status, and does not create the base or the inventory source of truth.
-- Use `warehouse_inventory_table_sync_tool` only when users explicitly ask to sync/export/publish/show a Feishu table snapshot. It can sync by `item_id` or by filtered scope such as warehouse, location, category, and expiry risk. If no table id is configured, the backend may auto-provision or reuse the table before syncing. Feishu table data is a read model, not the inventory source of truth.
-- Use `warehouse_table_schema_tool` before any request to create a Feishu inventory view. It returns the real field names, types, select colors, and existing views.
-- Use `warehouse_view_create_tool` only after schema discovery. Its input must be JSON with `view_name`, `visible_fields`, `filters`, and `sorts`; the backend rejects unknown fields before calling Feishu. The MVP creates or reuses a grid view and returns the validated plan instead of letting the Agent run direct Feishu CLI/API commands.
-- `Procurement Agent` and `Operations Agent` are backed by deterministic mock endpoints in their own department workflows.
-- Do not commit `.env` or print secrets.
-- When adding an English Markdown document, add the Chinese `.zh.md` counterpart.
-- Prefer Docker-first verification before cloud deployment.
+- `POST /warehouse/inventory/search`
+  - 用途：按条件搜索批次库存。
+  - 常用过滤：`item_id`、`warehouse_id`、`location_code`、`category` / `category_id`、`batch_no`、`expiry_risk`、`risk_level`、`limit`。
+  - 适合运营 agent 做库存风险汇总，或采购 agent 查补货上下文。
 
-## Common Verification
+- `POST /warehouse/inventory/table-rows`
+  - 用途：返回适合写入飞书库存表的行数据。
+  - 返回结构：`items[].batch_key`、`items[].item_id`、`items[].batch_no`、`items[].fields`。
+  - 这是 `feishu-adapter` 同步飞书库存表的主要读模型接口。
 
-Run from `D:\Project\agent\.worktrees\after-sales-implementation`:
+- `GET /warehouse/inventory/table-schema`
+  - 用途：返回仓储库存飞书表字段定义。
+  - 返回 `schema_id=warehouse_batch_inventory` 和字段列表。
 
-```powershell
-pytest services\ai-service\tests -v
-pytest services\mock-api\tests -v
-pytest services\feishu-adapter\tests -v
-pytest tests\test_department_workflows.py -v
-pytest tests\test_chat_parent_son_workflow.py -v
-docker compose config --quiet
-docker compose ps
-```
+- `POST /warehouse/exceptions/search`
+  - 用途：查询某商品的高风险批次、临期、过期、质检冻结等仓储异常。
+  - 入参重点：`item_id`，可选 `expiry_risk`。
 
-Useful smoke paths:
+- `POST /warehouse/fulfillment/check`
+  - 用途：判断某商品是否可以发货。
+  - 返回重点：`can_ship`、`blockers`、`available`、`reserved`、`batches`、`next_action`。
+  - 物流 agent 或客服 agent 只需要判断能否出库时，可以用这个接口。
 
-- n8n department chat webhooks: `http://localhost:5678/webhook/customer-support-inbound`, `http://localhost:5678/webhook/warehouse-inbound`, `http://localhost:5678/webhook/procurement-inbound`, and `http://localhost:5678/webhook/operations-inbound`
-- ai-service local port: `http://localhost:8001`
-- mock-api local port: `http://localhost:8002`
-- feishu-adapter local port: `http://localhost:8010`
-- feishu-adapter diagnostics: `http://localhost:8010/health/details`
-- warehouse inventory table provision: `http://localhost:8010/warehouse/inventory-table/provision`
-- warehouse inventory table sync: `http://localhost:8010/warehouse/inventory-table/sync`
-- warehouse inventory table schema: `http://localhost:8010/warehouse/inventory-table/schema`
-- warehouse inventory view create: `http://localhost:8010/warehouse/inventory-table/views/create`
+### 库位库存余额与订单库存接口
 
-Expected order smoke phrase for `ord_100`: `Order ord_100 is delivered. Shipment status is delivered.`
+- `GET /warehouse/stock/balances`
+  - 用途：按 `item_id + warehouse_id + location_code + batch_no` 聚合返回仓库库位级库存余额。
+  - 返回重点：`quantity_on_hand`、`quantity_available`、`batch_count`、`earliest_expiry_date`。
+  - 物流 agent 需要判断某件商品在某仓库/库位还有多少可用库存时，应优先使用这个接口。
+
+- `POST /warehouse/orders`
+  - 用途：创建订单主单，支持多行商品。
+  - 入参重点：`order_id`、`customer_id`、`items[].item_id`、`items[].warehouse_id`、`items[].quantity`。
+  - 创建后状态为 `created`，不会扣减库存。
+
+- `POST /warehouse/orders/{order_id}/pay`
+  - 用途：订单付款后按 FEFO 从 `inventory_location_balances` 扣减库存，并在 `order_items` 记录命中的 `warehouse_id + location_code + batch_no + quantity`。
+
+- `POST /warehouse/orders/{order_id}/ship`
+  - 用途：订单发货，只更新订单状态为 `shipped`，不再次扣减库存。
+
+- `POST /warehouse/orders/{order_id}/arrive`
+  - 用途：订单到货，只更新订单状态为 `arrived`，不再次扣减库存。
+
+- `POST /warehouse/orders/{order_id}/cancel`
+  - 用途：订单取消或发货前退款，按 `order_items` 原批次加回 `inventory_location_balances`。
+
+- `POST /warehouse/orders/{order_id}/return`
+  - 用途：已到货后退货，按 `order_items` 原批次加回 `inventory_location_balances`。
+
+### 补货和采购交接接口
+
+- `POST /procurement/replenishment-requests`
+  - 用途：仓储发现低库存后创建补货申请。
+  - 默认状态：`pending_procurement_review`。
+  - 采购 agent 后续负责审批、拒绝和创建采购单草稿。
+
+- `GET /procurement/replenishment-requests?status=pending_procurement_review`
+  - 用途：采购 agent 查询待审核补货申请。
+
+- `POST /procurement/purchase-order-drafts/confirm-arrival-batch`
+  - 用途：采购人员批量确认采购单到仓。
+  - 影响：创建 `RCV-POD-*` 入库批次，并创建 `warehouse_inventory_sync_jobs` 待处理任务。
+  - 返回重点：`confirmed_items`、`warehouse_inventory_sync_requests`、`warehouse_inventory_sync_jobs`、`next_action`。
+
+### 库存同步任务接口
+
+- `GET /warehouse/inventory-sync-jobs?status=pending`
+  - 用途：仓储 agent 拉取待处理库存同步任务。
+  - 任务来源：采购到货确认后产生的 `warehouse_inventory_sync_requested`。
+
+- `POST /warehouse/inventory-sync-jobs/{job_id}/complete`
+  - 用途：飞书库存表同步成功后标记任务完成。
+  - 入参重点：`processed_by`、`result`。
+
+- `POST /warehouse/inventory-sync-jobs/{job_id}/fail`
+  - 用途：飞书库存表同步失败后标记任务失败。
+  - 入参重点：`processed_by`、`error`。
+
+## feishu-adapter
+
+`feishu-adapter` 负责飞书协议、多维表格和仓储意图快路径。其他 workflow 不应直接调用飞书开放平台，应该通过这里的受控接口。
+
+### 仓储意图路由
+
+- `POST /warehouse/intents/route`
+  - 用途：把自然语言仓储请求路由到库存查询、表格同步、视图创建或 agent fallback。
+  - 常见输出：`executor`、`slots`、`clarification_required`、`clarification_question`。
+
+### 飞书库存表
+
+- `POST /warehouse/inventory-table/provision`
+  - 用途：创建或复用固定 schema 的飞书库存表。
+  - 默认表名：`Warehouse Inventory Snapshot`。
+  - 只在用户明确要求创建、初始化、配置飞书库存表时调用。
+
+- `POST /warehouse/inventory-table/sync`
+  - 用途：同步单个商品/批次库存快照。
+  - 常用入参：`item_id`、`warehouse_id`、`location_code`、`batch_no`。
+  - 表不存在时会通过受控 provisioning 自动创建或复用目标表。
+
+- `POST /warehouse/inventory-table/sync/filter`
+  - 用途：按过滤条件批量同步库存快照。
+  - 常用入参：`item_id`、`warehouse_id`、`location_code`、`category` / `category_id`、`batch_no`、`expiry_risk`、`risk_level`、`limit`。
+  - 适合人工要求“同步香港仓高风险库存”这类范围同步。
+
+- `POST /warehouse/inventory-table/sync/jobs`
+  - 用途：批量处理仓储库存同步任务。
+  - 入参重点：`jobs`、`limit_per_job`、`table_name`。
+  - 当前实现按 job 的 `item_id + warehouse_id + location_code + batch_no` 精确取行，再批量 upsert 到飞书表。
+  - 这是采购到货后增量同步的主路径。
+
+- `GET /warehouse/inventory-table/schema`
+  - 用途：读取真实飞书库存表字段、字段类型、选项颜色和已有视图。
+  - 创建视图前必须先调用。
+
+- `GET /warehouse/inventory-table/view-templates`
+  - 用途：列出仓储内置视图模板，例如高风险、临期、低库存、补货候选等。
+
+- `POST /warehouse/inventory-table/views/create`
+  - 用途：按受控 JSON 创建或复用飞书库存视图。
+  - 入参重点：`view_name`、`visible_fields`、`filters`、`sorts`。
+  - 后端会校验字段是否真实存在，避免 agent 编造飞书字段。
+
+- `POST /warehouse/inventory-table/views/from-template`
+  - 用途：把自然语言视图请求匹配到模板并创建视图。
+  - 适合“帮我建一个香港仓高风险库存视图”这类请求。
+
+## 业务数据库表
+
+仓储相关表由 `mock-api` 的仓储仓库层管理。有 `DATABASE_URL` 时走 Postgres；没有数据库时使用内存/fixture fallback。
+
+- `warehouses`
+  - 仓库主数据。
+  - 关键字段：`warehouse_id`、`warehouse_name`、`city`、`region`、`status`。
+
+- `storage_locations`
+  - 仓库库位数据。
+  - 关键字段：`location_id`、`warehouse_id`、`location_code`、`zone`、`temperature_zone`、`capacity_units`。
+
+- `categories`
+  - 商品分类。
+  - 关键字段：`category_id`、`category_name`、`storage_requirement`。
+
+- `items`
+  - 商品主数据。
+  - 关键字段：`item_id`、`category_id`、`item_name`、`brand`、`spec`、`unit`、`barcode`。
+
+- `inventory_batches`
+  - 批次入库事实表，用于进货记录和商品批次溯源，不再被订单扣减。
+  - 关键字段：`warehouse_id`、`location_code`、`item_id`、`batch_no`、`production_date`、`expiry_date`、`quantity_on_hand`、`quantity_reserved`、`reorder_threshold`、`storage_status`。
+
+- `inventory_location_balances`
+  - 批次级库位库存余额表，订单付款扣减、取消或退货加回。
+  - 关键字段：`id`、`warehouse_id`、`location_code`、`item_id`、`batch_no`、`quantity_on_hand`、`reorder_threshold`、`storage_status`。
+  - 初始化来源：按 `inventory_batches.quantity_on_hand` 建立余额，忽略旧模型的 `quantity_reserved`。
+
+- `orders`
+  - 订单主表，记录下单、付款、发货、到货、取消和退货状态。
+  - 关键字段：`id`、`order_id`、`customer_id`、`status`、`requested_items_json`、`paid_at`、`shipped_at`、`arrived_at`、`cancelled_at`、`returned_at`。
+
+- `order_items`
+  - 订单明细表，记录付款扣减命中的批次库存，用于取消和退货时按原批次加回。
+  - 关键字段：`id`、`order_id`、`customer_id`、`status`、`item_id`、`warehouse_id`、`location_code`、`batch_no`、`quantity`。
+
+- `replenishment_requests`
+  - 仓储发起、采购处理的补货申请。
+  - 关键字段：`request_id`、`status`、`warehouse_id`、`location_code`、`item_id`、`current_quantity`、`reorder_threshold`、`suggested_quantity`、`reason`、`created_by`。
+  - 主要状态：`pending_procurement_review`、`purchase_order_draft_created`、`rejected`。
+
+- `purchase_order_drafts`
+  - 采购单草稿，由采购 agent 负责，但到货后会影响仓储库存。
+  - 关键字段：`po_draft_id`、`request_id`、`supplier_id`、`item_id`、`quantity`、`status`、`estimated_arrival_date`。
+  - 到货后状态会进入 `received_at_warehouse`。
+
+- `warehouse_inventory_sync_jobs`
+  - 仓储库存同步任务表。
+  - 关键字段：`job_id`、`event`、`po_draft_id`、`request_id`、`item_id`、`warehouse_id`、`location_code`、`batch_no`、`quantity`、`status`、`processed_by`、`processed_at`、`result_json`、`error`。
+  - 采购确认到货后新增 `pending` 任务；仓储处理完成后改为 `completed` 或 `failed`。
+
+## 其他 workflow 可能会用到的契约
+
+- 采购 agent 如果确认采购单到货，必须通过 `POST /procurement/purchase-order-drafts/confirm-arrival-batch` 产生仓储同步任务，不要直接写飞书库存表。
+- 物流 agent 如果只需要判断是否能出库，可以调用 `POST /warehouse/fulfillment/check`，不要自行推断批次库存。
+- 订单付款后必须调用 `POST /warehouse/orders/{order_id}/pay` 扣减 `inventory_location_balances`；发货和到货只更新订单状态；取消或退货调用 `/cancel` 或 `/return` 按原批次加回库存。
+- 客服 agent 如果需要解释“为什么不能发货”，可以引用 `warehouse/fulfillment/check` 的 `blockers` 和 `next_action`，但不要承诺退款或补偿。
+- 运营 agent 如果要做库存风险汇总，可以调用 `POST /warehouse/inventory/search`，按 `risk_level`、`expiry_risk`、`warehouse_id`、`category` 聚合。
+- 任何 agent 需要飞书库存表、视图或同步状态，都应调用 `feishu-adapter` 的 `/warehouse/inventory-table/*` 接口，不要直接访问飞书开放平台。
+- 飞书库存表是读模型，不是库存源数据；库存源数据始终是 `mock-api` 暴露的仓储事实接口和背后的业务表。
+
+## 常见业务对象
+
+- 商品 ID 示例：`item_vinda_tissue`、`item_milk_pure`、`item_cola_zero`、`item_copy_paper`。
+- 仓库 ID 示例：`wh_sz_1`、`wh_hk_1`、`wh_sg_1`。
+- 库位示例：`A1`、`B1`、`C1`。
+- 批次号示例：`RCV-POD-*` 表示采购到货生成的入库批次。
+- 同步任务 ID 示例：`WSJ-POD-*`。
+- 补货申请 ID 示例：`REQ-*`。
+- 采购单草稿 ID 示例：`POD-*`。
+
+## 维护原则
+
+- 仓储 agent 后续只维护本章节。
+- 新增仓储接口时，同步更新 `mock-api`、`feishu-adapter` 或 n8n 工具名对应说明。
+- 新增跨 workflow 交接时，优先写清楚“谁创建、谁消费、状态怎么变、失败怎么处理”。
+- 不清楚的业务归属或技术细节，先和用户确认后再改文档或代码。
+
+# 采购agent
+
+本文档用于和其他 workflow / agent 协作时快速说明采购 agent 的业务边界、可复用接口、数据表和交接契约。后续维护时，采购 agent 只维护本章节；其他 workflow 的内容不要在采购章节里改。
+
+## 业务边界
+
+采购 agent 负责仓储补货申请的采购审核、默认供应商匹配、采购草稿单生成、采购飞书视图同步、采购草稿到仓确认，以及到仓后创建 Warehouse 库存同步任务。
+
+采购 agent 不负责直接修改库存事实、不负责同步仓储库存飞书视图、不负责客服退款/赔付、不负责物流承运商或派送决策。采购到仓后只生成入库批次和 Warehouse sync job，库存视图同步完成权仍归仓储 agent。
+
+当前采购系统是 `mock-procurement`，用于内部流程验证和 demo；尚未接入真实 ERP 或正式采购下单系统。
+
+## workflow 入口
+
+- Feishu 采购机器人消息进入 `feishu-adapter`，再转发到 n8n `Procurement Workflow`。
+- n8n webhook：`POST /webhook/procurement-inbound`。
+- workflow 文件：`n8n/workflows/procurement-workflow.json`。
+- 当前主要工具：
+  - `procurement_sync_replenishment_requests_tool`：把数据库补货申请同步到飞书采购补货请求表。
+  - `procurement_sync_purchase_order_drafts_tool`：把采购草稿单同步到飞书采购草稿单表。
+  - `procurement_approve_replenishment_batch_tool`：批量批准全部 pending 补货申请，生成或复用采购草稿单，并刷新两张采购飞书表。
+  - `procurement_confirm_arrival_batch_tool`：确认一个或多个 `POD-*` 到仓，创建入库批次和 Warehouse 库存同步任务，并刷新采购草稿表。
+  - `procurement_replenishment_request_tool`：查询 Warehouse 创建的 `pending_procurement_review` 补货申请。
+  - `procurement_approve_replenishment_tool`：批准单个 `REQ-*` 补货申请，生成或复用采购草稿单。
+  - `procurement_reject_replenishment_tool`：驳回单个 `REQ-*` 补货申请，并记录拒绝原因。
+  - `procurement_mock_tool`：按 `item_id` 生成基础 mock 采购建议。
+
+## ai-service
+
+当前采购业务没有在 `ai-service` 暴露专用 HTTP 接口。采购的确定性业务动作主要通过 n8n agent 调用 `mock-api` 和 `feishu-adapter` 完成。
+
+如果后续要把采购决策下沉到 `ai-service`，需要先明确是否新增可测试的采购决策层，例如供应商选择策略、比价规则、采购审批策略。不要让 `ai-service` 直接读写采购 Postgres 表，采购事实仍应通过 `mock-api` 或未来采购服务暴露。
+
+## mock-api
+
+`mock-api` 是采购事实数据的后端模拟系统。其他 workflow 如果需要采购状态，应优先调用这些接口，不要直接访问 Postgres。
+
+### 采购建议接口
+
+- `POST /procurement/mock`
+  - 用途：根据 `item_id` 和文本查询返回基础采购建议。
+  - 当前定位：mock 建议，不代表真实 ERP 报价或正式采购决策。
+
+### 补货申请接口
+
+- `POST /procurement/replenishment-requests`
+  - 用途：创建补货申请。
+  - 主要调用方：Warehouse Agent 在确认低库存后调用。
+  - 默认状态：`pending_procurement_review`。
+  - 入参重点：`source`、`warehouse_id`、`location_code`、`item_id`、`reason`、`created_by`。
+
+- `GET /procurement/replenishment-requests?status=pending_procurement_review`
+  - 用途：查询补货申请，可按状态过滤。
+  - 主要调用方：Procurement Agent、采购飞书表同步。
+
+- `POST /procurement/replenishment-requests/{request_id}/approve`
+  - 用途：批准单个 `REQ-*` 补货申请。
+  - 影响：申请状态更新为 `purchase_order_draft_created`，创建或复用 `POD-*` 采购草稿单。
+  - 幂等规则：重复批准同一个 `REQ-*` 必须复用已有草稿单，不重复创建。
+  - 异常：商品没有默认供应商时返回明确错误。
+
+- `POST /procurement/replenishment-requests/{request_id}/reject`
+  - 用途：驳回单个 `REQ-*` 补货申请。
+  - 影响：申请状态更新为 `rejected`，记录拒绝原因。
+  - 不会创建采购草稿单。
+
+- `POST /procurement/replenishment-requests/approve-batch`
+  - 用途：批量批准补货申请。
+  - 默认范围：全部 `pending_procurement_review`。
+  - 返回重点：`processed_count`、`approved_count`、`skipped_count`、`created_or_reused_drafts`、`errors`。
+  - 异常策略：某个商品没有默认供应商时跳过该申请并写入 `errors`，不中断整批任务。
+
+### 采购草稿单接口
+
+- `GET /procurement/purchase-order-drafts?request_id=REQ-1001`
+  - 用途：查询采购草稿单，可按 `request_id` 过滤。
+  - 返回重点：`po_draft_id`、`request_id`、`supplier_id`、`supplier_name`、`item_id`、`quantity`、`unit_price`、`estimated_total_price`、`lead_time_days`、`estimated_arrival_date`、`status`。
+
+- `POST /procurement/purchase-order-drafts/confirm-arrival-batch`
+  - 用途：批量确认一个或多个 `POD-*` 已到仓。
+  - 影响：
+    - `purchase_order_drafts.status` 更新为 `received_at_warehouse`。
+    - 创建 `RCV-POD-*` 入库批次。
+    - 创建 `warehouse_inventory_sync_jobs` 待处理任务。
+  - 返回重点：`confirmed_items`、`warehouse_inventory_sync_requests`、`warehouse_inventory_sync_jobs`、`errors`、`next_action`。
+  - 后续动作：通知 Warehouse Agent 消费 pending sync job，同步库存飞书视图。
+
+### 采购飞书表数据源接口
+
+- `GET /procurement/replenishment-requests/table-schema`
+  - 用途：返回采购补货请求飞书表字段定义。
+  - schema：`procurement_replenishment_requests`。
+
+- `POST /procurement/replenishment-requests/table-rows`
+  - 用途：返回补货请求飞书表行数据。
+  - 常用过滤：`status`、`request_id`、`limit`。
+  - 唯一键字段：`Request ID`。
+
+- `GET /procurement/purchase-order-drafts/table-schema`
+  - 用途：返回采购草稿单飞书表字段定义。
+  - schema：`procurement_purchase_order_drafts`。
+
+- `POST /procurement/purchase-order-drafts/table-rows`
+  - 用途：返回采购草稿单飞书表行数据。
+  - 常用过滤：`request_id`、`po_draft_id`、`limit`。
+  - 唯一键字段：`PO Draft ID`。
+
+## feishu-adapter
+
+`feishu-adapter` 负责采购飞书多维表格读模型同步。其他 workflow 不应直接调用飞书开放平台创建或更新采购表，应该通过这里的受控接口。
+
+### 采购补货请求表
+
+- `POST /procurement/replenishment-requests-table/provision`
+  - 用途：创建或复用采购补货请求表。
+  - 默认表名：`Procurement Replenishment Requests`。
+  - 唯一键：`Request ID`。
+
+- `POST /procurement/replenishment-requests-table/sync`
+  - 用途：把数据库中的补货申请同步到飞书补货请求表。
+  - 数据源：`mock-api /procurement/replenishment-requests/table-rows`。
+  - 常用入参：`status`、`request_id`、`limit`。
+
+### 采购草稿单表
+
+- `POST /procurement/purchase-order-drafts-table/provision`
+  - 用途：创建或复用采购草稿单表。
+  - 默认表名：`Procurement Purchase Order Drafts`。
+  - 唯一键：`PO Draft ID`。
+
+- `POST /procurement/purchase-order-drafts-table/sync`
+  - 用途：把数据库中的采购草稿单同步到飞书采购草稿单表。
+  - 数据源：`mock-api /procurement/purchase-order-drafts/table-rows`。
+  - 常用入参：`request_id`、`po_draft_id`、`limit`。
+
+### 配置约定
+
+- 采购表复用同一个飞书 Base / app 凭据。
+- 如果未配置采购 table id，后端可以自动建表。
+- 表同步是数据库到飞书的单向读模型同步；当前不支持从飞书表编辑回写数据库。
+
+## 业务数据库表
+
+采购相关表由 `mock-api` 的仓储仓库层统一管理。有 `DATABASE_URL` 时走 Postgres；没有数据库时使用内存/fixture fallback。
+
+- `replenishment_requests`
+  - 补货申请表，由 Warehouse 创建、Procurement 审核。
+  - 关键字段：`request_id`、`source`、`status`、`warehouse_id`、`warehouse_name`、`location_code`、`item_id`、`item_name`、`category_id`、`category_name`、`current_quantity`、`reorder_threshold`、`suggested_quantity`、`reason`、`created_by`、`created_at`、`updated_at`。
+  - 主要状态：`pending_procurement_review`、`purchase_order_draft_created`、`rejected`。
+
+- `procurement_suppliers`
+  - mock 采购供应商表，按 `item_id` 匹配默认供应商。
+  - 关键字段：`supplier_id`、`supplier_name`、`item_id`、`unit_price`、`currency`、`lead_time_days`、`reliability_score`。
+  - 当前策略：v1 每个商品只选一个默认供应商，不做多供应商比价。
+
+- `purchase_order_drafts`
+  - 采购单草稿表，由批准补货申请生成。
+  - 关键字段：`po_draft_id`、`request_id`、`supplier_id`、`supplier_name`、`item_id`、`quantity`、`unit_price`、`currency`、`estimated_total_price`、`lead_time_days`、`estimated_arrival_date`、`status`、`created_by`、`created_at`、`updated_at`。
+  - 主要状态：`draft_created`、`received_at_warehouse`。
+
+- `inventory_batches`
+  - 仓储批次库存事实表，不归采购直接维护。
+  - 采购到仓确认会通过后端创建 `RCV-POD-*` 入库批次，但库存事实仍由 Warehouse 相关接口对外暴露。
+
+- `warehouse_inventory_sync_jobs`
+  - 仓储库存同步任务表，不归采购完成。
+  - 采购确认到仓后新增 `pending` 任务；Warehouse Agent 消费后改为 `completed` 或 `failed`。
+
+## 其他 workflow 可能会用到的契约
+
+- Warehouse Agent 创建补货申请时调用 `POST /procurement/replenishment-requests`，不要直接创建采购草稿单。
+- Procurement Agent 批准或驳回补货申请后，状态只在 `replenishment_requests` 上流转，不直接改库存。
+- Procurement Agent 确认 `POD-*` 到仓时必须调用 `POST /procurement/purchase-order-drafts/confirm-arrival-batch`，不要直接写 `inventory_batches` 或飞书库存表。
+- Warehouse Agent 消费采购到仓后的库存同步任务时，使用 `GET /warehouse/inventory-sync-jobs?status=pending` 和 `/warehouse/inventory-table/sync/jobs` 链路完成库存飞书表同步。
+- Operations Agent 如果需要采购计划或草稿状态，应读取 `GET /procurement/replenishment-requests` 或 `GET /procurement/purchase-order-drafts`，不要从飞书采购表反推源数据。
+- Customer Support Agent 如果需要解释缺货补货进度，只能引用采购申请或草稿状态，不要承诺具体到货时间之外的正式履约承诺。
+- 飞书采购表是读模型，不是采购源数据；采购源数据始终是 `mock-api` 暴露的采购接口和背后的业务表。
+
+## 常见业务对象
+
+- 补货申请 ID 示例：`REQ-1001`。
+- 采购草稿单 ID 示例：`POD-5001`。
+- 到仓入库批次号示例：`RCV-POD-5001`。
+- 仓储同步任务 ID 示例：`WSJ-POD-5001`。
+- 商品 ID 示例：`item_vinda_tissue`、`item_milk_pure`、`item_cola_zero`、`item_copy_paper`。
+- 仓库 ID 示例：`wh_sz_1`、`wh_hk_1`。
+- 库位示例：`A1`、`B1`、`C1`。
+
+## 维护原则
+
+- 采购 agent 后续只维护本章节。
+- 新增采购接口时，同步更新 `mock-api`、`feishu-adapter` 或 n8n 工具名对应说明。
+- 新增跨 workflow 交接时，优先写清楚“谁创建、谁消费、状态怎么变、失败怎么处理”。
+- 不清楚的业务归属或技术细节，先和用户确认后再改文档或代码。

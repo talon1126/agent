@@ -10,8 +10,11 @@ from app.warehouse_store import (
     _quote_literal,
     categories,
     init_warehouse_schema,
+    inventory_location_balances,
     inventory_batches,
     items,
+    order_items,
+    orders,
     procurement_suppliers,
     purchase_order_drafts,
     replenishment_requests,
@@ -32,6 +35,9 @@ WAREHOUSE_TABLES = [
     procurement_suppliers,
     purchase_order_drafts,
     warehouse_inventory_sync_jobs,
+    inventory_location_balances,
+    orders,
+    order_items,
 ]
 
 
@@ -52,6 +58,9 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         supplier_count = connection.execute(text("select count(*) from procurement_suppliers")).scalar_one()
         draft_count = connection.execute(text("select count(*) from purchase_order_drafts")).scalar_one()
         sync_job_count = connection.execute(text("select count(*) from warehouse_inventory_sync_jobs")).scalar_one()
+        balance_count = connection.execute(text("select count(*) from inventory_location_balances")).scalar_one()
+        order_count = connection.execute(text("select count(*) from orders")).scalar_one()
+        order_item_count = connection.execute(text("select count(*) from order_items")).scalar_one()
 
     assert warehouse_count == 2
     assert location_count == 6
@@ -62,6 +71,9 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert supplier_count == 7
     assert draft_count == 0
     assert sync_job_count == 0
+    assert balance_count == 10
+    assert order_count == 0
+    assert order_item_count == 0
 
 
 def test_warehouse_tables_and_columns_have_chinese_comments() -> None:
@@ -248,3 +260,57 @@ def test_warehouse_repository_persists_inventory_sync_jobs(tmp_path: Path) -> No
     assert completed["result"] == {"synced_count": 1}
     assert repository.list_warehouse_inventory_sync_jobs(status="pending") == []
     assert repository.list_warehouse_inventory_sync_jobs(status="completed") == [completed]
+
+
+def test_warehouse_repository_persists_order_lifecycle_against_location_balances(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    created = repository.create_order(
+        {
+            "order_id": "ORD-CODEX-DB-1",
+            "customer_id": "cus_100",
+            "status": "created",
+            "requested_items": [
+                {"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}
+            ],
+            "created_by": "delivery-agent",
+            "created_at": "2026-05-28T10:00:00+00:00",
+            "updated_at": "2026-05-28T10:00:00+00:00",
+            "paid_at": "",
+            "shipped_at": "",
+            "arrived_at": "",
+            "cancelled_at": "",
+            "returned_at": "",
+        }
+    )
+
+    assert created["order"]["id"] == 1
+    assert created["order"]["status"] == "created"
+
+    paid = repository.pay_order(
+        "ORD-CODEX-DB-1",
+        updated_by="warehouse-agent",
+        updated_at="2026-05-28T10:01:00+00:00",
+    )
+
+    assert paid["order"]["status"] == "paid"
+    assert [item["batch_no"] for item in paid["items"]] == ["BATCH-20260401", "BATCH-20260501"]
+    assert [item["quantity"] for item in paid["items"]] == [16, 4]
+    balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
+    assert sum(item["quantity_on_hand"] for item in balances) == 116
+
+    batch = repository.get_inventory_batch_by_batch_no("BATCH-20260401")
+    assert batch["quantity_on_hand"] == 16
+
+    returned = repository.return_order(
+        "ORD-CODEX-DB-1",
+        updated_by="warehouse-agent",
+        updated_at="2026-05-28T10:10:00+00:00",
+    )
+
+    assert returned["order"]["status"] == "returned"
+    balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
+    assert sum(item["quantity_on_hand"] for item in balances) == 136

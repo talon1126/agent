@@ -1,3 +1,4 @@
+import json
 import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -25,6 +26,9 @@ REPLENISHMENT_REQUESTS: list[dict] = []
 PURCHASE_ORDER_DRAFTS: list[dict] = []
 RECEIVED_INVENTORY_BATCHES: list[dict] = []
 WAREHOUSE_INVENTORY_SYNC_JOBS: list[dict] = []
+WAREHOUSE_BATCH_QUANTITY_OVERRIDES: dict[str, dict[str, int]] = {}
+WAREHOUSE_ORDERS: list[dict] = []
+WAREHOUSE_ORDER_ITEMS: list[dict] = []
 WAREHOUSE_REPOSITORY: WarehouseRepository | None | bool = False
 
 PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_SCHEMA = [
@@ -147,6 +151,24 @@ class WarehouseInventorySyncJobUpdateRequest(BaseModel):
     processed_by: str = "warehouse-agent"
     result: dict[str, Any] | None = None
     error: str | None = None
+
+
+class WarehouseOrderItemCreate(BaseModel):
+    item_id: str
+    warehouse_id: str
+    quantity: int
+    location_code: str | None = None
+
+
+class WarehouseOrderCreate(BaseModel):
+    order_id: str | None = None
+    customer_id: str
+    items: list[WarehouseOrderItemCreate]
+    created_by: str = "warehouse-agent"
+
+
+class WarehouseOrderStatusUpdateRequest(BaseModel):
+    updated_by: str = "warehouse-agent"
 
 
 class ReplenishmentRequestTableRowsRequest(BaseModel):
@@ -460,6 +482,24 @@ def normalize_category(value: str | None) -> str:
     return raw
 
 
+def inventory_batch_key(row: dict[str, Any]) -> str:
+    return ":".join(
+        [
+            str(row["warehouse_id"]),
+            str(row["location_code"]),
+            str(row["item_id"]),
+            str(row["batch_no"]),
+        ]
+    )
+
+
+def apply_inventory_batch_override(row: dict[str, Any]) -> dict[str, Any]:
+    override = WAREHOUSE_BATCH_QUANTITY_OVERRIDES.get(inventory_batch_key(row))
+    if not override:
+        return row
+    return {**row, **override}
+
+
 def load_batch_inventory_rows(
     *,
     item_id: str | None = None,
@@ -520,7 +560,7 @@ def load_batch_inventory_rows(
         location = location_by_key[(str(batch["warehouse_id"]), str(batch["location_code"]))]
         rows.append({**batch, **warehouse, **location, **category, **item})
     return sorted(
-        rows,
+        [apply_inventory_batch_override(row) for row in rows],
         key=lambda row: (row["warehouse_id"], row["location_code"], row["item_name"], row["batch_no"]),
     )
 
@@ -539,7 +579,7 @@ def expiry_risk(row: dict[str, Any]) -> str:
 
 
 def quantity_available(row: dict[str, Any]) -> int:
-    return max(int(row.get("quantity_on_hand", 0)) - int(row.get("quantity_reserved", 0)), 0)
+    return max(int(row.get("quantity_on_hand", 0)), 0)
 
 
 def batch_risk_level(row: dict[str, Any]) -> str:
@@ -564,6 +604,180 @@ def batch_recommendation(row: dict[str, Any]) -> str:
     if quantity_available(row) < int(row.get("reorder_threshold", 0)):
         return "可用库存低于补货阈值，建议通知采购或调拨。"
     return "库存状态正常，可继续履约。"
+
+
+def aggregate_location_balances(
+    *,
+    item_id: str,
+    warehouse_id: str,
+) -> dict[str, Any]:
+    rows = [enrich_batch_row(row) for row in load_batch_inventory_rows(item_id=item_id, warehouse_id=warehouse_id)]
+    if not rows:
+        raise HTTPException(status_code=404, detail="warehouse stock balance not found")
+
+    risk_order = {"low": 1, "medium": 2, "high": 3}
+    locations: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        location = locations.setdefault(
+            row["location_code"],
+            {
+                "item_id": item_id,
+                "warehouse_id": warehouse_id,
+                "warehouse_name": row["warehouse_name"],
+                "location_code": row["location_code"],
+                "quantity_on_hand": 0,
+                "quantity_reserved": 0,
+                "quantity_available": 0,
+                "batch_count": 0,
+                "earliest_expiry_date": row["expiry_date"],
+                "risk_level": "low",
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        location["quantity_on_hand"] += int(row["quantity_on_hand"])
+        location["quantity_reserved"] += int(row["quantity_reserved"])
+        location["quantity_available"] += int(row["quantity_available"])
+        location["batch_count"] += 1
+        if row["expiry_date"] < location["earliest_expiry_date"]:
+            location["earliest_expiry_date"] = row["expiry_date"]
+        if risk_order[row["risk_level"]] > risk_order[location["risk_level"]]:
+            location["risk_level"] = row["risk_level"]
+
+    sorted_locations = sorted(locations.values(), key=lambda item: item["location_code"])
+    return {
+        "ok": True,
+        "schema_id": "inventory_location_balances",
+        "item_id": item_id,
+        "warehouse_id": warehouse_id,
+        "warehouse_name": rows[0]["warehouse_name"],
+        "total_quantity_on_hand": sum(item["quantity_on_hand"] for item in sorted_locations),
+        "total_quantity_reserved": sum(item["quantity_reserved"] for item in sorted_locations),
+        "total_quantity_available": sum(item["quantity_available"] for item in sorted_locations),
+        "locations": sorted_locations,
+    }
+
+
+def available_order_batches(item_id: str, warehouse_id: str, location_code: str | None = None) -> list[dict[str, Any]]:
+    rows = [enrich_batch_row(row) for row in load_batch_inventory_rows(item_id=item_id, warehouse_id=warehouse_id)]
+    return sorted(
+        [
+            row
+            for row in rows
+            if row["storage_status"] == "available"
+            and row["expiry_risk"] != "expired"
+            and int(row["quantity_available"]) > 0
+            and (not location_code or row["location_code"].casefold() == location_code.casefold())
+        ],
+        key=lambda row: (row["expiry_date"], row["production_date"], row["batch_no"]),
+    )
+
+
+def insufficient_stock_detail(
+    *,
+    requested_quantity: int,
+    available_quantity: int,
+    item_id: str,
+    warehouse_id: str,
+    balances: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "error": "insufficient_available_stock",
+        "item_id": item_id,
+        "warehouse_id": warehouse_id,
+        "requested_quantity": requested_quantity,
+        "available_quantity": available_quantity,
+        "shortage_quantity": max(requested_quantity - available_quantity, 0),
+        "available_locations": (balances or {}).get("locations", []),
+    }
+
+
+def allocate_order_item(item: dict[str, Any]) -> list[dict[str, Any]]:
+    item_id = str(item["item_id"]).strip()
+    warehouse_id = str(item["warehouse_id"]).strip()
+    location_code = str(item.get("location_code") or "").strip() or None
+    quantity = int(item["quantity"])
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity must be positive")
+    balances = aggregate_location_balances(item_id=item_id, warehouse_id=warehouse_id)
+    total_available = int(balances["total_quantity_available"])
+    if total_available < quantity:
+        raise HTTPException(
+            status_code=409,
+            detail=insufficient_stock_detail(
+                requested_quantity=quantity,
+                available_quantity=total_available,
+                item_id=item_id,
+                warehouse_id=warehouse_id,
+                balances=balances,
+            ),
+        )
+    candidate_batches = available_order_batches(item_id, warehouse_id, location_code)
+
+    remaining = quantity
+    allocations: list[dict[str, Any]] = []
+    for row in candidate_batches:
+        if remaining <= 0:
+            break
+        allocated = min(int(row["quantity_available"]), remaining)
+        if allocated <= 0:
+            continue
+        allocations.append({**row, "allocated_quantity": allocated})
+        remaining -= allocated
+    if remaining:
+        raise HTTPException(
+            status_code=409,
+            detail=insufficient_stock_detail(
+                requested_quantity=quantity,
+                available_quantity=quantity - remaining,
+                item_id=item_id,
+                warehouse_id=warehouse_id,
+                balances=balances,
+            ),
+        )
+    return allocations
+
+
+def next_warehouse_order_id(repository: WarehouseRepository | None = None) -> str:
+    existing_count = repository.count_orders() if repository else len(WAREHOUSE_ORDERS)
+    return f"ORD-CODEX-{existing_count + 1001}"
+
+
+def set_inventory_balance_quantity(
+    row: dict[str, Any],
+    *,
+    quantity_on_hand: int,
+) -> None:
+    WAREHOUSE_BATCH_QUANTITY_OVERRIDES[inventory_batch_key(row)] = {
+        "quantity_on_hand": quantity_on_hand,
+        "quantity_reserved": 0,
+    }
+
+
+def find_current_inventory_balance(line: dict[str, Any]) -> dict[str, Any]:
+    rows = load_batch_inventory_rows(
+        item_id=line["item_id"],
+        warehouse_id=line["warehouse_id"],
+        location_code=line["location_code"],
+        batch_no=line["batch_no"],
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="inventory balance not found")
+    return rows[0]
+
+
+def warehouse_order_response(order: dict[str, Any], items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {"ok": True, "order": order, "items": items or []}
+
+
+def get_warehouse_order_or_404(order_id: str) -> dict[str, Any]:
+    order = next((item for item in WAREHOUSE_ORDERS if item["order_id"] == order_id), None)
+    if not order:
+        raise HTTPException(status_code=404, detail="order_not_found")
+    return order
+
+
+def fallback_order_items(order_id: str) -> list[dict[str, Any]]:
+    return [item for item in WAREHOUSE_ORDER_ITEMS if item["order_id"] == order_id]
 
 
 def next_replenishment_request_id(repository: WarehouseRepository | None = None) -> str:
@@ -1043,6 +1257,7 @@ def procurement_purchase_order_draft_table_fields(draft: dict[str, Any]) -> dict
 
 
 def enrich_batch_row(row: dict[str, Any]) -> dict[str, Any]:
+    row = {**row, "quantity_reserved": 0}
     available = quantity_available(row)
     enriched = {
         **row,
@@ -1257,6 +1472,231 @@ def check_warehouse_fulfillment(payload: dict) -> dict:
         "batches": rows,
         "next_action": next_action,
     }
+
+
+@app.get("/warehouse/stock/balances")
+def get_warehouse_stock_balances(item_id: str, warehouse_id: str) -> dict[str, Any]:
+    return aggregate_location_balances(
+        item_id=item_id.strip(),
+        warehouse_id=warehouse_id.strip(),
+    )
+
+
+@app.post("/warehouse/orders")
+def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    now = datetime.now(UTC).isoformat()
+    order_id = (payload.order_id or "").strip() or next_warehouse_order_id(repository)
+    requested_items = [
+        {
+            "item_id": item.item_id.strip(),
+            "warehouse_id": item.warehouse_id.strip(),
+            "location_code": (item.location_code or "").strip(),
+            "quantity": int(item.quantity),
+        }
+        for item in payload.items
+    ]
+    order = {
+        "order_id": order_id,
+        "customer_id": payload.customer_id.strip(),
+        "status": "created",
+        "requested_items": requested_items,
+        "created_by": payload.created_by,
+        "created_at": now,
+        "updated_at": now,
+        "paid_at": "",
+        "shipped_at": "",
+        "arrived_at": "",
+        "cancelled_at": "",
+        "returned_at": "",
+    }
+    if repository:
+        return repository.create_order(order)
+
+    WAREHOUSE_ORDERS.append(order)
+    return warehouse_order_response(order)
+
+
+@app.get("/warehouse/orders/{order_id}")
+def get_warehouse_order(order_id: str) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    if repository:
+        details = repository.get_order(order_id)
+        if not details:
+            raise HTTPException(status_code=404, detail="order_not_found")
+        return {"ok": True, **details}
+    order = get_warehouse_order_or_404(order_id)
+    return warehouse_order_response(order, fallback_order_items(order_id))
+
+
+@app.post("/warehouse/orders/{order_id}/pay")
+def pay_warehouse_order(
+    order_id: str,
+    payload: WarehouseOrderStatusUpdateRequest,
+) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    if repository:
+        try:
+            return {"ok": True, **repository.pay_order(order_id, updated_by=payload.updated_by, updated_at=datetime.now(UTC).isoformat())}
+        except ValueError as error:
+            raise order_http_error(error) from error
+
+    order = get_warehouse_order_or_404(order_id)
+    if order["status"] == "paid":
+        return warehouse_order_response(order, fallback_order_items(order_id))
+    if order["status"] != "created":
+        raise HTTPException(status_code=409, detail=f"order_cannot_pay_from_{order['status']}")
+    now = datetime.now(UTC).isoformat()
+    created_items: list[dict[str, Any]] = []
+    for requested in order["requested_items"]:
+        for row in allocate_order_item(requested):
+            quantity = int(row["allocated_quantity"])
+            balance = find_current_inventory_balance(row)
+            set_inventory_balance_quantity(balance, quantity_on_hand=int(balance["quantity_on_hand"]) - quantity)
+            created_items.append(
+                {
+                    "id": len(WAREHOUSE_ORDER_ITEMS) + len(created_items) + 1,
+                    "order_id": order_id,
+                    "customer_id": order["customer_id"],
+                    "status": "paid",
+                    "item_id": row["item_id"],
+                    "warehouse_id": row["warehouse_id"],
+                    "location_code": row["location_code"],
+                    "batch_no": row["batch_no"],
+                    "quantity": quantity,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+    WAREHOUSE_ORDER_ITEMS.extend(created_items)
+    order["status"] = "paid"
+    order["updated_at"] = now
+    order["paid_at"] = now
+    return warehouse_order_response(order, fallback_order_items(order_id))
+
+
+def order_http_error(error: ValueError) -> HTTPException:
+    message = str(error)
+    try:
+        return HTTPException(status_code=409, detail=json.loads(message))
+    except json.JSONDecodeError:
+        if message == "order_not_found":
+            return HTTPException(status_code=404, detail=message)
+        return HTTPException(status_code=409, detail=message)
+
+
+def restore_fallback_order_items(order: dict[str, Any], status: str, now: str) -> None:
+    for line in [item for item in WAREHOUSE_ORDER_ITEMS if item["order_id"] == order["order_id"] and item["status"] == "paid"]:
+        balance = find_current_inventory_balance(line)
+        set_inventory_balance_quantity(
+            balance,
+            quantity_on_hand=int(balance["quantity_on_hand"]) + int(line["quantity"]),
+        )
+        line["status"] = status
+        line["updated_at"] = now
+
+
+def update_fallback_order_status(order_id: str, status: str) -> dict[str, Any]:
+    order = get_warehouse_order_or_404(order_id)
+    now = datetime.now(UTC).isoformat()
+    if status in {"cancelled", "returned"} and order["status"] in {"paid", "shipped", "arrived"}:
+        restore_fallback_order_items(order, status, now)
+    order["status"] = status
+    order["updated_at"] = now
+    timestamp_field = {
+        "shipped": "shipped_at",
+        "arrived": "arrived_at",
+        "cancelled": "cancelled_at",
+        "returned": "returned_at",
+    }.get(status)
+    if timestamp_field:
+        order[timestamp_field] = now
+    return warehouse_order_response(order, fallback_order_items(order_id))
+
+
+@app.post("/warehouse/orders/{order_id}/ship")
+def ship_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateRequest) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    if repository:
+        try:
+            return {
+                "ok": True,
+                **repository.update_order_status(
+                    order_id,
+                    status="shipped",
+                    updated_by=payload.updated_by,
+                    updated_at=datetime.now(UTC).isoformat(),
+                ),
+            }
+        except ValueError as error:
+            raise order_http_error(error) from error
+    return update_fallback_order_status(order_id, "shipped")
+
+
+@app.post("/warehouse/orders/{order_id}/arrive")
+def arrive_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateRequest) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    if repository:
+        try:
+            return {
+                "ok": True,
+                **repository.update_order_status(
+                    order_id,
+                    status="arrived",
+                    updated_by=payload.updated_by,
+                    updated_at=datetime.now(UTC).isoformat(),
+                ),
+            }
+        except ValueError as error:
+            raise order_http_error(error) from error
+    return update_fallback_order_status(order_id, "arrived")
+
+
+@app.post("/warehouse/orders/{order_id}/cancel")
+def cancel_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateRequest) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    if repository:
+        try:
+            return {"ok": True, **repository.cancel_order(order_id, updated_by=payload.updated_by, updated_at=datetime.now(UTC).isoformat())}
+        except ValueError as error:
+            raise order_http_error(error) from error
+    return update_fallback_order_status(order_id, "cancelled")
+
+
+@app.post("/warehouse/orders/{order_id}/return")
+def return_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateRequest) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    if repository:
+        try:
+            return {"ok": True, **repository.return_order(order_id, updated_by=payload.updated_by, updated_at=datetime.now(UTC).isoformat())}
+        except ValueError as error:
+            raise order_http_error(error) from error
+    return update_fallback_order_status(order_id, "returned")
+
+
+@app.post("/warehouse/order-tool")
+def warehouse_order_tool(payload: dict[str, Any]) -> dict[str, Any]:
+    action = str(payload.get("action") or "").strip().lower()
+    if action in {"create", "create_order"}:
+        return create_warehouse_order(WarehouseOrderCreate(**payload))
+    if action in {"create_and_pay", "paid"}:
+        created = create_warehouse_order(WarehouseOrderCreate(**payload))
+        return pay_warehouse_order(created["order"]["order_id"], WarehouseOrderStatusUpdateRequest(updated_by=str(payload.get("updated_by") or "warehouse-agent")))
+    order_id = str(payload.get("order_id") or "").strip()
+    if not order_id:
+        raise HTTPException(status_code=400, detail="missing_order_id")
+    update = WarehouseOrderStatusUpdateRequest(updated_by=str(payload.get("updated_by") or "warehouse-agent"))
+    if action in {"pay", "付款"}:
+        return pay_warehouse_order(order_id, update)
+    if action in {"ship", "发货"}:
+        return ship_warehouse_order(order_id, update)
+    if action in {"arrive", "到货", "delivered"}:
+        return arrive_warehouse_order(order_id, update)
+    if action in {"cancel", "取消", "refund"}:
+        return cancel_warehouse_order(order_id, update)
+    if action in {"return", "退货"}:
+        return return_warehouse_order(order_id, update)
+    raise HTTPException(status_code=400, detail="unsupported_order_action")
 
 
 @app.post("/procurement/mock")
