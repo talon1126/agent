@@ -158,7 +158,7 @@ def test_warehouse_repository_persists_replenishment_requests(tmp_path: Path) ->
         {
             "request_id": "REQ-2001",
             "source": "warehouse",
-            "status": "pending_procurement_review",
+            "status": "未审批",
             "warehouse_id": "wh_sz_1",
             "warehouse_name": "深圳仓",
             "location_code": "A1",
@@ -175,7 +175,7 @@ def test_warehouse_repository_persists_replenishment_requests(tmp_path: Path) ->
             "updated_at": "2026-05-24T21:00:00+08:00",
         }
     )
-    listed = repository.list_replenishment_requests(status="pending_procurement_review")
+    listed = repository.list_replenishment_requests(status="未审批")
 
     assert created["request_id"] == "REQ-2001"
     assert listed == [created]

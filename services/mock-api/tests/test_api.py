@@ -118,7 +118,7 @@ def test_create_and_list_replenishment_requests_from_warehouse_signal():
     created = create_response.json()
     assert created["ok"] is True
     assert created["request"]["request_id"].startswith("REQ-")
-    assert created["request"]["status"] == "pending_procurement_review"
+    assert created["request"]["status"] == "未审批"
     assert created["request"]["source"] == "warehouse"
     assert created["request"]["warehouse_id"] == "wh_sz_1"
     assert created["request"]["location_code"] == "A1"
@@ -128,14 +128,14 @@ def test_create_and_list_replenishment_requests_from_warehouse_signal():
     assert created["request"]["suggested_quantity"] == 100
     assert created["request"]["item_name"] == "维达纸巾"
 
-    list_response = client.get("/procurement/replenishment-requests?status=pending_procurement_review")
+    list_response = client.get("/procurement/replenishment-requests?status=未审批")
 
     assert list_response.status_code == 200
     listed = list_response.json()
     assert listed["ok"] is True
     assert any(
         item["request_id"] == created["request"]["request_id"]
-        and item["status"] == "pending_procurement_review"
+        and item["status"] == "未审批"
         for item in listed["items"]
     )
 
@@ -174,7 +174,7 @@ def test_approve_replenishment_request_creates_purchase_order():
     body = response.json()
     assert body["ok"] is True
     assert body["request"]["request_id"] == request["request_id"]
-    assert body["request"]["status"] == "purchase_order_created"
+    assert body["request"]["status"] == "已审批"
     assert body["purchase_order"]["purchase_order_id"].startswith("PO-")
     assert body["purchase_order"]["request_id"] == request["request_id"]
     assert body["purchase_order"]["supplier_id"] == "supplier_paper_sz"
@@ -224,7 +224,7 @@ def test_approve_replenishment_request_reuses_existing_purchase_order():
     assert orders["count"] == 1
 
 
-def test_reject_replenishment_request_updates_status_without_purchase_order():
+def test_reject_replenishment_request_keeps_unapproved_status_without_purchase_order():
     request = create_replenishment_request_for_test()
 
     response = client.post(
@@ -236,7 +236,7 @@ def test_reject_replenishment_request_updates_status_without_purchase_order():
     body = response.json()
     assert body["ok"] is True
     assert body["request"]["request_id"] == request["request_id"]
-    assert body["request"]["status"] == "rejected"
+    assert body["request"]["status"] == "未审批"
     assert body["request"]["reason"] == "供应商暂不稳定，先人工复核。"
 
     orders = client.get(
@@ -296,9 +296,9 @@ def test_approve_replenishment_request_batch_processes_pending_requests_and_skip
 
     refreshed = client.get("/procurement/replenishment-requests").json()["items"]
     statuses = {item["request_id"]: item["status"] for item in refreshed}
-    assert statuses[first["request_id"]] == "purchase_order_created"
-    assert statuses[second["request_id"]] == "purchase_order_created"
-    assert statuses[missing_supplier["request_id"]] == "pending_procurement_review"
+    assert statuses[first["request_id"]] == "已审批"
+    assert statuses[second["request_id"]] == "已审批"
+    assert statuses[missing_supplier["request_id"]] == "未审批"
 
 
 def test_confirm_purchase_order_arrival_batch_marks_unsynced_without_inventory_sync_job():
@@ -412,7 +412,7 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
     order_schema = client.get("/procurement/purchase-orders/table-schema").json()
     request_rows = client.post(
         "/procurement/replenishment-requests/table-rows",
-        json={"status": "purchase_order_created"},
+        json={"status": "已审批"},
     ).json()
     order_rows = client.post(
         "/procurement/purchase-orders/table-rows",
@@ -439,7 +439,7 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
         if item["request_id"] == request["request_id"]
     )
     assert request_fields["Request ID"] == request["request_id"]
-    assert request_fields["Status"] == "purchase_order_created"
+    assert request_fields["Status"] == "已审批"
     assert request_fields["Item Name"] == "维达纸巾"
 
     assert order_rows["ok"] is True

@@ -11,12 +11,29 @@ from .schemas import ReplenishmentApproveRequest, ReplenishmentRequestCreate
 from .state import PURCHASE_ORDERS, REPLENISHMENT_REQUESTS
 
 
+REPLENISHMENT_STATUS_UNAPPROVED = "未审批"
+REPLENISHMENT_STATUS_APPROVED = "已审批"
+
+_LEGACY_REPLENISHMENT_STATUS_MAP = {
+    "pending_procurement_review": REPLENISHMENT_STATUS_UNAPPROVED,
+    "rejected": REPLENISHMENT_STATUS_UNAPPROVED,
+    "purchase_order_created": REPLENISHMENT_STATUS_APPROVED,
+    "purchase_order_draft_created": REPLENISHMENT_STATUS_APPROVED,
+}
+
+
+def normalize_replenishment_status(status: str | None) -> str | None:
+    if status is None:
+        return None
+    stripped = str(status).strip()
+    return _LEGACY_REPLENISHMENT_STATUS_MAP.get(stripped, stripped)
+
+
 PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_SCHEMA = [
     {"name": "Request ID", "type": "text"},
     {"name": "Status", "type": "single_select", "options": [
-        {"name": "pending_procurement_review", "color": 24},
-        {"name": "purchase_order_created", "color": 28},
-        {"name": "rejected", "color": 17},
+        {"name": REPLENISHMENT_STATUS_UNAPPROVED, "color": 24},
+        {"name": REPLENISHMENT_STATUS_APPROVED, "color": 28},
     ]},
     {"name": "Source", "type": "text"},
     {"name": "Warehouse", "type": "text"},
@@ -119,7 +136,7 @@ def build_replenishment_request(
     return {
         "request_id": next_replenishment_request_id(repository),
         "source": payload.source,
-        "status": "pending_procurement_review",
+        "status": REPLENISHMENT_STATUS_UNAPPROVED,
         "warehouse_id": payload.warehouse_id,
         "warehouse_name": first["warehouse_name"],
         "location_code": payload.location_code,
@@ -268,7 +285,7 @@ def approve_replenishment_request_data(
 
     updated = update_replenishment_request_status(
         request["request_id"],
-        status="purchase_order_created",
+        status=REPLENISHMENT_STATUS_APPROVED,
         repository=repository,
     )
     return updated or request, order, created

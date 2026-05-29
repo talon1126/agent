@@ -282,7 +282,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
     "replenishment_requests": {
         "request_id": "补货申请编号，例如 REQ-1001。",
         "source": "申请来源，例如 warehouse。",
-        "status": "申请状态，例如 pending_procurement_review。",
+        "status": "申请状态，只允许未审批或已审批。",
         "warehouse_id": "触发补货申请的仓库编号。",
         "warehouse_name": "触发补货申请的仓库名称。",
         "location_code": "触发补货申请的具体库位，可为空。",
@@ -425,6 +425,21 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
         for column_name, statement in missing_column_sql.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
+        if inspector.has_table(replenishment_requests.name):
+            connection.execute(
+                text(
+                    "UPDATE replenishment_requests "
+                    "SET status = '未审批' "
+                    "WHERE status IN ('pending_procurement_review', 'rejected')"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE replenishment_requests "
+                    "SET status = '已审批' "
+                    "WHERE status IN ('purchase_order_created', 'purchase_order_draft_created')"
+                )
+            )
 
 
 def ensure_inventory_batch_id_integer(engine: Engine) -> None:

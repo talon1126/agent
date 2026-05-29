@@ -365,7 +365,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "body: { item_id: itemId" in fulfillment_tool["parameters"]["jsCode"]
             assert "body: { item_id: itemId" in table_sync_tool["parameters"]["jsCode"]
             assert "/procurement/replenishment-requests" in replenishment_tool["parameters"]["jsCode"]
-            assert "pending_procurement_review" in replenishment_tool["parameters"]["jsCode"]
+            assert "未审批" in replenishment_tool["parameters"]["jsCode"]
             assert "/warehouse/inventory-sync-jobs" in sync_jobs_tool["parameters"]["jsCode"]
             assert "/warehouse/inventory-table/sync/jobs" in sync_jobs_tool["parameters"]["jsCode"]
             assert "/warehouse/inventory-table/sync/filter" not in sync_jobs_tool["parameters"]["jsCode"]
@@ -384,8 +384,8 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "procurement_sync_purchase_orders_tool" in system_message
             assert "procurement_approve_replenishment_batch_tool" in system_message
             assert "procurement_confirm_purchase_order_arrival_tool" in system_message
-            assert "pending_procurement_review" in system_message
-            assert "purchase_order_created" in system_message
+            assert "未审批" in system_message
+            assert "已审批" in system_message
             assert "arrived_unsynced" in system_message
             assert "同步补货请求" in system_message
             assert "批量批准" in system_message
@@ -409,7 +409,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "item_id: itemId" in mock_tool["parameters"]["jsCode"]
             assert "extractSku" not in mock_tool["parameters"]["jsCode"]
             assert "/procurement/replenishment-requests" in list_tool["parameters"]["jsCode"]
-            assert "pending_procurement_review" in list_tool["parameters"]["jsCode"]
+            assert "未审批" in list_tool["parameters"]["jsCode"]
             assert "/approve" in approve_tool["parameters"]["jsCode"]
             assert "/reject" in reject_tool["parameters"]["jsCode"]
             assert "/procurement/replenishment-requests-table/sync" in sync_requests_tool["parameters"]["jsCode"]
