@@ -58,7 +58,6 @@ flowchart LR
 
 `mock-api` 是仓储和采购事实数据的模拟企业系统，仓储 Agent 的多数业务工具最终都落到这里：
 
-- 仓储路由模块位于 `services/mock-api/app/routers/warehouse/`，由 `main.py` 注册；库存、订单和同步任务分别在 `inventory.py`、`orders.py`、`sync_jobs.py` 中维护。
 - 初始化并维护仓储主数据：仓库、库位、分类、商品、批次库存。
 - 提供批次库存查询能力：按 `item_id`、仓库、库位、分类、批次、风险等维度返回库存事实。
 - 计算仓储派生字段：可用库存、临期状态、风险等级、处理建议、履约阻塞原因。
