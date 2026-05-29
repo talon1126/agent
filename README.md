@@ -24,12 +24,14 @@ flowchart LR
     Agent --> FulfillmentTool["warehouse_fulfillment_tool"]
     Agent --> ReplenishmentTool["warehouse_replenishment_request_tool"]
     Agent --> SyncJobsTool["warehouse_inventory_sync_jobs_tool"]
+    Agent --> OrderTool["warehouse_order_tool"]
 
     InventoryTool --> MockAPI["mock-api 仓储库存事实"]
     ExceptionTool --> MockAPI
     FulfillmentTool --> MockAPI
     ReplenishmentTool --> MockAPI
     SyncJobsTool --> MockAPI
+    OrderTool --> MockAPI
     SyncJobsTool --> AdapterSync["feishu-adapter sync/jobs"]
     FastSync --> AdapterSync
     AdapterSync --> Bitable["飞书多维表格库存表"]
@@ -50,6 +52,7 @@ flowchart LR
 - 同步库存表：`@warehouse 同步 item_vinda_tissue 库存到飞书` 会把匹配的批次库存快照同步到飞书 `Warehouse Inventory Snapshot` 表。
 - 创建库存视图：`@warehouse 创建高风险库存视图` 会读取真实飞书表字段，并按受控模板创建或复用库存视图。
 - 处理同步任务：`@warehouse 处理库存同步任务` 会消费采购到仓生成的 pending sync jobs，只同步对应 `RCV-POD-*` 批次，并把任务标记为 completed 或 failed。
+- 订单驱动库存扣减：订单付款后按 FEFO 扣减 `inventory_location_balances`，发货和到货只更新状态，取消或退货按 `order_items` 原批次加回。
 
 ## mock-api
 
@@ -59,6 +62,7 @@ flowchart LR
 - 提供批次库存查询能力：按 `item_id`、仓库、库位、分类、批次、风险等维度返回库存事实。
 - 计算仓储派生字段：可用库存、临期状态、风险等级、处理建议、履约阻塞原因。
 - 支持仓储异常和履约判断：用于回答库存差异、临期、过期、质检冻结、缺货和能否发货等问题。
+- 提供批次级库位余额和订单状态流转能力：`inventory_batches` 只保留入库事实，当前库存由 `inventory_location_balances` 承担，订单付款按 FEFO 扣减。
 - 承接补货申请：Warehouse 创建 `pending_procurement_review` 补货申请，Procurement 后续审批。
 - 支持采购到仓后的库存事实更新：确认 `POD-*` 到货会创建 `RCV-POD-*` 入库批次。
 - 管理仓储库存同步任务：创建、查询、完成或失败 `warehouse_inventory_sync_requested` job。

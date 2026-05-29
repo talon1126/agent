@@ -3,7 +3,15 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import DELIVERY_CASES, RECEIVED_INVENTORY_BATCHES, WAREHOUSE_INVENTORY_SYNC_JOBS, app
+from app.main import (
+    DELIVERY_CASES,
+    RECEIVED_INVENTORY_BATCHES,
+    WAREHOUSE_BATCH_QUANTITY_OVERRIDES,
+    WAREHOUSE_INVENTORY_SYNC_JOBS,
+    WAREHOUSE_ORDER_ITEMS,
+    WAREHOUSE_ORDERS,
+    app,
+)
 
 client = TestClient(app)
 
@@ -13,10 +21,16 @@ def clear_received_inventory_batches():
     DELIVERY_CASES.clear()
     RECEIVED_INVENTORY_BATCHES.clear()
     WAREHOUSE_INVENTORY_SYNC_JOBS.clear()
+    WAREHOUSE_BATCH_QUANTITY_OVERRIDES.clear()
+    WAREHOUSE_ORDERS.clear()
+    WAREHOUSE_ORDER_ITEMS.clear()
     yield
     DELIVERY_CASES.clear()
     RECEIVED_INVENTORY_BATCHES.clear()
     WAREHOUSE_INVENTORY_SYNC_JOBS.clear()
+    WAREHOUSE_BATCH_QUANTITY_OVERRIDES.clear()
+    WAREHOUSE_ORDERS.clear()
+    WAREHOUSE_ORDER_ITEMS.clear()
 
 
 def test_get_order_fixture():
@@ -109,9 +123,9 @@ def test_create_and_list_replenishment_requests_from_warehouse_signal():
     assert created["request"]["warehouse_id"] == "wh_sz_1"
     assert created["request"]["location_code"] == "A1"
     assert created["request"]["item_id"] == "item_vinda_tissue"
-    assert created["request"]["current_quantity"] == 96
+    assert created["request"]["current_quantity"] == 120
     assert created["request"]["reorder_threshold"] == 100
-    assert created["request"]["suggested_quantity"] == 104
+    assert created["request"]["suggested_quantity"] == 100
     assert created["request"]["item_name"] == "维达纸巾"
 
     list_response = client.get("/procurement/replenishment-requests?status=pending_procurement_review")
@@ -545,7 +559,7 @@ def test_warehouse_inventory_returns_batches_locations_and_risk():
     assert body["item_id"] == "item_vinda_tissue"
     assert body["item_name"] == "维达纸巾"
     assert body["category_name"] == "纸品"
-    assert body["total_quantity_available"] == 108
+    assert body["total_quantity_available"] == 136
     assert body["risk_level"] == "high"
     assert body["batches"][0]["warehouse_id"] == "wh_sz_1"
     assert body["batches"][0]["location_code"] == "A1"
@@ -691,3 +705,127 @@ def test_warehouse_fulfillment_check_allows_healthy_sku():
     assert body["can_ship"] is True
     assert body["blockers"] == []
     assert body["next_action"] == "release_to_pick"
+
+
+def test_warehouse_stock_balances_group_item_by_location():
+    response = client.get(
+        "/warehouse/stock/balances",
+        params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["item_id"] == "item_vinda_tissue"
+    assert body["warehouse_id"] == "wh_sz_1"
+    assert body["total_quantity_on_hand"] == 136
+    assert body["total_quantity_available"] == 136
+    locations = {item["location_code"]: item for item in body["locations"]}
+    assert locations["A1"]["quantity_available"] == 120
+    assert locations["B1"]["quantity_available"] == 16
+    assert locations["B1"]["earliest_expiry_date"] == "2027-04-01"
+
+
+def test_warehouse_order_paid_deducts_location_balances_and_preserves_batch_facts():
+    response = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-9001",
+            "customer_id": "cus_100",
+            "created_by": "warehouse-agent",
+            "items": [
+                {"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20},
+                {"item_id": "item_cola_zero", "warehouse_id": "wh_sz_1", "quantity": 5},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    created = response.json()
+    assert created["order"]["status"] == "created"
+
+    response = client.post("/warehouse/orders/ORD-CODEX-9001/pay", json={"updated_by": "warehouse-agent"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["order"]["status"] == "paid"
+    assert [line["location_code"] for line in body["items"] if line["item_id"] == "item_vinda_tissue"] == ["B1", "A1"]
+    assert [line["batch_no"] for line in body["items"] if line["item_id"] == "item_vinda_tissue"] == [
+        "BATCH-20260401",
+        "BATCH-20260501",
+    ]
+    assert [line["quantity"] for line in body["items"] if line["item_id"] == "item_vinda_tissue"] == [16, 4]
+
+    balances = client.get(
+        "/warehouse/stock/balances",
+        params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
+    ).json()
+    assert balances["total_quantity_on_hand"] == 116
+    assert balances["total_quantity_available"] == 116
+
+    inventory = client.get("/warehouse/inventory/item_vinda_tissue").json()
+    assert inventory["total_quantity_on_hand"] == 116
+    assert sum(int(batch["quantity_on_hand"]) for batch in inventory["batches"]) == 116
+
+
+def test_warehouse_order_cancel_adds_paid_stock_back_to_original_batches():
+    client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-9002",
+            "customer_id": "cus_100",
+            "items": [{"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}],
+        },
+    )
+    client.post("/warehouse/orders/ORD-CODEX-9002/pay", json={"updated_by": "warehouse-agent"})
+
+    response = client.post("/warehouse/orders/ORD-CODEX-9002/cancel", json={"updated_by": "warehouse-agent"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["order"]["status"] == "cancelled"
+    balances = client.get(
+        "/warehouse/stock/balances",
+        params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
+    ).json()
+    assert balances["total_quantity_available"] == 136
+
+
+def test_warehouse_order_return_after_arrival_adds_stock_back_to_original_batches():
+    client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-9003",
+            "customer_id": "cus_100",
+            "items": [{"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}],
+        },
+    )
+    client.post("/warehouse/orders/ORD-CODEX-9003/pay", json={"updated_by": "warehouse-agent"})
+    client.post("/warehouse/orders/ORD-CODEX-9003/ship", json={"updated_by": "delivery-agent"})
+    client.post("/warehouse/orders/ORD-CODEX-9003/arrive", json={"updated_by": "delivery-agent"})
+
+    response = client.post("/warehouse/orders/ORD-CODEX-9003/return", json={"updated_by": "warehouse-agent"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["order"]["status"] == "returned"
+    balances = client.get(
+        "/warehouse/stock/balances",
+        params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
+    ).json()
+    assert balances["total_quantity_available"] == 136
+
+
+def test_warehouse_order_pay_rejects_insufficient_stock():
+    client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-9004",
+            "customer_id": "cus_100",
+            "items": [{"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 200}],
+        },
+    )
+
+    response = client.post("/warehouse/orders/ORD-CODEX-9004/pay", json={"updated_by": "warehouse-agent"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "insufficient_available_stock"

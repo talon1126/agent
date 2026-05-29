@@ -68,6 +68,23 @@ inventory_batches = Table(
     Column("storage_status", String, nullable=False),
 )
 
+inventory_location_balances = Table(
+    "inventory_location_balances",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("warehouse_id", String, nullable=False, index=True),
+    Column("location_code", String, nullable=False, index=True),
+    Column("item_id", String, nullable=False, index=True),
+    Column("batch_no", String, nullable=False, index=True),
+    Column("production_date", String, nullable=False),
+    Column("expiry_date", String, nullable=False),
+    Column("quantity_on_hand", Integer, nullable=False, default=0),
+    Column("reorder_threshold", Integer, nullable=False, default=0),
+    Column("storage_status", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+)
+
 replenishment_requests = Table(
     "replenishment_requests",
     metadata,
@@ -116,6 +133,40 @@ warehouse_inventory_sync_jobs = Table(
     Column("error", Text, nullable=True),
 )
 
+orders = Table(
+    "orders",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("order_id", String, nullable=False, unique=True, index=True),
+    Column("customer_id", String, nullable=False, index=True),
+    Column("status", String, nullable=False, index=True),
+    Column("requested_items_json", Text, nullable=False, default="[]"),
+    Column("created_by", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("paid_at", String, nullable=False, default=""),
+    Column("shipped_at", String, nullable=False, default=""),
+    Column("arrived_at", String, nullable=False, default=""),
+    Column("cancelled_at", String, nullable=False, default=""),
+    Column("returned_at", String, nullable=False, default=""),
+)
+
+order_items = Table(
+    "order_items",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("order_id", String, nullable=False, index=True),
+    Column("customer_id", String, nullable=False, index=True),
+    Column("status", String, nullable=False, index=True),
+    Column("item_id", String, nullable=False, index=True),
+    Column("warehouse_id", String, nullable=False, index=True),
+    Column("location_code", String, nullable=False, index=True),
+    Column("batch_no", String, nullable=False, index=True),
+    Column("quantity", Integer, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+)
+
 procurement_suppliers = Table(
     "procurement_suppliers",
     metadata,
@@ -154,10 +205,13 @@ WAREHOUSE_TABLE_COMMENTS = {
     "categories": "商品分类表，保存纸品、乳制品、饮料等业务分类和存储要求。",
     "items": "商品主数据表，保存每个商品的名称、品牌、规格、单位和条码。",
     "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
+    "inventory_location_balances": "批次级库位库存余额表，保存订单扣减和退回后的当前可售库存。",
     "replenishment_requests": "补货申请表，保存仓储发现低库存后交给采购审核的结构化需求。",
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
     "purchase_order_drafts": "采购单草稿表，保存采购审核补货申请后生成的草稿单及到仓状态。",
     "warehouse_inventory_sync_jobs": "仓储库存同步任务表，保存采购到仓后需要 Warehouse Agent 同步飞书库存视图的待处理任务。",
+    "orders": "订单主表，保存下单、付款、发货、到货、取消和退货状态。",
+    "order_items": "订单明细表，保存订单扣减命中的商品、仓库、库位、批次和数量。",
 }
 
 WAREHOUSE_COLUMN_COMMENTS = {
@@ -202,6 +256,20 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "quantity_reserved": "已被订单或作业预留的库存数量。",
         "reorder_threshold": "补货预警阈值。",
         "storage_status": "库存存储状态，例如 available、quality_hold。",
+    },
+    "inventory_location_balances": {
+        "id": "批次级库位余额自增整数主键。",
+        "warehouse_id": "余额所在仓库编号。",
+        "location_code": "余额所在具体库位编号。",
+        "item_id": "余额对应商品编号。",
+        "batch_no": "余额对应批次号，用于商品溯源。",
+        "production_date": "批次生产日期。",
+        "expiry_date": "批次保质期到期日期。",
+        "quantity_on_hand": "当前可售库存余额；订单付款扣减，取消或退货加回。",
+        "reorder_threshold": "补货预警阈值。",
+        "storage_status": "余额库存状态，例如 available、quality_hold。",
+        "created_at": "余额行创建时间。",
+        "updated_at": "余额行更新时间。",
     },
     "replenishment_requests": {
         "request_id": "补货申请编号，例如 REQ-1001。",
@@ -271,6 +339,34 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "result_json": "任务处理结果 JSON 字符串。",
         "error": "任务失败原因，可为空。",
     },
+    "orders": {
+        "id": "订单自增整数主键。",
+        "order_id": "订单业务编号，例如 ORD-CODEX-9001。",
+        "customer_id": "客户编号。",
+        "status": "订单状态，例如 created、paid、shipped、arrived、cancelled、returned。",
+        "requested_items_json": "下单请求明细 JSON 字符串。",
+        "created_by": "创建订单的用户或系统身份。",
+        "created_at": "订单创建时间。",
+        "updated_at": "订单更新时间。",
+        "paid_at": "付款时间。",
+        "shipped_at": "发货时间。",
+        "arrived_at": "到货时间。",
+        "cancelled_at": "取消时间。",
+        "returned_at": "退货入库时间。",
+    },
+    "order_items": {
+        "id": "订单明细自增整数主键。",
+        "order_id": "关联订单业务编号。",
+        "customer_id": "客户编号。",
+        "status": "明细状态，例如 paid、cancelled、returned。",
+        "item_id": "明细商品编号。",
+        "warehouse_id": "扣减或加回库存所在仓库编号。",
+        "location_code": "扣减或加回库存所在库位。",
+        "batch_no": "扣减或加回库存对应批次号。",
+        "quantity": "明细数量。",
+        "created_at": "明细创建时间。",
+        "updated_at": "明细更新时间。",
+    },
 }
 
 
@@ -284,10 +380,13 @@ def init_warehouse_schema(engine: Engine) -> None:
             categories,
             items,
             inventory_batches,
+            inventory_location_balances,
             replenishment_requests,
             procurement_suppliers,
             purchase_order_drafts,
             warehouse_inventory_sync_jobs,
+            orders,
+            order_items,
         ],
     )
     ensure_warehouse_schema_columns(engine)
@@ -372,10 +471,33 @@ def load_inventory_batch_fixture_rows(fixture_dir: Path) -> list[dict[str, Any]]
     ]
 
 
+def inventory_location_balance_rows_from_batches(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    now = "2026-05-24T00:00:00+00:00"
+    return [
+        {
+            "warehouse_id": row["warehouse_id"],
+            "location_code": row["location_code"],
+            "item_id": row["item_id"],
+            "batch_no": row["batch_no"],
+            "production_date": row["production_date"],
+            "expiry_date": row["expiry_date"],
+            "quantity_on_hand": int(row["quantity_on_hand"]),
+            "reorder_threshold": int(row["reorder_threshold"]),
+            "storage_status": row["storage_status"],
+            "created_at": now,
+            "updated_at": now,
+        }
+        for row in rows
+    ]
+
+
 def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
     init_warehouse_schema(engine)
     with engine.begin() as connection:
         # Demo data is fixture-owned, so restart/reseed should converge the DB to fixtures.
+        connection.execute(order_items.delete())
+        connection.execute(orders.delete())
+        connection.execute(inventory_location_balances.delete())
         connection.execute(inventory_batches.delete())
         connection.execute(procurement_suppliers.delete())
         connection.execute(items.delete())
@@ -389,9 +511,11 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         )
         connection.execute(categories.insert(), load_fixture_rows(fixture_dir, "categories.json"))
         connection.execute(items.insert(), load_fixture_rows(fixture_dir, "items.json"))
+        batch_rows = load_inventory_batch_fixture_rows(fixture_dir)
+        connection.execute(inventory_batches.insert(), batch_rows)
         connection.execute(
-            inventory_batches.insert(),
-            load_inventory_batch_fixture_rows(fixture_dir),
+            inventory_location_balances.insert(),
+            inventory_location_balance_rows_from_batches(batch_rows),
         )
         connection.execute(
             procurement_suppliers.insert(),
@@ -414,7 +538,17 @@ class WarehouseRepository:
     ) -> list[dict[str, Any]]:
         statement = (
             select(
-                inventory_batches,
+                inventory_location_balances.c.id.label("batch_id"),
+                inventory_location_balances.c.warehouse_id,
+                inventory_location_balances.c.location_code,
+                inventory_location_balances.c.item_id,
+                inventory_location_balances.c.batch_no,
+                inventory_location_balances.c.production_date,
+                inventory_location_balances.c.expiry_date,
+                inventory_location_balances.c.quantity_on_hand,
+                text("0 AS quantity_reserved"),
+                inventory_location_balances.c.reorder_threshold,
+                inventory_location_balances.c.storage_status,
                 warehouses.c.warehouse_name,
                 warehouses.c.city,
                 storage_locations.c.zone,
@@ -428,30 +562,54 @@ class WarehouseRepository:
                 items.c.unit,
                 items.c.barcode,
             )
-            .join(warehouses, warehouses.c.warehouse_id == inventory_batches.c.warehouse_id)
+            .join(warehouses, warehouses.c.warehouse_id == inventory_location_balances.c.warehouse_id)
             .join(
                 storage_locations,
-                (storage_locations.c.warehouse_id == inventory_batches.c.warehouse_id)
-                & (storage_locations.c.location_code == inventory_batches.c.location_code),
+                (storage_locations.c.warehouse_id == inventory_location_balances.c.warehouse_id)
+                & (storage_locations.c.location_code == inventory_location_balances.c.location_code),
             )
-            .join(items, items.c.item_id == inventory_batches.c.item_id)
+            .join(items, items.c.item_id == inventory_location_balances.c.item_id)
             .join(categories, categories.c.category_id == items.c.category_id)
         )
         if item_id:
-            statement = statement.where(inventory_batches.c.item_id == item_id)
+            statement = statement.where(inventory_location_balances.c.item_id == item_id)
         if warehouse_id:
-            statement = statement.where(inventory_batches.c.warehouse_id == warehouse_id)
+            statement = statement.where(inventory_location_balances.c.warehouse_id == warehouse_id)
         if location_code:
-            statement = statement.where(inventory_batches.c.location_code == location_code)
+            statement = statement.where(inventory_location_balances.c.location_code == location_code)
         if category_id:
             statement = statement.where(categories.c.category_id == category_id)
         if batch_no:
-            statement = statement.where(inventory_batches.c.batch_no == batch_no)
+            statement = statement.where(inventory_location_balances.c.batch_no == batch_no)
         statement = statement.order_by(
-            inventory_batches.c.warehouse_id,
-            inventory_batches.c.location_code,
+            inventory_location_balances.c.warehouse_id,
+            inventory_location_balances.c.location_code,
             items.c.item_name,
-            inventory_batches.c.batch_no,
+            inventory_location_balances.c.batch_no,
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [dict(row) for row in rows]
+
+    def list_location_balances(
+        self,
+        *,
+        item_id: str | None = None,
+        warehouse_id: str | None = None,
+        location_code: str | None = None,
+    ) -> list[dict[str, Any]]:
+        statement = select(inventory_location_balances)
+        if item_id:
+            statement = statement.where(inventory_location_balances.c.item_id == item_id)
+        if warehouse_id:
+            statement = statement.where(inventory_location_balances.c.warehouse_id == warehouse_id)
+        if location_code:
+            statement = statement.where(inventory_location_balances.c.location_code == location_code)
+        statement = statement.order_by(
+            inventory_location_balances.c.warehouse_id,
+            inventory_location_balances.c.location_code,
+            inventory_location_balances.c.expiry_date,
+            inventory_location_balances.c.batch_no,
         )
         with self.engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
@@ -526,13 +684,36 @@ class WarehouseRepository:
         return [dict(row) for row in rows]
 
     def get_inventory_batch_by_batch_no(self, batch_no: str) -> dict[str, Any] | None:
-        rows = self.list_inventory_batches(batch_no=batch_no)
-        return rows[0] if rows else None
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(
+                    select(inventory_batches).where(inventory_batches.c.batch_no == batch_no)
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return dict(row) if row else None
 
     def create_inventory_batch(self, payload: dict[str, Any]) -> dict[str, Any]:
         values = {key: value for key, value in payload.items() if key != "batch_id"}
+        now = values.get("created_at") or "2026-05-24T00:00:00+00:00"
         with self.engine.begin() as connection:
             connection.execute(inventory_batches.insert().values(**values))
+            connection.execute(
+                inventory_location_balances.insert().values(
+                    warehouse_id=values["warehouse_id"],
+                    location_code=values["location_code"],
+                    item_id=values["item_id"],
+                    batch_no=values["batch_no"],
+                    production_date=values["production_date"],
+                    expiry_date=values["expiry_date"],
+                    quantity_on_hand=int(values["quantity_on_hand"]),
+                    reorder_threshold=int(values["reorder_threshold"]),
+                    storage_status=values["storage_status"],
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
         batch = self.get_inventory_batch_by_batch_no(str(values["batch_no"]))
         return batch or values
 
@@ -737,6 +918,174 @@ class WarehouseRepository:
         except json.JSONDecodeError:
             item["result"] = {}
         return item
+
+    def count_orders(self) -> int:
+        with self.engine.connect() as connection:
+            return int(connection.execute(select(func.count()).select_from(orders)).scalar_one())
+
+    def create_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        values = {**payload, "requested_items_json": json.dumps(payload["requested_items"], ensure_ascii=False)}
+        values.pop("requested_items", None)
+        with self.engine.begin() as connection:
+            connection.execute(orders.insert().values(**values))
+        return self.get_order(str(payload["order_id"])) or {"order": values, "items": []}
+
+    def get_order(self, order_id: str) -> dict[str, Any] | None:
+        with self.engine.connect() as connection:
+            order_row = (
+                connection.execute(select(orders).where(orders.c.order_id == order_id))
+                .mappings()
+                .one_or_none()
+            )
+            if not order_row:
+                return None
+            item_rows = (
+                connection.execute(
+                    select(order_items)
+                    .where(order_items.c.order_id == order_id)
+                    .order_by(order_items.c.id)
+                )
+                .mappings()
+                .all()
+            )
+        order = dict(order_row)
+        order["requested_items"] = json.loads(order.pop("requested_items_json") or "[]")
+        return {"order": order, "items": [dict(row) for row in item_rows]}
+
+    def pay_order(self, order_id: str, *, updated_by: str, updated_at: str) -> dict[str, Any]:
+        details = self.get_order(order_id)
+        if not details:
+            raise ValueError("order_not_found")
+        order = details["order"]
+        if order["status"] == "paid":
+            return details
+        if order["status"] != "created":
+            raise ValueError(f"order_cannot_pay_from_{order['status']}")
+        allocated_items = self._allocate_order_items(order, updated_at)
+        with self.engine.begin() as connection:
+            for item in allocated_items:
+                connection.execute(
+                    inventory_location_balances.update()
+                    .where(inventory_location_balances.c.item_id == item["item_id"])
+                    .where(inventory_location_balances.c.warehouse_id == item["warehouse_id"])
+                    .where(inventory_location_balances.c.location_code == item["location_code"])
+                    .where(inventory_location_balances.c.batch_no == item["batch_no"])
+                    .values(
+                        quantity_on_hand=inventory_location_balances.c.quantity_on_hand - int(item["quantity"]),
+                        updated_at=updated_at,
+                    )
+                )
+            connection.execute(order_items.insert(), allocated_items)
+            connection.execute(
+                orders.update()
+                .where(orders.c.order_id == order_id)
+                .values(status="paid", updated_at=updated_at, paid_at=updated_at)
+            )
+        return self.get_order(order_id) or details
+
+    def _allocate_order_items(self, order: dict[str, Any], updated_at: str) -> list[dict[str, Any]]:
+        allocated_items: list[dict[str, Any]] = []
+        with self.engine.connect() as connection:
+            for request in order["requested_items"]:
+                remaining = int(request["quantity"])
+                statement = (
+                    select(inventory_location_balances)
+                    .where(inventory_location_balances.c.item_id == request["item_id"])
+                    .where(inventory_location_balances.c.warehouse_id == request["warehouse_id"])
+                    .where(inventory_location_balances.c.storage_status == "available")
+                    .where(inventory_location_balances.c.quantity_on_hand > 0)
+                    .order_by(
+                        inventory_location_balances.c.expiry_date,
+                        inventory_location_balances.c.production_date,
+                        inventory_location_balances.c.batch_no,
+                    )
+                )
+                rows = connection.execute(statement).mappings().all()
+                for row in rows:
+                    if remaining <= 0:
+                        break
+                    quantity = min(int(row["quantity_on_hand"]), remaining)
+                    allocated_items.append(
+                        {
+                            "order_id": order["order_id"],
+                            "customer_id": order["customer_id"],
+                            "status": "paid",
+                            "item_id": row["item_id"],
+                            "warehouse_id": row["warehouse_id"],
+                            "location_code": row["location_code"],
+                            "batch_no": row["batch_no"],
+                            "quantity": quantity,
+                            "created_at": updated_at,
+                            "updated_at": updated_at,
+                        }
+                    )
+                    remaining -= quantity
+                if remaining > 0:
+                    available = int(request["quantity"]) - remaining
+                    raise ValueError(
+                        json.dumps(
+                            {
+                                "error": "insufficient_available_stock",
+                                "item_id": request["item_id"],
+                                "warehouse_id": request["warehouse_id"],
+                                "requested_quantity": int(request["quantity"]),
+                                "available_quantity": available,
+                                "shortage_quantity": remaining,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+        return allocated_items
+
+    def update_order_status(self, order_id: str, *, status: str, updated_by: str, updated_at: str) -> dict[str, Any]:
+        timestamp_columns = {
+            "shipped": "shipped_at",
+            "arrived": "arrived_at",
+            "cancelled": "cancelled_at",
+            "returned": "returned_at",
+        }
+        details = self.get_order(order_id)
+        if not details:
+            raise ValueError("order_not_found")
+        current_status = details["order"]["status"]
+        if status in {"cancelled", "returned"} and current_status in {"paid", "shipped", "arrived"}:
+            self._restore_order_items(order_id, status=status, updated_at=updated_at)
+        values = {"status": status, "updated_at": updated_at}
+        if status in timestamp_columns:
+            values[timestamp_columns[status]] = updated_at
+        with self.engine.begin() as connection:
+            connection.execute(orders.update().where(orders.c.order_id == order_id).values(**values))
+        return self.get_order(order_id) or details
+
+    def cancel_order(self, order_id: str, *, updated_by: str, updated_at: str) -> dict[str, Any]:
+        return self.update_order_status(order_id, status="cancelled", updated_by=updated_by, updated_at=updated_at)
+
+    def return_order(self, order_id: str, *, updated_by: str, updated_at: str) -> dict[str, Any]:
+        return self.update_order_status(order_id, status="returned", updated_by=updated_by, updated_at=updated_at)
+
+    def _restore_order_items(self, order_id: str, *, status: str, updated_at: str) -> None:
+        details = self.get_order(order_id)
+        if not details:
+            return
+        restorable = [item for item in details["items"] if item["status"] == "paid"]
+        with self.engine.begin() as connection:
+            for item in restorable:
+                connection.execute(
+                    inventory_location_balances.update()
+                    .where(inventory_location_balances.c.item_id == item["item_id"])
+                    .where(inventory_location_balances.c.warehouse_id == item["warehouse_id"])
+                    .where(inventory_location_balances.c.location_code == item["location_code"])
+                    .where(inventory_location_balances.c.batch_no == item["batch_no"])
+                    .values(
+                        quantity_on_hand=inventory_location_balances.c.quantity_on_hand + int(item["quantity"]),
+                        updated_at=updated_at,
+                    )
+                )
+                connection.execute(
+                    order_items.update()
+                    .where(order_items.c.id == item["id"])
+                    .values(status=status, updated_at=updated_at)
+                )
 
 
 def create_warehouse_repository_from_env(fixture_dir: Path) -> WarehouseRepository | None:
