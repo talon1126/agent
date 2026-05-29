@@ -140,6 +140,10 @@ flowchart LR
 
 采购 Agent 的事实数据由 `mock-api` 提供：
 
+- 采购 HTTP 路由已从 `services/mock-api/app/main.py` 拆到 `services/mock-api/app/routers/procurement/`，由 `main.py` 通过 `procurement_router` 统一注册。
+- `routers/procurement/requests.py` 负责补货申请创建、查询、批准、驳回、批量批准和补货申请飞书 rows/schema。
+- `routers/procurement/purchase_orders.py` 负责采购单查询、到仓确认和采购单飞书 rows/schema。
+- `routers/procurement/mock.py` 保留基础 mock 采购建议；`service.py` 放采购确定性业务逻辑；`schemas.py` 放请求模型；`state.py` 放内存 fallback。
 - 管理 `replenishment_requests`，承接 Warehouse 创建的 `pending_procurement_review` 补货申请。
 - 管理 mock 默认供应商，按 `item_id` 匹配供应商、单价和交期。
 - 管理 `purchase_orders`，记录供应商、商品、仓库、库位、数量、单价、预计总价、交期、预计到达日期、支付状态和仓库同步状态。

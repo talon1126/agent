@@ -290,6 +290,16 @@
 
 `mock-api` 是采购事实数据的后端模拟系统。其他 workflow 如果需要采购状态，应优先调用这些接口，不要直接访问 Postgres。
 
+### 路由实现结构
+
+- 采购 HTTP 路由已从 `services/mock-api/app/main.py` 拆到 `services/mock-api/app/routers/procurement/`，由 `main.py` 通过 `procurement_router` 统一注册。
+- `mock.py`：基础 mock 采购建议接口。
+- `requests.py`：补货申请创建、查询、批准、驳回、批量批准，以及补货申请飞书表 schema/rows。
+- `purchase_orders.py`：采购单查询、到仓确认，以及采购单飞书表 schema/rows。
+- `service.py`：采购确定性业务逻辑，例如默认供应商匹配、采购单生成、预计到达日期、状态流转和飞书表字段映射。
+- `schemas.py`：采购请求模型；`state.py`：内存 fallback 状态。
+- `/warehouse/*` 仍归仓储 router；采购 router 不直接创建库存批次、不创建 Warehouse sync job。
+
 ### 采购建议接口
 
 - `POST /procurement/mock`
