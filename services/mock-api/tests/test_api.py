@@ -159,7 +159,7 @@ def create_replenishment_request_for_test(
     return response.json()["request"]
 
 
-def test_approve_replenishment_request_creates_purchase_order_draft():
+def test_approve_replenishment_request_creates_purchase_order():
     request = create_replenishment_request_for_test()
     expected_arrival_date = (
         datetime.fromisoformat(request["created_at"]).date() + timedelta(days=3)
@@ -174,31 +174,35 @@ def test_approve_replenishment_request_creates_purchase_order_draft():
     body = response.json()
     assert body["ok"] is True
     assert body["request"]["request_id"] == request["request_id"]
-    assert body["request"]["status"] == "purchase_order_draft_created"
-    assert body["draft"]["po_draft_id"].startswith("POD-")
-    assert body["draft"]["request_id"] == request["request_id"]
-    assert body["draft"]["supplier_id"] == "supplier_paper_sz"
-    assert body["draft"]["supplier_name"] == "深圳纸品供应商"
-    assert body["draft"]["item_id"] == "item_vinda_tissue"
-    assert body["draft"]["quantity"] == request["suggested_quantity"]
-    assert body["draft"]["unit_price"] == 8
-    assert body["draft"]["currency"] == "CNY"
-    assert body["draft"]["estimated_total_price"] == request["suggested_quantity"] * 8
-    assert body["draft"]["lead_time_days"] == 3
-    assert body["draft"]["estimated_arrival_date"] == expected_arrival_date
-    assert body["draft"]["status"] == "draft"
+    assert body["request"]["status"] == "purchase_order_created"
+    assert body["purchase_order"]["purchase_order_id"].startswith("PO-")
+    assert body["purchase_order"]["request_id"] == request["request_id"]
+    assert body["purchase_order"]["supplier_id"] == "supplier_paper_sz"
+    assert body["purchase_order"]["supplier_name"] == "深圳纸品供应商"
+    assert body["purchase_order"]["item_id"] == "item_vinda_tissue"
+    assert body["purchase_order"]["warehouse_id"] == request["warehouse_id"]
+    assert body["purchase_order"]["warehouse_name"] == request["warehouse_name"]
+    assert body["purchase_order"]["location_code"] == request["location_code"]
+    assert body["purchase_order"]["quantity"] == request["suggested_quantity"]
+    assert body["purchase_order"]["unit_price"] == 8
+    assert body["purchase_order"]["currency"] == "CNY"
+    assert body["purchase_order"]["estimated_total_price"] == request["suggested_quantity"] * 8
+    assert body["purchase_order"]["lead_time_days"] == 3
+    assert body["purchase_order"]["estimated_arrival_date"] == expected_arrival_date
+    assert body["purchase_order"]["payment_status"] == "unpaid"
+    assert body["purchase_order"]["warehouse_sync_status"] == "pending_arrival"
 
-    drafts_response = client.get(
-        f"/procurement/purchase-order-drafts?request_id={request['request_id']}"
+    orders_response = client.get(
+        f"/procurement/purchase-orders?request_id={request['request_id']}"
     )
-    assert drafts_response.status_code == 200
-    drafts = drafts_response.json()
-    assert drafts["ok"] is True
-    assert drafts["count"] == 1
-    assert drafts["items"][0]["po_draft_id"] == body["draft"]["po_draft_id"]
+    assert orders_response.status_code == 200
+    orders = orders_response.json()
+    assert orders["ok"] is True
+    assert orders["count"] == 1
+    assert orders["items"][0]["purchase_order_id"] == body["purchase_order"]["purchase_order_id"]
 
 
-def test_approve_replenishment_request_reuses_existing_purchase_order_draft():
+def test_approve_replenishment_request_reuses_existing_purchase_order():
     request = create_replenishment_request_for_test()
 
     first = client.post(
@@ -212,15 +216,15 @@ def test_approve_replenishment_request_reuses_existing_purchase_order_draft():
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert second.json()["draft"]["po_draft_id"] == first.json()["draft"]["po_draft_id"]
-    assert second.json()["draft"]["estimated_arrival_date"] == first.json()["draft"]["estimated_arrival_date"]
-    drafts = client.get(
-        f"/procurement/purchase-order-drafts?request_id={request['request_id']}"
+    assert second.json()["purchase_order"]["purchase_order_id"] == first.json()["purchase_order"]["purchase_order_id"]
+    assert second.json()["purchase_order"]["estimated_arrival_date"] == first.json()["purchase_order"]["estimated_arrival_date"]
+    orders = client.get(
+        f"/procurement/purchase-orders?request_id={request['request_id']}"
     ).json()
-    assert drafts["count"] == 1
+    assert orders["count"] == 1
 
 
-def test_reject_replenishment_request_updates_status_without_draft():
+def test_reject_replenishment_request_updates_status_without_purchase_order():
     request = create_replenishment_request_for_test()
 
     response = client.post(
@@ -235,10 +239,10 @@ def test_reject_replenishment_request_updates_status_without_draft():
     assert body["request"]["status"] == "rejected"
     assert body["request"]["reason"] == "供应商暂不稳定，先人工复核。"
 
-    drafts = client.get(
-        f"/procurement/purchase-order-drafts?request_id={request['request_id']}"
+    orders = client.get(
+        f"/procurement/purchase-orders?request_id={request['request_id']}"
     ).json()
-    assert drafts["count"] == 0
+    assert orders["count"] == 0
 
 
 def test_replenishment_request_decision_returns_404_for_unknown_request():
@@ -281,7 +285,7 @@ def test_approve_replenishment_request_batch_processes_pending_requests_and_skip
     assert body["approved_count"] >= 2
     assert body["skipped_count"] >= 1
     approved_request_ids = {
-        item["request_id"] for item in body["created_or_reused_drafts"]
+        item["request_id"] for item in body["created_or_reused_orders"]
     }
     assert {first["request_id"], second["request_id"]}.issubset(approved_request_ids)
     assert any(
@@ -292,12 +296,12 @@ def test_approve_replenishment_request_batch_processes_pending_requests_and_skip
 
     refreshed = client.get("/procurement/replenishment-requests").json()["items"]
     statuses = {item["request_id"]: item["status"] for item in refreshed}
-    assert statuses[first["request_id"]] == "purchase_order_draft_created"
-    assert statuses[second["request_id"]] == "purchase_order_draft_created"
+    assert statuses[first["request_id"]] == "purchase_order_created"
+    assert statuses[second["request_id"]] == "purchase_order_created"
     assert statuses[missing_supplier["request_id"]] == "pending_procurement_review"
 
 
-def test_confirm_purchase_order_draft_arrival_batch_updates_inventory_and_is_idempotent():
+def test_confirm_purchase_order_arrival_batch_marks_unsynced_without_inventory_sync_job():
     first_request = create_replenishment_request_for_test(
         item_id="item_vinda_tissue",
         location_code="A1",
@@ -306,21 +310,21 @@ def test_confirm_purchase_order_draft_arrival_batch_updates_inventory_and_is_ide
         item_id="item_milk_pure",
         location_code="C1",
     )
-    first_draft = client.post(
+    first_order = client.post(
         f"/procurement/replenishment-requests/{first_request['request_id']}/approve",
         json={"created_by": "procurement:user-001"},
-    ).json()["draft"]
-    second_draft = client.post(
+    ).json()["purchase_order"]
+    second_order = client.post(
         f"/procurement/replenishment-requests/{second_request['request_id']}/approve",
         json={"created_by": "procurement:user-001"},
-    ).json()["draft"]
+    ).json()["purchase_order"]
 
     response = client.post(
-        "/procurement/purchase-order-drafts/confirm-arrival-batch",
+        "/procurement/purchase-orders/confirm-arrival-batch",
         json={
-            "po_draft_ids": [
-                first_draft["po_draft_id"],
-                second_draft["po_draft_id"],
+            "purchase_order_ids": [
+                first_order["purchase_order_id"],
+                second_order["purchase_order_id"],
             ],
             "received_by": "warehouse:user-001",
         },
@@ -332,121 +336,69 @@ def test_confirm_purchase_order_draft_arrival_batch_updates_inventory_and_is_ide
     assert body["processed_count"] == 2
     assert body["confirmed_count"] == 2
     assert body["skipped_count"] == 0
-    assert {item["po_draft_id"] for item in body["confirmed_items"]} == {
-        first_draft["po_draft_id"],
-        second_draft["po_draft_id"],
+    assert {item["purchase_order_id"] for item in body["confirmed_items"]} == {
+        first_order["purchase_order_id"],
+        second_order["purchase_order_id"],
     }
-    assert {
-        item["item_id"] for item in body["warehouse_inventory_sync_requests"]
-    } == {"item_vinda_tissue", "item_milk_pure"}
-    assert all(
-        item["next_action"] == "notify_warehouse_to_sync_inventory_table"
-        for item in body["warehouse_inventory_sync_requests"]
-    )
+    assert "warehouse_inventory_sync_jobs" not in body
+    assert "warehouse_inventory_sync_requests" not in body
+    assert all(item["warehouse_sync_status"] == "arrived_unsynced" for item in body["confirmed_items"])
 
-    refreshed_drafts = client.get("/procurement/purchase-order-drafts").json()["items"]
-    draft_statuses = {item["po_draft_id"]: item["status"] for item in refreshed_drafts}
-    assert draft_statuses[first_draft["po_draft_id"]] == "received_at_warehouse"
-    assert draft_statuses[second_draft["po_draft_id"]] == "received_at_warehouse"
+    refreshed_orders = client.get("/procurement/purchase-orders").json()["items"]
+    sync_statuses = {item["purchase_order_id"]: item["warehouse_sync_status"] for item in refreshed_orders}
+    assert sync_statuses[first_order["purchase_order_id"]] == "arrived_unsynced"
+    assert sync_statuses[second_order["purchase_order_id"]] == "arrived_unsynced"
 
     first_inventory = client.get("/warehouse/inventory/item_vinda_tissue").json()
     second_inventory = client.get("/warehouse/inventory/item_milk_pure").json()
-    first_receipt_batch = next(
-        item
+    assert all(
+        item["batch_no"] != f"RCV-{first_order['purchase_order_id']}"
         for item in first_inventory["batches"]
-        if item["batch_no"] == f"RCV-{first_draft['po_draft_id']}"
     )
-    second_receipt_batch = next(
-        item
+    assert all(
+        item["batch_no"] != f"RCV-{second_order['purchase_order_id']}"
         for item in second_inventory["batches"]
-        if item["batch_no"] == f"RCV-{second_draft['po_draft_id']}"
     )
-    assert first_receipt_batch["quantity_on_hand"] == first_draft["quantity"]
-    assert isinstance(first_receipt_batch["batch_id"], int)
-    assert first_receipt_batch["warehouse_id"] == first_request["warehouse_id"]
-    assert first_receipt_batch["location_code"] == first_request["location_code"]
-    assert second_receipt_batch["quantity_on_hand"] == second_draft["quantity"]
-    assert isinstance(second_receipt_batch["batch_id"], int)
-    assert second_receipt_batch["warehouse_id"] == second_request["warehouse_id"]
-    assert second_receipt_batch["location_code"] == second_request["location_code"]
+
+    pending_jobs = client.get("/warehouse/inventory-sync-jobs?status=pending").json()
+    assert all(
+        item.get("purchase_order_id") not in {first_order["purchase_order_id"], second_order["purchase_order_id"]}
+        for item in pending_jobs.get("items", [])
+    )
 
     repeat = client.post(
-        "/procurement/purchase-order-drafts/confirm-arrival-batch",
-        json={"po_draft_ids": [first_draft["po_draft_id"]], "received_by": "warehouse:user-001"},
+        "/procurement/purchase-orders/confirm-arrival-batch",
+        json={"purchase_order_ids": [first_order["purchase_order_id"]], "received_by": "warehouse:user-001"},
     )
 
     assert repeat.status_code == 200
     repeat_body = repeat.json()
     assert repeat_body["confirmed_items"][0]["action"] == "reused"
-    receipt_batches = [
-        item
-        for item in client.get("/warehouse/inventory/item_vinda_tissue").json()["batches"]
-        if item["batch_no"] == f"RCV-{first_draft['po_draft_id']}"
-    ]
-    assert len(receipt_batches) == 1
 
 
-def test_warehouse_inventory_sync_jobs_are_created_and_can_be_completed_or_failed():
+def test_purchase_orders_can_be_filtered_by_arrived_unsynced_status():
     request = create_replenishment_request_for_test(
         item_id="item_vinda_tissue",
         location_code="A1",
     )
-    draft = client.post(
+    order = client.post(
         f"/procurement/replenishment-requests/{request['request_id']}/approve",
         json={"created_by": "procurement:user-001"},
-    ).json()["draft"]
+    ).json()["purchase_order"]
 
     client.post(
-        "/procurement/purchase-order-drafts/confirm-arrival-batch",
-        json={"po_draft_ids": [draft["po_draft_id"]], "received_by": "warehouse:user-001"},
+        "/procurement/purchase-orders/confirm-arrival-batch",
+        json={"purchase_order_ids": [order["purchase_order_id"]], "received_by": "warehouse:user-001"},
     )
 
-    pending = client.get("/warehouse/inventory-sync-jobs?status=pending")
-    assert pending.status_code == 200
-    pending_body = pending.json()
-    assert pending_body["ok"] is True
-    assert pending_body["count"] >= 1
-    job = next(
-        item
-        for item in pending_body["items"]
-        if item["po_draft_id"] == draft["po_draft_id"]
+    response = client.get(
+        "/procurement/purchase-orders",
+        params={"warehouse_sync_status": "arrived_unsynced"},
     )
-    assert job["job_id"] == f"WSJ-{draft['po_draft_id']}"
-    assert job["event"] == "warehouse_inventory_sync_requested"
-    assert job["status"] == "pending"
-    assert job["item_id"] == "item_vinda_tissue"
-    assert job["warehouse_id"] == request["warehouse_id"]
-    assert job["location_code"] == request["location_code"]
-
-    failed_sync_complete = client.post(
-        f"/warehouse/inventory-sync-jobs/{job['job_id']}/complete",
-        json={
-            "processed_by": "warehouse-agent",
-            "result": {
-                "ok": False,
-                "error": "feishu_inventory_table_sync_failed",
-                "message": "missing warehouse inventory table config",
-            },
-        },
-    )
-    assert failed_sync_complete.status_code == 400
-    assert failed_sync_complete.json()["detail"] == "warehouse inventory sync result is not successful"
-    still_pending = client.get("/warehouse/inventory-sync-jobs?status=pending").json()
-    assert any(item["job_id"] == job["job_id"] for item in still_pending["items"])
-
-    complete = client.post(
-        f"/warehouse/inventory-sync-jobs/{job['job_id']}/complete",
-        json={"processed_by": "warehouse-agent", "result": {"ok": True, "synced_count": 1}},
-    )
-    assert complete.status_code == 200
-    assert complete.json()["job"]["status"] == "completed"
-    assert complete.json()["job"]["result"]["synced_count"] == 1
-
-    failed = client.post(
-        "/warehouse/inventory-sync-jobs/WSJ-DOES-NOT-EXIST/fail",
-        json={"processed_by": "warehouse-agent", "error": "not found"},
-    )
-    assert failed.status_code == 404
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert any(item["purchase_order_id"] == order["purchase_order_id"] for item in body["items"])
 
 
 def test_procurement_table_schema_and_rows_are_feishu_ready():
@@ -457,22 +409,28 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
     ).json()
 
     request_schema = client.get("/procurement/replenishment-requests/table-schema").json()
-    draft_schema = client.get("/procurement/purchase-order-drafts/table-schema").json()
+    order_schema = client.get("/procurement/purchase-orders/table-schema").json()
     request_rows = client.post(
         "/procurement/replenishment-requests/table-rows",
-        json={"status": "purchase_order_draft_created"},
+        json={"status": "purchase_order_created"},
     ).json()
-    draft_rows = client.post(
-        "/procurement/purchase-order-drafts/table-rows",
+    order_rows = client.post(
+        "/procurement/purchase-orders/table-rows",
         json={"request_id": request["request_id"]},
     ).json()
 
     assert request_schema["ok"] is True
     assert request_schema["schema_id"] == "procurement_replenishment_requests"
     assert "Request ID" in [field["name"] for field in request_schema["fields"]]
-    assert draft_schema["ok"] is True
-    assert draft_schema["schema_id"] == "procurement_purchase_order_drafts"
-    assert "Estimated Arrival Date" in [field["name"] for field in draft_schema["fields"]]
+    assert order_schema["ok"] is True
+    assert order_schema["schema_id"] == "procurement_purchase_orders"
+    order_field_names = [field["name"] for field in order_schema["fields"]]
+    assert "Purchase Order ID" in order_field_names
+    assert "Warehouse ID" in order_field_names
+    assert "Location" in order_field_names
+    assert "Payment Status" in order_field_names
+    assert "Warehouse Sync Status" in order_field_names
+    assert "Estimated Arrival Date" in order_field_names
 
     assert request_rows["ok"] is True
     request_fields = next(
@@ -481,15 +439,19 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
         if item["request_id"] == request["request_id"]
     )
     assert request_fields["Request ID"] == request["request_id"]
-    assert request_fields["Status"] == "purchase_order_draft_created"
+    assert request_fields["Status"] == "purchase_order_created"
     assert request_fields["Item Name"] == "维达纸巾"
 
-    assert draft_rows["ok"] is True
-    assert draft_rows["count"] == 1
-    draft_fields = draft_rows["items"][0]["fields"]
-    assert draft_fields["PO Draft ID"] == approve["draft"]["po_draft_id"]
-    assert draft_fields["Request ID"] == request["request_id"]
-    assert draft_fields["Estimated Arrival Date"] == approve["draft"]["estimated_arrival_date"]
+    assert order_rows["ok"] is True
+    assert order_rows["count"] == 1
+    order_fields = order_rows["items"][0]["fields"]
+    assert order_fields["Purchase Order ID"] == approve["purchase_order"]["purchase_order_id"]
+    assert order_fields["Request ID"] == request["request_id"]
+    assert order_fields["Warehouse ID"] == request["warehouse_id"]
+    assert order_fields["Location"] == request["location_code"]
+    assert order_fields["Payment Status"] == "unpaid"
+    assert order_fields["Warehouse Sync Status"] == "pending_arrival"
+    assert order_fields["Estimated Arrival Date"] == approve["purchase_order"]["estimated_arrival_date"]
 
 
 def test_operations_summary_mock_returns_cross_domain_summary():

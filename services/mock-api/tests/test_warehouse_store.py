@@ -16,7 +16,7 @@ from app.warehouse_store import (
     order_items,
     orders,
     procurement_suppliers,
-    purchase_order_drafts,
+    purchase_orders,
     replenishment_requests,
     seed_warehouse_fixtures,
     storage_locations,
@@ -33,7 +33,7 @@ WAREHOUSE_TABLES = [
     inventory_batches,
     replenishment_requests,
     procurement_suppliers,
-    purchase_order_drafts,
+    purchase_orders,
     warehouse_inventory_sync_jobs,
     inventory_location_balances,
     orders,
@@ -56,7 +56,7 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         batch_count = connection.execute(text("select count(*) from inventory_batches")).scalar_one()
         replenishment_count = connection.execute(text("select count(*) from replenishment_requests")).scalar_one()
         supplier_count = connection.execute(text("select count(*) from procurement_suppliers")).scalar_one()
-        draft_count = connection.execute(text("select count(*) from purchase_order_drafts")).scalar_one()
+        purchase_order_count = connection.execute(text("select count(*) from purchase_orders")).scalar_one()
         sync_job_count = connection.execute(text("select count(*) from warehouse_inventory_sync_jobs")).scalar_one()
         balance_count = connection.execute(text("select count(*) from inventory_location_balances")).scalar_one()
         order_count = connection.execute(text("select count(*) from orders")).scalar_one()
@@ -69,7 +69,7 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert batch_count == 10
     assert replenishment_count == 0
     assert supplier_count == 7
-    assert draft_count == 0
+    assert purchase_order_count == 0
     assert sync_job_count == 0
     assert balance_count == 10
     assert order_count == 0
@@ -181,36 +181,42 @@ def test_warehouse_repository_persists_replenishment_requests(tmp_path: Path) ->
     assert listed == [created]
 
 
-def test_warehouse_repository_reads_suppliers_and_persists_purchase_order_drafts(tmp_path: Path) -> None:
+def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
     init_warehouse_schema(engine)
     seed_warehouse_fixtures(engine, FIXTURE_DIR)
     repository = WarehouseRepository(engine)
 
     supplier = repository.get_default_supplier("item_vinda_tissue")
-    created = repository.create_purchase_order_draft(
+    created = repository.create_purchase_order(
         {
-            "po_draft_id": "POD-5001",
+            "purchase_order_id": "PO-5001",
             "request_id": "REQ-2001",
             "supplier_id": supplier["supplier_id"],
             "supplier_name": supplier["supplier_name"],
             "item_id": "item_vinda_tissue",
+            "warehouse_id": "wh_sz_1",
+            "warehouse_name": "深圳仓",
+            "location_code": "A1",
             "quantity": 104,
             "unit_price": supplier["unit_price"],
             "currency": supplier["currency"],
             "estimated_total_price": 832,
             "lead_time_days": supplier["lead_time_days"],
             "estimated_arrival_date": "2026-05-27",
-            "status": "draft",
+            "payment_status": "unpaid",
+            "warehouse_sync_status": "pending_arrival",
             "created_by": "procurement:user-001",
             "created_at": "2026-05-24T21:00:00+08:00",
             "updated_at": "2026-05-24T21:00:00+08:00",
         }
     )
-    listed = repository.list_purchase_order_drafts(request_id="REQ-2001")
+    listed = repository.list_purchase_orders(request_id="REQ-2001")
 
     assert supplier["supplier_name"] == "深圳纸品供应商"
-    assert created["po_draft_id"] == "POD-5001"
+    assert created["purchase_order_id"] == "PO-5001"
+    assert created["payment_status"] == "unpaid"
+    assert created["warehouse_sync_status"] == "pending_arrival"
     assert listed == [created]
 
 
