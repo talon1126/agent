@@ -16,6 +16,14 @@ class WarehouseInventorySearchRequest(BaseModel):
     limit: int = 50
 
 
+class WarehouseStockBalanceTableRowsRequest(BaseModel):
+    item_id: str | None = None
+    warehouse_id: str | None = None
+    location_code: str | None = None
+    cursor: str | None = None
+    limit: int = 500
+
+
 class WarehouseInventorySyncJobUpdateRequest(BaseModel):
     processed_by: str = "warehouse-agent"
     result: dict[str, Any] | None = None

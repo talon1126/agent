@@ -80,6 +80,19 @@ class InventoryTableProvisionRequest(BaseModel):
     table_name: str = "Warehouse Inventory Snapshot"
 
 
+class InventoryBalancesTableProvisionRequest(BaseModel):
+    table_name: str = "Warehouse Inventory Balances"
+
+
+class InventoryBalancesTableSyncRequest(BaseModel):
+    table_name: str = "Warehouse Inventory Balances"
+    item_id: str | None = None
+    warehouse_id: str | None = None
+    location_code: str | None = None
+    limit: int = 500
+    max_pages: int = 50
+
+
 class ProcurementTableProvisionRequest(BaseModel):
     table_name: str | None = None
 
@@ -259,6 +272,8 @@ INVENTORY_TABLE_FIELD_SPECS = [
 ]
 DEFAULT_INVENTORY_TABLE_NAME = "Warehouse Inventory Snapshot"
 DEFAULT_INVENTORY_TABLE_ALIASES = ["库存表", DEFAULT_INVENTORY_TABLE_NAME]
+DEFAULT_INVENTORY_BALANCE_TABLE_NAME = "Warehouse Inventory Balances"
+DEFAULT_INVENTORY_BALANCE_TABLE_ALIASES = ["库存余额表", DEFAULT_INVENTORY_BALANCE_TABLE_NAME]
 
 
 def _clean_bot_name(value: str) -> str:
@@ -395,6 +410,11 @@ def create_app(
     inventory_table_state = {
         "table_id": table_id,
         "view_id": table_view_id,
+    }
+    inventory_balance_table_state = {
+        "table_id": os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_ID", ""),
+        "view_id": os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_VIEW_ID", ""),
+        "table_url": os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_URL", ""),
     }
     inventory_table_lock = threading.RLock()
     procurement_replenishment_request_table_state = {
@@ -635,6 +655,7 @@ def create_app(
             "text": 1,
             "number": 2,
             "single_select": 3,
+            "date": 5,
         }
         field_name = str(field.get("name") or field.get("field_name") or "").strip()
         field_type = str(field.get("type") or "text").strip()
@@ -673,6 +694,49 @@ def create_app(
         except (httpx.HTTPError, ValueError, TypeError) as error:
             logger.warning("failed to load warehouse inventory table schema from backend: %s", error)
             return INVENTORY_TABLE_FIELD_SPECS
+
+    def inventory_balance_table_field_specs() -> list[dict[str, Any]]:
+        response = client.get(f"{runtime_mock_api_url}/warehouse/stock/balances/table-schema")
+        response.raise_for_status()
+        payload = response.json()
+        fields = payload.get("fields", [])
+        if payload.get("ok") is not True or not isinstance(fields, list) or not fields:
+            raise RuntimeError(f"warehouse inventory balance table schema lookup failed: {payload}")
+        return [
+            backend_field_to_feishu_field(field)
+            for field in fields
+            if isinstance(field, dict) and str(field.get("name") or field.get("field_name") or "").strip()
+        ]
+
+    def fetch_inventory_balance_table_rows(
+        *,
+        item_id: str | None = None,
+        warehouse_id: str | None = None,
+        location_code: str | None = None,
+        cursor: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        response = client.post(
+            f"{runtime_mock_api_url}/warehouse/stock/balances/table-rows",
+            json={
+                "item_id": item_id or None,
+                "warehouse_id": warehouse_id or None,
+                "location_code": location_code or None,
+                "cursor": cursor or None,
+                "limit": max(min(int(limit or 500), 500), 1),
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("ok") is not True:
+            raise RuntimeError(f"warehouse inventory balance table rows lookup failed: {payload}")
+        rows = payload.get("items", [])
+        if not isinstance(rows, list):
+            raise RuntimeError(f"warehouse inventory balance table rows returned invalid items: {payload}")
+        return {
+            "items": [row for row in rows if isinstance(row, dict) and isinstance(row.get("fields"), dict)],
+            "next_cursor": str(payload.get("next_cursor") or ""),
+        }
 
     def fetch_inventory_table_rows(
         *,
@@ -775,18 +839,19 @@ def create_app(
         inventory_response.raise_for_status()
         return legacy_inventory_rows_from_items(inventory_response.json().get("items", []))
 
-    def bitable_records_url(record_id: str | None = None) -> str:
+    def bitable_records_url(record_id: str | None = None, table_identifier: str | None = None) -> str:
+        resolved_table_identifier = table_identifier or inventory_table_state["table_id"]
         base = (
             f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}"
-            f"/tables/{inventory_table_state['table_id']}/records"
+            f"/tables/{resolved_table_identifier}/records"
         )
         return f"{base}/{record_id}" if record_id else base
 
-    def bitable_records_batch_create_url() -> str:
-        return f"{bitable_records_url()}/batch_create"
+    def bitable_records_batch_create_url(table_identifier: str | None = None) -> str:
+        return f"{bitable_records_url(table_identifier=table_identifier)}/batch_create"
 
-    def bitable_records_batch_update_url() -> str:
-        return f"{bitable_records_url()}/batch_update"
+    def bitable_records_batch_update_url(table_identifier: str | None = None) -> str:
+        return f"{bitable_records_url(table_identifier=table_identifier)}/batch_update"
 
     def bitable_tables_url() -> str:
         return f"{api_base_url}/open-apis/bitable/v1/apps/{table_app_token}/tables"
@@ -808,6 +873,7 @@ def create_app(
             1: "text",
             2: "number",
             3: "single_select",
+            5: "date",
         }.get(type_value, f"type_{type_value}")
 
     def inventory_field_options(field: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1191,6 +1257,220 @@ def create_app(
             "action": result["action"],
         }
 
+    def inventory_balance_table_candidate_names(table_name: str) -> list[str]:
+        if table_name == DEFAULT_INVENTORY_BALANCE_TABLE_NAME:
+            return DEFAULT_INVENTORY_BALANCE_TABLE_ALIASES
+        return [table_name]
+
+    def remember_inventory_balance_table(result: dict[str, str]) -> None:
+        if result.get("table_id"):
+            inventory_balance_table_state["table_id"] = result["table_id"]
+        if result.get("view_id"):
+            inventory_balance_table_state["view_id"] = result["view_id"]
+
+    def find_inventory_balance_table_by_name(*, token: str, table_name: str) -> dict[str, str]:
+        tables = list_inventory_tables(token=token)
+        for candidate_name in inventory_balance_table_candidate_names(table_name):
+            for item in tables:
+                if str(item.get("name") or item.get("table_name") or "") == candidate_name:
+                    return {
+                        "table_id": str(item.get("table_id") or ""),
+                        "view_id": str(item.get("default_view_id") or item.get("view_id") or ""),
+                    }
+        return {"table_id": "", "view_id": ""}
+
+    def find_inventory_balance_table_by_name_safe(*, token: str, table_name: str) -> dict[str, str]:
+        try:
+            return find_inventory_balance_table_by_name(token=token, table_name=table_name)
+        except (httpx.HTTPError, RuntimeError) as error:
+            logger.warning("failed to list inventory balance tables before resolving table id: %s", error)
+            return {"table_id": "", "view_id": ""}
+
+    def create_or_reuse_inventory_balance_table(
+        *,
+        token: str,
+        table_name: str,
+        field_specs: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        with inventory_table_lock:
+            existing = find_inventory_balance_table_by_name_safe(token=token, table_name=table_name)
+            if existing["table_id"]:
+                ensure_inventory_table_fields(
+                    token=token,
+                    table_identifier=existing["table_id"],
+                    field_specs=field_specs,
+                )
+                remember_inventory_balance_table(existing)
+                return {**existing, "action": "existing"}
+            response = client.post(
+                bitable_tables_url(),
+                headers={"Authorization": f"Bearer {token}"},
+                json={"table": {"name": table_name}},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in {0, None}:
+                if payload.get("code") == 1254013:
+                    existing = find_inventory_balance_table_by_name(token=token, table_name=table_name)
+                    if existing["table_id"]:
+                        ensure_inventory_table_fields(
+                            token=token,
+                            table_identifier=existing["table_id"],
+                            field_specs=field_specs,
+                        )
+                        remember_inventory_balance_table(existing)
+                        return {**existing, "action": "existing"}
+                raise RuntimeError(f"Feishu inventory balance table create failed: {payload}")
+            data = payload.get("data", {})
+            created_table_id = str(data.get("table_id") or "")
+            if not created_table_id:
+                raise RuntimeError(f"Feishu inventory balance table create returned no table_id: {payload}")
+            create_inventory_table_fields(
+                token=token,
+                table_identifier=created_table_id,
+                field_specs=field_specs,
+            )
+            result = {
+                "table_id": created_table_id,
+                "view_id": str(data.get("default_view_id") or data.get("view_id") or ""),
+                "action": "created",
+            }
+            remember_inventory_balance_table(result)
+            return result
+
+    def ensure_inventory_balance_table(
+        *,
+        token: str,
+        table_name: str,
+        field_specs: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        existing = find_inventory_balance_table_by_name_safe(token=token, table_name=table_name)
+        if existing["table_id"]:
+            ensure_inventory_table_fields(
+                token=token,
+                table_identifier=existing["table_id"],
+                field_specs=field_specs,
+            )
+            remember_inventory_balance_table(existing)
+            return {**existing, "action": "existing"}
+        if inventory_balance_table_state["table_id"]:
+            result = {
+                "table_id": inventory_balance_table_state["table_id"],
+                "view_id": inventory_balance_table_state["view_id"],
+                "action": "existing",
+            }
+            try:
+                ensure_inventory_table_fields(
+                    token=token,
+                    table_identifier=result["table_id"],
+                    field_specs=field_specs,
+                )
+                return result
+            except (httpx.HTTPStatusError, RuntimeError) as error:
+                if not is_missing_inventory_table_error(error):
+                    raise
+                inventory_balance_table_state["table_id"] = ""
+                inventory_balance_table_state["view_id"] = ""
+        return create_or_reuse_inventory_balance_table(
+            token=token,
+            table_name=table_name,
+            field_specs=field_specs,
+        )
+
+    def ensure_inventory_balance_table_views(
+        *,
+        token: str,
+        table_identifier: str,
+        fields_by_name: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        desired_plans = [
+            {
+                "view_name": "库存余额总览",
+                "view_type": "grid",
+                "visible_fields": [
+                    "Warehouse",
+                    "Location",
+                    "Item ID",
+                    "Item Name",
+                    "Quantity On Hand",
+                    "Storage Status",
+                    "Risk Level",
+                    "Balance Status",
+                    "Updated At",
+                ],
+                "filters": [],
+                "sorts": [{"field": "Warehouse", "order": "asc"}, {"field": "Item ID", "order": "asc"}],
+            },
+            {
+                "view_name": "低库存余额",
+                "view_type": "grid",
+                "visible_fields": [
+                    "Warehouse",
+                    "Location",
+                    "Item ID",
+                    "Item Name",
+                    "Quantity On Hand",
+                    "Reorder Threshold",
+                    "Risk Level",
+                    "Balance Status",
+                    "Updated At",
+                ],
+                "filters": [{"field": "Risk Level", "operator": "is", "value": "high"}],
+                "sorts": [{"field": "Quantity On Hand", "order": "asc"}],
+            },
+            {
+                "view_name": "可售库存",
+                "view_type": "grid",
+                "visible_fields": [
+                    "Warehouse",
+                    "Location",
+                    "Item ID",
+                    "Item Name",
+                    "Quantity On Hand",
+                    "Storage Status",
+                    "Balance Status",
+                    "Updated At",
+                ],
+                "filters": [{"field": "Balance Status", "operator": "is", "value": "available"}],
+                "sorts": [{"field": "Warehouse", "order": "asc"}, {"field": "Item ID", "order": "asc"}],
+            },
+        ]
+        existing_views = {
+            view["view_name"]: view
+            for view in list_inventory_table_views(token=token, table_identifier=table_identifier)
+        }
+        results = []
+        for plan in desired_plans:
+            view = existing_views.get(plan["view_name"])
+            if view:
+                action = "existing"
+                view_id = view["view_id"]
+            else:
+                created = create_inventory_table_view(
+                    token=token,
+                    table_identifier=table_identifier,
+                    view_name=plan["view_name"],
+                    view_type=plan["view_type"],
+                )
+                action = created["action"]
+                view_id = created["view_id"]
+            applied_property = apply_inventory_view_plan(
+                token=token,
+                table_identifier=table_identifier,
+                view_id=view_id,
+                plan=plan,
+                fields_by_name=fields_by_name,
+            )
+            results.append(
+                {
+                    "view_id": view_id,
+                    "view_name": plan["view_name"],
+                    "action": action,
+                    "applied_view_property": applied_property,
+                }
+            )
+        return results
+
     def procurement_table_field_specs(schema_endpoint: str) -> list[dict[str, Any]]:
         response = client.get(f"{runtime_mock_api_url}{schema_endpoint}")
         response.raise_for_status()
@@ -1443,6 +1723,30 @@ def create_app(
                 return option_name or option_id
         return value
 
+    def date_record_value(value: Any) -> Any:
+        if value in {None, ""}:
+            return value
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        text_value = str(value).strip()
+        if not text_value:
+            return value
+        if text_value.isdigit():
+            return int(text_value)
+        normalized = text_value.replace("Z", "+00:00")
+        try:
+            if "T" in normalized:
+                parsed = datetime.fromisoformat(normalized)
+            else:
+                parsed = datetime.fromisoformat(f"{normalized}T00:00:00+00:00")
+        except ValueError:
+            return value
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return int(parsed.timestamp() * 1000)
+
     def normalize_inventory_record_fields(
         fields: dict[str, Any],
         table_fields: dict[str, dict[str, Any]],
@@ -1452,6 +1756,8 @@ def create_app(
             field = table_fields.get(field_name)
             if isinstance(field, dict) and field.get("type") == 3:
                 normalized[field_name] = single_select_record_value(field, value)
+            if isinstance(field, dict) and field.get("type") == 5:
+                normalized[field_name] = date_record_value(value)
         return normalized
 
     def find_inventory_table_records(
@@ -1545,12 +1851,13 @@ def create_app(
         *,
         token: str,
         records: list[dict[str, Any]],
+        table_identifier: str | None = None,
     ) -> list[str]:
         if not records:
             return []
         try:
             response = client.post(
-                bitable_records_batch_create_url(),
+                bitable_records_batch_create_url(table_identifier=table_identifier),
                 headers={"Authorization": f"Bearer {token}"},
                 json={"records": [{"fields": fields} for fields in records]},
             )
@@ -1558,10 +1865,21 @@ def create_app(
         except httpx.HTTPStatusError as error:
             if error.response.status_code not in {404, 405}:
                 raise
-            return [
-                upsert_inventory_table_record(token=token, fields=fields).get("record_id", "")
-                for fields in records
-            ]
+            created_ids = []
+            for fields in records:
+                response = client.post(
+                    bitable_records_url(table_identifier=table_identifier),
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"fields": fields},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if payload.get("code") not in {0, None}:
+                    raise RuntimeError(f"Feishu inventory table create failed: {payload}")
+                data = payload.get("data", {})
+                record = data.get("record") if isinstance(data.get("record"), dict) else {}
+                created_ids.append(str(record.get("record_id") or data.get("record_id") or ""))
+            return created_ids
         payload = response.json()
         if payload.get("code") not in {0, None}:
             raise RuntimeError(f"Feishu inventory table batch create failed: {payload}")
@@ -1571,12 +1889,13 @@ def create_app(
         *,
         token: str,
         records: list[dict[str, Any]],
+        table_identifier: str | None = None,
     ) -> list[str]:
         if not records:
             return []
         try:
             response = client.post(
-                bitable_records_batch_update_url(),
+                bitable_records_batch_update_url(table_identifier=table_identifier),
                 headers={"Authorization": f"Bearer {token}"},
                 json={"records": records},
             )
@@ -1588,7 +1907,7 @@ def create_app(
             for record in records:
                 record_id = str(record.get("record_id") or "")
                 response = client.put(
-                    bitable_records_url(record_id),
+                    bitable_records_url(record_id, table_identifier=table_identifier),
                     headers={"Authorization": f"Bearer {token}"},
                     json={"fields": record.get("fields", {})},
                 )
@@ -1658,6 +1977,145 @@ def create_app(
             record_id = created_ids[index] if index < len(created_ids) else ""
             results[item["index"]] = {"action": "created", "record_id": record_id}
 
+        return results
+
+    def balance_identity_key(balance_key: str) -> tuple[tuple[str, str], ...]:
+        return (("Balance Key", balance_key),)
+
+    def balance_record_filter_expression(balance_key: str) -> str:
+        return f'CurrentValue.[Balance Key]="{bitable_filter_literal(balance_key)}"'
+
+    def balance_record_filter_chunks(balance_keys: list[str]) -> list[tuple[list[str], str]]:
+        chunks: list[tuple[list[str], str]] = []
+        current_keys: list[str] = []
+        current_expressions: list[str] = []
+        for balance_key_value in balance_keys:
+            expression = balance_record_filter_expression(balance_key_value)
+            candidate_expressions = [*current_expressions, expression]
+            candidate_filter = (
+                candidate_expressions[0]
+                if len(candidate_expressions) == 1
+                else f"OR({','.join(candidate_expressions)})"
+            )
+            if (
+                current_expressions
+                and len(candidate_filter) > MAX_INVENTORY_RECORD_LOOKUP_FILTER_LENGTH
+            ):
+                chunks.append(
+                    (
+                        current_keys,
+                        current_expressions[0]
+                        if len(current_expressions) == 1
+                        else f"OR({','.join(current_expressions)})",
+                    )
+                )
+                current_keys = [balance_key_value]
+                current_expressions = [expression]
+                continue
+            current_keys.append(balance_key_value)
+            current_expressions.append(expression)
+        if current_expressions:
+            chunks.append(
+                (
+                    current_keys,
+                    current_expressions[0]
+                    if len(current_expressions) == 1
+                    else f"OR({','.join(current_expressions)})",
+                )
+            )
+        return chunks
+
+    def find_balance_table_records(
+        *,
+        token: str,
+        table_identifier: str,
+        balance_keys: list[str],
+    ) -> dict[tuple[tuple[str, str], ...], str]:
+        records: dict[tuple[tuple[str, str], ...], str] = {}
+        if not balance_keys:
+            return records
+        for key_chunk, filter_expression in balance_record_filter_chunks(balance_keys):
+            response = client.get(
+                bitable_records_url(table_identifier=table_identifier),
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    "page_size": min(max(len(key_chunk), 20), 500),
+                    "filter": filter_expression,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in {0, None}:
+                raise RuntimeError(f"Feishu inventory balance table record lookup failed: {payload}")
+            items = payload.get("data", {}).get("items", [])
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+                record_id = str(item.get("record_id") or item.get("id") or "")
+                balance_key_value = str(fields.get("Balance Key") or "").strip()
+                if record_id and balance_key_value:
+                    records[balance_identity_key(balance_key_value)] = record_id
+        return records
+
+    def upsert_balance_table_records(
+        *,
+        token: str,
+        table_identifier: str,
+        field_rows: list[dict[str, Any]],
+        table_fields: dict[str, dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        prepared = []
+        for index, fields in enumerate(field_rows):
+            balance_key_value = str(fields.get("Balance Key") or "").strip()
+            if not balance_key_value:
+                raise RuntimeError("inventory balance table row is missing Balance Key")
+            prepared.append(
+                {
+                    "index": index,
+                    "balance_key": balance_key_value,
+                    "fields": normalize_inventory_record_fields(fields, table_fields),
+                }
+            )
+        existing_records = find_balance_table_records(
+            token=token,
+            table_identifier=table_identifier,
+            balance_keys=[item["balance_key"] for item in prepared],
+        )
+        create_items = []
+        update_items = []
+        results: list[dict[str, str]] = [{} for _ in prepared]
+        for item in prepared:
+            record_id = existing_records.get(balance_identity_key(item["balance_key"]), "")
+            if record_id:
+                update_items.append(
+                    {
+                        "index": item["index"],
+                        "record_id": record_id,
+                        "fields": item["fields"],
+                    }
+                )
+            else:
+                create_items.append(item)
+        updated_ids = update_inventory_table_records_batch(
+            token=token,
+            table_identifier=table_identifier,
+            records=[
+                {"record_id": item["record_id"], "fields": item["fields"]}
+                for item in update_items
+            ],
+        )
+        for index, item in enumerate(update_items):
+            record_id = updated_ids[index] if index < len(updated_ids) else item["record_id"]
+            results[item["index"]] = {"action": "updated", "record_id": record_id or item["record_id"]}
+        created_ids = create_inventory_table_records_batch(
+            token=token,
+            table_identifier=table_identifier,
+            records=[item["fields"] for item in create_items],
+        )
+        for index, item in enumerate(create_items):
+            record_id = created_ids[index] if index < len(created_ids) else ""
+            results[item["index"]] = {"action": "created", "record_id": record_id}
         return results
 
     def inventory_sync_result_item(row: dict[str, Any], result: dict[str, str]) -> dict[str, Any]:
@@ -2104,6 +2562,200 @@ def create_app(
             "template_id": match.template_id,
             "slots": match.slots or {},
         }
+
+    def inventory_balance_table_not_configured_response() -> dict[str, Any]:
+        return {
+            "ok": False,
+            "configured": False,
+            "error": "missing_feishu_inventory_balance_table_config",
+            "message": "Feishu inventory balance table sync requires app credentials and app token.",
+        }
+
+    @app.post("/warehouse/inventory-balances-table/provision")
+    def provision_inventory_balances_table(
+        request: InventoryBalancesTableProvisionRequest,
+    ) -> dict[str, Any]:
+        started = perf_counter()
+        if not inventory_table_provision_configured():
+            return inventory_balance_table_not_configured_response()
+        table_name = request.table_name.strip() or DEFAULT_INVENTORY_BALANCE_TABLE_NAME
+        try:
+            field_specs = inventory_balance_table_field_specs()
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            table_result = ensure_inventory_balance_table(
+                token=token,
+                table_name=table_name,
+                field_specs=field_specs,
+            )
+            fields_by_name = fields_by_name_for_table(
+                token=token,
+                table_identifier=table_result["table_id"],
+            )
+            views = ensure_inventory_balance_table_views(
+                token=token,
+                table_identifier=table_result["table_id"],
+                fields_by_name=fields_by_name,
+            )
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"inventory_balance_table_provision:{table_result['table_id']}",
+                workflow="/warehouse/inventory-balances-table/provision",
+                status="succeeded",
+                latency_ms=latency_ms,
+                tool_calls=[
+                    {
+                        "tool": "warehouse_inventory_balances_table_provision_tool",
+                        "input": {"table_name": table_name},
+                        "output": table_result,
+                    }
+                ],
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                "table_name": table_name,
+                "table_url": inventory_table_url_for(table_result["table_id"]),
+                "views": views,
+                **table_result,
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+            write_inventory_table_run_log(
+                event_id="inventory_balance_table_provision:failed",
+                workflow="/warehouse/inventory-balances-table/provision",
+                status="failed",
+                latency_ms=latency_ms,
+                error=message,
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "error": "feishu_inventory_balance_table_provision_failed",
+                "message": message,
+            }
+
+    @app.post("/warehouse/inventory-balances-table/sync")
+    def sync_inventory_balances_table(
+        request: InventoryBalancesTableSyncRequest,
+    ) -> dict[str, Any]:
+        started = perf_counter()
+        if not inventory_table_provision_configured():
+            return inventory_balance_table_not_configured_response()
+        table_name = request.table_name.strip() or DEFAULT_INVENTORY_BALANCE_TABLE_NAME
+        limit = max(min(int(request.limit or 500), 500), 1)
+        max_pages = max(min(int(request.max_pages or 50), 500), 1)
+        try:
+            field_specs = inventory_balance_table_field_specs()
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            table_result = ensure_inventory_balance_table(
+                token=token,
+                table_name=table_name,
+                field_specs=field_specs,
+            )
+            fields_by_name = fields_by_name_for_table(
+                token=token,
+                table_identifier=table_result["table_id"],
+            )
+            views = ensure_inventory_balance_table_views(
+                token=token,
+                table_identifier=table_result["table_id"],
+                fields_by_name=fields_by_name,
+            )
+
+            cursor = ""
+            synced_items: list[dict[str, Any]] = []
+            page_count = 0
+            while page_count < max_pages:
+                page = fetch_inventory_balance_table_rows(
+                    item_id=(request.item_id or "").strip() or None,
+                    warehouse_id=(request.warehouse_id or "").strip() or None,
+                    location_code=(request.location_code or "").strip() or None,
+                    cursor=cursor or None,
+                    limit=limit,
+                )
+                page_rows = page["items"]
+                if not page_rows:
+                    break
+
+                upsert_results = upsert_balance_table_records(
+                    token=token,
+                    table_identifier=table_result["table_id"],
+                    field_rows=[row["fields"] for row in page_rows],
+                    table_fields=fields_by_name,
+                )
+                for row, upsert_result in zip(page_rows, upsert_results, strict=False):
+                    fields = row["fields"]
+                    synced_items.append(
+                        {
+                            "balance_key": fields.get("Balance Key") or row.get("balance_key"),
+                            "item_id": fields.get("Item ID") or row.get("item_id"),
+                            "warehouse_id": fields.get("Warehouse ID") or row.get("warehouse_id"),
+                            "location_code": fields.get("Location") or row.get("location_code"),
+                            "quantity_on_hand": fields.get("Quantity On Hand"),
+                            "risk_level": fields.get("Risk Level"),
+                            "balance_status": fields.get("Balance Status"),
+                            "action": upsert_result.get("action"),
+                            "record_id": upsert_result.get("record_id"),
+                            "source_version": fields.get("Source Version", ""),
+                        }
+                    )
+                page_count += 1
+                cursor = page["next_cursor"]
+                if not cursor:
+                    break
+
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"inventory_balance_table_sync:{table_result['table_id']}",
+                workflow="/warehouse/inventory-balances-table/sync",
+                status="succeeded",
+                latency_ms=latency_ms,
+                tool_calls=[
+                    {
+                        "tool": "warehouse_inventory_balances_table_sync_tool",
+                        "input": request.model_dump(),
+                        "output": {"synced_count": len(synced_items), "page_count": page_count},
+                    }
+                ],
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                "synced_count": len(synced_items),
+                "page_count": page_count,
+                "items": synced_items,
+                "views": views,
+                "table_id": table_result["table_id"],
+                "table_name": table_name,
+                "table_url": inventory_table_url_for(table_result["table_id"]),
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+            write_inventory_table_run_log(
+                event_id="inventory_balance_table_sync:failed",
+                workflow="/warehouse/inventory-balances-table/sync",
+                status="failed",
+                latency_ms=latency_ms,
+                error=message,
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "error": "feishu_inventory_balance_table_sync_failed",
+                "message": message,
+            }
 
     @app.post("/warehouse/inventory-table/provision")
     def provision_inventory_table(request: InventoryTableProvisionRequest) -> dict[str, Any]:

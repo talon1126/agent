@@ -672,6 +672,51 @@ class WarehouseRepository:
             rows = connection.execute(statement).mappings().all()
         return [dict(row) for row in rows]
 
+    def list_inventory_balance_snapshots(
+        self,
+        *,
+        item_id: str | None = None,
+        warehouse_id: str | None = None,
+        location_code: str | None = None,
+    ) -> list[dict[str, Any]]:
+        statement = (
+            select(
+                inventory_location_balances.c.id,
+                inventory_location_balances.c.warehouse_id,
+                inventory_location_balances.c.location_code,
+                inventory_location_balances.c.item_id,
+                inventory_location_balances.c.quantity_on_hand,
+                inventory_location_balances.c.reorder_threshold,
+                inventory_location_balances.c.storage_status,
+                inventory_location_balances.c.created_at,
+                inventory_location_balances.c.updated_at,
+                warehouses.c.warehouse_name,
+                categories.c.category_id,
+                categories.c.category_name,
+                items.c.item_name,
+                items.c.brand,
+                items.c.spec,
+                items.c.unit,
+            )
+            .join(warehouses, warehouses.c.warehouse_id == inventory_location_balances.c.warehouse_id)
+            .join(items, items.c.item_id == inventory_location_balances.c.item_id)
+            .join(categories, categories.c.category_id == items.c.category_id)
+        )
+        if item_id:
+            statement = statement.where(inventory_location_balances.c.item_id == item_id)
+        if warehouse_id:
+            statement = statement.where(inventory_location_balances.c.warehouse_id == warehouse_id)
+        if location_code:
+            statement = statement.where(inventory_location_balances.c.location_code == location_code)
+        statement = statement.order_by(
+            inventory_location_balances.c.warehouse_id,
+            inventory_location_balances.c.location_code,
+            inventory_location_balances.c.item_id,
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [dict(row) for row in rows]
+
     def count_replenishment_requests(self) -> int:
         with self.engine.connect() as connection:
             return int(connection.execute(select(func.count()).select_from(replenishment_requests)).scalar_one())

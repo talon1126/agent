@@ -13,6 +13,7 @@
 - Feishu 仓储机器人消息进入 `feishu-adapter`，再转发到 n8n `Warehouse Workflow`。
 - n8n webhook：`POST /webhook/warehouse-inbound`。
 - workflow 文件：`n8n/workflows/warehouse-workflow.json`。
+- 定时刷新 workflow 文件：`n8n/workflows/warehouse-inventory-balances-refresh.json`，每 10 分钟调用一次飞书库存余额表同步。
 - 当前主要工具：
   - `warehouse_inventory_tool`：查询商品批次库存。
   - `warehouse_exception_tool`：查询高风险、临期、过期、质检冻结等仓储异常。
@@ -73,9 +74,19 @@
 ### 库位库存余额与订单库存接口
 
 - `GET /warehouse/stock/balances`
-  - 用途：按 `item_id + warehouse_id + location_code + batch_no` 聚合返回仓库库位级库存余额。
+  - 用途：按 `item_id + warehouse_id + location_code` 聚合返回仓库库位级库存余额。
   - 返回重点：`quantity_on_hand`、`quantity_available`、`batch_count`、`earliest_expiry_date`。
   - 物流 agent 需要判断某件商品在某仓库/库位还有多少可用库存时，应优先使用这个接口。
+
+- `GET /warehouse/stock/balances/table-schema`
+  - 用途：返回飞书库存余额表字段定义。
+  - 字段约定：一行一个 `item_id + warehouse_id + location_code`，不包含 `batch_no`；状态字段使用 `single_select`，时间字段使用 `date`。
+
+- `POST /warehouse/stock/balances/table-rows`
+  - 用途：分页返回适合写入飞书库存余额表的行数据。
+  - 常用入参：`item_id`、`warehouse_id`、`location_code`、`cursor`、`limit`。
+  - 分页约束：`limit` 最大 500；返回 `next_cursor` 供下一页继续同步。
+  - 余额规则：库存余额行不会因为数量为 0 被删除，余额为 0 时仍返回该行并标记 `Balance Status=zero_stock`。
 
 - `POST /warehouse/orders`
   - 用途：创建订单主单，支持多行商品。
@@ -181,6 +192,22 @@
   - 用途：把自然语言视图请求匹配到模板并创建视图。
   - 适合“帮我建一个香港仓高风险库存视图”这类请求。
 
+### 飞书库存余额表
+
+- `POST /warehouse/inventory-balances-table/provision`
+  - 用途：创建或复用固定 schema 的飞书库存余额表。
+  - 默认表名：`Warehouse Inventory Balances`。
+  - 表结构：一行一个 `item_id + warehouse_id + location_code` 聚合余额；所有状态字段为单选，所有时间字段为日期。
+  - 默认视图：库存余额总览、低库存余额、可售库存。
+
+- `POST /warehouse/inventory-balances-table/sync`
+  - 用途：把 `inventory_location_balances` 的余额读模型同步到飞书库存余额表。
+  - 数据源：`mock-api /warehouse/stock/balances/table-rows`。
+  - 常用入参：`item_id`、`warehouse_id`、`location_code`、`limit`、`max_pages`。
+  - 同步策略：每页最多 500 条，按 `Balance Key=item_id:warehouse_id:location_code` upsert；表不存在时自动创建，表存在时复用并补齐字段和视图。
+  - 定时刷新：`warehouse-inventory-balances-refresh.json` 每 10 分钟调用该接口，默认 `limit=500`、`max_pages=500`。
+  - 注意：同步不会删除飞书中的余额行；源数据余额为 0 时应同步为 0 行展示。
+
 ## 业务数据库表
 
 仓储相关表由 `mock-api` 的仓储仓库层管理。有 `DATABASE_URL` 时走 Postgres；没有数据库时使用内存/fixture fallback。
@@ -243,6 +270,7 @@
 - 客服 agent 如果需要解释“为什么不能发货”，可以引用 `warehouse/fulfillment/check` 的 `blockers` 和 `next_action`，但不要承诺退款或补偿。
 - 运营 agent 如果要做库存风险汇总，可以调用 `POST /warehouse/inventory/search`，按 `risk_level`、`expiry_risk`、`warehouse_id`、`category` 聚合。
 - 任何 agent 需要飞书库存表、视图或同步状态，都应调用 `feishu-adapter` 的 `/warehouse/inventory-table/*` 接口，不要直接访问飞书开放平台。
+- 任何 agent 需要飞书库存余额表，应调用 `feishu-adapter` 的 `/warehouse/inventory-balances-table/*` 接口；余额表按 `item_id + warehouse_id + location_code` 展示，不按批次展开。
 - 飞书库存表是读模型，不是库存源数据；库存源数据始终是 `mock-api` 暴露的仓储事实接口和背后的业务表。
 - Warehouse 扫描未同步采购单时，应使用 `BATCH-YYYYMMDD` 作为入库批次号，同一天到达的采购入库共享同一批次号，并在成功写入库存余额后把 `warehouse_sync_status` 更新为 `synced`。
 
