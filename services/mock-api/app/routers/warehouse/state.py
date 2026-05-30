@@ -5,6 +5,7 @@ from app.warehouse_store import WarehouseRepository, create_warehouse_repository
 
 RECEIVED_INVENTORY_BATCHES: list[dict] = []
 WAREHOUSE_INVENTORY_SYNC_JOBS: list[dict] = []
+WAREHOUSE_INVENTORY_MOVEMENTS: list[dict] = []
 WAREHOUSE_BATCH_QUANTITY_OVERRIDES: dict[str, dict[str, int]] = {}
 WAREHOUSE_ORDERS: list[dict] = []
 WAREHOUSE_ORDER_ITEMS: list[dict] = []

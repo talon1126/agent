@@ -10,6 +10,7 @@ from app.warehouse_store import (
     _quote_literal,
     categories,
     init_warehouse_schema,
+    inventory_movements,
     inventory_location_balances,
     inventory_batches,
     items,
@@ -38,6 +39,7 @@ WAREHOUSE_TABLES = [
     purchase_orders,
     warehouse_inventory_sync_jobs,
     inventory_location_balances,
+    inventory_movements,
     orders,
     order_items,
 ]
@@ -62,6 +64,7 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         purchase_order_count = connection.execute(text("select count(*) from purchase_orders")).scalar_one()
         sync_job_count = connection.execute(text("select count(*) from warehouse_inventory_sync_jobs")).scalar_one()
         balance_count = connection.execute(text("select count(*) from inventory_location_balances")).scalar_one()
+        movement_count = connection.execute(text("select count(*) from inventory_movements")).scalar_one()
         order_count = connection.execute(text("select count(*) from orders")).scalar_one()
         order_item_count = connection.execute(text("select count(*) from order_items")).scalar_one()
 
@@ -76,6 +79,7 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert purchase_order_count == 0
     assert sync_job_count == 0
     assert balance_count == 10
+    assert movement_count == 0
     assert order_count == 0
     assert order_item_count == 0
 
@@ -336,7 +340,15 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
             "delivery_provider_name": "顺丰",
             "courier_phone": "13800000001",
             "tracking_no": "SF1001",
-            "requested_items": [
+            "shipping_address": "广东省深圳市",
+            "shipping_province": "广东省",
+            "shipping_city": "深圳市",
+            "selected_warehouse_id": "wh_sz_1",
+            "selected_warehouse_name": "深圳仓",
+            "expires_at": "2026-05-28T10:30:00+00:00",
+            "released_at": "",
+            "release_reason": "",
+            "items": [
                 {"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}
             ],
             "created_by": "delivery-agent",
@@ -353,6 +365,10 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
     assert created["order"]["id"] == 1
     assert created["order"]["status"] == "未付款"
     assert created["order"]["delivery_provider_name"] == "顺丰"
+    assert "requested_items" not in created["order"]
+    assert [item["status"] for item in created["items"]] == ["未付款", "未付款"]
+    balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
+    assert sum(item["quantity_on_hand"] for item in balances) == 116
 
     paid = repository.pay_order(
         "ORD-CODEX-DB-1",
@@ -363,6 +379,7 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
     assert paid["order"]["status"] == "待发货"
     assert [item["batch_no"] for item in paid["items"]] == ["BATCH-20260401", "BATCH-20260501"]
     assert [item["quantity"] for item in paid["items"]] == [16, 4]
+    assert all(item["status"] == "待发货" for item in paid["items"])
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 116
 
@@ -378,3 +395,65 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
     assert returned["order"]["status"] == "已退货"
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 136
+
+    movements = repository.list_inventory_movements(order_id="ORD-CODEX-DB-1")
+    assert [item["movement_type"] for item in movements] == ["order_created", "order_returned"]
+    assert [item["quantity_delta"] for item in movements] == [-20, 20]
+    assert "batch_no" not in movements[0]
+
+
+def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+    repository.create_order(
+        {
+            "order_id": "ORD-CODEX-DB-EXPIRED",
+            "customer_id": "cus_100",
+            "status": "未付款",
+            "delivery_provider_id": "sf",
+            "delivery_provider_name": "顺丰",
+            "courier_phone": "",
+            "tracking_no": "SFEXPIRED",
+            "shipping_address": "广东省深圳市",
+            "shipping_province": "广东省",
+            "shipping_city": "深圳市",
+            "selected_warehouse_id": "wh_sz_1",
+            "selected_warehouse_name": "深圳仓",
+            "expires_at": "2026-05-28T10:30:00+00:00",
+            "released_at": "",
+            "release_reason": "",
+            "items": [
+                {"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}
+            ],
+            "created_by": "warehouse-agent",
+            "created_at": "2026-05-28T10:00:00+00:00",
+            "updated_at": "2026-05-28T10:00:00+00:00",
+            "paid_at": "",
+            "shipped_at": "",
+            "arrived_at": "",
+            "cancelled_at": "",
+            "returned_at": "",
+        }
+    )
+
+    released = repository.release_expired_orders(
+        processed_by="warehouse-timeout-job",
+        now="2026-05-28T10:31:00+00:00",
+    )
+    released_again = repository.release_expired_orders(
+        processed_by="warehouse-timeout-job",
+        now="2026-05-28T10:32:00+00:00",
+    )
+
+    assert [item["order_id"] for item in released] == ["ORD-CODEX-DB-EXPIRED"]
+    assert released[0]["status"] == "已取消"
+    assert released_again == []
+    balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
+    assert sum(item["quantity_on_hand"] for item in balances) == 136
+    movements = repository.list_inventory_movements(order_id="ORD-CODEX-DB-EXPIRED")
+    assert [item["movement_type"] for item in movements] == [
+        "order_created",
+        "order_timeout_released",
+    ]

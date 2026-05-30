@@ -215,6 +215,21 @@ def test_warehouse_inventory_balances_refresh_workflow_runs_every_10_minutes() -
     assert '"limit": 500' in sync_request["parameters"]["jsonBody"]
 
 
+def test_warehouse_order_timeout_release_workflow_runs_every_5_minutes() -> None:
+    workflow = load_workflow("warehouse-order-timeout-release.json")
+    schedule = node_by_name(workflow, "Every 5 Minutes")
+    release_request = node_by_name(workflow, "Release Expired Warehouse Orders")
+
+    assert workflow["name"] == "Warehouse Order Timeout Release"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 5}]
+    assert release_request["parameters"]["url"].endswith(
+        "/warehouse/orders/release-expired"
+    )
+    assert "warehouse-timeout-release" in release_request["parameters"]["jsonBody"]
+
+
 def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
     for filename, expected in DEPARTMENT_WORKFLOWS.items():
         workflow = load_workflow(filename)

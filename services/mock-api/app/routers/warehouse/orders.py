@@ -1,9 +1,13 @@
 import json
+import re
+from collections import defaultdict
+from datetime import timedelta
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from app.store import load_json
 from app.routers.delivery.state import get_delivery_provider
 from app.warehouse_store import WarehouseRepository
 
@@ -13,9 +17,10 @@ from .inventory import (
     inventory_batch_key,
     load_batch_inventory_rows,
 )
-from .schemas import WarehouseOrderCreate, WarehouseOrderStatusUpdateRequest
+from .schemas import WarehouseOrderCreate, WarehouseOrderReleaseExpiredRequest, WarehouseOrderStatusUpdateRequest
 from .state import (
     WAREHOUSE_BATCH_QUANTITY_OVERRIDES,
+    WAREHOUSE_INVENTORY_MOVEMENTS,
     WAREHOUSE_ORDERS,
     WAREHOUSE_ORDER_ITEMS,
     get_warehouse_repository,
@@ -29,6 +34,7 @@ ORDER_STATUS_SHIPPED = "已发货"
 ORDER_STATUS_ARRIVED = "已到货"
 ORDER_STATUS_REFUNDED = "已退款"
 ORDER_STATUS_RETURNED = "已退货"
+ORDER_STATUS_CANCELED = "已取消"
 
 
 def available_order_batches(item_id: str, warehouse_id: str, location_code: str | None = None) -> list[dict[str, Any]]:
@@ -111,6 +117,107 @@ def allocate_order_item(item: dict[str, Any]) -> list[dict[str, Any]]:
     return allocations
 
 
+def parse_shipping_address(value: str) -> tuple[str, str]:
+    text = str(value or "").strip()
+    province = ""
+    city = ""
+    province_match = re.search(r"([^省]+省)", text)
+    city_match = re.search(r"([^省市]+市)", text)
+    if province_match:
+        province = province_match.group(1)
+    if city_match:
+        city = city_match.group(1)
+    return province, city
+
+
+def normalize_city(value: str) -> str:
+    return str(value or "").strip().removesuffix("市")
+
+
+def active_warehouses() -> list[dict[str, Any]]:
+    return [item for item in load_json("warehouses.json") if item.get("status") == "active"]
+
+
+def aggregate_requested_quantities(items: list[dict[str, Any]]) -> dict[str, int]:
+    quantities: dict[str, int] = defaultdict(int)
+    for item in items:
+        quantity = int(item["quantity"])
+        if quantity <= 0:
+            raise HTTPException(status_code=400, detail="quantity must be positive")
+        quantities[str(item["item_id"])] += quantity
+    return dict(quantities)
+
+
+def warehouse_can_fulfill_all(items: list[dict[str, Any]], warehouse_id: str) -> tuple[bool, dict[str, Any] | None]:
+    for item_id, quantity in aggregate_requested_quantities(items).items():
+        balances = aggregate_location_balances(item_id=item_id, warehouse_id=warehouse_id)
+        available = int(balances["total_quantity_available"])
+        if available < quantity:
+            return False, insufficient_stock_detail(
+                requested_quantity=quantity,
+                available_quantity=available,
+                item_id=item_id,
+                warehouse_id=warehouse_id,
+                balances=balances,
+            )
+    return True, None
+
+
+def choose_single_warehouse(items: list[dict[str, Any]], shipping_city: str) -> dict[str, Any]:
+    explicit_ids = {str(item.get("warehouse_id") or "").strip() for item in items if str(item.get("warehouse_id") or "").strip()}
+    warehouses = active_warehouses()
+    if len(explicit_ids) > 1:
+        raise HTTPException(status_code=400, detail="order_items_must_use_single_warehouse")
+    if explicit_ids:
+        warehouses = [warehouse for warehouse in warehouses if warehouse["warehouse_id"] in explicit_ids]
+    city_key = normalize_city(shipping_city)
+    city_matches = [
+        warehouse for warehouse in warehouses if city_key and normalize_city(warehouse.get("city", "")) == city_key
+    ]
+    candidates = city_matches + [warehouse for warehouse in warehouses if warehouse not in city_matches]
+    first_shortage: dict[str, Any] | None = None
+    for warehouse in candidates:
+        can_fulfill, shortage = warehouse_can_fulfill_all(items, warehouse["warehouse_id"])
+        if can_fulfill:
+            return warehouse
+        if not first_shortage:
+            first_shortage = shortage
+    raise HTTPException(status_code=409, detail=first_shortage or {"error": "no_active_warehouse_can_fulfill_order"})
+
+
+def movement_rows_from_order_items(
+    items: list[dict[str, Any]],
+    *,
+    movement_type: str,
+    created_by: str,
+    created_at: str,
+    direction: int,
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str], int] = defaultdict(int)
+    for item in items:
+        key = (
+            item["order_id"],
+            item["item_id"],
+            item["warehouse_id"],
+            item["location_code"],
+        )
+        grouped[key] += int(item["quantity"])
+    return [
+        {
+            "movement_id": f"IM-{len(WAREHOUSE_INVENTORY_MOVEMENTS) + index + 1:06d}",
+            "order_id": order_id,
+            "movement_type": movement_type,
+            "item_id": item_id,
+            "warehouse_id": warehouse_id,
+            "location_code": location_code,
+            "quantity_delta": quantity * direction,
+            "created_by": created_by,
+            "created_at": created_at,
+        }
+        for index, ((order_id, item_id, warehouse_id, location_code), quantity) in enumerate(grouped.items())
+    ]
+
+
 def next_warehouse_order_id(repository: WarehouseRepository | None = None) -> str:
     existing_count = repository.count_orders() if repository else len(WAREHOUSE_ORDERS)
     return f"ORD-CODEX-{existing_count + 1001}"
@@ -161,15 +268,20 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     order_id = (payload.order_id or "").strip() or next_warehouse_order_id(repository)
     delivery_provider = get_delivery_provider(payload.delivery_provider_id)
+    shipping_province, shipping_city = parse_shipping_address(payload.shipping_address)
     requested_items = [
         {
             "item_id": item.item_id.strip(),
-            "warehouse_id": item.warehouse_id.strip(),
+            "warehouse_id": (item.warehouse_id or "").strip(),
             "location_code": (item.location_code or "").strip(),
             "quantity": int(item.quantity),
         }
         for item in payload.items
     ]
+    selected_warehouse = choose_single_warehouse(requested_items, shipping_city)
+    for item in requested_items:
+        item["warehouse_id"] = selected_warehouse["warehouse_id"]
+    expires_at = (datetime.fromisoformat(now) + timedelta(minutes=30)).isoformat()
     order = {
         "order_id": order_id,
         "customer_id": payload.customer_id.strip(),
@@ -181,7 +293,12 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
         "delivery_provider_name": delivery_provider["name"],
         "courier_phone": payload.courier_phone.strip(),
         "tracking_no": payload.tracking_no.strip() or f"{delivery_provider['tracking_prefix']}{order_id.replace('-', '')}",
-        "requested_items": requested_items,
+        "shipping_address": payload.shipping_address.strip(),
+        "shipping_province": shipping_province,
+        "shipping_city": shipping_city,
+        "selected_warehouse_id": selected_warehouse["warehouse_id"],
+        "selected_warehouse_name": selected_warehouse["warehouse_name"],
+        "items": requested_items,
         "created_by": payload.created_by,
         "created_at": now,
         "updated_at": now,
@@ -190,12 +307,49 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
         "arrived_at": "",
         "cancelled_at": "",
         "returned_at": "",
+        "expires_at": expires_at,
+        "released_at": "",
+        "release_reason": "",
     }
     if repository:
-        return repository.create_order(order)
+        try:
+            return {"ok": True, **repository.create_order(order)}
+        except ValueError as error:
+            raise order_http_error(error) from error
 
+    created_items: list[dict[str, Any]] = []
+    for requested in requested_items:
+        for row in allocate_order_item(requested):
+            quantity = int(row["allocated_quantity"])
+            balance = find_current_inventory_balance(row)
+            set_inventory_balance_quantity(balance, quantity_on_hand=int(balance["quantity_on_hand"]) - quantity)
+            created_items.append(
+                {
+                    "id": len(WAREHOUSE_ORDER_ITEMS) + len(created_items) + 1,
+                    "order_id": order_id,
+                    "customer_id": order["customer_id"],
+                    "status": ORDER_STATUS_UNPAID,
+                    "item_id": row["item_id"],
+                    "warehouse_id": row["warehouse_id"],
+                    "location_code": row["location_code"],
+                    "batch_no": row["batch_no"],
+                    "quantity": quantity,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+    WAREHOUSE_ORDER_ITEMS.extend(created_items)
+    WAREHOUSE_INVENTORY_MOVEMENTS.extend(
+        movement_rows_from_order_items(
+            created_items,
+            movement_type="order_created",
+            created_by=payload.created_by,
+            created_at=now,
+            direction=-1,
+        )
+    )
     WAREHOUSE_ORDERS.append(order)
-    return warehouse_order_response(order)
+    return warehouse_order_response(order, fallback_order_items(order_id))
 
 
 @router.get("/warehouse/orders/{order_id}")
@@ -228,28 +382,10 @@ def pay_warehouse_order(
     if order["status"] != ORDER_STATUS_UNPAID:
         raise HTTPException(status_code=409, detail=f"order_cannot_pay_from_{order['status']}")
     now = datetime.now(UTC).isoformat()
-    created_items: list[dict[str, Any]] = []
-    for requested in order["requested_items"]:
-        for row in allocate_order_item(requested):
-            quantity = int(row["allocated_quantity"])
-            balance = find_current_inventory_balance(row)
-            set_inventory_balance_quantity(balance, quantity_on_hand=int(balance["quantity_on_hand"]) - quantity)
-            created_items.append(
-                {
-                    "id": len(WAREHOUSE_ORDER_ITEMS) + len(created_items) + 1,
-                    "order_id": order_id,
-                    "customer_id": order["customer_id"],
-                    "status": ORDER_STATUS_PENDING_SHIPMENT,
-                    "item_id": row["item_id"],
-                    "warehouse_id": row["warehouse_id"],
-                    "location_code": row["location_code"],
-                    "batch_no": row["batch_no"],
-                    "quantity": quantity,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            )
-    WAREHOUSE_ORDER_ITEMS.extend(created_items)
+    for item in fallback_order_items(order_id):
+        if item["status"] == ORDER_STATUS_UNPAID:
+            item["status"] = ORDER_STATUS_PENDING_SHIPMENT
+            item["updated_at"] = now
     order["status"] = ORDER_STATUS_PENDING_SHIPMENT
     order["updated_at"] = now
     order["paid_at"] = now
@@ -270,7 +406,8 @@ def restore_fallback_order_items(order: dict[str, Any], status: str, now: str) -
     for line in [
         item
         for item in WAREHOUSE_ORDER_ITEMS
-        if item["order_id"] == order["order_id"] and item["status"] == ORDER_STATUS_PENDING_SHIPMENT
+        if item["order_id"] == order["order_id"]
+        and item["status"] in {ORDER_STATUS_UNPAID, ORDER_STATUS_PENDING_SHIPMENT, ORDER_STATUS_SHIPPED, ORDER_STATUS_ARRIVED}
     ]:
         balance = find_current_inventory_balance(line)
         set_inventory_balance_quantity(
@@ -279,12 +416,30 @@ def restore_fallback_order_items(order: dict[str, Any], status: str, now: str) -
         )
         line["status"] = status
         line["updated_at"] = now
+    WAREHOUSE_INVENTORY_MOVEMENTS.extend(
+        movement_rows_from_order_items(
+            [
+                item
+                for item in WAREHOUSE_ORDER_ITEMS
+                if item["order_id"] == order["order_id"] and item["status"] == status
+            ],
+            movement_type={
+                ORDER_STATUS_REFUNDED: "order_refunded",
+                ORDER_STATUS_RETURNED: "order_returned",
+                ORDER_STATUS_CANCELED: "order_timeout_released",
+            }.get(status, "order_restored"),
+            created_by="warehouse-agent",
+            created_at=now,
+            direction=1,
+        )
+    )
 
 
 def update_fallback_order_status(order_id: str, status: str) -> dict[str, Any]:
     order = get_warehouse_order_or_404(order_id)
     now = datetime.now(UTC).isoformat()
-    if status in {ORDER_STATUS_REFUNDED, ORDER_STATUS_RETURNED} and order["status"] in {
+    if status in {ORDER_STATUS_REFUNDED, ORDER_STATUS_RETURNED, ORDER_STATUS_CANCELED} and order["status"] in {
+        ORDER_STATUS_UNPAID,
         ORDER_STATUS_PENDING_SHIPMENT,
         ORDER_STATUS_SHIPPED,
         ORDER_STATUS_ARRIVED,
@@ -297,6 +452,7 @@ def update_fallback_order_status(order_id: str, status: str) -> dict[str, Any]:
         ORDER_STATUS_ARRIVED: "arrived_at",
         ORDER_STATUS_REFUNDED: "cancelled_at",
         ORDER_STATUS_RETURNED: "returned_at",
+        ORDER_STATUS_CANCELED: "cancelled_at",
     }.get(status)
     if timestamp_field:
         order[timestamp_field] = now
@@ -350,6 +506,38 @@ def cancel_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateReq
         except ValueError as error:
             raise order_http_error(error) from error
     return update_fallback_order_status(order_id, ORDER_STATUS_REFUNDED)
+
+
+@router.post("/warehouse/orders/release-expired")
+def release_expired_warehouse_orders(payload: WarehouseOrderReleaseExpiredRequest) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    now = payload.now or datetime.now(UTC).isoformat()
+    if repository:
+        released_orders = repository.release_expired_orders(
+            processed_by=payload.processed_by,
+            now=now,
+            limit=payload.limit,
+        )
+        return {
+            "ok": True,
+            "released_count": len(released_orders),
+            "released_orders": released_orders,
+            "processed_at": now,
+        }
+
+    released: list[dict[str, Any]] = []
+    for order in WAREHOUSE_ORDERS:
+        if len(released) >= max(min(int(payload.limit or 100), 500), 1):
+            break
+        if order["status"] != ORDER_STATUS_UNPAID or order.get("released_at"):
+            continue
+        if str(order.get("expires_at") or "") >= now:
+            continue
+        update_fallback_order_status(order["order_id"], ORDER_STATUS_CANCELED)
+        order["released_at"] = now
+        order["release_reason"] = "unpaid_timeout"
+        released.append(order)
+    return {"ok": True, "released_count": len(released), "released_orders": released, "processed_at": now}
 
 
 @router.post("/warehouse/orders/{order_id}/return")

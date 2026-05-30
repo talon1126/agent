@@ -90,11 +90,12 @@
 
 - `POST /warehouse/orders`
   - 用途：创建订单主单，支持多行商品。
-  - 入参重点：`order_id`、`customer_id`、`delivery_provider_id`、`courier_phone`、`tracking_no`、`items[].item_id`、`items[].warehouse_id`、`items[].quantity`。
-  - 创建后状态为 `未付款`，不会扣减库存；物流供应商字段写入订单主表，供 Delivery Agent 查询。
+  - 入参重点：`order_id`、`customer_id`、`shipping_address`、`delivery_provider_id`、`courier_phone`、`tracking_no`、`items[].item_id`、`items[].quantity`。
+  - 地址格式：`xx省xx市`；Warehouse 按整单同仓策略优先选择距离用户地址最近且能满足整单库存的仓库。
+  - 创建后状态为 `未付款`，立即写入 `order_items` 并扣减 `inventory_location_balances`；物流供应商字段写入订单主表，供 Delivery Agent 查询。
 
 - `POST /warehouse/orders/{order_id}/pay`
-  - 用途：订单付款后按 FEFO 从 `inventory_location_balances` 扣减库存，并在 `order_items` 记录命中的 `warehouse_id + location_code + batch_no + quantity`。
+  - 用途：订单付款后只更新订单和明细状态，不再次扣减库存。
   - 状态流转：`未付款` -> `待发货`。
 
 - `POST /warehouse/orders/{order_id}/ship`
@@ -108,6 +109,11 @@
 
 - `POST /warehouse/orders/{order_id}/return`
   - 用途：已到货后退货，状态更新为 `已退货`，按 `order_items` 原批次加回 `inventory_location_balances`。
+
+- `POST /warehouse/orders/release-expired`
+  - 用途：释放未付款超时订单占用的库存，由 n8n 定时 workflow 调用。
+  - 处理规则：扫描 `status=未付款`、`expires_at < now`、`released_at` 为空的订单，按 `order_items` 加回库存，订单状态更新为 `已取消`，写入 `release_reason=unpaid_timeout`。
+  - 定时 workflow 文件：`n8n/workflows/warehouse-order-timeout-release.json`，每 5 分钟调用一次。
 
 - `POST /warehouse/purchase-orders/sync-arrivals`
   - 用途：Warehouse 扫描采购单中 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的记录，同步到库存事实。
@@ -234,20 +240,26 @@
   - 关键字段：`warehouse_id`、`location_code`、`item_id`、`batch_no`、`production_date`、`expiry_date`、`quantity_on_hand`、`quantity_reserved`、`reorder_threshold`、`storage_status`。
 
 - `inventory_location_balances`
-  - 批次级库位库存余额表，订单付款扣减、取消或退货加回。
+  - 批次级库位库存余额表，订单创建扣减，取消、退款、退货或超时释放加回。
   - 关键字段：`id`、`warehouse_id`、`location_code`、`item_id`、`batch_no`、`quantity_on_hand`、`reorder_threshold`、`storage_status`。
   - 初始化来源：按 `inventory_batches.quantity_on_hand` 建立余额，忽略旧模型的 `quantity_reserved`。
   - 当前约束：同一 `item_id + warehouse_id` 后续采购入库复用同一个 `location_code`，避免同仓同商品分散到多个库位。
 
 - `orders`
   - 订单主表，记录下单、付款、发货、到货、取消和退货状态。
-  - 关键字段：`id`、`order_id`、`customer_id`、`status`、`delivery_provider_id`、`delivery_provider_name`、`courier_phone`、`tracking_no`、`requested_items_json`、`paid_at`、`shipped_at`、`arrived_at`、`cancelled_at`、`returned_at`。
-  - 主要状态：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`。
+  - 关键字段：`id`、`order_id`、`customer_id`、`status`、`delivery_provider_id`、`delivery_provider_name`、`courier_phone`、`tracking_no`、`shipping_address`、`shipping_province`、`shipping_city`、`selected_warehouse_id`、`selected_warehouse_name`、`paid_at`、`shipped_at`、`arrived_at`、`cancelled_at`、`returned_at`、`expires_at`、`released_at`、`release_reason`。
+  - 已删除字段：`requested_items_json`；订单商品明细和库存扣减事实以 `order_items` 为准。
+  - 主要状态：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`、`已取消`。
   - 业务边界：Warehouse 负责库存扣减和订单状态流转；Delivery 只读取订单上的物流供应商、快递员电话和物流单号，不负责库存分配。
 
 - `order_items`
-  - 订单明细表，记录付款扣减命中的批次库存，用于取消和退货时按原批次加回。
+  - 订单明细表，创建订单时即记录扣减命中的批次库存，用于取消、退款、退货或超时释放时按原批次加回。
   - 关键字段：`id`、`order_id`、`customer_id`、`status`、`item_id`、`warehouse_id`、`location_code`、`batch_no`、`quantity`。
+
+- `inventory_movements`
+  - 库存流水表，记录订单创建扣减和退款、退货、未付款超时释放的库存变化。
+  - 关键字段：`movement_id`、`order_id`、`movement_type`、`item_id`、`warehouse_id`、`location_code`、`quantity_delta`、`created_by`、`created_at`。
+  - 不记录 `batch_no`、`before_quantity` 或 `after_quantity`。
 
 - `delivery_providers`
   - 物流供应商表，记录可分配到订单的承运商主数据。
@@ -274,7 +286,7 @@
 
 - 采购 agent 如果确认采购单到货，必须通过 `POST /procurement/purchase-orders/confirm-arrival-batch` 把采购单标记为 `arrived_unsynced`，不要直接写 `inventory_batches`、`inventory_location_balances` 或飞书库存表。
 - 物流 agent 如果只需要判断是否能出库，可以调用 `POST /warehouse/fulfillment/check`，不要自行推断批次库存；如果查询配送状态，应调用 `POST /delivery/status/lookup` 读取订单物流字段。
-- 订单付款后必须调用 `POST /warehouse/orders/{order_id}/pay` 扣减 `inventory_location_balances` 并进入 `待发货`；发货和到货只更新为 `已发货`、`已到货`；取消或退货调用 `/cancel` 或 `/return` 按原批次加回库存，并进入 `已退款` 或 `已退货`。
+- 创建订单时即扣减 `inventory_location_balances` 并写入 `order_items`；付款只进入 `待发货`；发货和到货只更新为 `已发货`、`已到货`；取消、退款、退货或超时释放按 `order_items` 原扣减明细加回库存，并进入 `已退款`、`已退货` 或 `已取消`。
 - 客服 agent 如果需要解释“为什么不能发货”，可以引用 `warehouse/fulfillment/check` 的 `blockers` 和 `next_action`，但不要承诺退款或补偿。
 - 运营 agent 如果要做库存风险汇总，可以调用 `POST /warehouse/inventory/search`，按 `risk_level`、`expiry_risk`、`warehouse_id`、`category` 聚合。
 - 任何 agent 需要飞书库存表、视图或同步状态，都应调用 `feishu-adapter` 的 `/warehouse/inventory-table/*` 接口，不要直接访问飞书开放平台。
@@ -533,7 +545,7 @@
 - `POST /delivery/exceptions/search`
   - 用途：按订单状态或供应商查询物流列表。
   - 常用入参：`status`、`provider_id`、`limit`。
-  - 状态枚举：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`。
+  - 状态枚举：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`、`已取消`。
 
 - `POST /delivery/cases`
   - 用途：为真实订单创建物流跟进 case。
@@ -549,7 +561,7 @@
 - `orders`
   - 物流只读取订单主表上的物流字段，不拥有该表。
   - 物流相关字段：`delivery_provider_id`、`delivery_provider_name`、`courier_phone`、`tracking_no`、`status`。
-  - 订单状态：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`。
+  - 订单状态：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`、`已取消`。
 
 ## 其他 workflow 可能会用到的契约
 

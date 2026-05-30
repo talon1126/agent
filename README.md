@@ -58,7 +58,8 @@ flowchart LR
 - 创建库存视图：`@warehouse 创建高风险库存视图` 会读取真实飞书表字段，并按受控模板创建或复用库存视图。
 - 同步采购到仓库存：`@warehouse 同步采购到仓库存` 会扫描已支付且到仓未同步的 `PO-*`，按实际到仓日期生成 `BATCH-YYYYMMDD` 批次，写入批次事实表和库位余额表。
 - 处理历史同步任务：`@warehouse 处理库存同步任务` 会消费旧链路遗留的 pending sync jobs，只同步对应批次，并把任务标记为 completed 或 failed。
-- 订单驱动库存扣减：订单付款后按 FEFO 扣减 `inventory_location_balances`，发货和到货只更新状态，取消或退货按 `order_items` 原批次加回。
+- 订单驱动库存扣减：用户下单创建订单时按整单同仓和 FEFO 扣减 `inventory_location_balances`，付款只更新为待发货，取消、退款、退货或超时释放按 `order_items` 原批次加回。
+- 未付款订单超时释放：`warehouse-order-timeout-release.json` 每 5 分钟调用 `POST /warehouse/orders/release-expired`，把超时未付款订单更新为 `已取消` 并回滚库存。
 
 ## mock-api
 
@@ -68,7 +69,7 @@ flowchart LR
 - 提供批次库存查询能力：按 `item_id`、仓库、库位、分类、批次、风险等维度返回库存事实。
 - 计算仓储派生字段：可用库存、临期状态、风险等级、处理建议、履约阻塞原因。
 - 支持仓储异常和履约判断：用于回答库存差异、临期、过期、质检冻结、缺货和能否发货等问题。
-- 提供批次级库位余额和订单状态流转能力：`inventory_batches` 只保留入库事实，当前库存由 `inventory_location_balances` 承担，订单付款按 FEFO 扣减。
+- 提供批次级库位余额和订单状态流转能力：`inventory_batches` 只保留入库事实，当前库存由 `inventory_location_balances` 承担，订单创建时按 FEFO 扣减。
 - 提供飞书库存余额表读模型：`/warehouse/stock/balances/table-schema` 返回字段定义，`/warehouse/stock/balances/table-rows` 按 cursor 分页返回余额行，每页最多 500 条。
 - 承接补货申请：Warehouse 创建 `未审批` 补货申请，Procurement 批准后更新为 `已审批`。
 - 支持采购到仓后的库存事实更新：确认 `PO-*` 到货后，Warehouse 扫描 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的采购单，同步到 `inventory_batches` 和 `inventory_location_balances`。
@@ -214,4 +215,4 @@ flowchart LR
 - `POST /delivery/exceptions/search`：按 `status`、`provider_id` 查询物流订单列表。
 - `POST /delivery/cases`：创建物流跟进 case。
 
-订单状态统一为：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`。Warehouse 负责这些状态的写入和库存扣减，Delivery 只读取物流字段并创建跟进 case。
+订单状态统一为：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`、`已取消`。Warehouse 负责这些状态的写入和库存扣减，Delivery 只读取物流字段并创建跟进 case。

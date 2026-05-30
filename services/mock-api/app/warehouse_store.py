@@ -147,7 +147,11 @@ orders = Table(
     Column("delivery_provider_name", String, nullable=False, default="顺丰"),
     Column("courier_phone", String, nullable=False, default=""),
     Column("tracking_no", String, nullable=False, default=""),
-    Column("requested_items_json", Text, nullable=False, default="[]"),
+    Column("shipping_address", String, nullable=False, default=""),
+    Column("shipping_province", String, nullable=False, default=""),
+    Column("shipping_city", String, nullable=False, default=""),
+    Column("selected_warehouse_id", String, nullable=False, default=""),
+    Column("selected_warehouse_name", String, nullable=False, default=""),
     Column("created_by", String, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
@@ -156,6 +160,9 @@ orders = Table(
     Column("arrived_at", String, nullable=False, default=""),
     Column("cancelled_at", String, nullable=False, default=""),
     Column("returned_at", String, nullable=False, default=""),
+    Column("expires_at", String, nullable=False, default=""),
+    Column("released_at", String, nullable=False, default=""),
+    Column("release_reason", String, nullable=False, default=""),
 )
 
 order_items = Table(
@@ -172,6 +179,20 @@ order_items = Table(
     Column("quantity", Integer, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
+)
+
+inventory_movements = Table(
+    "inventory_movements",
+    metadata,
+    Column("movement_id", String, primary_key=True),
+    Column("order_id", String, nullable=False, index=True),
+    Column("movement_type", String, nullable=False, index=True),
+    Column("item_id", String, nullable=False, index=True),
+    Column("warehouse_id", String, nullable=False, index=True),
+    Column("location_code", String, nullable=False, index=True),
+    Column("quantity_delta", Integer, nullable=False),
+    Column("created_by", String, nullable=False),
+    Column("created_at", String, nullable=False),
 )
 
 delivery_providers = Table(
@@ -231,7 +252,7 @@ WAREHOUSE_TABLE_COMMENTS = {
     "categories": "商品分类表，保存纸品、乳制品、饮料等业务分类和存储要求。",
     "items": "商品主数据表，保存每个商品的名称、品牌、规格、单位和条码。",
     "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
-    "inventory_location_balances": "批次级库位库存余额表，保存订单扣减和退回后的当前可售库存。",
+    "inventory_location_balances": "批次级库位库存余额表，保存订单创建扣减和退回后的当前可售库存。",
     "replenishment_requests": "补货申请表，保存仓储发现低库存后交给采购审核的结构化需求。",
     "delivery_providers": "物流供应商表，保存顺丰、京东、圆通等承运商基础信息供订单和 Delivery Agent 使用。",
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
@@ -239,6 +260,7 @@ WAREHOUSE_TABLE_COMMENTS = {
     "warehouse_inventory_sync_jobs": "仓储库存同步任务表，保存采购到仓后需要 Warehouse Agent 同步飞书库存视图的待处理任务。",
     "orders": "订单主表，保存下单、付款、发货、到货、退款和退货状态，并保留物流供应商与快递员联系方式供 Delivery Agent 查询。",
     "order_items": "订单明细表，保存订单扣减命中的商品、仓库、库位、批次和数量。",
+    "inventory_movements": "库存流水表，记录订单创建、退款、退货和未付款超时释放对库位库存余额的影响。",
 }
 
 WAREHOUSE_COLUMN_COMMENTS = {
@@ -293,7 +315,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "batch_no": "余额对应批次号，用于商品溯源。",
         "production_date": "批次生产日期。",
         "expiry_date": "批次保质期到期日期。",
-        "quantity_on_hand": "当前可售库存余额；订单付款扣减，取消或退货加回。",
+        "quantity_on_hand": "当前可售库存余额；订单创建扣减，取消、退货或超时释放加回。",
         "reorder_threshold": "补货预警阈值。",
         "storage_status": "余额库存状态，例如 available、quality_hold。",
         "created_at": "余额行创建时间。",
@@ -376,12 +398,16 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "id": "订单自增整数主键。",
         "order_id": "订单业务编号，例如 ORD-CODEX-9001。",
         "customer_id": "客户编号。",
-        "status": "订单状态：未付款、待发货、已发货、已到货、已退款、已退货。",
+        "status": "订单状态：未付款、待发货、已发货、已到货、已退款、已退货、已取消。",
         "delivery_provider_id": "物流供应商编号，例如 sf、jd、yto。",
         "delivery_provider_name": "物流供应商展示名称，例如顺丰、京东、圆通。",
         "courier_phone": "快递员联系电话，由 Delivery Agent 查询和跟进。",
         "tracking_no": "物流单号或跟踪号。",
-        "requested_items_json": "下单请求明细 JSON 字符串。",
+        "shipping_address": "用户收货地址，统一格式为 xx省xx市。",
+        "shipping_province": "从收货地址解析出的省份。",
+        "shipping_city": "从收货地址解析出的城市。",
+        "selected_warehouse_id": "整单同仓发货时选中的仓库编号。",
+        "selected_warehouse_name": "整单同仓发货时选中的仓库名称。",
         "created_by": "创建订单的用户或系统身份。",
         "created_at": "订单创建时间。",
         "updated_at": "订单更新时间。",
@@ -390,6 +416,9 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "arrived_at": "到货时间。",
         "cancelled_at": "取消时间。",
         "returned_at": "退货入库时间。",
+        "expires_at": "未付款订单库存占用释放截止时间。",
+        "released_at": "未付款超时释放库存的处理时间。",
+        "release_reason": "库存释放原因，例如 unpaid_timeout。",
     },
     "order_items": {
         "id": "订单明细自增整数主键。",
@@ -411,6 +440,17 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "tracking_prefix": "生成 mock 物流单号时使用的前缀。",
         "status": "供应商启用状态，例如 active。",
     },
+    "inventory_movements": {
+        "movement_id": "库存流水编号。",
+        "order_id": "关联订单编号。",
+        "movement_type": "流水类型，例如 order_created、order_refunded、order_returned、order_timeout_released。",
+        "item_id": "发生库存变化的商品编号。",
+        "warehouse_id": "发生库存变化的仓库编号。",
+        "location_code": "发生库存变化的库位。",
+        "quantity_delta": "库存变化数量；扣减为负数，加回为正数。",
+        "created_by": "创建流水的用户、agent 或定时任务身份。",
+        "created_at": "流水创建时间。",
+    },
 }
 
 
@@ -431,6 +471,7 @@ def init_warehouse_schema(engine: Engine) -> None:
             warehouse_inventory_sync_jobs,
             orders,
             order_items,
+            inventory_movements,
             delivery_providers,
         ],
     )
@@ -466,10 +507,20 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
                 "delivery_provider_name": "ALTER TABLE orders ADD COLUMN delivery_provider_name VARCHAR NOT NULL DEFAULT '顺丰'",
                 "courier_phone": "ALTER TABLE orders ADD COLUMN courier_phone VARCHAR NOT NULL DEFAULT ''",
                 "tracking_no": "ALTER TABLE orders ADD COLUMN tracking_no VARCHAR NOT NULL DEFAULT ''",
+                "shipping_address": "ALTER TABLE orders ADD COLUMN shipping_address VARCHAR NOT NULL DEFAULT ''",
+                "shipping_province": "ALTER TABLE orders ADD COLUMN shipping_province VARCHAR NOT NULL DEFAULT ''",
+                "shipping_city": "ALTER TABLE orders ADD COLUMN shipping_city VARCHAR NOT NULL DEFAULT ''",
+                "selected_warehouse_id": "ALTER TABLE orders ADD COLUMN selected_warehouse_id VARCHAR NOT NULL DEFAULT ''",
+                "selected_warehouse_name": "ALTER TABLE orders ADD COLUMN selected_warehouse_name VARCHAR NOT NULL DEFAULT ''",
+                "expires_at": "ALTER TABLE orders ADD COLUMN expires_at VARCHAR NOT NULL DEFAULT ''",
+                "released_at": "ALTER TABLE orders ADD COLUMN released_at VARCHAR NOT NULL DEFAULT ''",
+                "release_reason": "ALTER TABLE orders ADD COLUMN release_reason VARCHAR NOT NULL DEFAULT ''",
             }
             for column_name, statement in order_missing_column_sql.items():
                 if column_name not in order_columns:
                     connection.execute(text(statement))
+            if "requested_items_json" in order_columns:
+                connection.execute(text("ALTER TABLE orders DROP COLUMN requested_items_json"))
             connection.execute(text("UPDATE orders SET status = '未付款' WHERE status = 'created'"))
             connection.execute(text("UPDATE orders SET status = '待发货' WHERE status = 'paid'"))
             connection.execute(text("UPDATE orders SET status = '已发货' WHERE status = 'shipped'"))
@@ -601,6 +652,7 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         # Demo data is fixture-owned, so restart/reseed should converge the DB to fixtures.
         connection.execute(order_items.delete())
         connection.execute(orders.delete())
+        connection.execute(inventory_movements.delete())
         connection.execute(delivery_providers.delete())
         connection.execute(inventory_location_balances.delete())
         connection.execute(inventory_batches.delete())
@@ -1303,18 +1355,40 @@ class WarehouseRepository:
     def list_orders(self) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:
             rows = connection.execute(select(orders).order_by(orders.c.id)).mappings().all()
-        items: list[dict[str, Any]] = []
-        for row in rows:
-            item = dict(row)
-            item["requested_items"] = json.loads(item.pop("requested_items_json") or "[]")
-            items.append(item)
-        return items
+        return [dict(row) for row in rows]
 
     def create_order(self, payload: dict[str, Any]) -> dict[str, Any]:
-        values = {**payload, "requested_items_json": json.dumps(payload["requested_items"], ensure_ascii=False)}
-        values.pop("requested_items", None)
+        item_requests = [dict(item) for item in payload["items"]]
+        values = {**payload}
+        values.pop("items", None)
+        updated_at = str(values["created_at"])
         with self.engine.begin() as connection:
             connection.execute(orders.insert().values(**values))
+            allocated_items = self._allocate_order_items(connection, values, item_requests, updated_at)
+            for item in allocated_items:
+                connection.execute(
+                    inventory_location_balances.update()
+                    .where(inventory_location_balances.c.item_id == item["item_id"])
+                    .where(inventory_location_balances.c.warehouse_id == item["warehouse_id"])
+                    .where(inventory_location_balances.c.location_code == item["location_code"])
+                    .where(inventory_location_balances.c.batch_no == item["batch_no"])
+                    .values(
+                        quantity_on_hand=inventory_location_balances.c.quantity_on_hand - int(item["quantity"]),
+                        updated_at=updated_at,
+                    )
+                )
+            if allocated_items:
+                connection.execute(order_items.insert(), allocated_items)
+                connection.execute(
+                    inventory_movements.insert(),
+                    self._inventory_movement_values(
+                        allocated_items,
+                        movement_type="order_created",
+                        created_by=str(values["created_by"]),
+                        created_at=updated_at,
+                        direction=-1,
+                    ),
+                )
         return self.get_order(str(payload["order_id"])) or {"order": values, "items": []}
 
     def get_order(self, order_id: str) -> dict[str, Any] | None:
@@ -1336,7 +1410,6 @@ class WarehouseRepository:
                 .all()
             )
         order = dict(order_row)
-        order["requested_items"] = json.loads(order.pop("requested_items_json") or "[]")
         return {"order": order, "items": [dict(row) for row in item_rows]}
 
     def pay_order(self, order_id: str, *, updated_by: str, updated_at: str) -> dict[str, Any]:
@@ -1348,21 +1421,13 @@ class WarehouseRepository:
             return details
         if order["status"] != "未付款":
             raise ValueError(f"order_cannot_pay_from_{order['status']}")
-        allocated_items = self._allocate_order_items(order, updated_at)
         with self.engine.begin() as connection:
-            for item in allocated_items:
-                connection.execute(
-                    inventory_location_balances.update()
-                    .where(inventory_location_balances.c.item_id == item["item_id"])
-                    .where(inventory_location_balances.c.warehouse_id == item["warehouse_id"])
-                    .where(inventory_location_balances.c.location_code == item["location_code"])
-                    .where(inventory_location_balances.c.batch_no == item["batch_no"])
-                    .values(
-                        quantity_on_hand=inventory_location_balances.c.quantity_on_hand - int(item["quantity"]),
-                        updated_at=updated_at,
-                    )
-                )
-            connection.execute(order_items.insert(), allocated_items)
+            connection.execute(
+                order_items.update()
+                .where(order_items.c.order_id == order_id)
+                .where(order_items.c.status == "未付款")
+                .values(status="待发货", updated_at=updated_at)
+            )
             connection.execute(
                 orders.update()
                 .where(orders.c.order_id == order_id)
@@ -1370,58 +1435,63 @@ class WarehouseRepository:
             )
         return self.get_order(order_id) or details
 
-    def _allocate_order_items(self, order: dict[str, Any], updated_at: str) -> list[dict[str, Any]]:
+    def _allocate_order_items(
+        self,
+        connection: Any,
+        order: dict[str, Any],
+        item_requests: list[dict[str, Any]],
+        updated_at: str,
+    ) -> list[dict[str, Any]]:
         allocated_items: list[dict[str, Any]] = []
-        with self.engine.connect() as connection:
-            for request in order["requested_items"]:
-                remaining = int(request["quantity"])
-                statement = (
-                    select(inventory_location_balances)
-                    .where(inventory_location_balances.c.item_id == request["item_id"])
-                    .where(inventory_location_balances.c.warehouse_id == request["warehouse_id"])
-                    .where(inventory_location_balances.c.storage_status == "available")
-                    .where(inventory_location_balances.c.quantity_on_hand > 0)
-                    .order_by(
-                        inventory_location_balances.c.expiry_date,
-                        inventory_location_balances.c.production_date,
-                        inventory_location_balances.c.batch_no,
+        for request in item_requests:
+            remaining = int(request["quantity"])
+            statement = (
+                select(inventory_location_balances)
+                .where(inventory_location_balances.c.item_id == request["item_id"])
+                .where(inventory_location_balances.c.warehouse_id == request["warehouse_id"])
+                .where(inventory_location_balances.c.storage_status == "available")
+                .where(inventory_location_balances.c.quantity_on_hand > 0)
+                .order_by(
+                    inventory_location_balances.c.expiry_date,
+                    inventory_location_balances.c.production_date,
+                    inventory_location_balances.c.batch_no,
+                )
+            ).with_for_update()
+            rows = connection.execute(statement).mappings().all()
+            for row in rows:
+                if remaining <= 0:
+                    break
+                quantity = min(int(row["quantity_on_hand"]), remaining)
+                allocated_items.append(
+                    {
+                        "order_id": order["order_id"],
+                        "customer_id": order["customer_id"],
+                        "status": "未付款",
+                        "item_id": row["item_id"],
+                        "warehouse_id": row["warehouse_id"],
+                        "location_code": row["location_code"],
+                        "batch_no": row["batch_no"],
+                        "quantity": quantity,
+                        "created_at": updated_at,
+                        "updated_at": updated_at,
+                    }
+                )
+                remaining -= quantity
+            if remaining > 0:
+                available = int(request["quantity"]) - remaining
+                raise ValueError(
+                    json.dumps(
+                        {
+                            "error": "insufficient_available_stock",
+                            "item_id": request["item_id"],
+                            "warehouse_id": request["warehouse_id"],
+                            "requested_quantity": int(request["quantity"]),
+                            "available_quantity": available,
+                            "shortage_quantity": remaining,
+                        },
+                        ensure_ascii=False,
                     )
                 )
-                rows = connection.execute(statement).mappings().all()
-                for row in rows:
-                    if remaining <= 0:
-                        break
-                    quantity = min(int(row["quantity_on_hand"]), remaining)
-                    allocated_items.append(
-                        {
-                            "order_id": order["order_id"],
-                            "customer_id": order["customer_id"],
-                            "status": "待发货",
-                            "item_id": row["item_id"],
-                            "warehouse_id": row["warehouse_id"],
-                            "location_code": row["location_code"],
-                            "batch_no": row["batch_no"],
-                            "quantity": quantity,
-                            "created_at": updated_at,
-                            "updated_at": updated_at,
-                        }
-                    )
-                    remaining -= quantity
-                if remaining > 0:
-                    available = int(request["quantity"]) - remaining
-                    raise ValueError(
-                        json.dumps(
-                            {
-                                "error": "insufficient_available_stock",
-                                "item_id": request["item_id"],
-                                "warehouse_id": request["warehouse_id"],
-                                "requested_quantity": int(request["quantity"]),
-                                "available_quantity": available,
-                                "shortage_quantity": remaining,
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
         return allocated_items
 
     def update_order_status(self, order_id: str, *, status: str, updated_by: str, updated_at: str) -> dict[str, Any]:
@@ -1430,13 +1500,24 @@ class WarehouseRepository:
             "已到货": "arrived_at",
             "已退款": "cancelled_at",
             "已退货": "returned_at",
+            "已取消": "cancelled_at",
         }
         details = self.get_order(order_id)
         if not details:
             raise ValueError("order_not_found")
         current_status = details["order"]["status"]
-        if status in {"已退款", "已退货"} and current_status in {"待发货", "已发货", "已到货"}:
-            self._restore_order_items(order_id, status=status, updated_at=updated_at)
+        if status in {"已退款", "已退货", "已取消"} and current_status in {"未付款", "待发货", "已发货", "已到货"}:
+            self._restore_order_items(
+                order_id,
+                status=status,
+                movement_type={
+                    "已退款": "order_refunded",
+                    "已退货": "order_returned",
+                    "已取消": "order_timeout_released",
+                }[status],
+                created_by=updated_by,
+                updated_at=updated_at,
+            )
         values = {"status": status, "updated_at": updated_at}
         if status in timestamp_columns:
             values[timestamp_columns[status]] = updated_at
@@ -1450,11 +1531,23 @@ class WarehouseRepository:
     def return_order(self, order_id: str, *, updated_by: str, updated_at: str) -> dict[str, Any]:
         return self.update_order_status(order_id, status="已退货", updated_by=updated_by, updated_at=updated_at)
 
-    def _restore_order_items(self, order_id: str, *, status: str, updated_at: str) -> None:
+    def _restore_order_items(
+        self,
+        order_id: str,
+        *,
+        status: str,
+        movement_type: str,
+        created_by: str,
+        updated_at: str,
+    ) -> None:
         details = self.get_order(order_id)
         if not details:
             return
-        restorable = [item for item in details["items"] if item["status"] == "待发货"]
+        restorable = [
+            item
+            for item in details["items"]
+            if item["status"] in {"未付款", "待发货", "已发货", "已到货"}
+        ]
         with self.engine.begin() as connection:
             for item in restorable:
                 connection.execute(
@@ -1473,6 +1566,90 @@ class WarehouseRepository:
                     .where(order_items.c.id == item["id"])
                     .values(status=status, updated_at=updated_at)
                 )
+            if restorable:
+                connection.execute(
+                    inventory_movements.insert(),
+                    self._inventory_movement_values(
+                        restorable,
+                        movement_type=movement_type,
+                        created_by=created_by,
+                        created_at=updated_at,
+                        direction=1,
+                    ),
+                )
+
+    def release_expired_orders(self, *, processed_by: str, now: str, limit: int = 100) -> list[dict[str, Any]]:
+        normalized_limit = max(min(int(limit or 100), 500), 1)
+        with self.engine.connect() as connection:
+            rows = (
+                connection.execute(
+                    select(orders)
+                    .where(orders.c.status == "未付款")
+                    .where(orders.c.released_at == "")
+                    .where(orders.c.expires_at != "")
+                    .where(orders.c.expires_at < now)
+                    .order_by(orders.c.expires_at, orders.c.id)
+                    .limit(normalized_limit)
+                )
+                .mappings()
+                .all()
+            )
+        released: list[dict[str, Any]] = []
+        for row in rows:
+            order_id = str(row["order_id"])
+            self.update_order_status(order_id, status="已取消", updated_by=processed_by, updated_at=now)
+            with self.engine.begin() as connection:
+                connection.execute(
+                    orders.update()
+                    .where(orders.c.order_id == order_id)
+                    .values(released_at=now, release_reason="unpaid_timeout")
+                )
+            details = self.get_order(order_id)
+            if details:
+                released.append(details["order"])
+        return released
+
+    def list_inventory_movements(self, *, order_id: str | None = None) -> list[dict[str, Any]]:
+        statement = select(inventory_movements)
+        if order_id:
+            statement = statement.where(inventory_movements.c.order_id == order_id)
+        statement = statement.order_by(inventory_movements.c.created_at, inventory_movements.c.movement_id)
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _inventory_movement_values(
+        items: list[dict[str, Any]],
+        *,
+        movement_type: str,
+        created_by: str,
+        created_at: str,
+        direction: int,
+    ) -> list[dict[str, Any]]:
+        grouped: dict[tuple[str, str, str, str], int] = {}
+        for item in items:
+            key = (
+                str(item["order_id"]),
+                str(item["item_id"]),
+                str(item["warehouse_id"]),
+                str(item["location_code"]),
+            )
+            grouped[key] = grouped.get(key, 0) + int(item["quantity"])
+        return [
+            {
+                "movement_id": f"IM-{created_at}-{index + 1}".replace(":", "").replace("+", "").replace("-", ""),
+                "order_id": order_id,
+                "movement_type": movement_type,
+                "item_id": item_id,
+                "warehouse_id": warehouse_id,
+                "location_code": location_code,
+                "quantity_delta": quantity * direction,
+                "created_by": created_by,
+                "created_at": created_at,
+            }
+            for index, ((order_id, item_id, warehouse_id, location_code), quantity) in enumerate(grouped.items())
+        ]
 
 
 def create_warehouse_repository_from_env(fixture_dir: Path) -> WarehouseRepository | None:

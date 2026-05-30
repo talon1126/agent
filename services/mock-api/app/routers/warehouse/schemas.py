@@ -32,7 +32,7 @@ class WarehouseInventorySyncJobUpdateRequest(BaseModel):
 
 class WarehouseOrderItemCreate(BaseModel):
     item_id: str
-    warehouse_id: str
+    warehouse_id: str | None = None
     quantity: int
     location_code: str | None = None
 
@@ -43,12 +43,19 @@ class WarehouseOrderCreate(BaseModel):
     delivery_provider_id: str = "sf"
     courier_phone: str = ""
     tracking_no: str = ""
+    shipping_address: str = ""
     items: list[WarehouseOrderItemCreate]
     created_by: str = "warehouse-agent"
 
 
 class WarehouseOrderStatusUpdateRequest(BaseModel):
     updated_by: str = "warehouse-agent"
+
+
+class WarehouseOrderReleaseExpiredRequest(BaseModel):
+    processed_by: str = "warehouse-timeout-release"
+    now: str | None = None
+    limit: int = 100
 
 
 class WarehousePurchaseOrderArrivalSyncRequest(BaseModel):

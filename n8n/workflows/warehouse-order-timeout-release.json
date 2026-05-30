@@ -1,0 +1,62 @@
+{
+  "name": "Warehouse Order Timeout Release",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "warehouse-order-timeout-schedule-node",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -320,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mock-api:8000/warehouse/orders/release-expired",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"processed_by\": \"warehouse-timeout-release\",\n  \"limit\": 100\n}",
+        "options": {}
+      },
+      "id": "release-expired-warehouse-orders-node",
+      "name": "Release Expired Warehouse Orders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -96,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Release Expired Warehouse Orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "active": true
+}
