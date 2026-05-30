@@ -5,6 +5,7 @@
 - 仓储 Agent 以“批次 + 库位”为核心模型处理库存，不再只看旧的 SKU 快照；回复中会保留商品、仓库、库位、批次、可用库存、临期风险和处理建议。
 - 支持仓储库存查询、仓储异常查询、履约风险判断、补货申请创建、飞书库存表同步、飞书库存视图创建等完整仓储工作流。
 - 飞书库存表是只读 read model：系统库存事实仍在 mock-api / Postgres 中，飞书表用于运营查看、筛选和同步展示。
+- 飞书库存余额表支持一行一个 `item_id + warehouse_id + location_code` 的聚合余额同步；余额为 0 的记录不会删除，会在飞书中显示为 0。
 - 采购确认 `PO-*` 到仓后只把 `purchase_orders.warehouse_sync_status` 标记为 `arrived_unsynced`；库存事实写入由 Warehouse 后续扫描未同步采购单完成。
 - 补货申请状态已收敛为 `未审批` 和 `已审批` 两种；驳回申请时仍保持 `未审批`，拒绝原因写入 `reason`。
 - 飞书库存同步仍支持按商品、仓库、库位、批次或风险范围同步；历史 sync job 链路保留用于处理旧的 pending 库存同步任务。
@@ -43,6 +44,8 @@ flowchart LR
 
 仓储 workflow 的入口是 `n8n/workflows/warehouse-workflow.json`。飞书消息先进入 `feishu-adapter`，再路由到 Warehouse Workflow。Workflow 会先做意图识别：明确的库存表同步、视图创建会走 fast path；其余仓储问题进入 Warehouse Agent，由 Agent 根据工具说明调用库存、异常、履约、补货或同步任务工具。
 
+库存余额飞书表由 `n8n/workflows/warehouse-inventory-balances-refresh.json` 定时刷新，每 10 分钟调用一次 `feishu-adapter /warehouse/inventory-balances-table/sync`，每页最多同步 500 条余额行。
+
 采购到仓链路由 Procurement Workflow 触发，但库存同步完成权在 Warehouse Workflow。采购确认 `PO-*` 到货后，mock-api 只把采购单标记为 `warehouse_sync_status=arrived_unsynced` 并写入 `arrived_at`，不直接创建库存批次或 Warehouse sync job；Warehouse 后续扫描 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的采购单，按 `BATCH-YYYYMMDD` 写入 `inventory_batches` 和 `inventory_location_balances`，完成后把采购单标记为 `synced`。旧的 `warehouse_inventory_sync_jobs_tool` 仍用于处理历史 pending sync job。
 
 ## 功能
@@ -66,6 +69,7 @@ flowchart LR
 - 计算仓储派生字段：可用库存、临期状态、风险等级、处理建议、履约阻塞原因。
 - 支持仓储异常和履约判断：用于回答库存差异、临期、过期、质检冻结、缺货和能否发货等问题。
 - 提供批次级库位余额和订单状态流转能力：`inventory_batches` 只保留入库事实，当前库存由 `inventory_location_balances` 承担，订单付款按 FEFO 扣减。
+- 提供飞书库存余额表读模型：`/warehouse/stock/balances/table-schema` 返回字段定义，`/warehouse/stock/balances/table-rows` 按 cursor 分页返回余额行，每页最多 500 条。
 - 承接补货申请：Warehouse 创建 `未审批` 补货申请，Procurement 批准后更新为 `已审批`。
 - 支持采购到仓后的库存事实更新：确认 `PO-*` 到货后，Warehouse 扫描 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的采购单，同步到 `inventory_batches` 和 `inventory_location_balances`。
 - 维护每仓唯一库位规则：同一 `item_id + warehouse_id` 后续入库复用首次确定的 `location_code`；若采购单没有库位，则使用该仓第一个可用库位。
@@ -83,6 +87,7 @@ flowchart LR
 - 仓储意图路由：识别库存表同步、视图模板创建等明确意图，让简单请求走 fast path，减少 Agent 循环。
 - 飞书库存表创建：在已有多维表格 app/base 中创建或复用固定 schema 的 `Warehouse Inventory Snapshot` 表。
 - 飞书库存同步：支持按商品、仓库、库位、分类、风险过滤同步，也支持按历史 sync job 精确同步指定批次。
+- 飞书库存余额同步：通过 `/warehouse/inventory-balances-table/provision` 创建或复用 `Warehouse Inventory Balances` 表，通过 `/warehouse/inventory-balances-table/sync` 分页 upsert 余额行；状态字段使用单选，时间字段使用日期。
 - 批量写入优化：对多条同步任务聚合处理，统一获取 token、建表、取字段和写入；使用 batch create/update 写飞书记录。
 - 防止飞书 filter 超限：查询已有记录时按 filter 字符串长度拆分为多次小查询，避免 20 条以上批次同步时触发 `FilterLengthExceedLimit`。
 - 视图创建能力：读取真实表字段和已有视图，根据自然语言模板创建高风险库存、低库存预警等受控 grid 视图。

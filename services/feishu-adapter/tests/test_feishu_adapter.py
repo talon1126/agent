@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
@@ -2522,6 +2523,184 @@ def test_inventory_table_view_templates_endpoint_lists_employee_templates() -> N
     assert body["ok"] is True
     assert any(item["template_id"] == "batch_risk_view" for item in body["templates"])
     assert any(item["template_id"] == "location_inventory_view" for item in body["templates"])
+
+
+def balance_table_schema_response() -> dict:
+    return {
+        "ok": True,
+        "schema_id": "warehouse_inventory_balances",
+        "fields": [
+            {"name": "Balance Key", "type": "text"},
+            {"name": "Warehouse", "type": "text"},
+            {"name": "Warehouse ID", "type": "text"},
+            {"name": "Location", "type": "text"},
+            {"name": "Item ID", "type": "text"},
+            {"name": "Item Name", "type": "text"},
+            {"name": "Quantity On Hand", "type": "number"},
+            {"name": "Quantity Available", "type": "number"},
+            {"name": "Reorder Threshold", "type": "number"},
+            {
+                "name": "Storage Status",
+                "type": "single_select",
+                "options": [
+                    {"name": "available", "color": 28},
+                    {"name": "quality_hold", "color": 17},
+                ],
+            },
+            {
+                "name": "Risk Level",
+                "type": "single_select",
+                "options": [
+                    {"name": "low", "color": 28},
+                    {"name": "medium", "color": 24},
+                    {"name": "high", "color": 17},
+                    {"name": "unknown", "color": 0},
+                ],
+            },
+            {
+                "name": "Balance Status",
+                "type": "single_select",
+                "options": [
+                    {"name": "available", "color": 28},
+                    {"name": "low_stock", "color": 24},
+                    {"name": "zero_stock", "color": 17},
+                    {"name": "quality_hold", "color": 17},
+                ],
+            },
+            {"name": "Created At", "type": "date"},
+            {"name": "Updated At", "type": "date"},
+            {"name": "Last Synced At", "type": "date"},
+            {
+                "name": "Sync Status",
+                "type": "single_select",
+                "options": [{"name": "synced", "color": 28}],
+            },
+            {"name": "Source Version", "type": "text"},
+        ],
+    }
+
+
+def balance_table_rows_response(*, next_cursor: str = "") -> dict:
+    return {
+        "ok": True,
+        "schema_id": "warehouse_inventory_balances",
+        "count": 1,
+        "next_cursor": next_cursor,
+        "items": [
+            {
+                "balance_key": "item_vinda_tissue:wh_sz_1:A1",
+                "fields": {
+                    "Balance Key": "item_vinda_tissue:wh_sz_1:A1",
+                    "Warehouse": "深圳仓",
+                    "Warehouse ID": "wh_sz_1",
+                    "Location": "A1",
+                    "Item ID": "item_vinda_tissue",
+                    "Item Name": "维达纸巾",
+                    "Quantity On Hand": 136,
+                    "Quantity Available": 136,
+                    "Reorder Threshold": 160,
+                    "Storage Status": "available",
+                    "Risk Level": "high",
+                    "Balance Status": "low_stock",
+                    "Created At": "2026-05-24T00:00:00+00:00",
+                    "Updated At": "2026-05-29T10:00:00+00:00",
+                    "Last Synced At": "2026-05-29T10:05:00+00:00",
+                    "Sync Status": "synced",
+                    "Source Version": "mock-api:item_vinda_tissue:wh_sz_1:A1:2026-05-29T10:00:00+00:00",
+                },
+            }
+        ],
+    }
+
+
+def test_inventory_balances_table_sync_provisions_pages_and_writes_date_fields_as_millis() -> None:
+    requests: list[httpx.Request] = []
+    created_fields: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/warehouse/stock/balances/table-rows":
+            payload = json.loads(request.content)
+            if payload.get("cursor") == "cursor-1":
+                return httpx.Response(
+                    200,
+                    json={"ok": True, "schema_id": "warehouse_inventory_balances", "count": 0, "items": []},
+                )
+            assert payload["limit"] == 500
+            return httpx.Response(200, json=balance_table_rows_response(next_cursor="cursor-1"))
+        if url == "http://mock-api.local/warehouse/stock/balances/table-schema":
+            return httpx.Response(200, json=balance_table_schema_response())
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"table_id": "tbl_balances", "default_view_id": "vew_default"}},
+            )
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances/fields":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": created_fields}})
+            payload = json.loads(request.content)
+            field = {
+                "field_id": f"fld_{len(created_fields) + 1}",
+                "field_name": payload["field_name"],
+                "type": payload["type"],
+            }
+            if "property" in payload:
+                field["property"] = payload["property"]
+            created_fields.append(field)
+            return httpx.Response(200, json={"code": 0, "data": {"field": field}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances/views":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(200, json={"code": 0, "data": {"view": {"view_id": "vew_created"}}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances/views/"):
+            return httpx.Response(200, json={"code": 0, "data": {"view": {"view_id": "vew_created"}}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances/records/batch_create":
+            return httpx.Response(200, json={"code": 0, "data": {"records": [{"record_id": "rec_balance"}]}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        mock_api_url="http://mock-api.local",
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+    )
+    client = TestClient(app)
+
+    response = client.post("/warehouse/inventory-balances-table/sync", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["synced_count"] == 1
+    assert body["table_id"] == "tbl_balances"
+    assert body["items"][0]["balance_key"] == "item_vinda_tissue:wh_sz_1:A1"
+    field_create_payloads = [
+        json.loads(request.content)
+        for request in requests
+        if request.method == "POST" and str(request.url).endswith("/tables/tbl_balances/fields")
+    ]
+    assert any(payload["field_name"] == "Storage Status" and payload["type"] == 3 for payload in field_create_payloads)
+    assert any(payload["field_name"] == "Created At" and payload["type"] == 5 for payload in field_create_payloads)
+    assert any(payload["field_name"] == "Updated At" and payload["type"] == 5 for payload in field_create_payloads)
+    batch_create = next(
+        request for request in requests if str(request.url).endswith("/tables/tbl_balances/records/batch_create")
+    )
+    fields = json.loads(batch_create.content)["records"][0]["fields"]
+    assert fields["Balance Key"] == "item_vinda_tissue:wh_sz_1:A1"
+    assert isinstance(fields["Created At"], int)
+    assert isinstance(fields["Updated At"], int)
+    assert isinstance(fields["Last Synced At"], int)
+    assert fields["Storage Status"] == "available"
+    assert fields["Risk Level"] == "high"
+    assert fields["Balance Status"] == "low_stock"
 
 
 def test_warehouse_intent_router_endpoint_routes_update_table_view_to_sync() -> None:

@@ -13,6 +13,7 @@ from app.main import (
     WAREHOUSE_ORDERS,
     app,
 )
+from app.routers.warehouse.inventory import aggregate_stock_balance_snapshot_rows
 
 client = TestClient(app)
 
@@ -689,6 +690,120 @@ def test_warehouse_inventory_table_rows_return_batch_location_feishu_ready_field
     assert first["fields"]["Location"] == "A1"
     assert first["fields"]["Category"] == "纸品"
     assert first["fields"]["Item Name"] == "维达纸巾"
+
+
+def test_warehouse_stock_balance_table_schema_uses_select_statuses_and_date_fields():
+    response = client.get("/warehouse/stock/balances/table-schema")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["schema_id"] == "warehouse_inventory_balances"
+    fields_by_name = {item["name"]: item for item in body["fields"]}
+    assert "Batch No" not in fields_by_name
+    assert fields_by_name["Balance Key"]["type"] == "text"
+    assert fields_by_name["Quantity On Hand"]["type"] == "number"
+    assert fields_by_name["Storage Status"]["type"] == "single_select"
+    assert fields_by_name["Risk Level"]["type"] == "single_select"
+    assert fields_by_name["Balance Status"]["type"] == "single_select"
+    assert fields_by_name["Sync Status"]["type"] == "single_select"
+    assert fields_by_name["Created At"]["type"] == "date"
+    assert fields_by_name["Updated At"]["type"] == "date"
+
+
+def test_warehouse_stock_balance_table_rows_page_by_cursor_without_batch_no():
+    response = client.post(
+        "/warehouse/stock/balances/table-rows",
+        json={"warehouse_id": "wh_sz_1", "limit": 2},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["schema_id"] == "warehouse_inventory_balances"
+    assert body["count"] == 2
+    assert body["next_cursor"]
+    first = body["items"][0]
+    assert first["balance_key"] == (
+        f"{first['fields']['Item ID']}:{first['fields']['Warehouse ID']}:{first['fields']['Location']}"
+    )
+    assert "Batch No" not in first["fields"]
+    assert first["fields"]["Warehouse"] == "深圳仓"
+    assert first["fields"]["Warehouse ID"] == "wh_sz_1"
+    assert first["fields"]["Quantity On Hand"] >= 0
+    assert first["fields"]["Quantity Available"] == first["fields"]["Quantity On Hand"]
+    assert first["fields"]["Storage Status"] in {"available", "quality_hold"}
+    assert first["fields"]["Risk Level"] in {"low", "medium", "high", "unknown"}
+    assert first["fields"]["Balance Status"] in {"available", "low_stock", "zero_stock", "quality_hold"}
+    assert first["fields"]["Sync Status"] == "synced"
+    assert first["fields"]["Created At"]
+    assert first["fields"]["Updated At"]
+
+
+def test_warehouse_stock_balance_table_rows_are_unique_by_item_warehouse_location():
+    response = client.post(
+        "/warehouse/stock/balances/table-rows",
+        json={"limit": 500},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    balance_keys = [item["balance_key"] for item in body["items"]]
+    assert len(balance_keys) == len(set(balance_keys))
+    vinda = [
+        item
+        for item in body["items"]
+        if item["balance_key"] == "item_vinda_tissue:wh_sz_1:A1"
+    ]
+    assert len(vinda) == 1
+    assert vinda[0]["fields"]["Quantity On Hand"] >= 136
+
+
+def test_aggregate_stock_balance_snapshot_rows_merges_duplicate_balance_keys():
+    rows = [
+        {
+            "item_id": "item_vinda_tissue",
+            "warehouse_id": "wh_sz_1",
+            "warehouse_name": "深圳仓",
+            "location_code": "A1",
+            "category_id": "paper",
+            "category_name": "纸品",
+            "item_name": "维达纸巾",
+            "brand": "维达",
+            "spec": "3层抽纸 24包",
+            "unit": "包",
+            "quantity_on_hand": 16,
+            "reorder_threshold": 100,
+            "storage_status": "available",
+            "created_at": "2026-05-24T00:00:00+00:00",
+            "updated_at": "2026-05-24T00:00:00+00:00",
+        },
+        {
+            "item_id": "item_vinda_tissue",
+            "warehouse_id": "wh_sz_1",
+            "warehouse_name": "深圳仓",
+            "location_code": "A1",
+            "category_id": "paper",
+            "category_name": "纸品",
+            "item_name": "维达纸巾",
+            "brand": "维达",
+            "spec": "3层抽纸 24包",
+            "unit": "包",
+            "quantity_on_hand": 120,
+            "reorder_threshold": 80,
+            "storage_status": "available",
+            "created_at": "2026-05-23T00:00:00+00:00",
+            "updated_at": "2026-05-25T00:00:00+00:00",
+        },
+    ]
+
+    result = aggregate_stock_balance_snapshot_rows(rows)
+
+    assert len(result) == 1
+    assert result[0]["quantity_on_hand"] == 136
+    assert result[0]["reorder_threshold"] == 100
+    assert result[0]["created_at"] == "2026-05-23T00:00:00+00:00"
+    assert result[0]["updated_at"] == "2026-05-25T00:00:00+00:00"
 
 
 def test_warehouse_exception_search_returns_expiring_batch_risks():

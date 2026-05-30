@@ -200,6 +200,21 @@ def test_department_workflow_files_exist() -> None:
         assert (WORKFLOW_DIR / filename).exists()
 
 
+def test_warehouse_inventory_balances_refresh_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("warehouse-inventory-balances-refresh.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Warehouse Inventory Balances Table")
+
+    assert workflow["name"] == "Warehouse Inventory Balances Refresh"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith(
+        "/warehouse/inventory-balances-table/sync"
+    )
+    assert '"limit": 500' in sync_request["parameters"]["jsonBody"]
+
+
 def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
     for filename, expected in DEPARTMENT_WORKFLOWS.items():
         workflow = load_workflow(filename)
