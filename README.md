@@ -173,9 +173,10 @@ flowchart LR
 
 ## 汇总
 
-- 物流 Agent 负责查询订单或运单配送状态、承运商、延迟天数、风险等级和处理建议。
-- 支持查询延迟、丢件等 mock 物流异常列表，也支持在用户明确要求时创建物流跟进 case。
-- 物流 Agent 不处理退款、赔偿或售后政策决策；这类请求只建议转交 Customer Support。
+- 物流 Agent 负责读取真实 `orders` 表上的配送状态、物流供应商、快递员电话、物流单号、风险等级和处理建议。
+- 支持按订单状态或物流供应商查询物流列表，也支持在用户明确要求时创建物流跟进 case。
+- 物流 Agent 不处理库存扣减、出库拣货、订单付款、退款赔付或退货入库；这些状态流转由 Warehouse 维护。
+- 当前内置物流供应商表包含顺丰（`sf`）、京东（`jd`）、圆通（`yto`）。
 
 ## workflow 架构
 
@@ -189,23 +190,28 @@ flowchart LR
     Agent --> ExceptionTool["delivery_exception_tool"]
     Agent --> CaseTool["delivery_case_tool"]
 
-    StatusTool --> MockAPI["mock-api mock-delivery"]
+    StatusTool --> MockAPI["mock-api delivery router"]
     ExceptionTool --> MockAPI
     CaseTool --> MockAPI
+    MockAPI --> Orders["orders"]
+    MockAPI --> Providers["delivery_providers"]
 ```
 
 物流 workflow 的入口是 `n8n/workflows/delivery-workflow.json`，webhook 是 `/webhook/delivery-inbound`。飞书消息经 `feishu-adapter` 多机器人网关进入 Delivery Workflow 后，由 Delivery Agent 按需调用 `delivery_status_tool`、`delivery_exception_tool` 或 `delivery_case_tool`。
 
 ## 功能
 
-- 查询物流状态：`@delivery 查询 ord_101 物流` 会返回订单/运单、承运商、状态、预计送达、延迟天数、风险等级和建议动作。
-- 汇总物流异常：`@delivery 当前有哪些延迟物流` 会按延迟、丢件或承运商筛选异常运单。
-- 创建物流 case：`@delivery 为 ord_101 创建物流延迟跟进 case` 会创建 mock delivery case，供后续人工或系统跟进。
+- 查询物流状态：`@delivery 查询 ord_101 物流` 会返回订单状态、物流供应商、快递员电话、物流单号、风险等级和建议动作。
+- 汇总物流列表：`@delivery 当前有哪些已发货订单` 或 `@delivery 查询顺丰已发货订单` 会按状态和供应商筛选订单。
+- 创建物流 case：`@delivery 为 ord_101 创建物流延迟跟进 case` 会创建 delivery case，供后续人工或系统跟进。
 
 ## mock-api
 
-物流 mock 能力由 `mock-api` 提供：
+物流能力由 `mock-api` 的 `services/mock-api/app/routers/delivery/` 提供，数据来源是数据库 `orders` 和 `delivery_providers`，不再依赖历史 `ship_` 运单 demo。
 
-- `POST /delivery/status/lookup`：按 `order_id` 或 `shipment_id` 查询物流状态。
-- `POST /delivery/exceptions/search`：查询延迟、丢件或异常运单。
+- `GET /delivery/providers`：查询物流供应商列表，默认包含顺丰、京东、圆通。
+- `POST /delivery/status/lookup`：按 `order_id` 查询订单物流状态。
+- `POST /delivery/exceptions/search`：按 `status`、`provider_id` 查询物流订单列表。
 - `POST /delivery/cases`：创建物流跟进 case。
+
+订单状态统一为：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`。Warehouse 负责这些状态的写入和库存扣减，Delivery 只读取物流字段并创建跟进 case。

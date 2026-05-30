@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from app.routers.delivery.state import get_delivery_provider
 from app.warehouse_store import WarehouseRepository
 
 from .inventory import (
@@ -21,6 +22,13 @@ from .state import (
 )
 
 router = APIRouter()
+
+ORDER_STATUS_UNPAID = "未付款"
+ORDER_STATUS_PENDING_SHIPMENT = "待发货"
+ORDER_STATUS_SHIPPED = "已发货"
+ORDER_STATUS_ARRIVED = "已到货"
+ORDER_STATUS_REFUNDED = "已退款"
+ORDER_STATUS_RETURNED = "已退货"
 
 
 def available_order_batches(item_id: str, warehouse_id: str, location_code: str | None = None) -> list[dict[str, Any]]:
@@ -152,6 +160,7 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
     repository = get_warehouse_repository()
     now = datetime.now(UTC).isoformat()
     order_id = (payload.order_id or "").strip() or next_warehouse_order_id(repository)
+    delivery_provider = get_delivery_provider(payload.delivery_provider_id)
     requested_items = [
         {
             "item_id": item.item_id.strip(),
@@ -164,7 +173,14 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
     order = {
         "order_id": order_id,
         "customer_id": payload.customer_id.strip(),
-        "status": "created",
+        "status": ORDER_STATUS_UNPAID,
+        # Warehouse owns inventory allocation and order lifecycle transitions.
+        # Delivery fields live on the order so Delivery Agent can read provider
+        # context without owning stock, picking, or shipment transition logic.
+        "delivery_provider_id": delivery_provider["provider_id"],
+        "delivery_provider_name": delivery_provider["name"],
+        "courier_phone": payload.courier_phone.strip(),
+        "tracking_no": payload.tracking_no.strip() or f"{delivery_provider['tracking_prefix']}{order_id.replace('-', '')}",
         "requested_items": requested_items,
         "created_by": payload.created_by,
         "created_at": now,
@@ -207,9 +223,9 @@ def pay_warehouse_order(
             raise order_http_error(error) from error
 
     order = get_warehouse_order_or_404(order_id)
-    if order["status"] == "paid":
+    if order["status"] == ORDER_STATUS_PENDING_SHIPMENT:
         return warehouse_order_response(order, fallback_order_items(order_id))
-    if order["status"] != "created":
+    if order["status"] != ORDER_STATUS_UNPAID:
         raise HTTPException(status_code=409, detail=f"order_cannot_pay_from_{order['status']}")
     now = datetime.now(UTC).isoformat()
     created_items: list[dict[str, Any]] = []
@@ -223,7 +239,7 @@ def pay_warehouse_order(
                     "id": len(WAREHOUSE_ORDER_ITEMS) + len(created_items) + 1,
                     "order_id": order_id,
                     "customer_id": order["customer_id"],
-                    "status": "paid",
+                    "status": ORDER_STATUS_PENDING_SHIPMENT,
                     "item_id": row["item_id"],
                     "warehouse_id": row["warehouse_id"],
                     "location_code": row["location_code"],
@@ -234,7 +250,7 @@ def pay_warehouse_order(
                 }
             )
     WAREHOUSE_ORDER_ITEMS.extend(created_items)
-    order["status"] = "paid"
+    order["status"] = ORDER_STATUS_PENDING_SHIPMENT
     order["updated_at"] = now
     order["paid_at"] = now
     return warehouse_order_response(order, fallback_order_items(order_id))
@@ -251,7 +267,11 @@ def order_http_error(error: ValueError) -> HTTPException:
 
 
 def restore_fallback_order_items(order: dict[str, Any], status: str, now: str) -> None:
-    for line in [item for item in WAREHOUSE_ORDER_ITEMS if item["order_id"] == order["order_id"] and item["status"] == "paid"]:
+    for line in [
+        item
+        for item in WAREHOUSE_ORDER_ITEMS
+        if item["order_id"] == order["order_id"] and item["status"] == ORDER_STATUS_PENDING_SHIPMENT
+    ]:
         balance = find_current_inventory_balance(line)
         set_inventory_balance_quantity(
             balance,
@@ -264,15 +284,19 @@ def restore_fallback_order_items(order: dict[str, Any], status: str, now: str) -
 def update_fallback_order_status(order_id: str, status: str) -> dict[str, Any]:
     order = get_warehouse_order_or_404(order_id)
     now = datetime.now(UTC).isoformat()
-    if status in {"cancelled", "returned"} and order["status"] in {"paid", "shipped", "arrived"}:
+    if status in {ORDER_STATUS_REFUNDED, ORDER_STATUS_RETURNED} and order["status"] in {
+        ORDER_STATUS_PENDING_SHIPMENT,
+        ORDER_STATUS_SHIPPED,
+        ORDER_STATUS_ARRIVED,
+    }:
         restore_fallback_order_items(order, status, now)
     order["status"] = status
     order["updated_at"] = now
     timestamp_field = {
-        "shipped": "shipped_at",
-        "arrived": "arrived_at",
-        "cancelled": "cancelled_at",
-        "returned": "returned_at",
+        ORDER_STATUS_SHIPPED: "shipped_at",
+        ORDER_STATUS_ARRIVED: "arrived_at",
+        ORDER_STATUS_REFUNDED: "cancelled_at",
+        ORDER_STATUS_RETURNED: "returned_at",
     }.get(status)
     if timestamp_field:
         order[timestamp_field] = now
@@ -288,14 +312,14 @@ def ship_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateReque
                 "ok": True,
                 **repository.update_order_status(
                     order_id,
-                    status="shipped",
+                    status=ORDER_STATUS_SHIPPED,
                     updated_by=payload.updated_by,
                     updated_at=datetime.now(UTC).isoformat(),
                 ),
             }
         except ValueError as error:
             raise order_http_error(error) from error
-    return update_fallback_order_status(order_id, "shipped")
+    return update_fallback_order_status(order_id, ORDER_STATUS_SHIPPED)
 
 
 @router.post("/warehouse/orders/{order_id}/arrive")
@@ -307,14 +331,14 @@ def arrive_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateReq
                 "ok": True,
                 **repository.update_order_status(
                     order_id,
-                    status="arrived",
+                    status=ORDER_STATUS_ARRIVED,
                     updated_by=payload.updated_by,
                     updated_at=datetime.now(UTC).isoformat(),
                 ),
             }
         except ValueError as error:
             raise order_http_error(error) from error
-    return update_fallback_order_status(order_id, "arrived")
+    return update_fallback_order_status(order_id, ORDER_STATUS_ARRIVED)
 
 
 @router.post("/warehouse/orders/{order_id}/cancel")
@@ -325,7 +349,7 @@ def cancel_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateReq
             return {"ok": True, **repository.cancel_order(order_id, updated_by=payload.updated_by, updated_at=datetime.now(UTC).isoformat())}
         except ValueError as error:
             raise order_http_error(error) from error
-    return update_fallback_order_status(order_id, "cancelled")
+    return update_fallback_order_status(order_id, ORDER_STATUS_REFUNDED)
 
 
 @router.post("/warehouse/orders/{order_id}/return")
@@ -336,7 +360,7 @@ def return_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateReq
             return {"ok": True, **repository.return_order(order_id, updated_by=payload.updated_by, updated_at=datetime.now(UTC).isoformat())}
         except ValueError as error:
             raise order_http_error(error) from error
-    return update_fallback_order_status(order_id, "returned")
+    return update_fallback_order_status(order_id, ORDER_STATUS_RETURNED)
 
 
 @router.post("/warehouse/order-tool")

@@ -40,6 +40,9 @@ class WarehouseOrderItemCreate(BaseModel):
 class WarehouseOrderCreate(BaseModel):
     order_id: str | None = None
     customer_id: str
+    delivery_provider_id: str = "sf"
+    courier_phone: str = ""
+    tracking_no: str = ""
     items: list[WarehouseOrderItemCreate]
     created_by: str = "warehouse-agent"
 

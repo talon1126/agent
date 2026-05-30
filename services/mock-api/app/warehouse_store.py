@@ -143,6 +143,10 @@ orders = Table(
     Column("order_id", String, nullable=False, unique=True, index=True),
     Column("customer_id", String, nullable=False, index=True),
     Column("status", String, nullable=False, index=True),
+    Column("delivery_provider_id", String, nullable=False, default="sf"),
+    Column("delivery_provider_name", String, nullable=False, default="顺丰"),
+    Column("courier_phone", String, nullable=False, default=""),
+    Column("tracking_no", String, nullable=False, default=""),
     Column("requested_items_json", Text, nullable=False, default="[]"),
     Column("created_by", String, nullable=False),
     Column("created_at", String, nullable=False),
@@ -168,6 +172,16 @@ order_items = Table(
     Column("quantity", Integer, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
+)
+
+delivery_providers = Table(
+    "delivery_providers",
+    metadata,
+    Column("provider_id", String, primary_key=True),
+    Column("provider_name", String, nullable=False),
+    Column("service_hotline", String, nullable=False),
+    Column("tracking_prefix", String, nullable=False),
+    Column("status", String, nullable=False),
 )
 
 procurement_suppliers = Table(
@@ -219,10 +233,11 @@ WAREHOUSE_TABLE_COMMENTS = {
     "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
     "inventory_location_balances": "批次级库位库存余额表，保存订单扣减和退回后的当前可售库存。",
     "replenishment_requests": "补货申请表，保存仓储发现低库存后交给采购审核的结构化需求。",
+    "delivery_providers": "物流供应商表，保存顺丰、京东、圆通等承运商基础信息供订单和 Delivery Agent 使用。",
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
     "purchase_orders": "采购单表，保存采购审核补货申请后生成的采购单、支付状态和仓库同步状态。",
     "warehouse_inventory_sync_jobs": "仓储库存同步任务表，保存采购到仓后需要 Warehouse Agent 同步飞书库存视图的待处理任务。",
-    "orders": "订单主表，保存下单、付款、发货、到货、取消和退货状态。",
+    "orders": "订单主表，保存下单、付款、发货、到货、退款和退货状态，并保留物流供应商与快递员联系方式供 Delivery Agent 查询。",
     "order_items": "订单明细表，保存订单扣减命中的商品、仓库、库位、批次和数量。",
 }
 
@@ -361,7 +376,11 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "id": "订单自增整数主键。",
         "order_id": "订单业务编号，例如 ORD-CODEX-9001。",
         "customer_id": "客户编号。",
-        "status": "订单状态，例如 created、paid、shipped、arrived、cancelled、returned。",
+        "status": "订单状态：未付款、待发货、已发货、已到货、已退款、已退货。",
+        "delivery_provider_id": "物流供应商编号，例如 sf、jd、yto。",
+        "delivery_provider_name": "物流供应商展示名称，例如顺丰、京东、圆通。",
+        "courier_phone": "快递员联系电话，由 Delivery Agent 查询和跟进。",
+        "tracking_no": "物流单号或跟踪号。",
         "requested_items_json": "下单请求明细 JSON 字符串。",
         "created_by": "创建订单的用户或系统身份。",
         "created_at": "订单创建时间。",
@@ -376,7 +395,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "id": "订单明细自增整数主键。",
         "order_id": "关联订单业务编号。",
         "customer_id": "客户编号。",
-        "status": "明细状态，例如 paid、cancelled、returned。",
+        "status": "明细状态，例如待发货、已退款、已退货。",
         "item_id": "明细商品编号。",
         "warehouse_id": "扣减或加回库存所在仓库编号。",
         "location_code": "扣减或加回库存所在库位。",
@@ -384,6 +403,13 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "quantity": "明细数量。",
         "created_at": "明细创建时间。",
         "updated_at": "明细更新时间。",
+    },
+    "delivery_providers": {
+        "provider_id": "物流供应商编号，例如 sf、jd、yto。",
+        "provider_name": "物流供应商展示名称，例如顺丰、京东、圆通。",
+        "service_hotline": "物流供应商客服电话。",
+        "tracking_prefix": "生成 mock 物流单号时使用的前缀。",
+        "status": "供应商启用状态，例如 active。",
     },
 }
 
@@ -405,6 +431,7 @@ def init_warehouse_schema(engine: Engine) -> None:
             warehouse_inventory_sync_jobs,
             orders,
             order_items,
+            delivery_providers,
         ],
     )
     ensure_warehouse_schema_columns(engine)
@@ -432,6 +459,27 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
         for column_name, statement in missing_column_sql.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
+        if inspector.has_table(orders.name):
+            order_columns = {column["name"] for column in inspector.get_columns(orders.name)}
+            order_missing_column_sql = {
+                "delivery_provider_id": "ALTER TABLE orders ADD COLUMN delivery_provider_id VARCHAR NOT NULL DEFAULT 'sf'",
+                "delivery_provider_name": "ALTER TABLE orders ADD COLUMN delivery_provider_name VARCHAR NOT NULL DEFAULT '顺丰'",
+                "courier_phone": "ALTER TABLE orders ADD COLUMN courier_phone VARCHAR NOT NULL DEFAULT ''",
+                "tracking_no": "ALTER TABLE orders ADD COLUMN tracking_no VARCHAR NOT NULL DEFAULT ''",
+            }
+            for column_name, statement in order_missing_column_sql.items():
+                if column_name not in order_columns:
+                    connection.execute(text(statement))
+            connection.execute(text("UPDATE orders SET status = '未付款' WHERE status = 'created'"))
+            connection.execute(text("UPDATE orders SET status = '待发货' WHERE status = 'paid'"))
+            connection.execute(text("UPDATE orders SET status = '已发货' WHERE status = 'shipped'"))
+            connection.execute(text("UPDATE orders SET status = '已到货' WHERE status = 'arrived'"))
+            connection.execute(text("UPDATE orders SET status = '已退款' WHERE status = 'cancelled'"))
+            connection.execute(text("UPDATE orders SET status = '已退货' WHERE status = 'returned'"))
+        if inspector.has_table(order_items.name):
+            connection.execute(text("UPDATE order_items SET status = '待发货' WHERE status = 'paid'"))
+            connection.execute(text("UPDATE order_items SET status = '已退款' WHERE status = 'cancelled'"))
+            connection.execute(text("UPDATE order_items SET status = '已退货' WHERE status = 'returned'"))
         if inspector.has_table(items.name):
             item_columns = {column["name"] for column in inspector.get_columns(items.name)}
             if "shelf_life_days" not in item_columns:
@@ -553,6 +601,7 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         # Demo data is fixture-owned, so restart/reseed should converge the DB to fixtures.
         connection.execute(order_items.delete())
         connection.execute(orders.delete())
+        connection.execute(delivery_providers.delete())
         connection.execute(inventory_location_balances.delete())
         connection.execute(inventory_batches.delete())
         connection.execute(procurement_suppliers.delete())
@@ -567,6 +616,10 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         )
         connection.execute(categories.insert(), load_fixture_rows(fixture_dir, "categories.json"))
         connection.execute(items.insert(), load_fixture_rows(fixture_dir, "items.json"))
+        connection.execute(
+            delivery_providers.insert(),
+            load_fixture_rows(fixture_dir, "delivery_providers.json"),
+        )
         batch_rows = load_inventory_batch_fixture_rows(fixture_dir)
         connection.execute(inventory_batches.insert(), batch_rows)
         connection.execute(
@@ -1223,9 +1276,39 @@ class WarehouseRepository:
             item["result"] = {}
         return item
 
+    def list_delivery_providers(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            rows = (
+                connection.execute(
+                    select(delivery_providers).order_by(delivery_providers.c.provider_id)
+                )
+                .mappings()
+                .all()
+            )
+        return [
+            {
+                "provider_id": row["provider_id"],
+                "name": row["provider_name"],
+                "service_hotline": row["service_hotline"],
+                "tracking_prefix": row["tracking_prefix"],
+                "status": row["status"],
+            }
+            for row in rows
+        ]
+
     def count_orders(self) -> int:
         with self.engine.connect() as connection:
             return int(connection.execute(select(func.count()).select_from(orders)).scalar_one())
+
+    def list_orders(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(select(orders).order_by(orders.c.id)).mappings().all()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["requested_items"] = json.loads(item.pop("requested_items_json") or "[]")
+            items.append(item)
+        return items
 
     def create_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         values = {**payload, "requested_items_json": json.dumps(payload["requested_items"], ensure_ascii=False)}
@@ -1261,9 +1344,9 @@ class WarehouseRepository:
         if not details:
             raise ValueError("order_not_found")
         order = details["order"]
-        if order["status"] == "paid":
+        if order["status"] == "待发货":
             return details
-        if order["status"] != "created":
+        if order["status"] != "未付款":
             raise ValueError(f"order_cannot_pay_from_{order['status']}")
         allocated_items = self._allocate_order_items(order, updated_at)
         with self.engine.begin() as connection:
@@ -1283,7 +1366,7 @@ class WarehouseRepository:
             connection.execute(
                 orders.update()
                 .where(orders.c.order_id == order_id)
-                .values(status="paid", updated_at=updated_at, paid_at=updated_at)
+                .values(status="待发货", updated_at=updated_at, paid_at=updated_at)
             )
         return self.get_order(order_id) or details
 
@@ -1313,7 +1396,7 @@ class WarehouseRepository:
                         {
                             "order_id": order["order_id"],
                             "customer_id": order["customer_id"],
-                            "status": "paid",
+                            "status": "待发货",
                             "item_id": row["item_id"],
                             "warehouse_id": row["warehouse_id"],
                             "location_code": row["location_code"],
@@ -1343,16 +1426,16 @@ class WarehouseRepository:
 
     def update_order_status(self, order_id: str, *, status: str, updated_by: str, updated_at: str) -> dict[str, Any]:
         timestamp_columns = {
-            "shipped": "shipped_at",
-            "arrived": "arrived_at",
-            "cancelled": "cancelled_at",
-            "returned": "returned_at",
+            "已发货": "shipped_at",
+            "已到货": "arrived_at",
+            "已退款": "cancelled_at",
+            "已退货": "returned_at",
         }
         details = self.get_order(order_id)
         if not details:
             raise ValueError("order_not_found")
         current_status = details["order"]["status"]
-        if status in {"cancelled", "returned"} and current_status in {"paid", "shipped", "arrived"}:
+        if status in {"已退款", "已退货"} and current_status in {"待发货", "已发货", "已到货"}:
             self._restore_order_items(order_id, status=status, updated_at=updated_at)
         values = {"status": status, "updated_at": updated_at}
         if status in timestamp_columns:
@@ -1362,16 +1445,16 @@ class WarehouseRepository:
         return self.get_order(order_id) or details
 
     def cancel_order(self, order_id: str, *, updated_by: str, updated_at: str) -> dict[str, Any]:
-        return self.update_order_status(order_id, status="cancelled", updated_by=updated_by, updated_at=updated_at)
+        return self.update_order_status(order_id, status="已退款", updated_by=updated_by, updated_at=updated_at)
 
     def return_order(self, order_id: str, *, updated_by: str, updated_at: str) -> dict[str, Any]:
-        return self.update_order_status(order_id, status="returned", updated_by=updated_by, updated_at=updated_at)
+        return self.update_order_status(order_id, status="已退货", updated_by=updated_by, updated_at=updated_at)
 
     def _restore_order_items(self, order_id: str, *, status: str, updated_at: str) -> None:
         details = self.get_order(order_id)
         if not details:
             return
-        restorable = [item for item in details["items"] if item["status"] == "paid"]
+        restorable = [item for item in details["items"] if item["status"] == "待发货"]
         with self.engine.begin() as connection:
             for item in restorable:
                 connection.execute(

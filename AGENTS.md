@@ -90,23 +90,24 @@
 
 - `POST /warehouse/orders`
   - 用途：创建订单主单，支持多行商品。
-  - 入参重点：`order_id`、`customer_id`、`items[].item_id`、`items[].warehouse_id`、`items[].quantity`。
-  - 创建后状态为 `created`，不会扣减库存。
+  - 入参重点：`order_id`、`customer_id`、`delivery_provider_id`、`courier_phone`、`tracking_no`、`items[].item_id`、`items[].warehouse_id`、`items[].quantity`。
+  - 创建后状态为 `未付款`，不会扣减库存；物流供应商字段写入订单主表，供 Delivery Agent 查询。
 
 - `POST /warehouse/orders/{order_id}/pay`
   - 用途：订单付款后按 FEFO 从 `inventory_location_balances` 扣减库存，并在 `order_items` 记录命中的 `warehouse_id + location_code + batch_no + quantity`。
+  - 状态流转：`未付款` -> `待发货`。
 
 - `POST /warehouse/orders/{order_id}/ship`
-  - 用途：订单发货，只更新订单状态为 `shipped`，不再次扣减库存。
+  - 用途：订单发货，只更新订单状态为 `已发货`，不再次扣减库存。
 
 - `POST /warehouse/orders/{order_id}/arrive`
-  - 用途：订单到货，只更新订单状态为 `arrived`，不再次扣减库存。
+  - 用途：订单到货，只更新订单状态为 `已到货`，不再次扣减库存。
 
 - `POST /warehouse/orders/{order_id}/cancel`
-  - 用途：订单取消或发货前退款，按 `order_items` 原批次加回 `inventory_location_balances`。
+  - 用途：订单取消或发货前退款，状态更新为 `已退款`，按 `order_items` 原批次加回 `inventory_location_balances`。
 
 - `POST /warehouse/orders/{order_id}/return`
-  - 用途：已到货后退货，按 `order_items` 原批次加回 `inventory_location_balances`。
+  - 用途：已到货后退货，状态更新为 `已退货`，按 `order_items` 原批次加回 `inventory_location_balances`。
 
 - `POST /warehouse/purchase-orders/sync-arrivals`
   - 用途：Warehouse 扫描采购单中 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的记录，同步到库存事实。
@@ -240,11 +241,18 @@
 
 - `orders`
   - 订单主表，记录下单、付款、发货、到货、取消和退货状态。
-  - 关键字段：`id`、`order_id`、`customer_id`、`status`、`requested_items_json`、`paid_at`、`shipped_at`、`arrived_at`、`cancelled_at`、`returned_at`。
+  - 关键字段：`id`、`order_id`、`customer_id`、`status`、`delivery_provider_id`、`delivery_provider_name`、`courier_phone`、`tracking_no`、`requested_items_json`、`paid_at`、`shipped_at`、`arrived_at`、`cancelled_at`、`returned_at`。
+  - 主要状态：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`。
+  - 业务边界：Warehouse 负责库存扣减和订单状态流转；Delivery 只读取订单上的物流供应商、快递员电话和物流单号，不负责库存分配。
 
 - `order_items`
   - 订单明细表，记录付款扣减命中的批次库存，用于取消和退货时按原批次加回。
   - 关键字段：`id`、`order_id`、`customer_id`、`status`、`item_id`、`warehouse_id`、`location_code`、`batch_no`、`quantity`。
+
+- `delivery_providers`
+  - 物流供应商表，记录可分配到订单的承运商主数据。
+  - 关键字段：`provider_id`、`provider_name`、`service_hotline`、`tracking_prefix`、`status`。
+  - 当前内置供应商：顺丰（`sf`）、京东（`jd`）、圆通（`yto`）。
 
 - `replenishment_requests`
   - 仓储发起、采购处理的补货申请。
@@ -265,8 +273,8 @@
 ## 其他 workflow 可能会用到的契约
 
 - 采购 agent 如果确认采购单到货，必须通过 `POST /procurement/purchase-orders/confirm-arrival-batch` 把采购单标记为 `arrived_unsynced`，不要直接写 `inventory_batches`、`inventory_location_balances` 或飞书库存表。
-- 物流 agent 如果只需要判断是否能出库，可以调用 `POST /warehouse/fulfillment/check`，不要自行推断批次库存。
-- 订单付款后必须调用 `POST /warehouse/orders/{order_id}/pay` 扣减 `inventory_location_balances`；发货和到货只更新订单状态；取消或退货调用 `/cancel` 或 `/return` 按原批次加回库存。
+- 物流 agent 如果只需要判断是否能出库，可以调用 `POST /warehouse/fulfillment/check`，不要自行推断批次库存；如果查询配送状态，应调用 `POST /delivery/status/lookup` 读取订单物流字段。
+- 订单付款后必须调用 `POST /warehouse/orders/{order_id}/pay` 扣减 `inventory_location_balances` 并进入 `待发货`；发货和到货只更新为 `已发货`、`已到货`；取消或退货调用 `/cancel` 或 `/return` 按原批次加回库存，并进入 `已退款` 或 `已退货`。
 - 客服 agent 如果需要解释“为什么不能发货”，可以引用 `warehouse/fulfillment/check` 的 `blockers` 和 `next_action`，但不要承诺退款或补偿。
 - 运营 agent 如果要做库存风险汇总，可以调用 `POST /warehouse/inventory/search`，按 `risk_level`、`expiry_risk`、`warehouse_id`、`category` 聚合。
 - 任何 agent 需要飞书库存表、视图或同步状态，都应调用 `feishu-adapter` 的 `/warehouse/inventory-table/*` 接口，不要直接访问飞书开放平台。
@@ -487,4 +495,72 @@
 - 采购 agent 后续只维护本章节。
 - 新增采购接口时，同步更新 `mock-api`、`feishu-adapter` 或 n8n 工具名对应说明。
 - 新增跨 workflow 交接时，优先写清楚“谁创建、谁消费、状态怎么变、失败怎么处理”。
+- 不清楚的业务归属或技术细节，先和用户确认后再改文档或代码。
+
+# 物流agent
+
+本文档用于和其他 workflow / agent 协作时快速说明物流 agent 的业务边界、可复用接口、数据表和交接契约。后续维护时，物流 agent 只维护本章节；其他 workflow 的内容不要在物流章节里改。
+
+## 业务边界
+
+物流 agent 负责读取订单上的物流供应商、快递员电话、物流单号和配送状态，查询已发货或已到货订单列表，并在用户明确要求时创建物流跟进 case。
+
+物流 agent 不负责库存扣减、出库拣货、订单付款、退款赔付或退货入库。订单状态和库存事实仍由 Warehouse 维护；物流只消费 `orders` 和 `delivery_providers` 的读模型字段。
+
+## workflow 入口
+
+- Feishu 物流机器人消息进入 `feishu-adapter`，再转发到 n8n `Delivery Workflow`。
+- n8n webhook：`POST /webhook/delivery-inbound`。
+- workflow 文件：`n8n/workflows/delivery-workflow.json`。
+- 当前主要工具：
+  - `delivery_status_tool`：按 `ord_` 订单号查询数据库订单的物流状态、供应商、快递员电话和处理建议。
+  - `delivery_exception_tool`：按订单状态或物流供应商查询物流订单列表，常用于已发货未到货或某承运商配送排查。
+  - `delivery_case_tool`：为指定订单创建物流跟进 case。
+
+## mock-api
+
+物流路由已拆到 `services/mock-api/app/routers/delivery/`，由 `main.py` 通过 `delivery_router` 统一注册。物流路由只读取 Warehouse 拥有的订单模型，不直接修改库存或订单状态。
+
+- `GET /delivery/providers`
+  - 用途：列出当前可用物流供应商。
+  - 默认供应商：顺丰（`sf`）、京东（`jd`）、圆通（`yto`）。
+
+- `POST /delivery/status/lookup`
+  - 用途：按 `order_id` 查询订单物流状态。
+  - 返回重点：`order.status`、`delivery.provider_id`、`delivery.provider_name`、`delivery.courier_phone`、`delivery.tracking_no`、`risk_level`、`recommendation`。
+  - 只接受订单号，不再依赖历史 `ship_` 运单 demo。
+
+- `POST /delivery/exceptions/search`
+  - 用途：按订单状态或供应商查询物流列表。
+  - 常用入参：`status`、`provider_id`、`limit`。
+  - 状态枚举：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`。
+
+- `POST /delivery/cases`
+  - 用途：为真实订单创建物流跟进 case。
+  - 入参重点：`order_id`、`case_type`、`reason`、`created_by`。
+
+## 业务数据库表
+
+- `delivery_providers`
+  - 物流供应商表。
+  - 关键字段：`provider_id`、`provider_name`、`service_hotline`、`tracking_prefix`、`status`。
+  - 当前内置供应商：顺丰、京东、圆通。
+
+- `orders`
+  - 物流只读取订单主表上的物流字段，不拥有该表。
+  - 物流相关字段：`delivery_provider_id`、`delivery_provider_name`、`courier_phone`、`tracking_no`、`status`。
+  - 订单状态：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`。
+
+## 其他 workflow 可能会用到的契约
+
+- Warehouse 创建订单时可以指定 `delivery_provider_id`、`courier_phone` 和 `tracking_no`；未指定供应商时默认顺丰。
+- Warehouse 付款、发货、到货、退款、退货接口负责订单状态流转；Delivery 不直接调用库存扣减逻辑。
+- Delivery 查询物流时只使用 `POST /delivery/status/lookup` 或 `POST /delivery/exceptions/search`，不要读取历史 `fixtures/data/orders.json` 或 `fixtures/data/shipments.json`。
+- 需要判断是否能出库时，应交给 Warehouse 的 `POST /warehouse/fulfillment/check`，不要由 Delivery 自行判断库存。
+
+## 维护原则
+
+- 物流 agent 后续只维护本章节。
+- 新增物流接口时，同步更新 `mock-api`、n8n 工具名和本章节说明。
+- 新增物流供应商字段或订单状态时，优先写清楚 Warehouse 与 Delivery 的读写边界。
 - 不清楚的业务归属或技术细节，先和用户确认后再改文档或代码。

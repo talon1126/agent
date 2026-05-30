@@ -481,9 +481,15 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "delivery_status_tool" in system_message
             assert "delivery_exception_tool" in system_message
             assert "delivery_case_tool" in system_message
+            assert "物流供应商" in system_message
+            assert "快递员电话" in system_message
+            assert "未付款" in system_message
+            assert "待发货" in system_message
+            assert "已发货" in system_message
+            assert "已到货" in system_message
             assert "不要直接执行其他部门动作" in system_message
-            assert "Customer Support" in system_message
-            assert "mock-delivery" in system_message
+            assert "Customer Support" not in system_message
+            assert "mock-delivery" not in system_message
             status_tool = node_by_name(workflow, "delivery_status_tool")
             exception_tool = node_by_name(workflow, "delivery_exception_tool")
             case_tool = node_by_name(workflow, "delivery_case_tool")
@@ -491,7 +497,12 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "/delivery/exceptions/search" in exception_tool["parameters"]["jsCode"]
             assert "/delivery/cases" in case_tool["parameters"]["jsCode"]
             assert "extractOrderId" in status_tool["parameters"]["jsCode"]
-            assert "extractShipmentId" in case_tool["parameters"]["jsCode"]
+            assert "extractShipmentId" not in status_tool["parameters"]["jsCode"]
+            assert "shipment_id" not in status_tool["parameters"]["jsCode"]
+            assert "extractShipmentId" not in case_tool["parameters"]["jsCode"]
+            assert "shipment_id" not in case_tool["parameters"]["jsCode"]
+            assert "provider_id" in exception_tool["parameters"]["jsCode"]
+            assert "已发货" in exception_tool["parameters"]["jsCode"]
             assert "case_type" in case_tool["parameters"]["jsCode"]
             assert "refund" not in case_tool["parameters"]["jsCode"].lower()
 

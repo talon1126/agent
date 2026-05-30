@@ -13,6 +13,7 @@ from app.warehouse_store import (
     inventory_location_balances,
     inventory_batches,
     items,
+    delivery_providers,
     order_items,
     orders,
     procurement_suppliers,
@@ -32,6 +33,7 @@ WAREHOUSE_TABLES = [
     items,
     inventory_batches,
     replenishment_requests,
+    delivery_providers,
     procurement_suppliers,
     purchase_orders,
     warehouse_inventory_sync_jobs,
@@ -55,6 +57,7 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         item_count = connection.execute(text("select count(*) from items")).scalar_one()
         batch_count = connection.execute(text("select count(*) from inventory_batches")).scalar_one()
         replenishment_count = connection.execute(text("select count(*) from replenishment_requests")).scalar_one()
+        delivery_provider_count = connection.execute(text("select count(*) from delivery_providers")).scalar_one()
         supplier_count = connection.execute(text("select count(*) from procurement_suppliers")).scalar_one()
         purchase_order_count = connection.execute(text("select count(*) from purchase_orders")).scalar_one()
         sync_job_count = connection.execute(text("select count(*) from warehouse_inventory_sync_jobs")).scalar_one()
@@ -68,6 +71,7 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert item_count == 8
     assert batch_count == 10
     assert replenishment_count == 0
+    assert delivery_provider_count == 3
     assert supplier_count == 7
     assert purchase_order_count == 0
     assert sync_job_count == 0
@@ -327,7 +331,11 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
         {
             "order_id": "ORD-CODEX-DB-1",
             "customer_id": "cus_100",
-            "status": "created",
+            "status": "未付款",
+            "delivery_provider_id": "sf",
+            "delivery_provider_name": "顺丰",
+            "courier_phone": "13800000001",
+            "tracking_no": "SF1001",
             "requested_items": [
                 {"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}
             ],
@@ -343,7 +351,8 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
     )
 
     assert created["order"]["id"] == 1
-    assert created["order"]["status"] == "created"
+    assert created["order"]["status"] == "未付款"
+    assert created["order"]["delivery_provider_name"] == "顺丰"
 
     paid = repository.pay_order(
         "ORD-CODEX-DB-1",
@@ -351,7 +360,7 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
         updated_at="2026-05-28T10:01:00+00:00",
     )
 
-    assert paid["order"]["status"] == "paid"
+    assert paid["order"]["status"] == "待发货"
     assert [item["batch_no"] for item in paid["items"]] == ["BATCH-20260401", "BATCH-20260501"]
     assert [item["quantity"] for item in paid["items"]] == [16, 4]
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
@@ -366,6 +375,6 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
         updated_at="2026-05-28T10:10:00+00:00",
     )
 
-    assert returned["order"]["status"] == "returned"
+    assert returned["order"]["status"] == "已退货"
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 136

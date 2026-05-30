@@ -532,38 +532,158 @@ def test_operations_summary_mock_returns_cross_domain_summary():
     assert any(item["domain"] == "warehouse" for item in body["incidents"])
 
 
-def test_delivery_status_lookup_accepts_order_id_and_returns_shipment_context():
-    response = client.post("/delivery/status/lookup", json={"order_id": "ord_300"})
+def test_delivery_providers_list_contains_default_domestic_carriers():
+    response = client.get("/delivery/providers")
+
+    assert response.status_code == 200
+    body = response.json()
+    provider_names = {item["name"] for item in body["items"]}
+    assert {"顺丰", "京东", "圆通"}.issubset(provider_names)
+
+
+def test_warehouse_order_uses_chinese_statuses_and_delivery_provider_fields():
+    create = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-DELIVERY-1001",
+            "customer_id": "cus_100",
+            "delivery_provider_id": "sf",
+            "courier_phone": "13800000001",
+            "items": [
+                {
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "quantity": 2,
+                }
+            ],
+            "created_by": "delivery-agent",
+        },
+    )
+
+    assert create.status_code == 200
+    created_order = create.json()["order"]
+    assert created_order["status"] == "未付款"
+    assert created_order["delivery_provider_id"] == "sf"
+    assert created_order["delivery_provider_name"] == "顺丰"
+    assert created_order["courier_phone"] == "13800000001"
+
+    paid = client.post(
+        "/warehouse/orders/ORD-DELIVERY-1001/pay",
+        json={"updated_by": "warehouse-agent"},
+    ).json()
+    assert paid["order"]["status"] == "待发货"
+
+    shipped = client.post(
+        "/warehouse/orders/ORD-DELIVERY-1001/ship",
+        json={"updated_by": "warehouse-agent"},
+    ).json()
+    assert shipped["order"]["status"] == "已发货"
+
+    arrived = client.post(
+        "/warehouse/orders/ORD-DELIVERY-1001/arrive",
+        json={"updated_by": "warehouse-agent"},
+    ).json()
+    assert arrived["order"]["status"] == "已到货"
+
+
+def test_delivery_status_lookup_uses_warehouse_order_and_delivery_provider_table():
+    client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-DELIVERY-1002",
+            "customer_id": "cus_100",
+            "delivery_provider_id": "jd",
+            "courier_phone": "13800000002",
+            "items": [
+                {
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "quantity": 1,
+                }
+            ],
+            "created_by": "warehouse-agent",
+        },
+    )
+    client.post(
+        "/warehouse/orders/ORD-DELIVERY-1002/pay",
+        json={"updated_by": "warehouse-agent"},
+    )
+    client.post(
+        "/warehouse/orders/ORD-DELIVERY-1002/ship",
+        json={"updated_by": "warehouse-agent"},
+    )
+
+    response = client.post(
+        "/delivery/status/lookup",
+        json={"order_id": "ORD-DELIVERY-1002"},
+    )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["system"] == "mock-delivery"
-    assert body["order"]["order_id"] == "ord_300"
-    assert body["shipment"]["shipment_id"] == "ship_300"
-    assert body["shipment"]["status"] == "delayed"
-    assert body["risk_level"] == "high"
-    assert "延迟" in body["recommendation"]
+    assert body["system"] == "mock-api-delivery"
+    assert body["order"]["order_id"] == "ORD-DELIVERY-1002"
+    assert body["order"]["status"] == "已发货"
+    assert body["delivery"]["provider_id"] == "jd"
+    assert body["delivery"]["provider_name"] == "京东"
+    assert body["delivery"]["courier_phone"] == "13800000002"
+    assert body["risk_level"] == "medium"
 
 
-def test_delivery_exceptions_search_returns_delayed_shipments():
-    response = client.post("/delivery/exceptions/search", json={"status": "delayed"})
+def test_delivery_exceptions_search_returns_shipped_orders_from_warehouse_order_table():
+    client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-DELIVERY-1003",
+            "customer_id": "cus_100",
+            "delivery_provider_id": "yto",
+            "courier_phone": "13800000003",
+            "items": [
+                {
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "quantity": 1,
+                }
+            ],
+            "created_by": "warehouse-agent",
+        },
+    )
+    client.post("/warehouse/orders/ORD-DELIVERY-1003/pay", json={"updated_by": "warehouse-agent"})
+    client.post("/warehouse/orders/ORD-DELIVERY-1003/ship", json={"updated_by": "warehouse-agent"})
+
+    response = client.post("/delivery/exceptions/search", json={"status": "已发货"})
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["system"] == "mock-delivery"
+    assert body["system"] == "mock-api-delivery"
     assert body["count"] == 1
-    assert body["items"][0]["shipment_id"] == "ship_300"
-    assert body["items"][0]["order_id"] == "ord_300"
-    assert body["items"][0]["exception_type"] == "delivery_delay"
+    assert body["items"][0]["order_id"] == "ORD-DELIVERY-1003"
+    assert body["items"][0]["delivery_provider_name"] == "圆通"
 
 
-def test_delivery_case_create_records_follow_up_case():
+def test_delivery_case_create_records_follow_up_case_for_warehouse_order():
+    client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-DELIVERY-1004",
+            "customer_id": "cus_100",
+            "delivery_provider_id": "sf",
+            "courier_phone": "13800000004",
+            "items": [
+                {
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "quantity": 1,
+                }
+            ],
+            "created_by": "warehouse-agent",
+        },
+    )
     response = client.post(
         "/delivery/cases",
         json={
-            "shipment_id": "ship_300",
+            "order_id": "ORD-DELIVERY-1004",
             "case_type": "delivery_delay",
             "reason": "客户催促，超过预计时效",
             "created_by": "delivery-agent",
@@ -574,7 +694,8 @@ def test_delivery_case_create_records_follow_up_case():
     body = response.json()
     assert body["ok"] is True
     assert body["case"]["case_id"].startswith("DCASE-")
-    assert body["case"]["shipment_id"] == "ship_300"
+    assert body["case"]["order_id"] == "ORD-DELIVERY-1004"
+    assert body["case"]["delivery_provider_name"] == "顺丰"
     assert body["case"]["status"] == "open"
     assert DELIVERY_CASES[0]["case_id"] == body["case"]["case_id"]
 
@@ -884,13 +1005,13 @@ def test_warehouse_order_paid_deducts_location_balances_and_preserves_batch_fact
     )
     assert response.status_code == 200
     created = response.json()
-    assert created["order"]["status"] == "created"
+    assert created["order"]["status"] == "未付款"
 
     response = client.post("/warehouse/orders/ORD-CODEX-9001/pay", json={"updated_by": "warehouse-agent"})
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["order"]["status"] == "paid"
+    assert body["order"]["status"] == "待发货"
     assert [line["location_code"] for line in body["items"] if line["item_id"] == "item_vinda_tissue"] == ["A1", "A1"]
     assert [line["batch_no"] for line in body["items"] if line["item_id"] == "item_vinda_tissue"] == [
         "BATCH-20260401",
@@ -925,7 +1046,7 @@ def test_warehouse_order_cancel_adds_paid_stock_back_to_original_batches():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["order"]["status"] == "cancelled"
+    assert body["order"]["status"] == "已退款"
     balances = client.get(
         "/warehouse/stock/balances",
         params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
@@ -950,7 +1071,7 @@ def test_warehouse_order_return_after_arrival_adds_stock_back_to_original_batche
 
     assert response.status_code == 200
     body = response.json()
-    assert body["order"]["status"] == "returned"
+    assert body["order"]["status"] == "已退货"
     balances = client.get(
         "/warehouse/stock/balances",
         params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
