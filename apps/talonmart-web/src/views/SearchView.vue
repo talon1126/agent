@@ -17,7 +17,9 @@ import {
   UserRound,
 } from 'lucide-vue-next'
 
+import { addCartItem, CART_USER_ID, fetchCart, removeCartItem } from '@/services/cartApi'
 import { searchProducts } from '@/services/searchApi'
+import type { CartItem } from '@/types/cart'
 import type { SearchProduct } from '@/types/search'
 
 const route = useRoute()
@@ -26,8 +28,12 @@ const router = useRouter()
 const searchQuery = ref(String(route.query.q ?? ''))
 const searchedQuery = ref('')
 const products = ref<SearchProduct[]>([])
+const cartItems = ref<CartItem[]>([])
 const isLoading = ref(false)
+const isCartLoading = ref(false)
 const errorMessage = ref('')
+const cartErrorMessage = ref('')
+const pendingCartItemId = ref('')
 
 const topTabs = ['Departments', 'Services', 'Rollbacks & More', 'Fast delivery', 'Fresh food']
 const quickFilters = ['In-store', 'Get it fast', 'All deals', 'Price', 'Brand', 'Subscription']
@@ -56,6 +62,10 @@ const resultCountLabel = computed(() =>
   products.value.length === 1 ? '1 result' : `${products.value.length} results`,
 )
 
+const cartQuantity = computed(() =>
+  cartItems.value.reduce((total, item) => total + Number(item.quantity || 0), 0),
+)
+
 function totalStock(product: SearchProduct) {
   return product.balances.reduce((total, balance) => total + balance.quantity_on_hand, 0)
 }
@@ -78,6 +88,75 @@ function productImage(product: SearchProduct) {
     return 'https://images.unsplash.com/photo-1586075010923-2dd4570fb338?auto=format&fit=crop&w=640&q=80'
   }
   return 'https://images.unsplash.com/photo-1583947581924-860bda6a26df?auto=format&fit=crop&w=640&q=80'
+}
+
+function productPrice(product: SearchProduct) {
+  const prices: Record<string, number> = {
+    item_milk_pure: 16.19,
+    item_cola_zero: 9.9,
+    item_copy_paper: 6.2,
+    item_vinda_tissue: 12.8,
+  }
+
+  return prices[product.item_id] ?? 9.99
+}
+
+function cartQuantityFor(itemId: string) {
+  return cartItems.value.find((item) => item.item_id === itemId)?.quantity ?? 0
+}
+
+async function loadCart() {
+  isCartLoading.value = true
+  cartErrorMessage.value = ''
+
+  try {
+    const response = await fetchCart(CART_USER_ID)
+    cartItems.value = response.items
+  } catch (error) {
+    cartItems.value = []
+    cartErrorMessage.value =
+      error instanceof Error
+        ? error.message
+        : 'Cart service is unavailable. Check the cart API and try again.'
+  } finally {
+    isCartLoading.value = false
+  }
+}
+
+async function handleAddToCart(product: SearchProduct) {
+  pendingCartItemId.value = product.item_id
+  cartErrorMessage.value = ''
+
+  try {
+    await addCartItem({
+      user_id: CART_USER_ID,
+      item_id: product.item_id,
+      item_name: product.item_name,
+      price: productPrice(product),
+      quantity: 1,
+    })
+    await loadCart()
+  } catch (error) {
+    cartErrorMessage.value =
+      error instanceof Error ? error.message : 'Unable to add this item to cart.'
+  } finally {
+    pendingCartItemId.value = ''
+  }
+}
+
+async function handleRemoveFromCart(product: SearchProduct) {
+  pendingCartItemId.value = product.item_id
+  cartErrorMessage.value = ''
+
+  try {
+    await removeCartItem(product.item_id, CART_USER_ID)
+    await loadCart()
+  } catch (error) {
+    cartErrorMessage.value =
+      error instanceof Error ? error.message : 'Unable to remove this item from cart.'
+  } finally {
+    pendingCartItemId.value = ''
+  }
 }
 
 async function loadResults(query: string) {
@@ -120,7 +199,10 @@ watch(
   },
 )
 
-onMounted(() => loadResults(searchQuery.value))
+onMounted(() => {
+  loadResults(searchQuery.value)
+  loadCart()
+})
 </script>
 
 <template>
@@ -167,9 +249,15 @@ onMounted(() => loadResults(searchQuery.value))
           <UserRound class="h-5 w-5" aria-hidden="true" />
           Account
         </RouterLink>
-        <RouterLink class="hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex" to="/">
+        <RouterLink class="relative hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex" to="/cart">
           <ShoppingCart class="h-5 w-5" aria-hidden="true" />
           Cart
+          <span
+            v-if="cartQuantity"
+            class="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#FFC220] px-1 text-xs font-black text-[#101828]"
+          >
+            {{ cartQuantity }}
+          </span>
         </RouterLink>
       </div>
 
@@ -303,7 +391,15 @@ onMounted(() => loadResults(searchQuery.value))
           <p class="mt-2 text-[#667085]">Try a different product keyword such as milk, cola, paper, or tissue.</p>
         </div>
 
-        <div v-else class="grid gap-x-5 gap-y-8 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+        <div
+          v-if="cartErrorMessage"
+          class="mb-5 rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-4 text-sm font-semibold text-[#991B1B]"
+          role="alert"
+        >
+          {{ cartErrorMessage }}
+        </div>
+
+        <div v-if="!isLoading && !errorMessage && products.length" class="grid gap-x-5 gap-y-8 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           <article
             v-for="product in products"
             :key="product.item_id"
@@ -324,9 +420,40 @@ onMounted(() => loadResults(searchQuery.value))
               <p class="mt-3 text-2xl font-black text-[#101828]">{{ totalStock(product) }} units</p>
               <p class="text-sm font-semibold text-[#039855]">Available for local fulfillment</p>
 
-              <button class="mt-4 min-h-11 w-full rounded-full bg-[#0053E2] font-black text-white transition hover:bg-[#003A9B]" type="button">
+              <button
+                v-if="cartQuantityFor(product.item_id) === 0"
+                class="mt-4 min-h-11 w-full rounded-full bg-[#0053E2] font-black text-white transition hover:bg-[#003A9B] disabled:cursor-not-allowed disabled:opacity-60"
+                type="button"
+                :disabled="pendingCartItemId === product.item_id || isCartLoading"
+                @click="handleAddToCart(product)"
+              >
                 Add to cart
               </button>
+
+              <div
+                v-else
+                class="mt-4 grid min-h-11 grid-cols-[44px_1fr_44px] items-center rounded-full bg-[#0053E2] font-black text-white"
+              >
+                <button
+                  class="grid h-11 place-items-center rounded-l-full text-2xl transition hover:bg-[#003A9B] disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  aria-label="Remove from cart"
+                  :disabled="pendingCartItemId === product.item_id || isCartLoading"
+                  @click="handleRemoveFromCart(product)"
+                >
+                  -
+                </button>
+                <span class="text-center">{{ cartQuantityFor(product.item_id) }} added</span>
+                <button
+                  class="grid h-11 place-items-center rounded-r-full text-3xl transition hover:bg-[#003A9B] disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  aria-label="Add one more"
+                  :disabled="pendingCartItemId === product.item_id || isCartLoading"
+                  @click="handleAddToCart(product)"
+                >
+                  +
+                </button>
+              </div>
             </div>
           </article>
         </div>

@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import CartView from '../views/CartView.vue'
 import HomeView from '../views/HomeView.vue'
 import SearchView from '../views/SearchView.vue'
 
@@ -14,6 +15,11 @@ const router = createRouter({
       path: '/search',
       name: 'search',
       component: SearchView,
+    },
+    {
+      path: '/cart',
+      name: 'cart',
+      component: CartView,
     },
     {
       path: '/about',

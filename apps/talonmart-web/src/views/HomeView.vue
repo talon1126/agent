@@ -131,14 +131,14 @@ function handleSearch() {
           <ClipboardList class="h-5 w-5 text-[#00A6C8]" aria-hidden="true" />
           Orders
         </a>
-        <a
+        <RouterLink
           class="flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-md bg-white px-3 text-sm font-bold text-[#0F2A44]"
-          href="#"
+          to="/cart"
           style="color: #0f2a44"
         >
           <ShoppingCart class="h-5 w-5" aria-hidden="true" />
           Cart
-        </a>
+        </RouterLink>
       </div>
 
       <nav class="border-t border-white/10 bg-[#123A5D]">
