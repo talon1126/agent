@@ -45,6 +45,7 @@ def product_search_items(query: str) -> list[dict[str, Any]]:
             "brand": row["brand"],
             "spec": row["spec"],
             "category_id": row["category_id"],
+            "price": float(row["price"]),
             "balances": [],
         }
 

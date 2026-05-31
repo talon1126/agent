@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import (
+    CART_ITEMS,
     DELIVERY_CASES,
     PURCHASE_ORDERS,
     RECEIVED_INVENTORY_BATCHES,
@@ -30,6 +31,7 @@ def clear_received_inventory_batches():
     WAREHOUSE_ORDERS.clear()
     WAREHOUSE_ORDER_ITEMS.clear()
     PURCHASE_ORDERS.clear()
+    CART_ITEMS.clear()
     yield
     DELIVERY_CASES.clear()
     RECEIVED_INVENTORY_BATCHES.clear()
@@ -39,6 +41,7 @@ def clear_received_inventory_batches():
     WAREHOUSE_ORDERS.clear()
     WAREHOUSE_ORDER_ITEMS.clear()
     PURCHASE_ORDERS.clear()
+    CART_ITEMS.clear()
 
 
 def test_get_order_fixture():
@@ -76,6 +79,7 @@ def test_product_search_returns_item_with_inventory_balances(monkeypatch):
                 "brand": "蒙牛",
                 "spec": "250ml*24盒",
                 "category_id": "dairy",
+                "price": 18.40,
             }
         ],
     )
@@ -114,6 +118,7 @@ def test_product_search_returns_item_with_inventory_balances(monkeypatch):
             "brand": "蒙牛",
             "spec": "250ml*24盒",
             "category_id": "dairy",
+            "price": 18.40,
             "balances": [
                 {
                     "id": 3,
@@ -183,6 +188,7 @@ def test_product_search_returns_matching_item_without_balances(monkeypatch):
                 "brand": "Talon",
                 "spec": "1件",
                 "category_id": "paper",
+                "price": 9.90,
             }
         ],
     )
@@ -195,9 +201,149 @@ def test_product_search_returns_matching_item_without_balances(monkeypatch):
             "brand": "Talon",
             "spec": "1件",
             "category_id": "paper",
+            "price": 9.90,
             "balances": [],
         }
     ]
+
+
+def test_cart_add_uses_item_price_and_accumulates_quantity():
+    first = client.post(
+        "/cart",
+        json={
+            "user_id": 1,
+            "item_id": "item_milk_pure",
+            "item_name": "纯牛奶",
+            "price": 999.99,
+            "quantity": 1,
+        },
+    )
+    second = client.post(
+        "/cart",
+        json={
+            "user_id": 1,
+            "item_id": "item_milk_pure",
+            "item_name": "纯牛奶",
+            "price": 0,
+            "quantity": 2,
+        },
+    )
+
+    assert first.status_code == 200
+    assert first.json()["item"]["price"] == 18.4
+    assert second.status_code == 200
+    assert second.json()["item"] == {
+        "id": 1,
+        "user_id": 1,
+        "item_id": "item_milk_pure",
+        "item_name": "纯牛奶",
+        "price": 18.4,
+        "quantity": 3,
+    }
+
+
+def test_cart_list_filters_by_user_id():
+    CART_ITEMS.append(
+        {
+            "id": 1,
+            "user_id": 1,
+            "item_id": "item_milk_pure",
+            "item_name": "纯牛奶",
+            "price": 18.4,
+            "quantity": 2,
+        }
+    )
+    CART_ITEMS.append(
+        {
+            "id": 2,
+            "user_id": 2,
+            "item_id": "item_cola_zero",
+            "item_name": "零度可乐",
+            "price": 36.9,
+            "quantity": 1,
+        }
+    )
+
+    response = client.get("/cart", params={"user_id": 1})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "user_id": 1,
+        "count": 1,
+        "items": [
+            {
+                "id": 1,
+                "user_id": 1,
+                "item_id": "item_milk_pure",
+                "item_name": "纯牛奶",
+                "price": 18.4,
+                "quantity": 2,
+            }
+        ],
+    }
+
+
+def test_cart_delete_requires_matching_user_and_item():
+    CART_ITEMS.append(
+        {
+            "id": 1,
+            "user_id": 1,
+            "item_id": "item_milk_pure",
+            "item_name": "纯牛奶",
+            "price": 18.4,
+            "quantity": 2,
+        }
+    )
+
+    missing = client.delete("/cart", params={"user_id": 2, "item_id": "item_milk_pure"})
+    removed = client.delete("/cart", params={"user_id": 1, "item_id": "item_milk_pure"})
+
+    assert missing.status_code == 404
+    assert missing.json() == {
+        "ok": False,
+        "error": "cart_item_not_found",
+        "message": "cart item does not exist",
+    }
+    assert removed.status_code == 200
+    assert removed.json() == {
+        "ok": True,
+        "removed": True,
+        "user_id": 1,
+        "item_id": "item_milk_pure",
+    }
+
+
+def test_cart_rejects_unknown_user_and_invalid_quantity():
+    unknown_user = client.post(
+        "/cart",
+        json={
+            "user_id": 999,
+            "item_id": "item_milk_pure",
+            "item_name": "纯牛奶",
+            "price": 18.4,
+            "quantity": 1,
+        },
+    )
+    invalid_quantity = client.post(
+        "/cart",
+        json={
+            "user_id": 1,
+            "item_id": "item_milk_pure",
+            "item_name": "纯牛奶",
+            "price": 18.4,
+            "quantity": 0,
+        },
+    )
+
+    assert unknown_user.status_code == 404
+    assert unknown_user.json()["error"] == "user_not_found"
+    assert invalid_quantity.status_code == 400
+    assert invalid_quantity.json() == {
+        "ok": False,
+        "error": "invalid_cart_item",
+        "message": "quantity must be greater than 0",
+    }
 
 
 def test_create_approval_request():
