@@ -577,6 +577,96 @@
 - 新增物流供应商字段或订单状态时，优先写清楚 Warehouse 与 Delivery 的读写边界。
 - 不清楚的业务归属或技术细节，先和用户确认后再改文档或代码。
 
+# 客服agent
+
+本文档用于和其他 workflow / agent 协作时快速说明客服 agent 的业务边界、可复用接口、数据表和交接契约。后续维护时，客服 agent 只维护本章节；其他 workflow 的内容不要在客服章节里改。
+
+## 业务边界
+
+客服 agent 负责面向电商客服和售后场景的问题处理，包括订单状态查询、物流状态解释、配送延迟说明、退款/退货/换货政策查询、投诉和补偿类问题，以及基于短期记忆处理“这个订单”“刚才那单”等追问。
+
+客服 agent 不负责库存扣减、库位/批次管理、补货申请创建、采购审批、采购单到仓确认、物流承运商调度或飞书库存/采购表同步。需要解释缺货、发货阻塞、补货进度或物流状态时，只消费 Warehouse、Procurement、Delivery 暴露的接口或状态，不直接改这些 workflow 拥有的数据。
+
+## workflow 入口
+
+- Feishu 客服机器人消息进入 `feishu-adapter`，再转发到 n8n `Customer Support Workflow`。
+- n8n webhook：`POST /webhook/customer-support-inbound`。
+- workflow 文件：`n8n/workflows/customer-support-workflow.json`。
+- Feishu bot 名称通常是 `customer_support`。
+- 当前主要工具：
+  - `order_status_tool`：查询订单和物流状态。用户提供 `ord_` 订单号时必须调用。
+  - `policy_search_tool`：检索售后政策。涉及退款、退货、换货、审批、补偿、物流赔偿、差评处理时必须调用。
+
+## ai-service
+
+`ai-service` 承担客服/售后中需要可测试的确定性逻辑，不直接编排 Feishu 或 n8n。
+
+- `POST /message/handle`
+  - 用途：消息处理入口，支持订单号提取、文本/音频转写边界和订单状态工具调用。
+
+- `POST /after-sales/fast-path`
+  - 用途：客服售后快路径。可处理明确订单查询，以及在同一 session 已记住 `last_order_id` 时处理退款类追问；不能处理时应 decline，让 workflow 回退到 Agent。
+
+- `POST /decide`
+  - 用途：售后事件确定性决策，用于非聊天事件流。
+
+`session_state` 用于保存短期、可恢复的会话状态，例如 `last_order_id`；`user_profile` 用于保存精简用户级事实，不应塞入完整聊天记录。客服 workflow 的 n8n Postgres Chat Memory 继续用于上下文问答，session key 应保持 `customer_support:<session_id>` 这类部门命名空间，避免和其他 agent 混用。
+
+## mock-api
+
+客服 agent 通过 `mock-api` 获取订单、物流和政策事实，不直接访问 Postgres。
+
+- `GET /orders/{order_id}`
+  - 用途：按订单号查询订单事实。
+  - 当前主要由 `services/ai-service/app/order_status_tool.py` 调用。
+
+- `GET /shipments/{shipment_id}`
+  - 用途：查询历史物流 fixture 中的运单状态；新订单物流状态应优先消费 Warehouse/Delivery 维护在订单上的物流字段。
+
+- `POST /policies/search`
+  - 用途：检索售后政策。
+  - 返回必须包含可审计元数据：`source_file`、`section`、`clause_id`、`clause_title`。
+  - 如果没有匹配条款，客服回复必须说明“未找到对应公司政策，需要人工确认”，不要编造政策。
+
+## 业务数据库表
+
+客服相关持久化应优先通过 `ai-service`、`mock-api` 或未来专用 customer/customer-service API 访问，不要让 n8n 或 `feishu-adapter` 直接读写 Postgres 表。
+
+- `session_state`
+  - 短期可恢复状态表。
+  - 客服重点字段：`session_id`、`source`、`chat_id`、`sender_id`、`state`、`updated_at`。
+  - 典型状态：`state.last_order_id`。
+
+- `user_profile`
+  - 用户级精简事实表。
+  - 客服只保存可复用的结构化事实和偏好，不保存完整聊天 transcript。
+
+- `users`
+  - 用户账号表，当前已在部署中的 Postgres 创建。
+  - 关键字段：`id`、`phone_number`、`email`、`username`、`password`。
+  - 当前 `password` 类型为 `varchar(20)`，只适合 demo/临时数据；如果后续做真实登录，需要重新设计密码 hash 字段和长度。
+
+- `cart_items`
+  - 购物车明细表，当前已在部署中的 Postgres 创建。
+  - 关键字段：`id`、`item_id`、`item_name`、`user_id`、`price`、`quantity`。
+  - 当前只使用逻辑外键：`user_id` 逻辑关联 `users.id`，`item_id` 逻辑关联 `items.item_id`；没有物理外键。
+  - 约束：`price >= 0`，`quantity > 0`，`quantity` 默认值为 `1`。
+
+## 其他 workflow 可能会用到的契约
+
+- Customer Support Agent 查询订单或物流状态时优先使用 `order_status_tool` 或已暴露的订单/物流 API，不直接读取 Warehouse 的库存批次表。
+- Customer Support Agent 需要解释“为什么不能发货”时，可以引用 Warehouse `POST /warehouse/fulfillment/check` 返回的 `blockers` 和 `next_action`，但不要自行承诺退款、补偿或库存调拨。
+- Customer Support Agent 需要解释缺货补货进度时，只能引用 Procurement 的补货申请或采购单状态，不要承诺采购系统没有给出的准确到货时间。
+- 涉及退款、退货、换货、审批、补偿、物流赔偿或差评处理时，必须通过 `policy_search_tool` / `POST /policies/search` 获取政策条款和元数据。
+- 前端或未来 customer API 如果使用 `users`、`cart_items`，应补齐服务层接口和初始化/迁移路径，不要只依赖手工建表状态。
+
+## 维护原则
+
+- 客服 agent 后续只维护本章节。
+- 新增客服 workflow 工具、售后政策接口、用户/购物车接口或记忆状态设计时，同步更新本章节和 `README.md` 的客服章节。
+- 新增跨 workflow 交接时，优先写清楚“客服只读什么、谁拥有写入、状态从哪里来、回复能承诺什么”。
+- 不清楚的业务归属、字段类型、约束或安全细节，先和用户确认后再改文档或代码。
+
 # 前端
 
 本文档用于记录 TalonMart 前端项目的长期协作约定。后续维护前端时，先查看本章节和相关前端文档，再改代码或接口契约。

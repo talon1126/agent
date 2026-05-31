@@ -216,3 +216,78 @@ flowchart LR
 - `POST /delivery/cases`：创建物流跟进 case。
 
 订单状态统一为：`未付款`、`待发货`、`已发货`、`已到货`、`已退款`、`已退货`、`已取消`。Warehouse 负责这些状态的写入和库存扣减，Delivery 只读取物流字段并创建跟进 case。
+
+# 客服agent
+
+## 汇总
+
+- 客服 Agent 负责电商客服和售后问题，包括订单状态、物流状态、配送延迟、退款/退货/换货政策、投诉和补偿类问题。
+- 客服 Agent 不拥有库存、采购或物流派送状态；这些事实分别由 Warehouse、Procurement 和 Delivery 维护，客服只通过工具/API 消费。
+- 订单类问题必须走 `order_status_tool`，政策类问题必须走 `policy_search_tool`，回复需要保留可审计的订单、物流或政策来源。
+- 短期上下文使用 `Customer Support Postgres Chat Memory` 和 `ai-service` 的 `session_state`，用于处理“这个订单”“刚才那单”等追问。
+- 当前部署中的 Postgres 已有 `users` 和 `cart_items` 两张 demo 业务表；后续如果接入真实用户/购物车 API，需要补齐服务层和初始化/迁移路径。
+
+## workflow 架构
+
+```mermaid
+flowchart LR
+    User["飞书客服用户"] --> Gateway["feishu-adapter 多机器人网关"]
+    Gateway --> Workflow["n8n Customer Support Workflow"]
+    Workflow --> Agent["Customer Support Agent"]
+
+    Agent --> Memory["Customer Support Postgres Chat Memory"]
+    Agent --> OrderTool["order_status_tool"]
+    Agent --> PolicyTool["policy_search_tool"]
+
+    OrderTool --> AIService["ai-service order_status_tool"]
+    AIService --> Orders["mock-api orders / shipments"]
+    PolicyTool --> PolicyAPI["mock-api /policies/search"]
+    AIService --> SessionState["session_state / user_profile"]
+    Orders --> Postgres["Postgres / fixtures"]
+    PolicyAPI --> Policies["fixtures/policies"]
+```
+
+客服 workflow 的入口是 `n8n/workflows/customer-support-workflow.json`，webhook 是 `/webhook/customer-support-inbound`。飞书消息经 `feishu-adapter` 多机器人网关进入 Customer Support Workflow 后，由 Customer Support Agent 按需调用 `order_status_tool` 或 `policy_search_tool`。Feishu bot 名称通常是 `customer_support`。
+
+## 功能
+
+- 查询订单：`@customer_support 帮我查询订单 ord_100` 会调用 `order_status_tool`，返回订单状态、物流状态、延迟情况和建议动作。
+- 追问售后：`@customer_support 这个订单怎么退款` 会先通过 memory 找到最近订单号，再调用 `policy_search_tool` 检索退款政策。
+- 查询政策：退款、退货、换货、审批、补偿、物流赔偿和差评处理必须返回 `source_file`、`section`、`clause_id` 和 `clause_title`。
+- 处理缺货解释：客服可以引用 Warehouse fulfillment check 的阻塞原因和下一步动作，但不能代替 Warehouse 扣库存，也不能替 Procurement 承诺采购到货时间。
+
+## ai-service
+
+客服相关确定性逻辑主要在 `ai-service`：
+
+- `POST /message/handle`：消息处理入口，支持订单号提取和订单状态查询。
+- `POST /after-sales/fast-path`：售后快路径；能处理明确订单查询和带已记忆订单号的退款类追问，不能处理时回退到 Agent。
+- `POST /decide`：售后事件确定性决策。
+
+`session_state` 保存会话级短期状态，例如 `last_order_id`；`user_profile` 保存精简用户级事实。客服不要把完整聊天记录写入 `user_profile`。
+
+## mock-api
+
+客服 Agent 的事实数据由 `mock-api` 和 fixture 提供：
+
+- `GET /orders/{order_id}`：查询订单事实。
+- `GET /shipments/{shipment_id}`：查询历史物流 fixture 运单状态。
+- `POST /policies/search`：检索售后政策，返回可审计条款元数据。
+
+政策文件位于 `fixtures/policies/after_sales_policy.zh.md` 和 `fixtures/policies/after_sales_policy.md`，eval 用例位于 `fixtures/evals/policy_rag_eval.json`。如果政策检索没有返回 matches，客服必须说“未找到对应公司政策，需要人工确认”，不要编造条款。
+
+## 业务数据库表
+
+- `session_state`：保存客服快路径和会话状态，例如 `last_order_id`。
+- `user_profile`：保存精简用户级事实，避免存完整 transcript。
+- `users`：当前部署 Postgres 中的 demo 用户表，字段为 `id`、`phone_number`、`email`、`username`、`password`。
+- `cart_items`：当前部署 Postgres 中的 demo 购物车明细表，字段为 `id`、`item_id`、`item_name`、`user_id`、`price`、`quantity`；只使用逻辑外键，`price >= 0`，`quantity > 0`，`quantity` 默认 `1`。
+
+后续如果把 `users` 和 `cart_items` 纳入应用主路径，需要新增服务层接口、测试和数据库初始化/迁移，不要只依赖手工建表。
+
+## 维护原则
+
+- 客服 agent 后续只维护本章节。
+- 新增客服 workflow 工具、售后政策接口、用户/购物车接口或记忆状态设计时，同步更新 `README.md` 和 `AGENTS.md` 的客服章节。
+- 客服回答必须基于工具/API 和政策条款，不凭模型常识编造公司规则。
+- 不清楚的业务归属、字段类型、约束或安全细节，先和用户确认后再改文档或代码。
