@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   ClipboardList,
   MapPin,
@@ -10,6 +12,7 @@ import {
 } from 'lucide-vue-next'
 
 const categories = ['Paper Goods', 'Dairy', 'Beverages', 'Office Supplies']
+const router = useRouter()
 
 const deals = [
   {
@@ -53,6 +56,21 @@ const deals = [
     stock: 'In stock',
   },
 ]
+
+const searchQuery = ref('milk')
+const searchError = ref('')
+
+function handleSearch() {
+  const query = searchQuery.value.trim()
+
+  if (!query) {
+    searchError.value = 'Enter a product keyword to search inventory.'
+    return
+  }
+
+  searchError.value = ''
+  router.push({ name: 'search', query: { q: query } })
+}
 </script>
 
 <template>
@@ -81,8 +99,10 @@ const deals = [
         <form
           class="order-3 flex min-h-11 w-full overflow-hidden rounded-md bg-white lg:order-none lg:min-w-[360px] lg:flex-1"
           role="search"
+          @submit.prevent="handleSearch"
         >
           <input
+            v-model="searchQuery"
             aria-label="Search products"
             class="min-w-0 flex-1 px-4 text-base text-[#101828] outline-none"
             placeholder="Search groceries, beverages, paper goods..."
@@ -163,13 +183,15 @@ const deals = [
               Stock-ready daily essentials with fast local fulfillment.
             </h1>
             <p class="mt-4 max-w-xl text-base text-white/75">
-              Browse focused household, office, dairy, and beverage deals backed by live order and
-              inventory APIs.
+              Search product inventory from the live warehouse API, then compare stock by warehouse
+              before the storefront is connected to checkout.
             </p>
             <button
               class="mt-6 min-h-11 rounded-md bg-[#FFB020] px-5 font-bold text-[#0F2A44] hover:bg-[#FFC44D]"
+              type="button"
+              @click="handleSearch"
             >
-              Shop today deals
+              Search milk inventory
             </button>
           </div>
           <div class="grid bg-[#E6F8FB] p-6 text-[#0F2A44]">
@@ -184,6 +206,14 @@ const deals = [
             </div>
           </div>
         </section>
+
+        <p
+          v-if="searchError"
+          class="rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-4 text-sm font-semibold text-[#991B1B]"
+          role="alert"
+        >
+          {{ searchError }}
+        </p>
 
         <section>
           <div class="mb-3 flex items-end justify-between">

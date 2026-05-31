@@ -14,6 +14,7 @@ from app.main import (
     WAREHOUSE_ORDERS,
     app,
 )
+from app.routers import search as search_router
 from app.routers.warehouse.inventory import aggregate_stock_balance_snapshot_rows
 
 client = TestClient(app)
@@ -65,12 +66,12 @@ def test_search_policy_returns_refund_clause_metadata():
 
 
 def test_product_search_returns_item_with_inventory_balances():
-    response = client.get("/search", params={"q": "牛奶"})
+    response = client.get("/search", params={"q": "milk"})
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["query"] == "牛奶"
+    assert body["query"] == "milk"
     assert body["count"] == 1
     assert body["items"] == [
         {
@@ -119,6 +120,34 @@ def test_product_search_requires_query():
         "error": "missing_query",
         "message": "q is required",
     }
+
+
+def test_product_search_returns_matching_item_without_balances(monkeypatch):
+    monkeypatch.setattr(
+        search_router,
+        "load_search_items",
+        lambda query=None: [
+            {
+                "item_id": "item_no_stock",
+                "item_name": "无库存测试商品",
+                "brand": "Talon",
+                "spec": "1件",
+                "category_id": "paper",
+            }
+        ],
+    )
+    monkeypatch.setattr(search_router, "load_search_balance_rows", lambda: [])
+
+    assert search_router.product_search_items("无库存") == [
+        {
+            "item_id": "item_no_stock",
+            "item_name": "无库存测试商品",
+            "brand": "Talon",
+            "spec": "1件",
+            "category_id": "paper",
+            "balances": [],
+        }
+    ]
 
 
 def test_create_approval_request():

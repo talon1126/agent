@@ -20,17 +20,18 @@ GET /search?q=milk
 
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `q` | string | 是 | 搜索关键词。后端匹配 `items.item_name`、`items.brand`、`items.spec`。 |
+| `q` | string | 是 | 搜索关键词。后端匹配 `items.item_id`、`items.item_name`、`items.brand`、`items.spec`。 |
 
 ### 搜索匹配规则
 
 `q` 只匹配以下字段：
 
+- `items.item_id`
 - `items.item_name`
 - `items.brand`
 - `items.spec`
 
-当前不把 `category_id` 纳入关键词匹配。分类后续如需支持，应作为独立筛选条件设计，例如 `GET /search?q=milk&category_id=cat_dairy`。
+当前不把 `category_id` 纳入关键词匹配。`item_id` 用于支持 `milk` 这类英文关键词命中 `item_milk_pure`。分类后续如需支持，应作为独立筛选条件设计，例如 `GET /search?q=milk&category_id=dairy`。
 
 ## 返回结构
 
@@ -133,7 +134,7 @@ GET /search
 
 推荐数据组合逻辑：
 
-1. 从 `items` 表按 `item_name`、`brand`、`spec` 匹配关键词。
+1. 从 `items` 表按 `item_id`、`item_name`、`brand`、`spec` 匹配关键词。
 2. 拿到匹配商品的 `item_id` 集合。
 3. 查询 `inventory_location_balances` 中对应 `item_id` 的余额行。
 4. 按 `item_id` 聚合成商品列表。

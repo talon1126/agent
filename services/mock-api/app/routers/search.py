@@ -5,11 +5,27 @@ from fastapi.responses import JSONResponse
 
 from app.routers.warehouse.inventory import load_batch_inventory_rows
 from app.routers.warehouse.state import get_warehouse_repository
+from app.store import load_json
 
 router = APIRouter()
 
 
-SEARCH_FIELDS = ("item_name", "brand", "spec")
+SEARCH_FIELDS = ("item_id", "item_name", "brand", "spec")
+
+
+def load_search_items(query: str | None = None) -> list[dict[str, Any]]:
+    normalized_query = (query or "").casefold()
+    repository = get_warehouse_repository()
+    if repository:
+        return repository.search_items(normalized_query)
+    rows = load_json("items.json")
+    if not normalized_query:
+        return rows
+    return [
+        row
+        for row in rows
+        if any(normalized_query in str(row.get(field) or "").casefold() for field in SEARCH_FIELDS)
+    ]
 
 
 def load_search_balance_rows() -> list[dict[str, Any]]:
@@ -34,21 +50,22 @@ def balance_id(row: dict[str, Any], fallback_id: int) -> int:
 
 def product_search_items(query: str) -> list[dict[str, Any]]:
     products: dict[str, dict[str, Any]] = {}
-    for index, row in enumerate(load_search_balance_rows(), start=1):
-        if not matches_product_query(row, query):
-            continue
+    for row in load_search_items(query):
         item_id = str(row["item_id"])
-        product = products.setdefault(
-            item_id,
-            {
-                "item_id": item_id,
-                "item_name": row["item_name"],
-                "brand": row["brand"],
-                "spec": row["spec"],
-                "category_id": row["category_id"],
-                "balances": [],
-            },
-        )
+        products[item_id] = {
+            "item_id": item_id,
+            "item_name": row["item_name"],
+            "brand": row["brand"],
+            "spec": row["spec"],
+            "category_id": row["category_id"],
+            "balances": [],
+        }
+
+    for index, row in enumerate(load_search_balance_rows(), start=1):
+        item_id = str(row["item_id"])
+        product = products.get(item_id)
+        if not product:
+            continue
         product["balances"].append(
             {
                 "id": balance_id(row, index),

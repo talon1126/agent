@@ -777,6 +777,28 @@ class WarehouseRepository:
             rows = connection.execute(statement).mappings().all()
         return [dict(row) for row in rows]
 
+    def search_items(self, query: str) -> list[dict[str, Any]]:
+        normalized_query = f"%{query.casefold()}%"
+        statement = (
+            select(
+                items.c.item_id,
+                items.c.item_name,
+                items.c.brand,
+                items.c.spec,
+                items.c.category_id,
+            )
+            .where(
+                func.lower(items.c.item_id).like(normalized_query)
+                | func.lower(items.c.item_name).like(normalized_query)
+                | func.lower(items.c.brand).like(normalized_query)
+                | func.lower(items.c.spec).like(normalized_query)
+            )
+            .order_by(items.c.item_id)
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [dict(row) for row in rows]
+
     def list_inventory_balance_snapshots(
         self,
         *,

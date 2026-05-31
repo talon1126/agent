@@ -1,0 +1,12 @@
+[build]
+base = "apps/talonmart-web"
+command = "pnpm build"
+publish = "dist"
+
+[build.environment]
+NODE_VERSION = "20.20.2"
+
+[[redirects]]
+from = "/*"
+to = "/index.html"
+status = 200
