@@ -50,6 +50,7 @@ items = Table(
     Column("item_name", String, nullable=False),
     Column("brand", String, nullable=False),
     Column("spec", String, nullable=False),
+    Column("search_text", Text, nullable=False, default=""),
     Column("unit", String, nullable=False),
     Column("barcode", String, nullable=False),
     Column("shelf_life_days", Integer, nullable=False, default=365),
@@ -290,6 +291,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "item_name": "商品名称，例如维达纸巾、纯牛奶。",
         "brand": "商品品牌。",
         "spec": "商品规格。",
+        "search_text": "商品搜索文本，由商品编号、名称、品牌和规格合并，用于 pg_search BM25 检索。",
         "unit": "库存计量单位。",
         "barcode": "商品条码。",
         "shelf_life_days": "商品实际保质期天数，用于采购到仓同步时计算批次过期日期。",
@@ -535,6 +537,15 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
             item_columns = {column["name"] for column in inspector.get_columns(items.name)}
             if "shelf_life_days" not in item_columns:
                 connection.execute(text("ALTER TABLE items ADD COLUMN shelf_life_days INTEGER NOT NULL DEFAULT 365"))
+            if "search_text" not in item_columns:
+                connection.execute(text("ALTER TABLE items ADD COLUMN search_text TEXT NOT NULL DEFAULT ''"))
+            connection.execute(
+                text(
+                    "UPDATE items "
+                    "SET search_text = trim(item_id || ' ' || item_name || ' ' || brand || ' ' || spec) "
+                    "WHERE search_text = ''"
+                )
+            )
         if inspector.has_table(replenishment_requests.name):
             connection.execute(
                 text(
@@ -646,6 +657,54 @@ def _deterministic_reorder_threshold(*parts: str) -> int:
     return 20 + (int(digest[:8], 16) % 101)
 
 
+def item_search_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(field) or "").strip()
+        for field in ("item_id", "item_name", "brand", "spec")
+        if str(row.get(field) or "").strip()
+    )
+
+
+def load_item_fixture_rows(fixture_dir: Path) -> list[dict[str, Any]]:
+    rows = load_fixture_rows(fixture_dir, "items.json")
+    return [{**row, "search_text": item_search_text(row)} for row in rows]
+
+
+def build_item_pg_search_index_sql() -> str:
+    return (
+        "CREATE INDEX items_search_idx ON items "
+        "USING bm25 (item_id, (search_text::pdb.chinese_compatible)) "
+        "WITH (key_field='item_id')"
+    )
+
+
+def build_item_search_sql():
+    return text(
+        """
+        SELECT
+            item_id,
+            item_name,
+            brand,
+            spec,
+            category_id,
+            pdb.score(item_id) AS score
+        FROM items
+        WHERE search_text &&& :query
+        ORDER BY score DESC, item_id
+        LIMIT :limit
+        """
+    )
+
+
+def ensure_item_pg_search_index(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as connection:
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_search"))
+        connection.execute(text("DROP INDEX IF EXISTS items_search_idx"))
+        connection.execute(text(build_item_pg_search_index_sql()))
+
+
 def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
     init_warehouse_schema(engine)
     with engine.begin() as connection:
@@ -667,7 +726,7 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
             load_fixture_rows(fixture_dir, "storage_locations.json"),
         )
         connection.execute(categories.insert(), load_fixture_rows(fixture_dir, "categories.json"))
-        connection.execute(items.insert(), load_fixture_rows(fixture_dir, "items.json"))
+        connection.execute(items.insert(), load_item_fixture_rows(fixture_dir))
         connection.execute(
             delivery_providers.insert(),
             load_fixture_rows(fixture_dir, "delivery_providers.json"),
@@ -682,6 +741,7 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
             procurement_suppliers.insert(),
             load_fixture_rows(fixture_dir, "procurement_suppliers.json"),
         )
+    ensure_item_pg_search_index(engine)
 
 
 class WarehouseRepository:
@@ -777,26 +837,10 @@ class WarehouseRepository:
             rows = connection.execute(statement).mappings().all()
         return [dict(row) for row in rows]
 
-    def search_items(self, query: str) -> list[dict[str, Any]]:
-        normalized_query = f"%{query.casefold()}%"
-        statement = (
-            select(
-                items.c.item_id,
-                items.c.item_name,
-                items.c.brand,
-                items.c.spec,
-                items.c.category_id,
-            )
-            .where(
-                func.lower(items.c.item_id).like(normalized_query)
-                | func.lower(items.c.item_name).like(normalized_query)
-                | func.lower(items.c.brand).like(normalized_query)
-                | func.lower(items.c.spec).like(normalized_query)
-            )
-            .order_by(items.c.item_id)
-        )
+    def search_items(self, query: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        statement = build_item_search_sql()
         with self.engine.connect() as connection:
-            rows = connection.execute(statement).mappings().all()
+            rows = connection.execute(statement, {"query": query.strip(), "limit": limit}).mappings().all()
         return [dict(row) for row in rows]
 
     def list_inventory_balance_snapshots(

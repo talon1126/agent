@@ -7,6 +7,8 @@ from app.warehouse_store import (
     WAREHOUSE_COLUMN_COMMENTS,
     WAREHOUSE_TABLE_COMMENTS,
     WarehouseRepository,
+    build_item_pg_search_index_sql,
+    build_item_search_sql,
     _quote_literal,
     categories,
     init_warehouse_schema,
@@ -99,6 +101,22 @@ def test_warehouse_tables_and_columns_have_chinese_comments() -> None:
 
 def test_postgres_comment_literal_escapes_single_quotes() -> None:
     assert _quote_literal("员工's 库存说明") == "'员工''s 库存说明'"
+
+
+def test_item_search_sql_uses_pg_search_bm25_without_like() -> None:
+    statement = str(build_item_search_sql())
+
+    assert "search_text &&&" in statement
+    assert "pdb.score" in statement
+    assert "LIKE" not in statement.upper()
+
+
+def test_item_pg_search_index_uses_chinese_compatible_tokenizer() -> None:
+    statement = build_item_pg_search_index_sql()
+
+    assert "USING bm25" in statement
+    assert "search_text::pdb.chinese_compatible" in statement
+    assert "key_field='item_id'" in statement
 
 
 def test_warehouse_repository_reads_batch_inventory_rows(tmp_path: Path) -> None:

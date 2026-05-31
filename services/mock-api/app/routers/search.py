@@ -5,27 +5,19 @@ from fastapi.responses import JSONResponse
 
 from app.routers.warehouse.inventory import load_batch_inventory_rows
 from app.routers.warehouse.state import get_warehouse_repository
-from app.store import load_json
 
 router = APIRouter()
 
 
-SEARCH_FIELDS = ("item_id", "item_name", "brand", "spec")
+class SearchBackendUnavailable(RuntimeError):
+    pass
 
 
 def load_search_items(query: str | None = None) -> list[dict[str, Any]]:
-    normalized_query = (query or "").casefold()
     repository = get_warehouse_repository()
     if repository:
-        return repository.search_items(normalized_query)
-    rows = load_json("items.json")
-    if not normalized_query:
-        return rows
-    return [
-        row
-        for row in rows
-        if any(normalized_query in str(row.get(field) or "").casefold() for field in SEARCH_FIELDS)
-    ]
+        return repository.search_items(query or "")
+    raise SearchBackendUnavailable("Postgres pg_search backend is required for /search")
 
 
 def load_search_balance_rows() -> list[dict[str, Any]]:
@@ -33,11 +25,6 @@ def load_search_balance_rows() -> list[dict[str, Any]]:
     if repository:
         return repository.list_inventory_balance_snapshots()
     return load_batch_inventory_rows()
-
-
-def matches_product_query(row: dict[str, Any], query: str) -> bool:
-    normalized_query = query.casefold()
-    return any(normalized_query in str(row.get(field) or "").casefold() for field in SEARCH_FIELDS)
 
 
 def balance_id(row: dict[str, Any], fallback_id: int) -> int:
@@ -87,5 +74,11 @@ def search_products(q: str | None = None):
             content={"ok": False, "error": "missing_query", "message": "q is required"},
         )
 
-    items = product_search_items(query)
+    try:
+        items = product_search_items(query)
+    except SearchBackendUnavailable as error:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": "search_backend_unavailable", "message": str(error)},
+        )
     return {"ok": True, "query": query, "count": len(items), "items": items}

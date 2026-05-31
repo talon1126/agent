@@ -1,6 +1,6 @@
 # 商品列表 / 搜索接口前后端对接文档
 
-本文档用于约定 TalonMart 前端与后端 `GET /search` 商品搜索接口的对接方式。当前目标是先支持商品列表和关键词搜索，不引入 Elasticsearch，不暴露批次、库位、临期风险等消费者不需要理解的仓储内部字段。
+本文档用于约定 TalonMart 前端与后端 `GET /search` 商品搜索接口的对接方式。当前目标是先支持商品列表和关键词搜索，不引入 Elasticsearch；后端使用 Postgres `pg_search` / BM25 做关键词检索，不暴露批次、库位、临期风险等消费者不需要理解的仓储内部字段。
 
 ## 接口定位
 
@@ -20,18 +20,18 @@ GET /search?q=milk
 
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `q` | string | 是 | 搜索关键词。后端匹配 `items.item_id`、`items.item_name`、`items.brand`、`items.spec`。 |
+| `q` | string | 是 | 搜索关键词。后端用 `items.search_text` 的 BM25 索引匹配商品编号、名称、品牌和规格。 |
 
 ### 搜索匹配规则
 
-`q` 只匹配以下字段：
+`q` 只匹配以下商品搜索文本来源：
 
 - `items.item_id`
 - `items.item_name`
 - `items.brand`
 - `items.spec`
 
-当前不把 `category_id` 纳入关键词匹配。`item_id` 用于支持 `milk` 这类英文关键词命中 `item_milk_pure`。分类后续如需支持，应作为独立筛选条件设计，例如 `GET /search?q=milk&category_id=dairy`。
+后端把以上字段合并到 `items.search_text`，使用 `pdb.chinese_compatible` tokenizer 建 BM25 索引，并使用 AND/conjunction 匹配，避免 `牛奶` 因单字 token 误命中只有 `奶` 的商品。当前不把 `category_id` 纳入关键词匹配。`item_id` 用于支持 `milk` 这类英文关键词命中 `item_milk_pure`。分类后续如需支持，应作为独立筛选条件设计，例如 `GET /search?q=milk&category_id=dairy`。
 
 ## 返回结构
 
@@ -122,9 +122,9 @@ const totalQuantityOnHand = product.balances.reduce(
 
 消费者页面不展示 `inventory_location_balances.id`。该字段主要用于前后端调试、后续库存明细展开、或者定位具体库存余额记录。
 
-## 后端实现建议
+## 后端实现
 
-后端实现时建议在 `mock-api` 中新增消费者商品搜索读接口，不要把该接口放入采购或物流路由。
+后端接口位于 `mock-api`，不要把该接口放入采购或物流路由。
 
 推荐路由：
 
@@ -132,15 +132,17 @@ const totalQuantityOnHand = product.balances.reduce(
 GET /search
 ```
 
-推荐数据组合逻辑：
+当前数据组合逻辑：
 
-1. 从 `items` 表按 `item_id`、`item_name`、`brand`、`spec` 匹配关键词。
+1. 从 `items` 表按 `items_search_idx` BM25 索引匹配关键词。
 2. 拿到匹配商品的 `item_id` 集合。
 3. 查询 `inventory_location_balances` 中对应 `item_id` 的余额行。
 4. 按 `item_id` 聚合成商品列表。
 5. 每个商品外层返回商品主数据，`balances[]` 返回库存余额明细。
 
 如果 `q` 为空，后端应返回 400 错误，避免无条件扫全表。
+
+如果 Postgres / `pg_search` 搜索后端不可用，后端返回 503，不回退到 Python 字符串匹配。
 
 ## 错误响应
 
@@ -168,6 +170,16 @@ GET /search
   "query": "unknown",
   "count": 0,
   "items": []
+}
+```
+
+### 搜索后端不可用
+
+```json
+{
+  "ok": false,
+  "error": "search_backend_unavailable",
+  "message": "Postgres pg_search backend is required for /search"
 }
 ```
 
@@ -202,6 +214,7 @@ export interface SearchResponse {
 ## 当前不做
 
 - 不引入 Elasticsearch。
+- 不使用 SQL `LIKE` 或 Python fixture 字符串匹配作为 `/search` 的搜索实现。
 - 不返回 `total_quantity_on_hand`。
 - 不把 `category_id` 纳入 `q` 的关键词匹配。
 - 不在消费者搜索结果里返回批次号、库位、临期风险或补货状态。
