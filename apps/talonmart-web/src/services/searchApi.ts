@@ -1,16 +1,8 @@
-import axios from 'axios'
-
+import { apiClient } from '@/services/apiClient'
 import type { SearchResponse } from '@/types/search'
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() || '/api'
-
-const searchClient = axios.create({
-  baseURL: apiBaseUrl,
-  timeout: 10_000,
-})
-
 export async function searchProducts(query: string): Promise<SearchResponse> {
-  const response = await searchClient.get<SearchResponse>('/search', {
+  const response = await apiClient.get<SearchResponse>('/search', {
     params: { q: query },
   })
 
