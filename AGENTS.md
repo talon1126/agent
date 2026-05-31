@@ -622,14 +622,14 @@ TalonMart 是一个非商用、用于部署到公网展示的面试项目。目�
 当前搜索接口：
 
 - `GET /search?q=milk`
-- `q` 只匹配 `items.item_name`、`items.brand`、`items.spec`。
+- `q` 通过 Postgres `pg_search` / BM25 匹配 `items.search_text`，来源包括 `items.item_id`、`items.item_name`、`items.brand`、`items.spec`。
 - `q` 不匹配 `category_id`。
 - 返回结果按 `item_id` 聚合。
 - `item_id` 类型保持字符串，例如 `item_milk_pure`，不要为了前端展示改成 number。
 - 库存余额明细放在 `items[].balances[]`。
 - 前端不接收 `total_quantity_on_hand`；总库存由前端从 `balances[].quantity_on_hand` 求和。
 
-注意：当前仓储 fixture 商品名称主要是中文，例如 `纯牛奶`。如果要让 `q=milk` 命中中文商品，需要先设计英文商品名、别名或同义词表，不要在接口里临时硬编码翻译规则。
+注意：当前 `q=milk` 可以通过 `item_id=item_milk_pure` 命中中文商品；后续如果需要“牛乳”等自然语言同义词，应设计别名或同义词表，不要在接口里临时硬编码翻译规则。
 
 ## 部署约定
 

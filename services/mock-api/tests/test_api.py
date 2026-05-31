@@ -65,7 +65,41 @@ def test_search_policy_returns_refund_clause_metadata():
     assert first_match["text"]
 
 
-def test_product_search_returns_item_with_inventory_balances():
+def test_product_search_returns_item_with_inventory_balances(monkeypatch):
+    monkeypatch.setattr(
+        search_router,
+        "load_search_items",
+        lambda query=None: [
+            {
+                "item_id": "item_milk_pure",
+                "item_name": "纯牛奶",
+                "brand": "蒙牛",
+                "spec": "250ml*24盒",
+                "category_id": "dairy",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        search_router,
+        "load_search_balance_rows",
+        lambda: [
+            {
+                "id": 3,
+                "warehouse_id": "wh_hk_1",
+                "item_id": "item_milk_pure",
+                "quantity_on_hand": 64,
+                "storage_status": "available",
+            },
+            {
+                "id": 4,
+                "warehouse_id": "wh_sz_1",
+                "item_id": "item_milk_pure",
+                "quantity_on_hand": 140,
+                "storage_status": "available",
+            }
+        ],
+    )
+
     response = client.get("/search", params={"q": "milk"})
 
     assert response.status_code == 200
@@ -100,7 +134,10 @@ def test_product_search_returns_item_with_inventory_balances():
     ]
 
 
-def test_product_search_does_not_match_category_id():
+def test_product_search_does_not_match_category_id(monkeypatch):
+    monkeypatch.setattr(search_router, "load_search_items", lambda query=None: [])
+    monkeypatch.setattr(search_router, "load_search_balance_rows", lambda: [])
+
     response = client.get("/search", params={"q": "dairy"})
 
     assert response.status_code == 200
@@ -119,6 +156,19 @@ def test_product_search_requires_query():
         "ok": False,
         "error": "missing_query",
         "message": "q is required",
+    }
+
+
+def test_product_search_requires_postgres_search_backend(monkeypatch):
+    monkeypatch.setattr(search_router, "get_warehouse_repository", lambda: None)
+
+    response = client.get("/search", params={"q": "milk"})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "ok": False,
+        "error": "search_backend_unavailable",
+        "message": "Postgres pg_search backend is required for /search",
     }
 
 
