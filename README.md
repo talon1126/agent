@@ -225,7 +225,7 @@ flowchart LR
 - 客服 Agent 不拥有库存、采购或物流派送状态；这些事实分别由 Warehouse、Procurement 和 Delivery 维护，客服只通过工具/API 消费。
 - 订单类问题必须走 `order_status_tool`，政策类问题必须走 `policy_search_tool`，回复需要保留可审计的订单、物流或政策来源。
 - 短期上下文使用 `Customer Support Postgres Chat Memory` 和 `ai-service` 的 `session_state`，用于处理“这个订单”“刚才那单”等追问。
-- 当前部署中的 Postgres 已有 `users` 和 `cart_items` 两张 demo 业务表；后续如果接入真实用户/购物车 API，需要补齐服务层和初始化/迁移路径。
+- 当前部署中的 Postgres 已有 `users` 和 `cart_items` 两张 demo 业务表；`mock-api` 已暴露购物车 v1 接口，用于前端添加、查询和移除购物车商品。
 
 ## workflow 架构
 
@@ -281,7 +281,13 @@ flowchart LR
 - `session_state`：保存客服快路径和会话状态，例如 `last_order_id`。
 - `user_profile`：保存精简用户级事实，避免存完整 transcript。
 - `users`：当前部署 Postgres 中的 demo 用户表，字段为 `id`、`phone_number`、`email`、`username`、`password`。
-- `cart_items`：当前部署 Postgres 中的 demo 购物车明细表，字段为 `id`、`item_id`、`item_name`、`user_id`、`price`、`quantity`；只使用逻辑外键，`price >= 0`，`quantity > 0`，`quantity` 默认 `1`。
+- `cart_items`：当前部署 Postgres 中的 demo 购物车明细表，字段为 `id`、`item_id`、`item_name`、`user_id`、`price`、`quantity`；只使用逻辑外键，`price >= 0`，`quantity > 0`，`quantity` 默认 `1`。购物车写入时以后端 `items.price` 为准。
+
+购物车接口：
+
+- `POST /cart`：添加商品到购物车；同一 `user_id + item_id` 已存在时累加数量。
+- `GET /cart?user_id=1`：查询指定用户购物车。
+- `DELETE /cart?user_id=1&item_id=item_milk_pure`：移除指定用户的整条购物车商品。
 
 后续如果把 `users` 和 `cart_items` 纳入应用主路径，需要新增服务层接口、测试和数据库初始化/迁移，不要只依赖手工建表。
 

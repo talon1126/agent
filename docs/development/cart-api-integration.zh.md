@@ -63,7 +63,7 @@ Content-Type: application/json
 | `user_id` | number | 是 | 当前用户 ID。v1 由前端显式传入，后续接登录后改为从 token 获取。 |
 | `item_id` | string | 是 | 商品 ID。 |
 | `item_name` | string | 是 | 商品名称。 |
-| `price` | number | 是 | 商品加入购物车时的价格。 |
+| `price` | number | 是 | 前端传入当前展示价格；后端 v1 只做非负校验，最终写入购物车时以后端 `items.price` 为准。 |
 | `quantity` | number | 否 | 添加数量，默认 1，必须大于 0。 |
 
 ### 业务规则
@@ -72,7 +72,8 @@ Content-Type: application/json
 2. 如果 `quantity <= 0`，返回 400。
 3. 如果 `price < 0`，返回 400。
 4. 如果同一个 `user_id + item_id` 已存在购物车行，建议累加 `quantity`，不要重复插入多行。
-5. 当前 `cart_items` 表没有唯一约束，后端应在业务逻辑中先查后写。后续可以补唯一约束 `unique(user_id, item_id)`。
+5. 后端必须读取 `items.price` 作为可信价格来源，不能直接信任前端传入的 `price`。
+6. 当前 `cart_items` 表没有唯一约束，后端应在业务逻辑中先查后写。后续可以补唯一约束 `unique(user_id, item_id)`。
 
 ### 成功响应
 
@@ -230,7 +231,7 @@ DELETE /cart?user_id=1&item_id=item_milk_pure
 6. 数量状态按钮参考 Walmart 交互：左侧 `-`，中间显示 `N added`，右侧 `+`。
 7. 点击 `+` 时继续调用 `POST /cart`，后端累加该商品数量。
 8. 点击 `-` 时如果当前数量大于 1，v1 可以继续调用 `POST /cart` 以负数减量前必须另行设计更新接口；当前文档尚未定义减量接口，所以前端 v1 推荐只在数量为 1 时调用 `DELETE /cart?user_id=1&item_id=...` 移除整条商品，数量大于 1 的减量功能等更新数量接口确定后再做。
-9. 当前搜索接口不返回价格，前端如果要添加购物车，需要先明确价格来源。v1 可以使用前端 mock 价格或后端补商品价格字段，但正式实现应由后端返回可信价格。
+9. 当前搜索接口返回 `items.price`，前端添加购物车时可以把该价格随请求发送；后端仍以后端 `items.price` 为准。
 
 ## 后端实现建议
 
@@ -259,6 +260,8 @@ DELETE /cart
 5. 查询购物车时按 `user_id` 过滤 `cart_items`。
 6. 删除购物车商品时按 `user_id + item_id` 删除。
 7. 返回字段保持和本文档一致。
+
+价格规则：`cart_items.price` 写入后端 `items.price`，`POST /cart` 请求体里的 `price` 只用于兼容前端 payload 和基础非负校验。
 
 ## 当前不做
 

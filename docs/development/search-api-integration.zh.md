@@ -49,6 +49,7 @@ GET /search?q=milk
       "brand": "Talon Fresh",
       "spec": "1L x 12",
       "category_id": "cat_dairy",
+      "price": 18.4,
       "balances": [
         {
           "id": 12,
@@ -88,6 +89,7 @@ GET /search?q=milk
 | `brand` | `items.brand` | string | 品牌。 |
 | `spec` | `items.spec` | string | 规格。 |
 | `category_id` | `items.category_id` | string | 分类 ID。 |
+| `price` | `items.price` | number | 商品当前销售价格，供商品卡片和加入购物车使用。 |
 | `balances` | `inventory_location_balances` | array | 该商品对应的库存余额明细。 |
 
 ### `balances[]` 字段
@@ -116,6 +118,7 @@ const totalQuantityOnHand = product.balances.reduce(
 - 商品名称：`item_name`
 - 品牌：`brand`
 - 规格：`spec`
+- 价格：`price`
 - 分类：`category_id`
 - 总库存：前端根据 `balances[]` 求和
 - 库存状态：根据 `balances[].storage_status` 和库存数量转换为消费者可理解文案
@@ -200,6 +203,7 @@ export interface SearchProduct {
   brand: string
   spec: string
   category_id: string
+  price: number
   balances: SearchBalance[]
 }
 

@@ -6,7 +6,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, Text, create_engine, func, inspect, select, text
+from sqlalchemy import Column, Integer, MetaData, Numeric, String, Table, Text, create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger("mock_api.warehouse_store")
@@ -50,6 +50,7 @@ items = Table(
     Column("item_name", String, nullable=False),
     Column("brand", String, nullable=False),
     Column("spec", String, nullable=False),
+    Column("price", Numeric(12, 2), nullable=False, default=0),
     Column("search_text", Text, nullable=False, default=""),
     Column("unit", String, nullable=False),
     Column("barcode", String, nullable=False),
@@ -206,6 +207,27 @@ delivery_providers = Table(
     Column("status", String, nullable=False),
 )
 
+users = Table(
+    "users",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("phone_number", String(32), nullable=False, default=""),
+    Column("email", String(255), nullable=False, default=""),
+    Column("username", String(100), nullable=False, default=""),
+    Column("password", String(20), nullable=False, default=""),
+)
+
+cart_items = Table(
+    "cart_items",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("item_id", String(64), nullable=False, index=True),
+    Column("item_name", String(255), nullable=False),
+    Column("user_id", Integer, nullable=False, index=True),
+    Column("price", Numeric(12, 2), nullable=False),
+    Column("quantity", Integer, nullable=False, default=1),
+)
+
 procurement_suppliers = Table(
     "procurement_suppliers",
     metadata,
@@ -256,6 +278,8 @@ WAREHOUSE_TABLE_COMMENTS = {
     "inventory_location_balances": "批次级库位库存余额表，保存订单创建扣减和退回后的当前可售库存。",
     "replenishment_requests": "补货申请表，保存仓储发现低库存后交给采购审核的结构化需求。",
     "delivery_providers": "物流供应商表，保存顺丰、京东、圆通等承运商基础信息供订单和 Delivery Agent 使用。",
+    "users": "TalonMart 用户表，保存购物车 v1 使用的测试用户资料。",
+    "cart_items": "购物车明细表，按用户和商品保存加入购物车时的商品快照价格与数量。",
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
     "purchase_orders": "采购单表，保存采购审核补货申请后生成的采购单、支付状态和仓库同步状态。",
     "warehouse_inventory_sync_jobs": "仓储库存同步任务表，保存采购到仓后需要 Warehouse Agent 同步飞书库存视图的待处理任务。",
@@ -291,6 +315,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "item_name": "商品名称，例如维达纸巾、纯牛奶。",
         "brand": "商品品牌。",
         "spec": "商品规格。",
+        "price": "商品销售价格，用于前台搜索结果和购物车加入时的可信价格来源。",
         "search_text": "商品搜索文本，由商品编号、名称、品牌和规格合并，用于 pg_search BM25 检索。",
         "unit": "库存计量单位。",
         "barcode": "商品条码。",
@@ -442,6 +467,21 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "tracking_prefix": "生成 mock 物流单号时使用的前缀。",
         "status": "供应商启用状态，例如 active。",
     },
+    "users": {
+        "id": "用户自增整数主键。",
+        "phone_number": "用户手机号。",
+        "email": "用户邮箱。",
+        "username": "用户名。",
+        "password": "密码字段；当前仅用于 mock，不应用于正式明文存储。",
+    },
+    "cart_items": {
+        "id": "购物车明细自增整数主键。",
+        "item_id": "购物车商品编号。",
+        "item_name": "加入购物车时的商品名称。",
+        "user_id": "购物车所属用户 ID。",
+        "price": "加入购物车时采用的后端商品价格。",
+        "quantity": "购物车商品数量。",
+    },
     "inventory_movements": {
         "movement_id": "库存流水编号。",
         "order_id": "关联订单编号。",
@@ -469,6 +509,8 @@ def init_warehouse_schema(engine: Engine) -> None:
             inventory_location_balances,
             replenishment_requests,
             procurement_suppliers,
+            users,
+            cart_items,
             purchase_orders,
             warehouse_inventory_sync_jobs,
             orders,
@@ -537,6 +579,8 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
             item_columns = {column["name"] for column in inspector.get_columns(items.name)}
             if "shelf_life_days" not in item_columns:
                 connection.execute(text("ALTER TABLE items ADD COLUMN shelf_life_days INTEGER NOT NULL DEFAULT 365"))
+            if "price" not in item_columns:
+                connection.execute(text("ALTER TABLE items ADD COLUMN price NUMERIC(12, 2) NOT NULL DEFAULT 0"))
             if "search_text" not in item_columns:
                 connection.execute(text("ALTER TABLE items ADD COLUMN search_text TEXT NOT NULL DEFAULT ''"))
             connection.execute(
@@ -670,6 +714,25 @@ def load_item_fixture_rows(fixture_dir: Path) -> list[dict[str, Any]]:
     return [{**row, "search_text": item_search_text(row)} for row in rows]
 
 
+def default_user_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": 1,
+            "phone_number": "13800000001",
+            "email": "user1@talonmart.local",
+            "username": "talon_user_1",
+            "password": "demo123",
+        },
+        {
+            "id": 2,
+            "phone_number": "13800000002",
+            "email": "user2@talonmart.local",
+            "username": "talon_user_2",
+            "password": "demo123",
+        },
+    ]
+
+
 def build_item_pg_search_index_sql() -> str:
     return (
         "CREATE INDEX items_search_idx ON items "
@@ -686,6 +749,7 @@ def build_item_search_sql():
             item_name,
             brand,
             spec,
+            price,
             category_id,
             pdb.score(item_id) AS score
         FROM items
@@ -713,10 +777,12 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         connection.execute(orders.delete())
         connection.execute(inventory_movements.delete())
         connection.execute(delivery_providers.delete())
+        connection.execute(cart_items.delete())
         connection.execute(inventory_location_balances.delete())
         connection.execute(inventory_batches.delete())
         connection.execute(procurement_suppliers.delete())
         connection.execute(items.delete())
+        connection.execute(users.delete())
         connection.execute(categories.delete())
         connection.execute(storage_locations.delete())
         connection.execute(warehouses.delete())
@@ -727,6 +793,7 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         )
         connection.execute(categories.insert(), load_fixture_rows(fixture_dir, "categories.json"))
         connection.execute(items.insert(), load_item_fixture_rows(fixture_dir))
+        connection.execute(users.insert(), default_user_rows())
         connection.execute(
             delivery_providers.insert(),
             load_fixture_rows(fixture_dir, "delivery_providers.json"),
@@ -841,7 +908,68 @@ class WarehouseRepository:
         statement = build_item_search_sql()
         with self.engine.connect() as connection:
             rows = connection.execute(statement, {"query": query.strip(), "limit": limit}).mappings().all()
-        return [dict(row) for row in rows]
+        return [{**dict(row), "price": float(row["price"])} for row in rows]
+
+    def user_exists(self, user_id: int) -> bool:
+        with self.engine.connect() as connection:
+            row = connection.execute(select(users.c.id).where(users.c.id == user_id)).first()
+        return row is not None
+
+    def get_item_for_cart(self, item_id: str) -> dict[str, Any] | None:
+        statement = select(items.c.item_id, items.c.item_name, items.c.price).where(items.c.item_id == item_id)
+        with self.engine.connect() as connection:
+            row = connection.execute(statement).mappings().first()
+        if not row:
+            return None
+        return {**dict(row), "price": float(row["price"])}
+
+    def list_cart_items(self, user_id: int) -> list[dict[str, Any]]:
+        statement = select(cart_items).where(cart_items.c.user_id == user_id).order_by(cart_items.c.id)
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [{**dict(row), "price": float(row["price"])} for row in rows]
+
+    def upsert_cart_item(self, *, user_id: int, item_id: str, quantity: int) -> dict[str, Any]:
+        item = self.get_item_for_cart(item_id)
+        if not item:
+            raise ValueError("item_not_found")
+        with self.engine.begin() as connection:
+            existing = connection.execute(
+                select(cart_items)
+                .where(cart_items.c.user_id == user_id)
+                .where(cart_items.c.item_id == item_id)
+            ).mappings().first()
+            if existing:
+                new_quantity = int(existing["quantity"]) + quantity
+                connection.execute(
+                    cart_items.update()
+                    .where(cart_items.c.id == existing["id"])
+                    .values(quantity=new_quantity, item_name=item["item_name"], price=item["price"])
+                )
+                row = connection.execute(select(cart_items).where(cart_items.c.id == existing["id"])).mappings().one()
+            else:
+                result = connection.execute(
+                    cart_items.insert().values(
+                        user_id=user_id,
+                        item_id=item_id,
+                        item_name=item["item_name"],
+                        price=item["price"],
+                        quantity=quantity,
+                    )
+                )
+                row = connection.execute(
+                    select(cart_items).where(cart_items.c.id == result.inserted_primary_key[0])
+                ).mappings().one()
+        return {**dict(row), "price": float(row["price"])}
+
+    def delete_cart_item(self, *, user_id: int, item_id: str) -> bool:
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                cart_items.delete()
+                .where(cart_items.c.user_id == user_id)
+                .where(cart_items.c.item_id == item_id)
+            )
+        return bool(result.rowcount)
 
     def list_inventory_balance_snapshots(
         self,

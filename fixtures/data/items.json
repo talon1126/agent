@@ -5,6 +5,7 @@
     "item_name": "维达纸巾",
     "brand": "维达",
     "spec": "3层抽纸 24包",
+    "price": 29.90,
     "unit": "包",
     "barcode": "6901234567001",
     "shelf_life_days": 365
@@ -15,6 +16,7 @@
     "item_name": "纯牛奶",
     "brand": "蒙牛",
     "spec": "250ml*24盒",
+    "price": 18.40,
     "unit": "箱",
     "barcode": "6901234567002",
     "shelf_life_days": 45
@@ -25,6 +27,7 @@
     "item_name": "原味酸奶",
     "brand": "伊利",
     "spec": "180g*12杯",
+    "price": 22.80,
     "unit": "箱",
     "barcode": "6901234567003",
     "shelf_life_days": 18
@@ -35,6 +38,7 @@
     "item_name": "矿泉水",
     "brand": "农夫山泉",
     "spec": "550ml*24瓶",
+    "price": 31.90,
     "unit": "箱",
     "barcode": "6901234567004",
     "shelf_life_days": 730
@@ -45,6 +49,7 @@
     "item_name": "零度可乐",
     "brand": "可口可乐",
     "spec": "330ml*24罐",
+    "price": 36.90,
     "unit": "箱",
     "barcode": "6901234567005",
     "shelf_life_days": 365
@@ -55,6 +60,7 @@
     "item_name": "洗衣液",
     "brand": "蓝月亮",
     "spec": "3kg",
+    "price": 49.90,
     "unit": "瓶",
     "barcode": "6901234567006",
     "shelf_life_days": 1095
@@ -65,6 +71,7 @@
     "item_name": "中性笔",
     "brand": "晨光",
     "spec": "0.5mm 黑色 12支",
+    "price": 12.90,
     "unit": "盒",
     "barcode": "6901234567007",
     "shelf_life_days": 1460
@@ -75,6 +82,7 @@
     "item_name": "A4复印纸",
     "brand": "得力",
     "spec": "80g 500张",
+    "price": 24.50,
     "unit": "包",
     "barcode": "6901234567008",
     "shelf_life_days": 1460

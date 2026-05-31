@@ -10,6 +10,7 @@ from app.warehouse_store import (
     build_item_pg_search_index_sql,
     build_item_search_sql,
     _quote_literal,
+    cart_items,
     categories,
     init_warehouse_schema,
     inventory_movements,
@@ -24,6 +25,7 @@ from app.warehouse_store import (
     replenishment_requests,
     seed_warehouse_fixtures,
     storage_locations,
+    users,
     warehouse_inventory_sync_jobs,
     warehouses,
 )
@@ -37,6 +39,8 @@ WAREHOUSE_TABLES = [
     inventory_batches,
     replenishment_requests,
     delivery_providers,
+    users,
+    cart_items,
     procurement_suppliers,
     purchase_orders,
     warehouse_inventory_sync_jobs,
@@ -69,6 +73,9 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         movement_count = connection.execute(text("select count(*) from inventory_movements")).scalar_one()
         order_count = connection.execute(text("select count(*) from orders")).scalar_one()
         order_item_count = connection.execute(text("select count(*) from order_items")).scalar_one()
+        user_count = connection.execute(text("select count(*) from users")).scalar_one()
+        cart_item_count = connection.execute(text("select count(*) from cart_items")).scalar_one()
+        milk_price = connection.execute(text("select price from items where item_id = 'item_milk_pure'")).scalar_one()
 
     assert warehouse_count == 2
     assert location_count == 6
@@ -84,6 +91,9 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert movement_count == 0
     assert order_count == 0
     assert order_item_count == 0
+    assert user_count == 2
+    assert cart_item_count == 0
+    assert float(milk_price) == 18.4
 
 
 def test_warehouse_tables_and_columns_have_chinese_comments() -> None:
