@@ -64,6 +64,63 @@ def test_search_policy_returns_refund_clause_metadata():
     assert first_match["text"]
 
 
+def test_product_search_returns_item_with_inventory_balances():
+    response = client.get("/search", params={"q": "牛奶"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["query"] == "牛奶"
+    assert body["count"] == 1
+    assert body["items"] == [
+        {
+            "item_id": "item_milk_pure",
+            "item_name": "纯牛奶",
+            "brand": "蒙牛",
+            "spec": "250ml*24盒",
+            "category_id": "dairy",
+            "balances": [
+                {
+                    "id": 3,
+                    "warehouse_id": "wh_hk_1",
+                    "item_id": "item_milk_pure",
+                    "quantity_on_hand": 64,
+                    "storage_status": "available",
+                },
+                {
+                    "id": 4,
+                    "warehouse_id": "wh_sz_1",
+                    "item_id": "item_milk_pure",
+                    "quantity_on_hand": 140,
+                    "storage_status": "available",
+                },
+            ],
+        }
+    ]
+
+
+def test_product_search_does_not_match_category_id():
+    response = client.get("/search", params={"q": "dairy"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["query"] == "dairy"
+    assert body["count"] == 0
+    assert body["items"] == []
+
+
+def test_product_search_requires_query():
+    response = client.get("/search")
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "ok": False,
+        "error": "missing_query",
+        "message": "q is required",
+    }
+
+
 def test_create_approval_request():
     payload = {
         "event_id": "evt_refund_high_value",

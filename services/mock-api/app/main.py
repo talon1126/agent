@@ -10,6 +10,7 @@ from app.routers.delivery.router import router as delivery_router
 from app.routers.delivery.state import DELIVERY_CASES
 from app.routers.procurement.router import router as procurement_router
 from app.routers.procurement.state import PURCHASE_ORDERS, REPLENISHMENT_REQUESTS
+from app.routers.search import router as search_router
 from app.routers.warehouse.router import router as warehouse_router
 from app.routers.warehouse.state import (
     RECEIVED_INVENTORY_BATCHES,
@@ -24,6 +25,7 @@ from app.routers.warehouse.state import (
 app = FastAPI(title="Ecommerce Mock Enterprise API")
 app.include_router(delivery_router)
 app.include_router(procurement_router)
+app.include_router(search_router)
 app.include_router(warehouse_router)
 
 __all__ = [

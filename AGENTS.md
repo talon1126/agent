@@ -576,3 +576,76 @@
 - 新增物流接口时，同步更新 `mock-api`、n8n 工具名和本章节说明。
 - 新增物流供应商字段或订单状态时，优先写清楚 Warehouse 与 Delivery 的读写边界。
 - 不清楚的业务归属或技术细节，先和用户确认后再改文档或代码。
+
+# 前端
+
+本文档用于记录 TalonMart 前端项目的长期协作约定。后续维护前端时，先查看本章节和相关前端文档，再改代码或接口契约。
+
+## 项目定位
+
+TalonMart 是一个非商用、用于部署到公网展示的面试项目。目标是做一个参考 Walmart 信息结构的消费者零售前台，但保持独立品牌，不使用 Walmart 商标、文案或第一方素材。
+
+前端面向消费者展示商品浏览、搜索、促销区、购物车、下单和订单状态。前端不暴露仓储内部字段，例如批次号、库位、临期风险、补货申请、采购单或飞书同步状态。
+
+## 技术栈
+
+- 框架：Vue 3。
+- 构建工具：Vite。
+- 语言：TypeScript。
+- 路由：Vue Router。
+- 状态管理：Pinia。
+- HTTP 请求：Axios。
+- 样式：Tailwind CSS。
+- 图标：lucide-vue-next。
+- 当前不使用 Nuxt 3、SSR 或全栈框架；后端继续作为独立 API 服务。
+
+前端项目路径：`apps/talonmart-web`。
+
+## 设计系统
+
+当前设计系统文档：`docs/frontend/talonmart-design-system.md`。
+
+关键约定：
+
+- 品牌名：TalonMart。
+- 视觉方向：密集、清晰、可信的大型零售电商界面。
+- 主色：深海军蓝 + 青色，促销用琥珀色，折扣和错误用红色，成功和可售状态用绿色。
+- 首版以桌面 Web 为主；移动端只做基础响应式兜底，不单独设计移动导航模型。
+- 不做营销落地页优先，首页应直接呈现可用的零售购物体验。
+
+## 后端接口对接
+
+前端通过 Axios 调用后端 API，不直接访问 Postgres、n8n 或飞书表。
+
+当前商品列表 / 搜索接口文档：`docs/development/search-api-integration.zh.md`。
+
+当前搜索接口：
+
+- `GET /search?q=milk`
+- `q` 只匹配 `items.item_name`、`items.brand`、`items.spec`。
+- `q` 不匹配 `category_id`。
+- 返回结果按 `item_id` 聚合。
+- `item_id` 类型保持字符串，例如 `item_milk_pure`，不要为了前端展示改成 number。
+- 库存余额明细放在 `items[].balances[]`。
+- 前端不接收 `total_quantity_on_hand`；总库存由前端从 `balances[].quantity_on_hand` 求和。
+
+注意：当前仓储 fixture 商品名称主要是中文，例如 `纯牛奶`。如果要让 `q=milk` 命中中文商品，需要先设计英文商品名、别名或同义词表，不要在接口里临时硬编码翻译规则。
+
+## 部署约定
+
+前端是 Vite 静态应用，构建产物为 `apps/talonmart-web/dist`。
+
+推荐部署顺序：
+
+1. 面试展示优先使用 Vercel、Netlify 或 Cloudflare Pages 托管静态前端。
+2. 后端 API 单独部署，前端通过环境变量配置 API Base URL，例如 `VITE_API_BASE_URL`。
+3. 只有在需要展示完整工程部署能力时，再增加 Docker + Nginx 托管前端静态产物。
+
+前端不要求一开始放进 Docker。若后续使用 Docker，应避免把运行时业务逻辑放进前端容器；前端容器只负责服务静态文件。
+
+## 维护原则
+
+- 前端章节后续只维护 TalonMart 前端相关约定，不写仓储、采购或物流内部实现细节。
+- 新增或调整前端依赖、接口契约、部署方式时，同步更新本章节和对应开发文档。
+- 不清楚的产品交互、接口字段、部署目标或技术取舍，先和用户确认后再改文档或代码。
+- Walmart 只能作为信息结构和交互密度参考，不复制品牌资产、页面文案或受保护内容。

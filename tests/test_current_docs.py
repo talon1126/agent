@@ -3,7 +3,6 @@ from pathlib import Path
 
 CURRENT_DOCS = [
     Path("AGENTS.md"),
-    Path("AGENTS.zh.md"),
     Path("docs/architecture.md"),
     Path("docs/architecture.zh.md"),
     Path("docs/demo-script.md"),
