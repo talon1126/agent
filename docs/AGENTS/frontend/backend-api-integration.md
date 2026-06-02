@@ -33,4 +33,4 @@
 - `POST /flash-sales/{flash_sale_id}/purchase`：用户抢购，后端通过 Redis Lua 保证营销库存扣减和一人一单；成功后立即返回 `未付款` 订单。
 - `POST /flash-sales/{flash_sale_id}/activate`：测试或运营初始化活动，重置 Redis 剩余配额和已抢购用户集合。
 
-注意：前端可以根据接口返回的 `stock_remaining` 做展示和弱实时刷新，但最终是否抢购成功以后端 `/purchase` 返回为准。
+注意：当前后端尚未提供秒杀列表接口，首页秒杀专区不能硬编码 `flash_sale_id=1`。前端先展示空状态并封装抢购逻辑；列表接口补齐后，前端按“用户每次刷新页面时重新查询库存”的策略加载活动，不做轮询。最终是否抢购成功以后端 `/purchase` 返回为准。

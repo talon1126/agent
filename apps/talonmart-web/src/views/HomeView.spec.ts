@@ -13,6 +13,8 @@ describe('HomeView', () => {
     )
     expect(wrapper.text()).toContain('Paper Goods')
     expect(wrapper.text()).toContain('Today deals')
+    expect(wrapper.text()).toContain('Flash Deals')
+    expect(wrapper.text()).toContain('Waiting for the flash sale list API')
     expect(wrapper.text()).toContain('Cart')
   })
 })

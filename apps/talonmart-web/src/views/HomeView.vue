@@ -2,7 +2,9 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  BadgePercent,
   ClipboardList,
+  Clock3,
   MapPin,
   Menu,
   PackageCheck,
@@ -57,8 +59,19 @@ const deals = [
   },
 ]
 
+const flashDealPlaceholders = [
+  'Mattress deals',
+  'Kitchen appliances',
+  'Outdoor savings',
+  'Home refresh',
+  'Beauty markdowns',
+]
+
 const searchQuery = ref('milk')
 const searchError = ref('')
+
+// 中文注释：秒杀列表接口尚未提供，主页只展示专区入口和空状态，不硬编码活动 ID。
+const flashSaleListReady = false
 
 function handleSearch() {
   const query = searchQuery.value.trim()
@@ -214,6 +227,59 @@ function handleSearch() {
         >
           {{ searchError }}
         </p>
+
+        <section class="border-y border-[#E4E7EC] bg-white px-0 py-8">
+          <div class="mb-5 flex items-end justify-between gap-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <BadgePercent class="h-7 w-7 text-[#1A7F00]" aria-hidden="true" />
+                <h2 class="text-2xl font-black">Flash Deals</h2>
+              </div>
+              <p class="mt-1 text-sm text-[#667085]">Up to 65% off, refreshed when the page loads.</p>
+            </div>
+            <button
+              class="text-sm font-bold underline decoration-[#101828] underline-offset-2 disabled:cursor-not-allowed disabled:text-[#98A2B3] disabled:no-underline"
+              type="button"
+              :disabled="!flashSaleListReady"
+            >
+              View all
+            </button>
+          </div>
+
+          <div class="grid gap-6 md:grid-cols-[1fr_280px]">
+            <div class="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
+              <article
+                v-for="label in flashDealPlaceholders"
+                :key="label"
+                class="rounded-lg border border-dashed border-[#D0D5DD] bg-[#FCFCFD] p-3"
+              >
+                <div class="grid aspect-[4/3] place-items-center rounded-md bg-[#F2F4F7] text-[#98A2B3]">
+                  <Clock3 class="h-9 w-9" aria-hidden="true" />
+                </div>
+                <button
+                  class="mt-3 min-h-10 rounded-full border border-[#667085] px-5 font-black text-[#344054]"
+                  type="button"
+                  disabled
+                >
+                  Options
+                </button>
+                <p class="mt-3 text-sm font-bold text-[#1A7F00]">Now loading soon</p>
+                <h3 class="mt-1 min-h-12 text-sm font-semibold leading-snug text-[#344054]">
+                  {{ label }}
+                </h3>
+              </article>
+            </div>
+
+            <div class="rounded-lg border border-[#D8E0E8] bg-[#F7F8FA] p-5">
+              <p class="text-xs font-black uppercase text-[#667085]">Backend dependency</p>
+              <h3 class="mt-2 text-xl font-black">Waiting for the flash sale list API</h3>
+              <p class="mt-3 text-sm leading-6 text-[#667085]">
+                The purchase API is ready. Once the list endpoint is added, this section will fetch
+                current stock on every page refresh and render real activities here.
+              </p>
+            </div>
+          </div>
+        </section>
 
         <section>
           <div class="mb-3 flex items-end justify-between">
