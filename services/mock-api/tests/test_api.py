@@ -46,6 +46,8 @@ class FakeFlashSaleRedis:
 
     def set(self, key: str, value: int):
         if key.endswith(":stock"):
+            flash_sale_id = int(key.split(":")[1])
+            self.stocks[flash_sale_id] = int(value)
             self.stock = int(value)
 
     def delete(self, key: str):
@@ -627,6 +629,25 @@ def test_flash_sale_list_returns_multiple_sales_with_redis_stock(monkeypatch):
     }
 
 
+def test_initialize_active_flash_sales_resets_active_stock(monkeypatch):
+    repository = FakeFlashSaleRepository(
+        sales=[
+            active_flash_sale(id=1, item_id="item_milk_pure", stock_limit=2),
+            active_flash_sale(id=2, item_id="item_cola_zero", stock_limit=3),
+            active_flash_sale(id=3, item_id="item_vinda_tissue", status="draft", stock_limit=4),
+        ]
+    )
+    redis_client = FakeFlashSaleRedis(stock=0, claimed_users={"1"})
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+
+    result = flash_sales_router.initialize_active_flash_sales()
+
+    assert result == {"initialized": 2}
+    assert redis_client.stocks == {1: 2, 2: 3}
+    assert redis_client.claimed_users == set()
+
+
 def test_flash_sale_purchase_creates_unpaid_order_and_records_claim(monkeypatch):
     repository = FakeFlashSaleRepository(active_flash_sale())
     redis_client = FakeFlashSaleRedis(stock=1)
@@ -664,9 +685,40 @@ def test_flash_sale_purchase_rejects_duplicate_user(monkeypatch):
     assert response.status_code == 409
     assert response.json() == {
         "ok": False,
-        "error": "already_claimed",
-        "message": "user already claimed this flash sale",
+        "error": "purchase_limit_reached",
+        "message": "已达到购买上限",
     }
+
+
+def test_flash_sale_purchase_rejects_existing_ordered_claim(monkeypatch):
+    repository = FakeFlashSaleRepository(active_flash_sale())
+    repository.claims[(1, 1)] = {
+        "id": 1,
+        "flash_sale_id": 1,
+        "user_id": 1,
+        "item_id": "item_milk_pure",
+        "status": "ordered",
+        "order_id": "ORD-CODEX-FLASH-1",
+        "error": None,
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "updated_at": "2026-06-01T00:00:00+00:00",
+    }
+    redis_client = FakeFlashSaleRedis(stock=1)
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+
+    response = client.post(
+        "/flash-sales/1/purchase",
+        json={"user_id": 1, "shipping_address": "广东省深圳市南山区示例路 100 号"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "ok": False,
+        "error": "purchase_limit_reached",
+        "message": "已达到购买上限",
+    }
+    assert redis_client.stock == 1
 
 
 def test_flash_sale_purchase_compensates_redis_when_order_creation_fails(monkeypatch):

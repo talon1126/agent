@@ -61,6 +61,39 @@ describe('flashSaleApi', () => {
     })
   })
 
+  it('uses backend business message when flash sale purchase is rejected', async () => {
+    const { purchaseFlashSaleWithDefaultAddress } = await import('@/services/flashSaleApi')
+
+    fetchDeliveryAddresses.mockResolvedValue({
+      ok: true,
+      user_id: 1,
+      count: 1,
+      items: [
+        {
+          id: 1,
+          user_id: 1,
+          receiver_name: 'Talon 测试用户',
+          phone_number: '13800000001',
+          address: '广东省深圳市南山区示例路 100 号',
+          is_default: 1,
+        },
+      ],
+    })
+    const axiosError = Object.assign(new Error('Request failed with status code 409'), {
+      isAxiosError: true,
+      response: {
+        data: {
+          ok: false,
+          error: 'purchase_limit_reached',
+          message: '已达到购买上限',
+        },
+      },
+    })
+    apiPost.mockRejectedValue(axiosError)
+
+    await expect(purchaseFlashSaleWithDefaultAddress(3, 1)).rejects.toThrow('已达到购买上限')
+  })
+
   it('fetches active flash sale list for the storefront section', async () => {
     const { fetchFlashSales } = await import('@/services/flashSaleApi')
 

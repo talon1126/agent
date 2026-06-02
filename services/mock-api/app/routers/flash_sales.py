@@ -35,6 +35,8 @@ return 'ok'
 """
 
 FLASH_SALE_REDIS_CLIENT: Any = None
+PURCHASE_LIMIT_ERROR = "purchase_limit_reached"
+PURCHASE_LIMIT_MESSAGE = "已达到购买上限"
 
 
 class FlashSalePurchaseRequest(BaseModel):
@@ -48,6 +50,10 @@ def error_response(status_code: int, error: str, message: str) -> JSONResponse:
         status_code=status_code,
         content={"ok": False, "error": error, "message": message},
     )
+
+
+def purchase_limit_response() -> JSONResponse:
+    return error_response(409, PURCHASE_LIMIT_ERROR, PURCHASE_LIMIT_MESSAGE)
 
 
 def flash_sale_stock_key(flash_sale_id: int) -> str:
@@ -118,6 +124,24 @@ def claim_flash_sale_slot(redis_client: Any, flash_sale_id: int, user_id: int) -
         str(user_id),
     )
     return normalize_redis_result(result)
+
+
+def initialize_active_flash_sales() -> dict[str, int]:
+    repository = get_warehouse_repository()
+    if not repository:
+        return {"initialized": 0}
+    redis_client = get_flash_sale_redis()
+    if not redis_client:
+        return {"initialized": 0}
+
+    initialized = 0
+    for sale in repository.list_flash_sales(status="active", limit=100):
+        flash_sale_id = int(sale["id"])
+        # mock-api 启动时数据库会重置演示 claim，Redis 用户集合也要同步清空。
+        redis_client.set(flash_sale_stock_key(flash_sale_id), int(sale["stock_limit"]))
+        redis_client.delete(flash_sale_users_key(flash_sale_id))
+        initialized += 1
+    return {"initialized": initialized}
 
 
 @router.get("/flash-sales", response_model=None)
@@ -209,19 +233,12 @@ def purchase_flash_sale(
         flash_sale_id=flash_sale_id,
         user_id=payload.user_id,
     )
-    if existing_claim and existing_claim["status"] == "ordered":
-        return {
-            "ok": True,
-            "claim": existing_claim,
-            "order": {"order_id": existing_claim["order_id"], "status": "未付款"},
-            "items": [],
-        }
-    if existing_claim and existing_claim["status"] == "pending":
-        return error_response(409, "already_claimed", "user already claimed this flash sale")
+    if existing_claim and existing_claim["status"] in {"ordered", "pending"}:
+        return purchase_limit_response()
 
     claim_result = claim_flash_sale_slot(redis_client, flash_sale_id, payload.user_id)
     if claim_result == "already_claimed":
-        return error_response(409, "already_claimed", "user already claimed this flash sale")
+        return purchase_limit_response()
     if claim_result == "sold_out":
         return error_response(409, "sold_out", "flash sale stock is sold out")
     if claim_result == "not_initialized":
@@ -239,7 +256,7 @@ def purchase_flash_sale(
         )
     except IntegrityError:
         compensate_flash_sale_claim(redis_client, flash_sale_id, payload.user_id)
-        return error_response(409, "already_claimed", "user already claimed this flash sale")
+        return purchase_limit_response()
 
     try:
         created = create_warehouse_order(

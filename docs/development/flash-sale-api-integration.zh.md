@@ -9,6 +9,7 @@
 - `flash_sales.stock_limit` 是独立营销秒杀库存配额，不代表真实仓储库存。
 - 秒杀成功后会立即复用 `/warehouse/orders` 创建 `未付款` 订单，并扣减 `inventory_location_balances`。
 - 同一 `flash_sale_id + user_id` 只允许成功一次。
+- mock-api 启动或重建时会生成 7 条 `active` 秒杀演示活动和 1 条 `draft` 活动，并初始化 active 活动的 Redis 剩余配额。
 
 ## Redis 约定
 
@@ -132,10 +133,10 @@ Content-Type: application/json
 
 常见失败：
 
-- `409 already_claimed`：同一用户已经抢过该活动。
+- `409 purchase_limit_reached`：同一用户已经抢过该活动，返回文案为 `已达到购买上限`。
 - `409 sold_out`：营销秒杀库存已抢完。
 - `409 flash_sale_not_active`：活动未激活、未开始或已结束。
-- `503 flash_sale_not_initialized`：活动未初始化 Redis 库存，需要先调用激活接口。
+- `503 flash_sale_not_initialized`：活动未初始化 Redis 库存；启动种子 active 活动会自动初始化，手工新增或 draft 活动需要先调用激活接口。
 
 ## 前端业务
 
@@ -202,41 +203,24 @@ GET /delivery_addresses?user_id=1
 
 ## 本地测试步骤
 
-1. 插入测试活动。
-
-```sql
-INSERT INTO flash_sales (
-  item_id,
-  sale_price,
-  stock_limit,
-  status,
-  starts_at,
-  ends_at,
-  created_at,
-  updated_at
-) VALUES (
-  'item_milk_pure',
-  9.90,
-  5,
-  'draft',
-  '2026-06-02T00:00:00+00:00',
-  '2099-06-03T00:00:00+00:00',
-  now()::text,
-  now()::text
-)
-RETURNING id;
-```
-
-2. 激活活动。
+1. 查询启动种子活动。
 
 ```bash
-curl -X POST http://localhost:8002/flash-sales/1/activate
+curl "http://localhost:8002/flash-sales?status=active&limit=20"
+```
+
+预期：返回 7 条 `active` 活动，且 `stock_remaining` 不为空。
+
+2. 如果手工新增了 draft 活动，再用列表返回的活动 `id` 激活活动。
+
+```bash
+curl -X POST http://localhost:8002/flash-sales/{id}/activate
 ```
 
 3. 查询剩余数量。
 
 ```bash
-curl http://localhost:8002/flash-sales/1
+curl http://localhost:8002/flash-sales/{id}
 ```
 
 预期：`stock_remaining` 等于 `stock_limit`。
@@ -244,7 +228,7 @@ curl http://localhost:8002/flash-sales/1
 4. 用户抢购。
 
 ```bash
-curl -X POST http://localhost:8002/flash-sales/1/purchase \
+curl -X POST http://localhost:8002/flash-sales/{id}/purchase \
   -H "Content-Type: application/json" \
   -d "{\"user_id\":1,\"shipping_address\":\"广东省深圳市南山区示例路 100 号\",\"delivery_provider_id\":\"sf\"}"
 ```
@@ -255,5 +239,5 @@ curl -X POST http://localhost:8002/flash-sales/1/purchase \
 - 返回订单状态为 `未付款`。
 - `flash_sale_claims.status=ordered`。
 - `inventory_location_balances` 中对应商品库存减少 1。
-- 再次用同一 `user_id` 请求会返回 `already_claimed`。
+- 再次用同一 `user_id` 请求会返回 `purchase_limit_reached`，文案为 `已达到购买上限`。
 

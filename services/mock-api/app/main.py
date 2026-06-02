@@ -9,7 +9,7 @@ from app.store import FIXTURE_DIR, find_by_id
 from app.routers.cart import CART_ITEMS, router as cart_router
 from app.routers.delivery_addresses import DEFAULT_DELIVERY_ADDRESSES, router as delivery_addresses_router
 from app.routers.delivery.router import router as delivery_router
-from app.routers.flash_sales import router as flash_sales_router
+from app.routers.flash_sales import initialize_active_flash_sales, router as flash_sales_router
 from app.routers.delivery.state import DELIVERY_CASES
 from app.routers.procurement.router import router as procurement_router
 from app.routers.product_details import router as product_details_router
@@ -177,6 +177,7 @@ def health() -> dict[str, str]:
 @app.on_event("startup")
 def startup_warehouse_store() -> None:
     get_warehouse_repository()
+    initialize_active_flash_sales()
 
 
 @app.get("/orders/{order_id}")

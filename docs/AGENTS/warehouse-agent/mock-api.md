@@ -86,12 +86,12 @@
 - `GET /flash-sales?status=active&limit=20`
   - 用途：分页前的轻量秒杀活动列表查询，供前端展示活动卡片。
   - 返回重点：`flash_sales[].item_id`、`sale_price`、`stock_limit`、`stock_remaining`、`status`、`starts_at`、`ends_at`。
-  - 约束：`limit` 范围 1 到 100；`stock_remaining` 来自 Redis，未初始化 Redis 的活动在列表中返回 `null`。
+  - 约束：`limit` 范围 1 到 100；`stock_remaining` 来自 Redis，mock-api 启动种子 active 活动会自动初始化，未初始化的手工活动在列表中返回 `null`。
 
 - `GET /flash-sales/{flash_sale_id}`
   - 用途：读取秒杀活动详情和 Redis 中的剩余营销库存。
   - 返回重点：`item_id`、`sale_price`、`stock_limit`、`stock_remaining`、`status`、`starts_at`、`ends_at`。
-  - 约束：活动必须已写入 `flash_sales`，并且执行过激活初始化 Redis 库存；否则返回 `flash_sale_not_initialized`。
+  - 约束：活动必须已写入 `flash_sales`，并且 Redis 库存已初始化；手工新增或 draft 活动未激活时返回 `flash_sale_not_initialized`。
 
 - `POST /flash-sales/{flash_sale_id}/activate`
   - 用途：把活动状态更新为 `active`，并把 `flash_sales.stock_limit` 初始化到 Redis。
@@ -103,7 +103,7 @@
   - 入参重点：`user_id`、`shipping_address`，可选 `delivery_provider_id`。
   - 处理规则：先用 Redis Lua 原子扣减营销库存和写入用户集合，再写 `flash_sale_claims`，最后创建仓储订单并扣减真实库存。
   - 补偿规则：如果 Redis 扣减成功但仓储订单创建失败，会回补 Redis 库存、移除用户集合，并把抢购结果标记为 `failed`。
-  - 重复规则：同一 `flash_sale_id + user_id` 只允许成功一次，重复请求返回 `already_claimed` 或已存在订单结果。
+  - 重复规则：同一 `flash_sale_id + user_id` 只允许成功一次，重复请求统一返回 `purchase_limit_reached`，文案为 `已达到购买上限`。
 
 - `POST /warehouse/purchase-orders/sync-arrivals`
   - 用途：Warehouse 扫描采购单中 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的记录，同步到库存事实。

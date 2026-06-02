@@ -2,7 +2,7 @@ import logging
 import os
 import json
 import hashlib
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -842,6 +842,98 @@ def default_delivery_address_rows() -> list[dict[str, Any]]:
     ]
 
 
+def default_flash_sale_rows() -> list[dict[str, Any]]:
+    now = datetime.now(UTC)
+    active_starts_at = (now - timedelta(days=1)).isoformat()
+    active_ends_at = (now + timedelta(days=7)).isoformat()
+    draft_starts_at = (now + timedelta(days=1)).isoformat()
+    draft_ends_at = (now + timedelta(days=8)).isoformat()
+    timestamp = now.isoformat()
+    # 秒杀活动属于本地演示基准数据，mock-api 重启或重建后会重新生成。
+    return [
+        {
+            "item_id": "item_milk_pure",
+            "sale_price": "12.90",
+            "stock_limit": 30,
+            "status": "active",
+            "starts_at": active_starts_at,
+            "ends_at": active_ends_at,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        {
+            "item_id": "item_cola_zero",
+            "sale_price": "19.90",
+            "stock_limit": 40,
+            "status": "active",
+            "starts_at": active_starts_at,
+            "ends_at": active_ends_at,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        {
+            "item_id": "item_vinda_tissue",
+            "sale_price": "18.80",
+            "stock_limit": 25,
+            "status": "active",
+            "starts_at": active_starts_at,
+            "ends_at": active_ends_at,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        {
+            "item_id": "item_yogurt_plain",
+            "sale_price": "15.90",
+            "stock_limit": 20,
+            "status": "active",
+            "starts_at": active_starts_at,
+            "ends_at": active_ends_at,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        {
+            "item_id": "item_water_spring",
+            "sale_price": "16.90",
+            "stock_limit": 35,
+            "status": "active",
+            "starts_at": active_starts_at,
+            "ends_at": active_ends_at,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        {
+            "item_id": "item_detergent",
+            "sale_price": "39.90",
+            "stock_limit": 10,
+            "status": "active",
+            "starts_at": active_starts_at,
+            "ends_at": active_ends_at,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        {
+            "item_id": "item_office_pen",
+            "sale_price": "6.90",
+            "stock_limit": 50,
+            "status": "active",
+            "starts_at": active_starts_at,
+            "ends_at": active_ends_at,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        {
+            "item_id": "item_copy_paper",
+            "sale_price": "18.90",
+            "stock_limit": 15,
+            "status": "draft",
+            "starts_at": draft_starts_at,
+            "ends_at": draft_ends_at,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+    ]
+
+
 def build_item_pg_search_index_sql() -> str:
     return (
         "CREATE INDEX items_search_idx ON items "
@@ -907,6 +999,7 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         connection.execute(items.insert(), load_item_fixture_rows(fixture_dir))
         connection.execute(users.insert(), default_user_rows())
         connection.execute(delivery_addresses.insert(), default_delivery_address_rows())
+        connection.execute(flash_sales.insert(), default_flash_sale_rows())
         connection.execute(
             delivery_providers.insert(),
             load_fixture_rows(fixture_dir, "delivery_providers.json"),

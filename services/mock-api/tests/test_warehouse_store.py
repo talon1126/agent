@@ -84,6 +84,9 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         user_count = connection.execute(text("select count(*) from users")).scalar_one()
         delivery_address_count = connection.execute(text("select count(*) from delivery_addresses")).scalar_one()
         flash_sale_count = connection.execute(text("select count(*) from flash_sales")).scalar_one()
+        active_flash_sale_count = connection.execute(
+            text("select count(*) from flash_sales where status = 'active'")
+        ).scalar_one()
         flash_sale_claim_count = connection.execute(text("select count(*) from flash_sale_claims")).scalar_one()
         default_address = connection.execute(
             text("select address from delivery_addresses where user_id = 1 and is_default = 1")
@@ -107,7 +110,8 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert order_item_count == 0
     assert user_count == 2
     assert delivery_address_count == 2
-    assert flash_sale_count == 0
+    assert flash_sale_count == 8
+    assert active_flash_sale_count == 7
     assert flash_sale_claim_count == 0
     assert default_address == "广东省深圳市南山区示例路 100 号"
     assert cart_item_count == 0

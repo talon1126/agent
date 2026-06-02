@@ -1,3 +1,5 @@
+import axios from 'axios'
+
 import { apiClient } from '@/services/apiClient'
 import { fetchDeliveryAddresses } from '@/services/checkoutApi'
 import type {
@@ -7,6 +9,19 @@ import type {
   FlashSalePurchaseResponse,
   FlashSaleResponse,
 } from '@/types/flashSale'
+
+interface ApiErrorResponse {
+  message?: unknown
+}
+
+function backendErrorMessage(error: unknown): string | null {
+  if (!axios.isAxiosError<ApiErrorResponse>(error)) {
+    return null
+  }
+  const message = error.response?.data?.message
+
+  return typeof message === 'string' && message.trim() ? message.trim() : null
+}
 
 export async function fetchFlashSales(
   params: FlashSaleListParams = {},
@@ -28,13 +43,21 @@ export async function purchaseFlashSale(
   flashSaleId: number,
   payload: FlashSalePurchaseRequest,
 ): Promise<FlashSalePurchaseResponse> {
-  // 中文注释：抢购是否成功以后端原子扣减结果为准，前端只负责提交用户和收货地址。
-  const response = await apiClient.post<FlashSalePurchaseResponse>(
-    `/flash-sales/${flashSaleId}/purchase`,
-    payload,
-  )
+  try {
+    // 中文注释：抢购是否成功以后端原子扣减结果为准，前端只负责提交用户和收货地址。
+    const response = await apiClient.post<FlashSalePurchaseResponse>(
+      `/flash-sales/${flashSaleId}/purchase`,
+      payload,
+    )
 
-  return response.data
+    return response.data
+  } catch (error) {
+    const message = backendErrorMessage(error)
+    if (message) {
+      throw new Error(message)
+    }
+    throw error
+  }
 }
 
 export async function purchaseFlashSaleWithDefaultAddress(
