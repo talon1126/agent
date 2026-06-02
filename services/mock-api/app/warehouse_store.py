@@ -1046,6 +1046,26 @@ class WarehouseRepository:
             return None
         return {**dict(row), "price": float(row["price"])}
 
+    def get_item_detail(self, item_id: str) -> dict[str, Any] | None:
+        statement = (
+            select(
+                items.c.item_id,
+                items.c.item_name,
+                items.c.brand,
+                items.c.spec,
+                items.c.category_id,
+                items.c.price,
+                items.c.unit,
+                items.c.barcode,
+            )
+            .where(items.c.item_id == item_id)
+        )
+        with self.engine.connect() as connection:
+            row = connection.execute(statement).mappings().first()
+        if not row:
+            return None
+        return {**dict(row), "price": float(row["price"])}
+
     def list_cart_items(self, user_id: int) -> list[dict[str, Any]]:
         statement = select(cart_items).where(cart_items.c.user_id == user_id).order_by(cart_items.c.id)
         with self.engine.connect() as connection:

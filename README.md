@@ -72,6 +72,7 @@ flowchart LR
 - 支持仓储异常和履约判断：用于回答库存差异、临期、过期、质检冻结、缺货和能否发货等问题。
 - 提供批次级库位余额和订单状态流转能力：`inventory_batches` 只保留入库事实，当前库存由 `inventory_location_balances` 承担，订单创建时按 FEFO 扣减。
 - 提供飞书库存余额表读模型：`/warehouse/stock/balances/table-schema` 返回字段定义，`/warehouse/stock/balances/table-rows` 按 cursor 分页返回余额行，每页最多 500 条。
+- 提供商品详情页读模型：`GET /ip/{item_id}` 从 `items` 表读取基础字段，并生成图片、评分、卖点、描述、规格和履约展示信息。
 - 提供秒杀活动查询、激活和抢购接口：`/flash-sales/{id}`、`/flash-sales/{id}/activate`、`/flash-sales/{id}/purchase`；抢购成功后创建 `未付款` 订单。
 - 承接补货申请：Warehouse 创建 `未审批` 补货申请，Procurement 批准后更新为 `已审批`。
 - 支持采购到仓后的库存事实更新：确认 `PO-*` 到货后，Warehouse 扫描 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的采购单，同步到 `inventory_batches` 和 `inventory_location_balances`。

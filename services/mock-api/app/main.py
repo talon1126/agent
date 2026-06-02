@@ -12,6 +12,7 @@ from app.routers.delivery.router import router as delivery_router
 from app.routers.flash_sales import router as flash_sales_router
 from app.routers.delivery.state import DELIVERY_CASES
 from app.routers.procurement.router import router as procurement_router
+from app.routers.product_details import router as product_details_router
 from app.routers.procurement.state import PURCHASE_ORDERS, REPLENISHMENT_REQUESTS
 from app.routers.search import router as search_router
 from app.routers.warehouse.router import router as warehouse_router
@@ -31,6 +32,7 @@ app.include_router(procurement_router)
 app.include_router(cart_router)
 app.include_router(delivery_addresses_router)
 app.include_router(flash_sales_router)
+app.include_router(product_details_router)
 app.include_router(search_router)
 app.include_router(warehouse_router)
 

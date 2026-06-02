@@ -24,10 +24,10 @@
 
 - `GET /ip/{item_id}`：按商品 ID 读取商品详情，用于商品详情页。
 - `item_id` 保持字符串，例如 `item_milk_pure`。
-- 商品详情页图片区需要支持桌面端主图 hover 局部放大效果。
-- `images`、`features`、`ingredients`、`description`、`details`、`rating`、`badges`、`fulfillment` 先作为后续需要补充的详情字段定义在对接文档中。
+- 基础字段来自后端 `items` 表；`images`、`features`、`ingredients`、`description`、`details`、`rating`、`badges`、`fulfillment` 由 mock-api 生成，供详情页完整展示。
+- 商品详情页图片区支持桌面端主图 hover 局部放大效果。
 - 前端已新增 `/items/:item_id` 路由、`productDetailApi` 服务封装和 `ProductDetailView`；搜索结果商品图和标题可跳转到详情页。
-- 当前本地后端 `GET /ip/item_milk_pure` 仍返回 404 时，详情页展示 `Item not found` 错误态；后端补齐接口后即可显示完整详情。
+- 商品不存在时，后端返回 `404 item_not_found`，详情页展示 `Item not found` 错误态。
 
 购物车结算相关接口：
 

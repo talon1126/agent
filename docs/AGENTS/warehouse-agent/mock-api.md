@@ -4,6 +4,12 @@
 
 ## 库存与履约接口
 
+- `GET /ip/{item_id}`
+  - 用途：按商品 ID 返回商品详情页数据，供前端 `/items/:item_id` 页面使用。
+  - 数据来源：基础字段来自 `items` 表；图片、评分、卖点、描述、规格明细和履约展示信息由 mock-api 根据商品基础字段确定性生成。
+  - 返回重点：`item_id`、`item_name`、`brand`、`spec`、`category_id`、`price`、`images`、`rating`、`features`、`details`、`fulfillment`。
+  - 找不到商品时返回 `404 item_not_found`。
+
 - `GET /warehouse/inventory/{item_id}`
   - 用途：查询某个商品在多个仓库、库位、批次上的库存汇总和明细。
   - 返回重点：`total_quantity_on_hand`、`total_quantity_reserved`、`total_quantity_available`、`risk_level`、`recommendation`、`batches`。

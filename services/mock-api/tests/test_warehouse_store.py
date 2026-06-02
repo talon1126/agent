@@ -249,6 +249,24 @@ def test_item_pg_search_index_uses_chinese_compatible_tokenizer() -> None:
     assert "key_field='item_id'" in statement
 
 
+def test_warehouse_repository_gets_item_detail_from_items_table(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    item = repository.get_item_detail("item_milk_pure")
+
+    assert item["item_id"] == "item_milk_pure"
+    assert item["item_name"] == "纯牛奶"
+    assert item["brand"]
+    assert item["spec"]
+    assert item["category_id"] == "dairy"
+    assert isinstance(item["price"], float)
+    assert item["unit"]
+    assert item["barcode"]
+
+
 def test_warehouse_repository_reads_batch_inventory_rows(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
     init_warehouse_schema(engine)

@@ -1,6 +1,6 @@
 # 商品详情前后端对接文档
 
-本文档记录 TalonMart 商品详情页的前后端接口契约和前端展示要求。当前只定义对接约定，不要求本轮实现后端接口或前端页面。
+本文档记录 TalonMart 商品详情页的前后端接口契约和前端展示要求。当前后端已实现 `GET /ip/{item_id}`，前端已实现商品详情页和接口封装。
 
 ## 目标页面
 
@@ -84,8 +84,8 @@ GET /ip/item_milk_pure
 - `item_id` 不转换为 number，前端路由和购物车接口继续使用字符串 ID。
 - `price` 用于页面展示；加入购物车时以后端 `POST /cart` 写入价格为准。
 - `images` 至少返回 1 张主图；如果没有多图，前端只展示主图，不展示缩略图列表。
-- `features`、`ingredients`、`description`、`details`、`rating`、`badges`、`fulfillment` 当前可以先在文档中定义为后续需要补充的字段。
-- 如果后端暂时只具备 `items` 表字段，可以先返回 `item_id`、`item_name`、`brand`、`spec`、`category_id`、`price`，前端对缺失详情字段做空状态处理。
+- `item_id`、`item_name`、`brand`、`spec`、`category_id`、`price` 来自 Postgres `items` 表。
+- `images`、`features`、`ingredients`、`description`、`details`、`rating`、`badges`、`fulfillment` 当前由 mock-api 根据商品基础字段确定性生成，供前端详情页完整展示。
 
 失败返回建议：
 
@@ -103,11 +103,11 @@ GET /ip/item_milk_pure
 - `404`：商品不存在。
 - `500`：服务端异常。
 
-## 后端字段补充计划
+## 后端字段实现
 
-当前商品详情页所需字段可以分两阶段补齐：
+当前商品详情页字段分两层：
 
-第一阶段，复用现有 `items` 表：
+基础字段来自 `items` 表：
 
 - `item_id`
 - `item_name`
@@ -116,7 +116,7 @@ GET /ip/item_milk_pure
 - `category_id`
 - `price`
 
-第二阶段，新增或扩展详情数据来源：
+展示字段由 mock-api 生成：
 
 - 商品图片：`images[]`。
 - 商品卖点：`features[]`。
@@ -126,6 +126,8 @@ GET /ip/item_milk_pure
 - 商品评分：`rating.score`、`rating.count`。
 - 商品标签：`badges[]`。
 - 履约展示信息：`fulfillment`。
+
+后续如果需要运营可编辑商品详情，再新增商品详情扩展表；当前不新增表，避免影响既有商品搜索和购物车流程。
 
 ## 前端业务
 
@@ -189,9 +191,8 @@ POST /cart
 
 ## 联调步骤
 
-1. 后端实现 `GET /ip/{item_id}`。
-2. 使用 `item_milk_pure` 返回至少基础商品字段。
-3. 前端新增商品详情服务封装。
-4. 前端新增商品详情页并从搜索结果卡片跳转。
-5. 验证主图 hover 时出现局部放大效果。
-6. 验证点击 `Add to cart` 后购物车数量变化。
+1. 访问 `GET /ip/item_milk_pure`，预期返回 `ok=true` 和完整 `item` 对象。
+2. 访问 `GET /ip/item_missing`，预期返回 `404 item_not_found`。
+3. 前端访问 `/items/item_milk_pure`，预期商品详情页展示商品基础信息、主图、卖点、规格和履约信息。
+4. 验证主图 hover 时出现局部放大效果。
+5. 验证点击 `Add to cart` 后购物车数量变化。

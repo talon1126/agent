@@ -18,6 +18,7 @@ from app.main import (
 )
 from app.routers import search as search_router
 from app.routers import flash_sales as flash_sales_router
+from app.routers import product_details as product_details_router
 from app.routers.warehouse.inventory import aggregate_stock_balance_snapshot_rows
 
 client = TestClient(app)
@@ -120,6 +121,16 @@ class FakeFlashSaleRepository:
                 claim["updated_at"] = updated_at
                 self.failed_claims.append(dict(claim))
                 return dict(claim)
+        return None
+
+
+class FakeProductDetailRepository:
+    def __init__(self, item: dict | None = None):
+        self.item = item
+
+    def get_item_detail(self, item_id: str):
+        if self.item and self.item["item_id"] == item_id:
+            return dict(self.item)
         return None
 
 
@@ -323,6 +334,56 @@ def test_product_search_returns_matching_item_without_balances(monkeypatch):
             "balances": [],
         }
     ]
+
+
+def test_product_detail_returns_enriched_item_from_repository(monkeypatch):
+    repository = FakeProductDetailRepository(
+        {
+            "item_id": "item_milk_pure",
+            "item_name": "纯牛奶",
+            "brand": "Talon Value",
+            "spec": "1L x 6",
+            "category_id": "dairy",
+            "price": 18.4,
+            "unit": "box",
+            "barcode": "690000000001",
+        }
+    )
+    monkeypatch.setattr(product_details_router, "get_warehouse_repository", lambda: repository)
+
+    response = client.get("/ip/item_milk_pure")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["item"]["item_id"] == "item_milk_pure"
+    assert body["item"]["item_name"] == "纯牛奶"
+    assert body["item"]["brand"] == "Talon Value"
+    assert body["item"]["spec"] == "1L x 6"
+    assert body["item"]["category_id"] == "dairy"
+    assert body["item"]["price"] == 18.4
+    assert body["item"]["currency"] == "USD"
+    assert body["item"]["images"][0]["alt"] == "纯牛奶 main product image"
+    assert body["item"]["rating"]["score"] >= 4
+    assert body["item"]["features"]
+    assert body["item"]["ingredients"]
+    assert body["item"]["description"]
+    assert {"label": "Specification", "value": "1L x 6"} in body["item"]["details"]
+    assert body["item"]["fulfillment"]["delivery_available"] is True
+
+
+def test_product_detail_returns_404_for_missing_item(monkeypatch):
+    repository = FakeProductDetailRepository()
+    monkeypatch.setattr(product_details_router, "get_warehouse_repository", lambda: repository)
+
+    response = client.get("/ip/item_missing")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "ok": False,
+        "error": "item_not_found",
+        "message": "Item not found.",
+    }
 
 
 def test_cart_add_uses_item_price_and_accumulates_quantity():
