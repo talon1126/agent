@@ -1,13 +1,24 @@
 import { apiClient } from '@/services/apiClient'
 import { fetchDeliveryAddresses } from '@/services/checkoutApi'
 import type {
+  FlashSaleListParams,
+  FlashSaleListResponse,
   FlashSalePurchaseRequest,
   FlashSalePurchaseResponse,
   FlashSaleResponse,
 } from '@/types/flashSale'
 
+export async function fetchFlashSales(
+  params: FlashSaleListParams = {},
+): Promise<FlashSaleListResponse> {
+  // 中文注释：主页秒杀专区每次页面刷新时重新查询列表和库存，不做前端轮询。
+  const response = await apiClient.get<FlashSaleListResponse>('/flash-sales', { params })
+
+  return response.data
+}
+
 export async function fetchFlashSale(flashSaleId: number): Promise<FlashSaleResponse> {
-  // 中文注释：后端当前只提供单活动查询，列表接口补齐前不在主页硬编码活动 ID。
+  // 中文注释：单活动查询保留给后续详情页或购买后刷新单条库存使用。
   const response = await apiClient.get<FlashSaleResponse>(`/flash-sales/${flashSaleId}`)
 
   return response.data

@@ -60,4 +60,34 @@ describe('flashSaleApi', () => {
       delivery_provider_id: 'sf',
     })
   })
+
+  it('fetches active flash sale list for the storefront section', async () => {
+    const { fetchFlashSales } = await import('@/services/flashSaleApi')
+
+    apiGet.mockResolvedValue({
+      data: {
+        ok: true,
+        count: 1,
+        flash_sales: [
+          {
+            id: 2,
+            item_id: 'item_milk_pure',
+            sale_price: 12.9,
+            stock_limit: 30,
+            stock_remaining: 30,
+            status: 'active',
+            starts_at: '2026-06-01T17:04:35+08:00',
+            ends_at: '2026-06-09T17:04:35+08:00',
+          },
+        ],
+      },
+    })
+
+    const response = await fetchFlashSales({ status: 'active', limit: 20 })
+
+    expect(apiGet).toHaveBeenCalledWith('/flash-sales', {
+      params: { status: 'active', limit: 20 },
+    })
+    expect(response.flash_sales).toEqual([expect.objectContaining({ item_id: 'item_milk_pure' })])
+  })
 })

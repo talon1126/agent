@@ -3,10 +3,21 @@ export interface FlashSale {
   item_id: string
   sale_price: number
   stock_limit: number
-  stock_remaining: number
+  stock_remaining: number | null
   status: string
   starts_at: string
   ends_at: string
+}
+
+export interface FlashSaleListParams {
+  status?: string
+  limit?: number
+}
+
+export interface FlashSaleListResponse {
+  ok: true
+  count: number
+  flash_sales: FlashSale[]
 }
 
 export interface FlashSaleResponse {
