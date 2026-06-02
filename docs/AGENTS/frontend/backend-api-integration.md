@@ -3,6 +3,7 @@
 前端通过 Axios 调用后端 API，不直接访问 Postgres、n8n 或飞书表。
 
 当前商品列表 / 搜索接口文档：`docs/development/search-api-integration.zh.md`。
+当前商品详情接口文档：`docs/development/product-detail-api-integration.zh.md`。
 当前购物车 / 结算接口文档：`docs/development/cart-api-integration.zh.md`。
 当前秒杀接口文档：`docs/development/flash-sale-api-integration.zh.md`。
 
@@ -18,6 +19,13 @@
 - 前端不接收 `total_quantity_on_hand`；总库存由前端从 `balances[].quantity_on_hand` 求和。
 
 注意：当前 `q=milk` 可以通过 `item_id=item_milk_pure` 命中中文商品；后续如果需要“牛乳”等自然语言同义词，应设计别名或同义词表，不要在接口里临时硬编码翻译规则。
+
+商品详情相关接口：
+
+- `GET /ip/{item_id}`：按商品 ID 读取商品详情，用于商品详情页。
+- `item_id` 保持字符串，例如 `item_milk_pure`。
+- 商品详情页图片区需要支持桌面端主图 hover 局部放大效果。
+- `images`、`features`、`ingredients`、`description`、`details`、`rating`、`badges`、`fulfillment` 先作为后续需要补充的详情字段定义在对接文档中。
 
 购物车结算相关接口：
 
