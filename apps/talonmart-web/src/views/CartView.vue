@@ -7,6 +7,7 @@ import {
   Heart,
   Info,
   LoaderCircle,
+  MapPin,
   Minus,
   Plus,
   Search,
@@ -16,13 +17,21 @@ import {
 } from 'lucide-vue-next'
 
 import { addCartItem, CART_USER_ID, fetchCart, removeCartItem } from '@/services/cartApi'
+import { createWarehouseOrder, fetchDeliveryAddresses } from '@/services/checkoutApi'
 import type { CartItem } from '@/types/cart'
+import type { DeliveryAddress } from '@/types/checkout'
 
 const router = useRouter()
 
 const cartItems = ref<CartItem[]>([])
+const deliveryAddresses = ref<DeliveryAddress[]>([])
+const selectedAddressId = ref<number | null>(null)
 const isLoading = ref(false)
+const isAddressLoading = ref(false)
+const isCheckingOut = ref(false)
 const errorMessage = ref('')
+const addressErrorMessage = ref('')
+const checkoutErrorMessage = ref('')
 const pendingItemId = ref('')
 const searchQuery = ref('')
 
@@ -77,6 +86,9 @@ const subtotal = computed(() =>
 
 const shippingFee = computed(() => (cartItems.value.length > 0 && subtotal.value < 35 ? 6.99 : 0))
 const estimatedTotal = computed(() => subtotal.value + shippingFee.value)
+const selectedAddress = computed(
+  () => deliveryAddresses.value.find((address) => address.id === selectedAddressId.value) ?? null,
+)
 
 function formatCurrency(value: number | string) {
   return new Intl.NumberFormat('en-US', {
@@ -114,6 +126,29 @@ async function loadCart() {
   }
 }
 
+async function loadDeliveryAddresses() {
+  isAddressLoading.value = true
+  addressErrorMessage.value = ''
+
+  try {
+    const response = await fetchDeliveryAddresses(CART_USER_ID)
+    deliveryAddresses.value = response.items
+
+    // 中文注释：默认地址优先；没有默认地址时选第一条，保证用户仍可直接结算。
+    const defaultAddress = response.items.find((address) => Number(address.is_default) === 1)
+    selectedAddressId.value = defaultAddress?.id ?? response.items[0]?.id ?? null
+  } catch (error) {
+    deliveryAddresses.value = []
+    selectedAddressId.value = null
+    addressErrorMessage.value =
+      error instanceof Error
+        ? error.message
+        : 'Delivery address service is unavailable. Check the address API.'
+  } finally {
+    isAddressLoading.value = false
+  }
+}
+
 async function addOne(item: CartItem) {
   pendingItemId.value = item.item_id
   errorMessage.value = ''
@@ -148,13 +183,53 @@ async function removeItem(item: CartItem) {
   }
 }
 
+async function continueToCheckout() {
+  checkoutErrorMessage.value = ''
+
+  if (cartItems.value.length === 0) {
+    checkoutErrorMessage.value = 'Your cart is empty.'
+    return
+  }
+
+  if (!selectedAddress.value?.address.trim()) {
+    checkoutErrorMessage.value = 'Please choose a delivery address before checkout.'
+    return
+  }
+
+  isCheckingOut.value = true
+
+  try {
+    // 中文注释：前端只传商品和数量，仓库选择、库位分配、库存扣减由后端订单接口负责。
+    await createWarehouseOrder({
+      customer_id: String(CART_USER_ID),
+      delivery_provider_id: 'sf',
+      courier_phone: '',
+      shipping_address: selectedAddress.value.address.trim(),
+      items: cartItems.value.map((item) => ({
+        item_id: item.item_id,
+        quantity: Number(item.quantity || 0),
+      })),
+      created_by: 'talonmart-web',
+    })
+    router.push({ name: 'home' })
+  } catch (error) {
+    checkoutErrorMessage.value =
+      error instanceof Error ? error.message : 'Unable to create order. Check the order API.'
+  } finally {
+    isCheckingOut.value = false
+  }
+}
+
 function submitSearch() {
   const normalized = searchQuery.value.trim()
   if (!normalized) return
   router.push({ name: 'search', query: { q: normalized } })
 }
 
-onMounted(loadCart)
+onMounted(() => {
+  loadCart()
+  loadDeliveryAddresses()
+})
 </script>
 
 <template>
@@ -231,6 +306,63 @@ onMounted(loadCart)
           <h2 class="text-2xl font-black">Pickup and delivery options</h2>
           <ChevronDown class="h-6 w-6" aria-hidden="true" />
         </div>
+
+        <section class="rounded-lg border border-[#D8E0E8] bg-white p-6 shadow-sm">
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="grid h-10 w-10 place-items-center rounded-full bg-[#EAF2FF]">
+                <MapPin class="h-5 w-5 text-[#0053E2]" aria-hidden="true" />
+              </span>
+              <div>
+                <h2 class="text-xl font-black">Delivery address</h2>
+                <p class="text-sm text-[#667085]">Choose where this order should ship.</p>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="isAddressLoading" class="mt-5 flex items-center gap-3 rounded-lg bg-[#F7F8FA] p-4 text-sm font-bold text-[#0053E2]">
+            <LoaderCircle class="h-5 w-5 animate-spin" aria-hidden="true" />
+            Loading delivery addresses
+          </div>
+
+          <div v-else-if="addressErrorMessage" class="mt-5 rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-4 text-sm text-[#991B1B]" role="alert">
+            {{ addressErrorMessage }}
+          </div>
+
+          <div v-else-if="deliveryAddresses.length === 0" class="mt-5 rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-4 text-sm text-[#991B1B]" role="alert">
+            Please add a delivery address before checkout.
+          </div>
+
+          <div v-else class="mt-5 grid gap-3">
+            <label
+              v-for="address in deliveryAddresses"
+              :key="address.id"
+              class="grid cursor-pointer gap-3 rounded-lg border p-4 transition md:grid-cols-[auto_1fr_auto]"
+              :class="selectedAddressId === address.id ? 'border-[#0053E2] bg-[#F5F9FF]' : 'border-[#D8E0E8] bg-white hover:border-[#8CB7FF]'"
+            >
+              <input
+                v-model="selectedAddressId"
+                class="mt-1 h-5 w-5 accent-[#0053E2]"
+                name="delivery-address"
+                type="radio"
+                :value="address.id"
+              />
+              <span>
+                <span class="block font-black">
+                  {{ address.receiver_name }}
+                  <span class="font-semibold text-[#667085]">{{ address.phone_number }}</span>
+                </span>
+                <span class="mt-1 block text-sm text-[#344054]">{{ address.address }}</span>
+              </span>
+              <span
+                v-if="Number(address.is_default) === 1"
+                class="h-fit rounded-full bg-[#EAF2FF] px-3 py-1 text-xs font-black text-[#0053E2]"
+              >
+                Default
+              </span>
+            </label>
+          </div>
+        </section>
 
         <div v-if="isLoading" class="grid min-h-[260px] place-items-center rounded-lg border border-[#D8E0E8] bg-white">
           <div class="flex items-center gap-3 text-lg font-bold text-[#0053E2]">
@@ -340,9 +472,22 @@ onMounted(loadCart)
 
       <aside class="space-y-5">
         <section class="sticky top-6 rounded-lg border border-[#D8E0E8] bg-white p-6 shadow-sm">
-          <button class="min-h-12 w-full rounded-full bg-[#0053E2] font-black text-white transition hover:bg-[#003A9B]" type="button">
-            Continue to checkout
+          <button
+            class="min-h-12 w-full rounded-full bg-[#0053E2] font-black text-white transition hover:bg-[#003A9B] disabled:cursor-not-allowed disabled:bg-[#8CB7FF]"
+            type="button"
+            aria-label="Continue to checkout"
+            :disabled="isCheckingOut || isLoading || isAddressLoading"
+            @click="continueToCheckout"
+          >
+            <span v-if="isCheckingOut" class="inline-flex items-center gap-2">
+              <LoaderCircle class="h-5 w-5 animate-spin" aria-hidden="true" />
+              Creating order
+            </span>
+            <span v-else>Continue to checkout</span>
           </button>
+          <p v-if="checkoutErrorMessage" class="mt-3 rounded-md bg-[#FEF2F2] p-3 text-sm font-semibold text-[#991B1B]" role="alert">
+            {{ checkoutErrorMessage }}
+          </p>
           <p class="mt-5 text-center text-sm">
             For the best shopping experience,
             <RouterLink class="underline" to="/">sign in</RouterLink>

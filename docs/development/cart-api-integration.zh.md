@@ -44,7 +44,7 @@
 2. `address` 不能为空字符串；前端点击 `Continue to checkout` 前必须校验。
 3. `is_default` 只使用 `0` 和 `1`，不要使用布尔值字符串。
 4. 同一个 `user_id` 推荐最多只有一条 `is_default=1` 的地址；后端新增或切换默认地址时应把该用户其他地址更新为 `0`。
-5. 本文档只约定表结构和购物车结算使用方式；配送地址的新增、编辑、删除接口后续另行设计。
+5. 本文档只约定表结构、地址查询和购物车结算使用方式；配送地址的新增、编辑、删除接口后续另行设计。
 
 ## 接口范围
 
@@ -53,6 +53,7 @@
 - `POST /cart`：添加商品到购物车。
 - `GET /cart?user_id=1`：按用户查询购物车商品。
 - `DELETE /cart?user_id=1&item_id=item_milk_pure`：从购物车移除某个商品。
+- `GET /delivery_addresses?user_id=1`：查询用户配送地址。
 - `POST /warehouse/orders`：点击 `Continue to checkout` 后创建订单。
 
 后端必须通过 `user_id` 过滤数据，只返回该用户自己的 `cart_items` 行。
@@ -121,10 +122,43 @@ Content-Type: application/json
 user_id=1
 ```
 
+### 查询配送地址
+
+```http
+GET /delivery_addresses?user_id=1
+```
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "user_id": 1,
+  "count": 1,
+  "items": [
+    {
+      "id": 1,
+      "user_id": 1,
+      "receiver_name": "Talon 测试用户",
+      "phone_number": "13800000001",
+      "address": "广东省深圳市南山区示例路 100 号",
+      "is_default": 1
+    }
+  ]
+}
+```
+
+前端展示规则：
+
+1. 调用 `GET /delivery_addresses?user_id=1` 后展示地址卡片列表。
+2. 优先选中 `is_default=1` 的地址；如果没有默认地址，选中第一条地址。
+3. 用户可以在购物车页切换本次订单使用的地址。
+4. 没有地址或选中地址的 `address` 为空时，点击 `Continue to checkout` 不创建订单。
+
 ### 前端流程
 
 1. 读取当前用户购物车：`GET /cart?user_id=1`。
-2. 获取或读取当前用户收货地址，地址来源对应 `delivery_addresses` 表。
+2. 查询当前用户收货地址：`GET /delivery_addresses?user_id=1`。
 3. 校验 `address` 不能为空；如果为空，不调用创建订单接口，在购物车页展示错误提示。
 4. 校验购物车不能为空；如果为空，不调用创建订单接口。
 5. 将 `cart_items` 转换为 `POST /warehouse/orders` 的 `items[]`。
@@ -416,5 +450,5 @@ DELETE /cart
 - 不做减少数量、清空购物车。
 - 不新增支付接口。
 - 不做价格优惠、税费、运费计算或在线支付结算。
-- 不设计配送地址新增、编辑、删除接口。
+- 不设计配送地址新增、编辑、删除接口；当前只查询地址并供购物车结算选择。
 - 不让前端直接访问数据库。
