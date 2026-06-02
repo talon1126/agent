@@ -179,6 +179,43 @@ def test_warehouse_repository_persists_flash_sales_and_claims(tmp_path: Path) ->
         )
 
 
+def test_warehouse_repository_lists_flash_sales_by_status(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    repository = WarehouseRepository(engine)
+
+    repository.create_flash_sale(
+        {
+            "item_id": "item_milk_pure",
+            "sale_price": 9.9,
+            "stock_limit": 5,
+            "status": "active",
+            "starts_at": "2026-06-01T00:00:00+00:00",
+            "ends_at": "2099-06-03T00:00:00+00:00",
+            "created_at": "2026-06-01T00:00:00+00:00",
+            "updated_at": "2026-06-01T00:00:00+00:00",
+        }
+    )
+    repository.create_flash_sale(
+        {
+            "item_id": "item_cola_zero",
+            "sale_price": 4.9,
+            "stock_limit": 8,
+            "status": "draft",
+            "starts_at": "2026-06-04T00:00:00+00:00",
+            "ends_at": "2099-06-03T00:00:00+00:00",
+            "created_at": "2026-06-01T00:00:00+00:00",
+            "updated_at": "2026-06-01T00:00:00+00:00",
+        }
+    )
+
+    sales = repository.list_flash_sales(status="active", limit=10)
+
+    assert len(sales) == 1
+    assert sales[0]["item_id"] == "item_milk_pure"
+    assert sales[0]["status"] == "active"
+
+
 def test_warehouse_tables_and_columns_have_chinese_comments() -> None:
     table_names = {table.name for table in WAREHOUSE_TABLES}
 

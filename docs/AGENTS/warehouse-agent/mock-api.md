@@ -77,6 +77,11 @@
 
 ## 秒杀接口
 
+- `GET /flash-sales?status=active&limit=20`
+  - 用途：分页前的轻量秒杀活动列表查询，供前端展示活动卡片。
+  - 返回重点：`flash_sales[].item_id`、`sale_price`、`stock_limit`、`stock_remaining`、`status`、`starts_at`、`ends_at`。
+  - 约束：`limit` 范围 1 到 100；`stock_remaining` 来自 Redis，未初始化 Redis 的活动在列表中返回 `null`。
+
 - `GET /flash-sales/{flash_sale_id}`
   - 用途：读取秒杀活动详情和 Redis 中的剩余营销库存。
   - 返回重点：`item_id`、`sale_price`、`stock_limit`、`stock_remaining`、`status`、`starts_at`、`ends_at`。

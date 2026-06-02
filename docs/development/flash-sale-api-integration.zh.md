@@ -19,17 +19,43 @@
 
 ## 接口
 
-### 当前接口状态
+### 查询活动列表
 
-当前后端已提供单活动查询、活动激活和抢购接口，暂未提供秒杀活动列表接口。
+```http
+GET /flash-sales?status=active&limit=20
+```
 
-因此前端当前策略是：
+查询参数：
 
-1. 主页新增 `Flash Deals` 秒杀专区，但不硬编码 `flash_sale_id=1` 或其他活动 ID。
-2. 秒杀专区先展示空状态和预留卡片，等待后端补齐列表接口后再渲染真实活动。
-3. 前端已封装单活动查询和抢购接口，后续列表接口返回活动 ID 后可直接复用。
-4. 前端查询库存策略为“用户每次刷新页面时查询一次”；不做轮询，不做前端倒计时扣库存。
-5. 最终是否抢购成功以后端 `/flash-sales/{id}/purchase` 返回为准。
+- `status`：可选，按活动状态过滤，例如 `active`、`draft`、`ended`、`disabled`。
+- `limit`：可选，默认 20，范围 1 到 100。
+
+成功返回：
+
+```json
+{
+  "ok": true,
+  "count": 2,
+  "flash_sales": [
+    {
+      "id": 1,
+      "item_id": "item_milk_pure",
+      "sale_price": 9.9,
+      "stock_limit": 5,
+      "stock_remaining": 4,
+      "status": "active",
+      "starts_at": "2026-06-02T00:00:00+00:00",
+      "ends_at": "2099-06-03T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+说明：
+
+- `stock_remaining` 来自 Redis，前端可用于弱实时展示剩余数量。
+- 如果某条活动还没有初始化 Redis 库存，列表中该条 `stock_remaining` 返回 `null`。
+- 前端最终应以 `POST /flash-sales/{id}/purchase` 的返回结果判断是否抢购成功。
 
 ### 查询活动
 
@@ -119,10 +145,10 @@ Content-Type: application/json
 
 - 标题：`Flash Deals`。
 - 副文案：提示折扣和刷新策略。
-- 卡片区：当前只显示预留卡片和空状态，不展示真实商品。
-- `View all`：列表接口补齐前禁用。
+- 卡片区：调用 `GET /flash-sales?status=active&limit=20` 渲染真实活动，不硬编码 `flash_sale_id=1` 或其他活动 ID。
+- `View all`：可以跳转到秒杀列表页，或在列表页未完成前保留为当前专区锚点。
 
-当前不能硬编码 `flash_sale_id=1`，原因是后端尚未提供列表接口，前端无法判断哪些活动应该展示在首页。
+前端查询库存策略为“用户每次刷新页面时查询一次”；不做轮询，不做前端倒计时扣库存。最终是否抢购成功以后端 `/flash-sales/{id}/purchase` 返回为准。
 
 ### 前端接口封装
 
@@ -135,6 +161,7 @@ apps/talonmart-web/src/types/flashSale.ts
 
 已封装能力：
 
+- `fetchFlashSales(params)`：调用 `GET /flash-sales`。
 - `fetchFlashSale(flashSaleId)`：调用 `GET /flash-sales/{flash_sale_id}`。
 - `purchaseFlashSale(flashSaleId, payload)`：调用 `POST /flash-sales/{flash_sale_id}/purchase`。
 - `purchaseFlashSaleWithDefaultAddress(flashSaleId, userId)`：先查询默认配送地址，再发起抢购。
@@ -162,9 +189,9 @@ GET /delivery_addresses?user_id=1
 }
 ```
 
-### 后续接入列表接口
+### 列表接口接入
 
-后端补齐列表接口后，前端应按以下方式接入：
+前端应按以下方式接入列表接口：
 
 1. 主页加载时调用列表接口。
 2. 列表接口需要返回活动 ID、商品 ID、秒杀价、剩余秒杀库存、活动状态、开始和结束时间。

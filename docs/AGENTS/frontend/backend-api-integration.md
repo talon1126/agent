@@ -29,6 +29,7 @@
 
 秒杀相关接口：
 
+- `GET /flash-sales?status=active&limit=20`：读取秒杀活动列表，前端用 `flash_sales[].stock_remaining` 展示弱实时剩余数量。
 - `GET /flash-sales/{flash_sale_id}`：读取活动详情和剩余营销库存，前端可用 `stock_remaining` 展示剩余数量。
 - `POST /flash-sales/{flash_sale_id}/purchase`：用户抢购，后端通过 Redis Lua 保证营销库存扣减和一人一单；成功后立即返回 `未付款` 订单。
 - `POST /flash-sales/{flash_sale_id}/activate`：测试或运营初始化活动，重置 Redis 剩余配额和已抢购用户集合。

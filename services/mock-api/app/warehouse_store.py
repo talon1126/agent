@@ -1115,6 +1115,16 @@ class WarehouseRepository:
             )
         return self._format_flash_sale(row) if row else None
 
+    def list_flash_sales(self, *, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        capped_limit = max(1, min(limit, 100))
+        statement = select(flash_sales).order_by(flash_sales.c.id)
+        if status:
+            statement = statement.where(flash_sales.c.status == status)
+        statement = statement.limit(capped_limit)
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [self._format_flash_sale(row) for row in rows]
+
     def update_flash_sale_status(self, flash_sale_id: int, *, status: str, updated_at: str) -> dict[str, Any] | None:
         with self.engine.begin() as connection:
             connection.execute(
