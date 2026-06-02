@@ -5,6 +5,8 @@
 
 维护规则：新增或修改某个 agent 的业务说明时，只维护对应目录下的具体文档；根 `AGENTS.md` 只维护路由链接。
 
+所有业务代码都要附带中文注释。
+
 ## 仓储agent
 
 - 总览：[warehouse-agent/README.md](docs/AGENTS/warehouse-agent/README.md)
