@@ -346,6 +346,41 @@ def test_cart_rejects_unknown_user_and_invalid_quantity():
     }
 
 
+def test_delivery_addresses_list_returns_default_address_for_user():
+    response = client.get("/delivery_addresses", params={"user_id": 1})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "user_id": 1,
+        "count": 1,
+        "items": [
+            {
+                "id": 1,
+                "user_id": 1,
+                "receiver_name": "Talon 测试用户",
+                "phone_number": "13800000001",
+                "address": "广东省深圳市南山区示例路 100 号",
+                "is_default": 1,
+            }
+        ],
+    }
+
+
+def test_delivery_addresses_rejects_missing_and_unknown_user():
+    missing = client.get("/delivery_addresses")
+    unknown = client.get("/delivery_addresses", params={"user_id": 999})
+
+    assert missing.status_code == 400
+    assert missing.json() == {
+        "ok": False,
+        "error": "missing_user_id",
+        "message": "user_id is required",
+    }
+    assert unknown.status_code == 404
+    assert unknown.json()["error"] == "user_not_found"
+
+
 def test_create_approval_request():
     payload = {
         "event_id": "evt_refund_high_value",
@@ -883,6 +918,7 @@ def test_delivery_status_lookup_uses_warehouse_order_and_delivery_provider_table
             "customer_id": "cus_100",
             "delivery_provider_id": "jd",
             "courier_phone": "13800000002",
+            "shipping_address": "广东省深圳市",
             "items": [
                 {
                     "item_id": "item_vinda_tissue",
@@ -927,6 +963,7 @@ def test_delivery_exceptions_search_returns_shipped_orders_from_warehouse_order_
             "customer_id": "cus_100",
             "delivery_provider_id": "yto",
             "courier_phone": "13800000003",
+            "shipping_address": "广东省深圳市",
             "items": [
                 {
                     "item_id": "item_vinda_tissue",
@@ -959,6 +996,7 @@ def test_delivery_case_create_records_follow_up_case_for_warehouse_order():
             "customer_id": "cus_100",
             "delivery_provider_id": "sf",
             "courier_phone": "13800000004",
+            "shipping_address": "广东省深圳市",
             "items": [
                 {
                     "item_id": "item_vinda_tissue",
@@ -1328,12 +1366,28 @@ def test_warehouse_order_paid_deducts_location_balances_and_preserves_batch_fact
     assert all(line["status"] == "待发货" for line in body["items"])
 
 
+def test_warehouse_order_rejects_empty_shipping_address():
+    response = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-EMPTY-ADDRESS",
+            "customer_id": "1",
+            "shipping_address": "   ",
+            "items": [{"item_id": "item_milk_pure", "warehouse_id": "wh_sz_1", "quantity": 1}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "shipping_address_required"
+
+
 def test_warehouse_order_cancel_adds_paid_stock_back_to_original_batches():
     client.post(
         "/warehouse/orders",
         json={
             "order_id": "ORD-CODEX-9002",
             "customer_id": "cus_100",
+            "shipping_address": "广东省深圳市",
             "items": [{"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}],
         },
     )
@@ -1365,6 +1419,7 @@ def test_warehouse_order_return_after_arrival_adds_stock_back_to_original_batche
         json={
             "order_id": "ORD-CODEX-9003",
             "customer_id": "cus_100",
+            "shipping_address": "广东省深圳市",
             "items": [{"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}],
         },
     )
@@ -1390,6 +1445,7 @@ def test_warehouse_order_pay_rejects_insufficient_stock():
         json={
             "order_id": "ORD-CODEX-9004",
             "customer_id": "cus_100",
+            "shipping_address": "广东省深圳市",
             "items": [{"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 200}],
         },
     )

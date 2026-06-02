@@ -268,7 +268,10 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     order_id = (payload.order_id or "").strip() or next_warehouse_order_id(repository)
     delivery_provider = get_delivery_provider(payload.delivery_provider_id)
-    shipping_province, shipping_city = parse_shipping_address(payload.shipping_address)
+    shipping_address = payload.shipping_address.strip()
+    if not shipping_address:
+        raise HTTPException(status_code=400, detail="shipping_address_required")
+    shipping_province, shipping_city = parse_shipping_address(shipping_address)
     requested_items = [
         {
             "item_id": item.item_id.strip(),
@@ -293,7 +296,7 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
         "delivery_provider_name": delivery_provider["name"],
         "courier_phone": payload.courier_phone.strip(),
         "tracking_no": payload.tracking_no.strip() or f"{delivery_provider['tracking_prefix']}{order_id.replace('-', '')}",
-        "shipping_address": payload.shipping_address.strip(),
+        "shipping_address": shipping_address,
         "shipping_province": shipping_province,
         "shipping_city": shipping_city,
         "selected_warehouse_id": selected_warehouse["warehouse_id"],

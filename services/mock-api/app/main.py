@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.store import FIXTURE_DIR, find_by_id
 from app.routers.cart import CART_ITEMS, router as cart_router
+from app.routers.delivery_addresses import DEFAULT_DELIVERY_ADDRESSES, router as delivery_addresses_router
 from app.routers.delivery.router import router as delivery_router
 from app.routers.delivery.state import DELIVERY_CASES
 from app.routers.procurement.router import router as procurement_router
@@ -27,12 +28,14 @@ app = FastAPI(title="Ecommerce Mock Enterprise API")
 app.include_router(delivery_router)
 app.include_router(procurement_router)
 app.include_router(cart_router)
+app.include_router(delivery_addresses_router)
 app.include_router(search_router)
 app.include_router(warehouse_router)
 
 __all__ = [
     "app",
     "CART_ITEMS",
+    "DEFAULT_DELIVERY_ADDRESSES",
     "RECEIVED_INVENTORY_BATCHES",
     "WAREHOUSE_BATCH_QUANTITY_OVERRIDES",
     "WAREHOUSE_INVENTORY_MOVEMENTS",

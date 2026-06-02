@@ -12,6 +12,7 @@ from app.warehouse_store import (
     _quote_literal,
     cart_items,
     categories,
+    delivery_addresses,
     init_warehouse_schema,
     inventory_movements,
     inventory_location_balances,
@@ -40,6 +41,7 @@ WAREHOUSE_TABLES = [
     replenishment_requests,
     delivery_providers,
     users,
+    delivery_addresses,
     cart_items,
     procurement_suppliers,
     purchase_orders,
@@ -74,6 +76,10 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         order_count = connection.execute(text("select count(*) from orders")).scalar_one()
         order_item_count = connection.execute(text("select count(*) from order_items")).scalar_one()
         user_count = connection.execute(text("select count(*) from users")).scalar_one()
+        delivery_address_count = connection.execute(text("select count(*) from delivery_addresses")).scalar_one()
+        default_address = connection.execute(
+            text("select address from delivery_addresses where user_id = 1 and is_default = 1")
+        ).scalar_one()
         cart_item_count = connection.execute(text("select count(*) from cart_items")).scalar_one()
         milk_price = connection.execute(text("select price from items where item_id = 'item_milk_pure'")).scalar_one()
 
@@ -92,8 +98,30 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert order_count == 0
     assert order_item_count == 0
     assert user_count == 2
+    assert delivery_address_count == 2
+    assert default_address == "广东省深圳市南山区示例路 100 号"
     assert cart_item_count == 0
     assert float(milk_price) == 18.4
+
+
+def test_warehouse_repository_lists_delivery_addresses(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    addresses = repository.list_delivery_addresses(1)
+
+    assert addresses == [
+        {
+            "id": 1,
+            "user_id": 1,
+            "receiver_name": "Talon 测试用户",
+            "phone_number": "13800000001",
+            "address": "广东省深圳市南山区示例路 100 号",
+            "is_default": 1,
+        }
+    ]
 
 
 def test_warehouse_tables_and_columns_have_chinese_comments() -> None:

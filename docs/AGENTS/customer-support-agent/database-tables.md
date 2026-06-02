@@ -22,3 +22,10 @@
   - 当前只使用逻辑外键：`user_id` 逻辑关联 `users.id`，`item_id` 逻辑关联 `items.item_id`；没有物理外键。
   - 约束：`price >= 0`，`quantity > 0`，`quantity` 默认值为 `1`。
   - 价格来源：`POST /cart` 写入时以后端 `items.price` 为准，前端传入价格只做非负校验。
+
+- `delivery_addresses`
+  - 配送地址表，当前已在部署中的 Postgres 创建。
+  - 关键字段：`id`、`user_id`、`receiver_name`、`phone_number`、`address`、`is_default`。
+  - 当前只使用逻辑外键：`user_id` 逻辑关联 `users.id`；没有物理外键。
+  - 读取接口：`GET /delivery_addresses?user_id=1`。
+  - 结算规则：`address` 不能为空，`is_default` 只使用 `1` / `0`。

@@ -51,7 +51,7 @@
 - `POST /warehouse/orders`
   - 用途：创建订单主单，支持多行商品。
   - 入参重点：`order_id`、`customer_id`、`shipping_address`、`delivery_provider_id`、`courier_phone`、`tracking_no`、`items[].item_id`、`items[].quantity`。
-  - 地址格式：`xx省xx市`；Warehouse 按整单同仓策略优先选择距离用户地址最近且能满足整单库存的仓库。
+  - 地址格式：`xx省xx市`；`shipping_address` 不能为空，空地址返回 `400 shipping_address_required`；Warehouse 按整单同仓策略优先选择距离用户地址最近且能满足整单库存的仓库。
   - 创建后状态为 `未付款`，立即写入 `order_items` 并扣减 `inventory_location_balances`；物流供应商字段写入订单主表，供 Delivery Agent 查询。
 
 - `POST /warehouse/orders/{order_id}/pay`

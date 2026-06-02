@@ -217,6 +217,17 @@ users = Table(
     Column("password", String(20), nullable=False, default=""),
 )
 
+delivery_addresses = Table(
+    "delivery_addresses",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("user_id", Integer, nullable=False, index=True),
+    Column("receiver_name", String(100), nullable=False),
+    Column("phone_number", String(32), nullable=False),
+    Column("address", String(500), nullable=False),
+    Column("is_default", Integer, nullable=False, default=0),
+)
+
 cart_items = Table(
     "cart_items",
     metadata,
@@ -279,6 +290,7 @@ WAREHOUSE_TABLE_COMMENTS = {
     "replenishment_requests": "补货申请表，保存仓储发现低库存后交给采购审核的结构化需求。",
     "delivery_providers": "物流供应商表，保存顺丰、京东、圆通等承运商基础信息供订单和 Delivery Agent 使用。",
     "users": "TalonMart 用户表，保存购物车 v1 使用的测试用户资料。",
+    "delivery_addresses": "TalonMart 配送地址表，保存购物车结算创建订单时使用的用户收货地址。",
     "cart_items": "购物车明细表，按用户和商品保存加入购物车时的商品快照价格与数量。",
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
     "purchase_orders": "采购单表，保存采购审核补货申请后生成的采购单、支付状态和仓库同步状态。",
@@ -474,6 +486,14 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "username": "用户名。",
         "password": "密码字段；当前仅用于 mock，不应用于正式明文存储。",
     },
+    "delivery_addresses": {
+        "id": "配送地址自增整数主键。",
+        "user_id": "地址所属用户 ID，逻辑关联 users.id。",
+        "receiver_name": "收货人姓名。",
+        "phone_number": "收货人手机号。",
+        "address": "收货地址，购物车结算创建订单时不能为空。",
+        "is_default": "是否默认地址；1 表示默认，0 表示非默认。",
+    },
     "cart_items": {
         "id": "购物车明细自增整数主键。",
         "item_id": "购物车商品编号。",
@@ -510,6 +530,7 @@ def init_warehouse_schema(engine: Engine) -> None:
             replenishment_requests,
             procurement_suppliers,
             users,
+            delivery_addresses,
             cart_items,
             purchase_orders,
             warehouse_inventory_sync_jobs,
@@ -733,6 +754,27 @@ def default_user_rows() -> list[dict[str, Any]]:
     ]
 
 
+def default_delivery_address_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": 1,
+            "user_id": 1,
+            "receiver_name": "Talon 测试用户",
+            "phone_number": "13800000001",
+            "address": "广东省深圳市南山区示例路 100 号",
+            "is_default": 1,
+        },
+        {
+            "id": 2,
+            "user_id": 2,
+            "receiver_name": "Talon 测试用户二",
+            "phone_number": "13800000002",
+            "address": "广东省深圳市福田区示例路 200 号",
+            "is_default": 1,
+        },
+    ]
+
+
 def build_item_pg_search_index_sql() -> str:
     return (
         "CREATE INDEX items_search_idx ON items "
@@ -778,6 +820,7 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         connection.execute(inventory_movements.delete())
         connection.execute(delivery_providers.delete())
         connection.execute(cart_items.delete())
+        connection.execute(delivery_addresses.delete())
         connection.execute(inventory_location_balances.delete())
         connection.execute(inventory_batches.delete())
         connection.execute(procurement_suppliers.delete())
@@ -794,6 +837,7 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         connection.execute(categories.insert(), load_fixture_rows(fixture_dir, "categories.json"))
         connection.execute(items.insert(), load_item_fixture_rows(fixture_dir))
         connection.execute(users.insert(), default_user_rows())
+        connection.execute(delivery_addresses.insert(), default_delivery_address_rows())
         connection.execute(
             delivery_providers.insert(),
             load_fixture_rows(fixture_dir, "delivery_providers.json"),
@@ -914,6 +958,16 @@ class WarehouseRepository:
         with self.engine.connect() as connection:
             row = connection.execute(select(users.c.id).where(users.c.id == user_id)).first()
         return row is not None
+
+    def list_delivery_addresses(self, user_id: int) -> list[dict[str, Any]]:
+        statement = (
+            select(delivery_addresses)
+            .where(delivery_addresses.c.user_id == user_id)
+            .order_by(delivery_addresses.c.is_default.desc(), delivery_addresses.c.id)
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [dict(row) for row in rows]
 
     def get_item_for_cart(self, item_id: str) -> dict[str, Any] | None:
         statement = select(items.c.item_id, items.c.item_name, items.c.price).where(items.c.item_id == item_id)

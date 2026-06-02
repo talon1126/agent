@@ -3,6 +3,7 @@
 前端通过 Axios 调用后端 API，不直接访问 Postgres、n8n 或飞书表。
 
 当前商品列表 / 搜索接口文档：`docs/development/search-api-integration.zh.md`。
+当前购物车 / 结算接口文档：`docs/development/cart-api-integration.zh.md`。
 
 当前搜索接口：
 
@@ -16,3 +17,11 @@
 - 前端不接收 `total_quantity_on_hand`；总库存由前端从 `balances[].quantity_on_hand` 求和。
 
 注意：当前 `q=milk` 可以通过 `item_id=item_milk_pure` 命中中文商品；后续如果需要“牛乳”等自然语言同义词，应设计别名或同义词表，不要在接口里临时硬编码翻译规则。
+
+购物车结算相关接口：
+
+- `POST /cart`：添加商品到购物车，后端按 `items.price` 写入可信价格。
+- `GET /cart?user_id=1`：按用户读取购物车商品。
+- `DELETE /cart?user_id=1&item_id=item_milk_pure`：移除用户购物车中的某个商品。
+- `GET /delivery_addresses?user_id=1`：按用户读取配送地址，当前用于 `Continue to checkout` 前获取默认收货地址。
+- `POST /warehouse/orders`：复用仓储订单接口创建订单；前端传 `shipping_address`，不传 `warehouse_id` / `location_code` 时由 Warehouse 按地址和库存选择仓库。

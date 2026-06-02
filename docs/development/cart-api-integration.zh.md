@@ -4,7 +4,7 @@
 
 ## 当前数据库表
 
-用户已在数据库中新增 `users`、`cart_items`，并计划新增 `delivery_addresses` 配送地址表。
+用户已在数据库中新增 `users`、`cart_items`、`delivery_addresses` 三张购物车结算相关表。
 
 ### `users`
 
@@ -53,9 +53,10 @@
 - `POST /cart`：添加商品到购物车。
 - `GET /cart?user_id=1`：按用户查询购物车商品。
 - `DELETE /cart?user_id=1&item_id=item_milk_pure`：从购物车移除某个商品。
+- `GET /delivery_addresses?user_id=1`：按用户查询配送地址。
 - `POST /warehouse/orders`：点击 `Continue to checkout` 后创建订单。
 
-后端必须通过 `user_id` 过滤数据，只返回该用户自己的 `cart_items` 行。
+后端必须通过 `user_id` 过滤数据，只返回该用户自己的 `cart_items` 和 `delivery_addresses` 行。
 
 ## 添加商品到购物车
 
@@ -124,12 +125,46 @@ user_id=1
 ### 前端流程
 
 1. 读取当前用户购物车：`GET /cart?user_id=1`。
-2. 获取或读取当前用户收货地址，地址来源对应 `delivery_addresses` 表。
+2. 获取当前用户收货地址：`GET /delivery_addresses?user_id=1`。
 3. 校验 `address` 不能为空；如果为空，不调用创建订单接口，在购物车页展示错误提示。
 4. 校验购物车不能为空；如果为空，不调用创建订单接口。
 5. 将 `cart_items` 转换为 `POST /warehouse/orders` 的 `items[]`。
 6. 调用 `POST /warehouse/orders`。
 7. 创建订单成功后跳转主页面 `/`。
+
+## 查询配送地址
+
+```http
+GET /delivery_addresses?user_id=1
+```
+
+### Query 参数
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `user_id` | number | 是 | 当前用户 ID。 |
+
+### 成功响应
+
+```json
+{
+  "ok": true,
+  "user_id": 1,
+  "count": 1,
+  "items": [
+    {
+      "id": 1,
+      "user_id": 1,
+      "receiver_name": "Talon 测试用户",
+      "phone_number": "13800000001",
+      "address": "广东省深圳市南山区示例路 100 号",
+      "is_default": 1
+    }
+  ]
+}
+```
+
+前端结算时优先使用 `is_default=1` 的地址；如果没有默认地址，可以使用返回列表第一条，后续地址新增、编辑、切换默认接口再单独设计。
 
 ### 现有创建订单接口
 
@@ -192,10 +227,11 @@ services/mock-api/app/routers/warehouse/schemas.py
 1. 如果未传 `order_id`，后端自动生成订单号。
 2. 订单创建后初始状态为 `未付款`。
 3. 后端会解析 `shipping_address` 中的省、市信息，例如 `广东省深圳市`。
-4. 后端按整单同仓策略选择可满足库存的仓库；如果请求项显式传入多个不同仓库，会返回 400。
-5. 创建订单时会写入 `orders` 和 `order_items`，并扣减 `inventory_location_balances`。
-6. 付款接口 `POST /warehouse/orders/{order_id}/pay` 只更新状态，不再次扣减库存。
-7. 发货、到货、取消、退货由仓储订单后续接口处理，购物车结算 v1 不调用这些接口。
+4. 如果 `shipping_address` 为空字符串，后端返回 400，错误为 `shipping_address_required`。
+5. 后端按整单同仓策略选择可满足库存的仓库；如果请求项显式传入多个不同仓库，会返回 400。
+6. 创建订单时会写入 `orders` 和 `order_items`，并扣减 `inventory_location_balances`。
+7. 付款接口 `POST /warehouse/orders/{order_id}/pay` 只更新状态，不再次扣减库存。
+8. 发货、到货、取消、退货由仓储订单后续接口处理，购物车结算 v1 不调用这些接口。
 
 ### 成功响应
 
@@ -377,7 +413,7 @@ DELETE /cart?user_id=1&item_id=item_milk_pure
 7. 点击 `+` 时继续调用 `POST /cart`，后端累加该商品数量。
 8. 点击 `-` 时如果当前数量大于 1，v1 可以继续调用 `POST /cart` 以负数减量前必须另行设计更新接口；当前文档尚未定义减量接口，所以前端 v1 推荐只在数量为 1 时调用 `DELETE /cart?user_id=1&item_id=...` 移除整条商品，数量大于 1 的减量功能等更新数量接口确定后再做。
 9. 当前搜索接口返回 `items.price`，前端添加购物车时可以把该价格随请求发送；后端仍以后端 `items.price` 为准。
-10. 点击 `Continue to checkout` 时必须先校验收货地址不为空，再调用 `POST /warehouse/orders` 创建订单。
+10. 点击 `Continue to checkout` 时先调用 `GET /delivery_addresses?user_id=1` 获取地址，并校验收货地址不为空，再调用 `POST /warehouse/orders` 创建订单。
 11. 创建订单成功后跳转主页面 `/`，不在购物车页继续处理支付。
 
 ## 后端实现建议
@@ -416,5 +452,5 @@ DELETE /cart
 - 不做减少数量、清空购物车。
 - 不新增支付接口。
 - 不做价格优惠、税费、运费计算或在线支付结算。
-- 不设计配送地址新增、编辑、删除接口。
+- 不设计配送地址新增、编辑、删除接口；当前只提供按用户读取地址。
 - 不让前端直接访问数据库。
