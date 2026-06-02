@@ -24,13 +24,22 @@ client = TestClient(app)
 
 
 class FakeFlashSaleRedis:
-    def __init__(self, stock: int = 1, claimed_users: set[str] | None = None):
+    def __init__(
+        self,
+        stock: int = 1,
+        claimed_users: set[str] | None = None,
+        stocks: dict[int, int] | None = None,
+    ):
         self.stock = stock
+        self.stocks = dict(stocks or {})
         self.claimed_users = set(claimed_users or set())
         self.compensated: list[str] = []
 
     def get(self, key: str):
         if key.endswith(":stock"):
+            flash_sale_id = int(key.split(":")[1])
+            if flash_sale_id in self.stocks:
+                return str(self.stocks[flash_sale_id])
             return str(self.stock)
         return None
 
@@ -61,15 +70,21 @@ class FakeFlashSaleRedis:
 
 
 class FakeFlashSaleRepository:
-    def __init__(self, sale: dict):
-        self.sale = sale
+    def __init__(self, sale: dict | None = None, sales: list[dict] | None = None):
+        self.sale = sale or (sales or [active_flash_sale()])[0]
+        self.sales = list(sales or [self.sale])
         self.claims: dict[tuple[int, int], dict] = {}
         self.failed_claims: list[dict] = []
 
     def get_flash_sale(self, flash_sale_id: int):
-        if flash_sale_id == int(self.sale["id"]):
-            return dict(self.sale)
+        for sale in self.sales:
+            if flash_sale_id == int(sale["id"]):
+                return dict(sale)
         return None
+
+    def list_flash_sales(self, *, status: str | None = None, limit: int = 20):
+        rows = [dict(sale) for sale in self.sales if status is None or sale["status"] == status]
+        return rows[:limit]
 
     def get_flash_sale_claim(self, *, flash_sale_id: int, user_id: int):
         claim = self.claims.get((flash_sale_id, user_id))
@@ -505,6 +520,49 @@ def test_flash_sale_detail_returns_redis_remaining_stock(monkeypatch):
             "starts_at": "2026-06-01T00:00:00+00:00",
             "ends_at": "2099-06-03T00:00:00+00:00",
         },
+    }
+
+
+def test_flash_sale_list_returns_multiple_sales_with_redis_stock(monkeypatch):
+    repository = FakeFlashSaleRepository(
+        sales=[
+            active_flash_sale(id=1, item_id="item_milk_pure", stock_limit=2),
+            active_flash_sale(id=2, item_id="item_cola_zero", stock_limit=3),
+            active_flash_sale(id=3, item_id="item_vinda_tissue", status="draft", stock_limit=4),
+        ]
+    )
+    redis_client = FakeFlashSaleRedis(stocks={1: 1, 2: 3})
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+
+    response = client.get("/flash-sales?status=active&limit=10")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "count": 2,
+        "flash_sales": [
+            {
+                "id": 1,
+                "item_id": "item_milk_pure",
+                "sale_price": 9.9,
+                "stock_limit": 2,
+                "stock_remaining": 1,
+                "status": "active",
+                "starts_at": "2026-06-01T00:00:00+00:00",
+                "ends_at": "2099-06-03T00:00:00+00:00",
+            },
+            {
+                "id": 2,
+                "item_id": "item_cola_zero",
+                "sale_price": 9.9,
+                "stock_limit": 3,
+                "stock_remaining": 3,
+                "status": "active",
+                "starts_at": "2026-06-01T00:00:00+00:00",
+                "ends_at": "2099-06-03T00:00:00+00:00",
+            },
+        ],
     }
 
 

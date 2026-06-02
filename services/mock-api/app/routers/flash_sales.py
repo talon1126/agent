@@ -2,7 +2,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
@@ -77,7 +77,7 @@ def parse_timestamp(value: str) -> datetime:
     return parsed
 
 
-def format_flash_sale(sale: dict[str, Any], stock_remaining: int) -> dict[str, Any]:
+def format_flash_sale(sale: dict[str, Any], stock_remaining: int | None) -> dict[str, Any]:
     return {
         "id": int(sale["id"]),
         "item_id": str(sale["item_id"]),
@@ -118,6 +118,32 @@ def claim_flash_sale_slot(redis_client: Any, flash_sale_id: int, user_id: int) -
         str(user_id),
     )
     return normalize_redis_result(result)
+
+
+@router.get("/flash-sales", response_model=None)
+def list_flash_sales(
+    status: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    repository = get_warehouse_repository()
+    if not repository:
+        return error_response(503, "flash_sale_backend_unavailable", "Postgres backend is required")
+    redis_client = get_flash_sale_redis()
+    if not redis_client:
+        return error_response(503, "flash_sale_backend_unavailable", "Redis backend is required")
+
+    sales = repository.list_flash_sales(status=status, limit=limit)
+    formatted_sales = []
+    for sale in sales:
+        raw_stock = redis_client.get(flash_sale_stock_key(int(sale["id"])))
+        stock_remaining = int(raw_stock) if raw_stock is not None else None
+        formatted_sales.append(format_flash_sale(sale, stock_remaining))
+
+    return {
+        "ok": True,
+        "count": len(formatted_sales),
+        "flash_sales": formatted_sales,
+    }
 
 
 @router.get("/flash-sales/{flash_sale_id}", response_model=None)

@@ -19,6 +19,44 @@
 
 ## 接口
 
+### 查询活动列表
+
+```http
+GET /flash-sales?status=active&limit=20
+```
+
+查询参数：
+
+- `status`：可选，按活动状态过滤，例如 `active`、`draft`、`ended`、`disabled`。
+- `limit`：可选，默认 20，范围 1 到 100。
+
+成功返回：
+
+```json
+{
+  "ok": true,
+  "count": 2,
+  "flash_sales": [
+    {
+      "id": 1,
+      "item_id": "item_milk_pure",
+      "sale_price": 9.9,
+      "stock_limit": 5,
+      "stock_remaining": 4,
+      "status": "active",
+      "starts_at": "2026-06-02T00:00:00+00:00",
+      "ends_at": "2099-06-03T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+说明：
+
+- `stock_remaining` 来自 Redis，前端可用于弱实时展示剩余数量。
+- 如果某条活动还没有初始化 Redis 库存，列表中该条 `stock_remaining` 返回 `null`。
+- 前端最终应以 `POST /flash-sales/{id}/purchase` 的返回结果判断是否抢购成功。
+
 ### 查询活动
 
 ```http
