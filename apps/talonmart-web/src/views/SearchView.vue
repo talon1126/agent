@@ -210,7 +210,9 @@ onMounted(() => {
     <header class="sticky top-0 z-30 bg-[#0053E2] text-white shadow-sm">
       <div class="mx-auto flex max-w-[1440px] items-center gap-4 px-6 py-4">
         <RouterLink class="flex shrink-0 items-center gap-3" to="/" aria-label="TalonMart home">
-          <span class="grid h-11 w-11 place-items-center rounded-full bg-[#FFC220] font-black text-[#0053E2]">
+          <span
+            class="grid h-11 w-11 place-items-center rounded-full bg-[#FFC220] font-black text-[#0053E2]"
+          >
             TM
           </span>
           <span class="text-2xl font-black">TalonMart</span>
@@ -228,7 +230,11 @@ onMounted(() => {
           <ChevronDown class="h-4 w-4" aria-hidden="true" />
         </button>
 
-        <form class="flex min-h-12 flex-1 overflow-hidden rounded-full bg-white" role="search" @submit.prevent="submitSearch">
+        <form
+          class="flex min-h-12 flex-1 overflow-hidden rounded-full bg-white"
+          role="search"
+          @submit.prevent="submitSearch"
+        >
           <input
             v-model="searchQuery"
             aria-label="Search products"
@@ -245,11 +251,17 @@ onMounted(() => {
           </button>
         </form>
 
-        <RouterLink class="hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex" to="/">
+        <RouterLink
+          class="hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex"
+          to="/"
+        >
           <UserRound class="h-5 w-5" aria-hidden="true" />
           Account
         </RouterLink>
-        <RouterLink class="relative hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex" to="/cart">
+        <RouterLink
+          class="relative hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex"
+          to="/cart"
+        >
           <ShoppingCart class="h-5 w-5" aria-hidden="true" />
           Cart
           <span
@@ -270,7 +282,11 @@ onMounted(() => {
             type="button"
           >
             {{ tab }}
-            <ChevronDown v-if="tab === 'Departments' || tab === 'Services'" class="h-4 w-4" aria-hidden="true" />
+            <ChevronDown
+              v-if="tab === 'Departments' || tab === 'Services'"
+              class="h-4 w-4"
+              aria-hidden="true"
+            />
           </button>
         </div>
       </nav>
@@ -285,12 +301,28 @@ onMounted(() => {
           type="button"
         >
           <Home v-if="filter === 'In-store'" class="h-5 w-5 text-[#0053E2]" aria-hidden="true" />
-          <Truck v-else-if="filter === 'Get it fast'" class="h-5 w-5 text-[#0053E2]" aria-hidden="true" />
-          <BadgeDollarSign v-else-if="filter === 'All deals' || filter === 'Price'" class="h-5 w-5 text-[#0053E2]" aria-hidden="true" />
-          <RefreshCw v-else-if="filter === 'Subscription'" class="h-5 w-5 text-[#0053E2]" aria-hidden="true" />
+          <Truck
+            v-else-if="filter === 'Get it fast'"
+            class="h-5 w-5 text-[#0053E2]"
+            aria-hidden="true"
+          />
+          <BadgeDollarSign
+            v-else-if="filter === 'All deals' || filter === 'Price'"
+            class="h-5 w-5 text-[#0053E2]"
+            aria-hidden="true"
+          />
+          <RefreshCw
+            v-else-if="filter === 'Subscription'"
+            class="h-5 w-5 text-[#0053E2]"
+            aria-hidden="true"
+          />
           <SlidersHorizontal v-else class="h-5 w-5 text-[#0053E2]" aria-hidden="true" />
           {{ filter }}
-          <ChevronDown v-if="filter === 'Price' || filter === 'Brand'" class="h-4 w-4" aria-hidden="true" />
+          <ChevronDown
+            v-if="filter === 'Price' || filter === 'Brand'"
+            class="h-4 w-4"
+            aria-hidden="true"
+          />
         </button>
       </div>
     </section>
@@ -305,7 +337,12 @@ onMounted(() => {
         >
           <span class="grid h-24 w-24 place-items-center overflow-hidden rounded-lg bg-[#F1F5F9]">
             <span v-if="!shortcut.image" class="text-sm font-black text-[#0053E2]">Shop all</span>
-            <img v-else :alt="shortcut.label" :src="shortcut.image" class="h-full w-full object-cover" />
+            <img
+              v-else
+              :alt="shortcut.label"
+              :src="shortcut.image"
+              class="h-full w-full object-cover"
+            />
           </span>
           <span>{{ shortcut.label }}</span>
         </button>
@@ -317,7 +354,10 @@ onMounted(() => {
         <div class="sticky top-[150px] space-y-6">
           <section class="border-b border-[#D8E0E8] pb-5">
             <h2 class="text-lg font-black">Filter by</h2>
-            <button class="mt-4 flex min-h-10 w-full items-center justify-between text-left font-bold" type="button">
+            <button
+              class="mt-4 flex min-h-10 w-full items-center justify-between text-left font-bold"
+              type="button"
+            >
               Departments
               <ChevronDown class="h-4 w-4" aria-hidden="true" />
             </button>
@@ -334,7 +374,10 @@ onMounted(() => {
           </section>
 
           <section class="border-b border-[#D8E0E8] pb-5">
-            <button class="flex min-h-10 w-full items-center justify-between text-left font-bold" type="button">
+            <button
+              class="flex min-h-10 w-full items-center justify-between text-left font-bold"
+              type="button"
+            >
               Availability
               <ChevronDown class="h-4 w-4" aria-hidden="true" />
             </button>
@@ -345,7 +388,10 @@ onMounted(() => {
           </section>
 
           <section>
-            <button class="flex min-h-10 w-full items-center justify-between text-left font-bold" type="button">
+            <button
+              class="flex min-h-10 w-full items-center justify-between text-left font-bold"
+              type="button"
+            >
               Warehouse
               <ChevronDown class="h-4 w-4" aria-hidden="true" />
             </button>
@@ -361,8 +407,12 @@ onMounted(() => {
         <div class="mb-5 flex flex-wrap items-start justify-between gap-4">
           <div>
             <p class="text-sm text-[#667085]">Home / Search</p>
-            <h1 class="mt-2 text-3xl font-black">Results for "{{ searchedQuery || searchQuery }}"</h1>
-            <p class="mt-1 text-sm text-[#667085]">{{ resultCountLabel }} from live inventory balances</p>
+            <h1 class="mt-2 text-3xl font-black">
+              Results for "{{ searchedQuery || searchQuery }}"
+            </h1>
+            <p class="mt-1 text-sm text-[#667085]">
+              {{ resultCountLabel }} from live inventory balances
+            </p>
           </div>
 
           <button
@@ -374,21 +424,33 @@ onMounted(() => {
           </button>
         </div>
 
-        <div v-if="isLoading" class="grid min-h-[280px] place-items-center rounded-lg border border-[#D8E0E8] bg-[#F8FAFC]">
+        <div
+          v-if="isLoading"
+          class="grid min-h-[280px] place-items-center rounded-lg border border-[#D8E0E8] bg-[#F8FAFC]"
+        >
           <div class="flex items-center gap-3 text-lg font-bold text-[#0053E2]">
             <LoaderCircle class="h-6 w-6 animate-spin" aria-hidden="true" />
             Loading search results
           </div>
         </div>
 
-        <div v-else-if="errorMessage" class="rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-6 text-[#991B1B]" role="alert">
+        <div
+          v-else-if="errorMessage"
+          class="rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-6 text-[#991B1B]"
+          role="alert"
+        >
           <h2 class="text-lg font-black">Search request failed</h2>
           <p class="mt-2 text-sm">{{ errorMessage }}</p>
         </div>
 
-        <div v-else-if="products.length === 0" class="rounded-lg border border-[#D8E0E8] bg-[#F8FAFC] p-8">
+        <div
+          v-else-if="products.length === 0"
+          class="rounded-lg border border-[#D8E0E8] bg-[#F8FAFC] p-8"
+        >
           <h2 class="text-xl font-black">No results found</h2>
-          <p class="mt-2 text-[#667085]">Try a different product keyword such as milk, cola, paper, or tissue.</p>
+          <p class="mt-2 text-[#667085]">
+            Try a different product keyword such as milk, cola, paper, or tissue.
+          </p>
         </div>
 
         <div
@@ -399,22 +461,42 @@ onMounted(() => {
           {{ cartErrorMessage }}
         </div>
 
-        <div v-if="!isLoading && !errorMessage && products.length" class="grid gap-x-5 gap-y-8 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+        <div
+          v-if="!isLoading && !errorMessage && products.length"
+          class="grid gap-x-5 gap-y-8 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+        >
           <article
             v-for="product in products"
             :key="product.item_id"
             class="group rounded-lg border border-transparent bg-white p-3 transition hover:border-[#D8E0E8] hover:shadow-md"
           >
-            <div class="relative aspect-square overflow-hidden rounded-lg bg-[#F1F5F9]">
-              <img :alt="product.item_name" :src="productImage(product)" class="h-full w-full object-cover transition group-hover:scale-105" />
-              <span class="absolute left-3 top-3 rounded-full bg-white px-3 py-1 text-xs font-black text-[#0053E2] shadow-sm">
+            <RouterLink
+              class="relative block aspect-square overflow-hidden rounded-lg bg-[#F1F5F9]"
+              :to="{ name: 'product-detail', params: { item_id: product.item_id } }"
+              :aria-label="`View ${product.item_name}`"
+            >
+              <img
+                :alt="product.item_name"
+                :src="productImage(product)"
+                class="h-full w-full object-cover transition group-hover:scale-105"
+              />
+              <span
+                class="absolute left-3 top-3 rounded-full bg-white px-3 py-1 text-xs font-black text-[#0053E2] shadow-sm"
+              >
                 {{ stockLabel(product) }}
               </span>
-            </div>
+            </RouterLink>
 
             <div class="mt-4">
-              <p class="text-xs font-black uppercase text-[#667085]">{{ product.brand }} / {{ product.category_id }}</p>
-              <h2 class="mt-1 min-h-14 text-lg font-bold leading-tight">{{ product.item_name }}</h2>
+              <p class="text-xs font-black uppercase text-[#667085]">
+                {{ product.brand }} / {{ product.category_id }}
+              </p>
+              <RouterLink
+                class="mt-1 block min-h-14 text-lg font-bold leading-tight hover:text-[#0053E2] hover:underline"
+                :to="{ name: 'product-detail', params: { item_id: product.item_id } }"
+              >
+                {{ product.item_name }}
+              </RouterLink>
               <p class="mt-1 text-sm text-[#667085]">{{ product.spec }}</p>
 
               <p class="mt-3 text-2xl font-black text-[#101828]">{{ totalStock(product) }} units</p>
