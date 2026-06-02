@@ -75,6 +75,25 @@
   - 处理规则：扫描 `status=未付款`、`expires_at < now`、`released_at` 为空的订单，按 `order_items` 加回库存，订单状态更新为 `已取消`，写入 `release_reason=unpaid_timeout`。
   - 定时 workflow 文件：`n8n/workflows/warehouse-order-timeout-release.json`，每 5 分钟调用一次。
 
+## 秒杀接口
+
+- `GET /flash-sales/{flash_sale_id}`
+  - 用途：读取秒杀活动详情和 Redis 中的剩余营销库存。
+  - 返回重点：`item_id`、`sale_price`、`stock_limit`、`stock_remaining`、`status`、`starts_at`、`ends_at`。
+  - 约束：活动必须已写入 `flash_sales`，并且执行过激活初始化 Redis 库存；否则返回 `flash_sale_not_initialized`。
+
+- `POST /flash-sales/{flash_sale_id}/activate`
+  - 用途：把活动状态更新为 `active`，并把 `flash_sales.stock_limit` 初始化到 Redis。
+  - Redis 键：`flash_sale:{id}:stock` 保存剩余配额，`flash_sale:{id}:users` 保存已抢购用户。
+  - 注意：重复激活会重置 Redis 剩余配额和已抢购用户集合，只应用于活动开始前或测试环境。
+
+- `POST /flash-sales/{flash_sale_id}/purchase`
+  - 用途：用户参与秒杀，成功后立即复用 `/warehouse/orders` 创建 `未付款` 订单。
+  - 入参重点：`user_id`、`shipping_address`，可选 `delivery_provider_id`。
+  - 处理规则：先用 Redis Lua 原子扣减营销库存和写入用户集合，再写 `flash_sale_claims`，最后创建仓储订单并扣减真实库存。
+  - 补偿规则：如果 Redis 扣减成功但仓储订单创建失败，会回补 Redis 库存、移除用户集合，并把抢购结果标记为 `failed`。
+  - 重复规则：同一 `flash_sale_id + user_id` 只允许成功一次，重复请求返回 `already_claimed` 或已存在订单结果。
+
 - `POST /warehouse/purchase-orders/sync-arrivals`
   - 用途：Warehouse 扫描采购单中 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的记录，同步到库存事实。
   - 写入规则：`batch_no` 使用 `BATCH-YYYYMMDD`，日期来自采购单 `arrived_at`；`expiry_date` 按商品主数据 `items.shelf_life_days` 计算；`storage_status=available`；`reorder_threshold` 在合理范围内生成。

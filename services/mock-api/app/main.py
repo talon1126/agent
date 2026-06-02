@@ -9,6 +9,7 @@ from app.store import FIXTURE_DIR, find_by_id
 from app.routers.cart import CART_ITEMS, router as cart_router
 from app.routers.delivery_addresses import DEFAULT_DELIVERY_ADDRESSES, router as delivery_addresses_router
 from app.routers.delivery.router import router as delivery_router
+from app.routers.flash_sales import router as flash_sales_router
 from app.routers.delivery.state import DELIVERY_CASES
 from app.routers.procurement.router import router as procurement_router
 from app.routers.procurement.state import PURCHASE_ORDERS, REPLENISHMENT_REQUESTS
@@ -29,6 +30,7 @@ app.include_router(delivery_router)
 app.include_router(procurement_router)
 app.include_router(cart_router)
 app.include_router(delivery_addresses_router)
+app.include_router(flash_sales_router)
 app.include_router(search_router)
 app.include_router(warehouse_router)
 

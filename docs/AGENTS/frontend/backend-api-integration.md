@@ -4,6 +4,7 @@
 
 当前商品列表 / 搜索接口文档：`docs/development/search-api-integration.zh.md`。
 当前购物车 / 结算接口文档：`docs/development/cart-api-integration.zh.md`。
+当前秒杀接口文档：`docs/development/flash-sale-api-integration.zh.md`。
 
 当前搜索接口：
 
@@ -25,3 +26,11 @@
 - `DELETE /cart?user_id=1&item_id=item_milk_pure`：移除用户购物车中的某个商品。
 - `GET /delivery_addresses?user_id=1`：按用户读取配送地址，当前用于 `Continue to checkout` 前获取默认收货地址。
 - `POST /warehouse/orders`：复用仓储订单接口创建订单；前端传 `shipping_address`，不传 `warehouse_id` / `location_code` 时由 Warehouse 按地址和库存选择仓库。
+
+秒杀相关接口：
+
+- `GET /flash-sales/{flash_sale_id}`：读取活动详情和剩余营销库存，前端可用 `stock_remaining` 展示剩余数量。
+- `POST /flash-sales/{flash_sale_id}/purchase`：用户抢购，后端通过 Redis Lua 保证营销库存扣减和一人一单；成功后立即返回 `未付款` 订单。
+- `POST /flash-sales/{flash_sale_id}/activate`：测试或运营初始化活动，重置 Redis 剩余配额和已抢购用户集合。
+
+注意：前端可以根据接口返回的 `stock_remaining` 做展示和弱实时刷新，但最终是否抢购成功以后端 `/purchase` 返回为准。

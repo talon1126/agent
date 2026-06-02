@@ -8,6 +8,7 @@
 - 飞书库存余额表支持一行一个 `item_id + warehouse_id + location_code` 的聚合余额同步；余额为 0 的记录不会删除，会在飞书中显示为 0。
 - 采购确认 `PO-*` 到仓后只把 `purchase_orders.warehouse_sync_status` 标记为 `arrived_unsynced`；库存事实写入由 Warehouse 后续扫描未同步采购单完成。
 - 补货申请状态已收敛为 `未审批` 和 `已审批` 两种；驳回申请时仍保持 `未审批`，拒绝原因写入 `reason`。
+- 秒杀链路使用 Redis Lua 扣减独立营销库存配额，成功后立即复用仓储订单接口创建 `未付款` 订单，订单失败时会补偿 Redis 配额。
 - 飞书库存同步仍支持按商品、仓库、库位、批次或风险范围同步；历史 sync job 链路保留用于处理旧的 pending 库存同步任务。
 
 ## workflow 架构
@@ -71,6 +72,7 @@ flowchart LR
 - 支持仓储异常和履约判断：用于回答库存差异、临期、过期、质检冻结、缺货和能否发货等问题。
 - 提供批次级库位余额和订单状态流转能力：`inventory_batches` 只保留入库事实，当前库存由 `inventory_location_balances` 承担，订单创建时按 FEFO 扣减。
 - 提供飞书库存余额表读模型：`/warehouse/stock/balances/table-schema` 返回字段定义，`/warehouse/stock/balances/table-rows` 按 cursor 分页返回余额行，每页最多 500 条。
+- 提供秒杀活动查询、激活和抢购接口：`/flash-sales/{id}`、`/flash-sales/{id}/activate`、`/flash-sales/{id}/purchase`；抢购成功后创建 `未付款` 订单。
 - 承接补货申请：Warehouse 创建 `未审批` 补货申请，Procurement 批准后更新为 `已审批`。
 - 支持采购到仓后的库存事实更新：确认 `PO-*` 到货后，Warehouse 扫描 `payment_status=paid` 且 `warehouse_sync_status=arrived_unsynced` 的采购单，同步到 `inventory_batches` 和 `inventory_location_balances`。
 - 维护每仓唯一库位规则：同一 `item_id + warehouse_id` 后续入库复用首次确定的 `location_code`；若采购单没有库位，则使用该仓第一个可用库位。

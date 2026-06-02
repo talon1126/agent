@@ -6,7 +6,21 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Column, Integer, MetaData, Numeric, String, Table, Text, create_engine, func, inspect, select, text
+from sqlalchemy import (
+    Column,
+    Integer,
+    MetaData,
+    Numeric,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    func,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger("mock_api.warehouse_store")
@@ -239,6 +253,34 @@ cart_items = Table(
     Column("quantity", Integer, nullable=False, default=1),
 )
 
+flash_sales = Table(
+    "flash_sales",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("item_id", String(64), nullable=False, index=True),
+    Column("sale_price", Numeric(12, 2), nullable=False),
+    Column("stock_limit", Integer, nullable=False),
+    Column("status", String(32), nullable=False, index=True),
+    Column("starts_at", String, nullable=False),
+    Column("ends_at", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+)
+
+flash_sale_claims = Table(
+    "flash_sale_claims",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("flash_sale_id", Integer, nullable=False, index=True),
+    Column("user_id", Integer, nullable=False, index=True),
+    Column("item_id", String(64), nullable=False, index=True),
+    Column("order_id", String, nullable=False, default=""),
+    Column("status", String(32), nullable=False, index=True),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("flash_sale_id", "user_id", name="uq_flash_sale_claim_user"),
+)
+
 procurement_suppliers = Table(
     "procurement_suppliers",
     metadata,
@@ -292,6 +334,8 @@ WAREHOUSE_TABLE_COMMENTS = {
     "users": "TalonMart 用户表，保存购物车 v1 使用的测试用户资料。",
     "delivery_addresses": "TalonMart 配送地址表，保存购物车结算创建订单时使用的用户收货地址。",
     "cart_items": "购物车明细表，按用户和商品保存加入购物车时的商品快照价格与数量。",
+    "flash_sales": "秒杀活动表，一条活动绑定一个秒杀商品和独立营销库存配额。",
+    "flash_sale_claims": "秒杀抢购结果表，记录用户抢购结果和关联订单，保证一人一单。",
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
     "purchase_orders": "采购单表，保存采购审核补货申请后生成的采购单、支付状态和仓库同步状态。",
     "warehouse_inventory_sync_jobs": "仓储库存同步任务表，保存采购到仓后需要 Warehouse Agent 同步飞书库存视图的待处理任务。",
@@ -502,6 +546,27 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "price": "加入购物车时采用的后端商品价格。",
         "quantity": "购物车商品数量。",
     },
+    "flash_sales": {
+        "id": "秒杀活动自增整数主键。",
+        "item_id": "秒杀商品编号，一条活动只绑定一个商品。",
+        "sale_price": "秒杀展示价格。",
+        "stock_limit": "独立营销秒杀库存配额，不等同于真实仓储库存。",
+        "status": "活动状态：draft、active、ended 或 disabled。",
+        "starts_at": "活动开始时间。",
+        "ends_at": "活动结束时间。",
+        "created_at": "活动创建时间。",
+        "updated_at": "活动更新时间。",
+    },
+    "flash_sale_claims": {
+        "id": "秒杀结果自增整数主键。",
+        "flash_sale_id": "关联秒杀活动 ID。",
+        "user_id": "抢购用户 ID。",
+        "item_id": "抢购商品编号。",
+        "order_id": "秒杀成功后关联的仓储订单编号。",
+        "status": "抢购结果状态：pending、ordered、failed 或 cancelled。",
+        "created_at": "结果创建时间。",
+        "updated_at": "结果更新时间。",
+    },
     "inventory_movements": {
         "movement_id": "库存流水编号。",
         "order_id": "关联订单编号。",
@@ -532,6 +597,8 @@ def init_warehouse_schema(engine: Engine) -> None:
             users,
             delivery_addresses,
             cart_items,
+            flash_sales,
+            flash_sale_claims,
             purchase_orders,
             warehouse_inventory_sync_jobs,
             orders,
@@ -820,6 +887,8 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         connection.execute(inventory_movements.delete())
         connection.execute(delivery_providers.delete())
         connection.execute(cart_items.delete())
+        connection.execute(flash_sale_claims.delete())
+        connection.execute(flash_sales.delete())
         connection.execute(delivery_addresses.delete())
         connection.execute(inventory_location_balances.delete())
         connection.execute(inventory_batches.delete())
@@ -1024,6 +1093,127 @@ class WarehouseRepository:
                 .where(cart_items.c.item_id == item_id)
             )
         return bool(result.rowcount)
+
+    def create_flash_sale(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self.engine.begin() as connection:
+            result = connection.execute(flash_sales.insert().values(**payload))
+            row = (
+                connection.execute(
+                    select(flash_sales).where(flash_sales.c.id == result.inserted_primary_key[0])
+                )
+                .mappings()
+                .one()
+            )
+        return self._format_flash_sale(row)
+
+    def get_flash_sale(self, flash_sale_id: int) -> dict[str, Any] | None:
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(select(flash_sales).where(flash_sales.c.id == flash_sale_id))
+                .mappings()
+                .one_or_none()
+            )
+        return self._format_flash_sale(row) if row else None
+
+    def update_flash_sale_status(self, flash_sale_id: int, *, status: str, updated_at: str) -> dict[str, Any] | None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                flash_sales.update()
+                .where(flash_sales.c.id == flash_sale_id)
+                .values(status=status, updated_at=updated_at)
+            )
+            row = (
+                connection.execute(select(flash_sales).where(flash_sales.c.id == flash_sale_id))
+                .mappings()
+                .one_or_none()
+            )
+        return self._format_flash_sale(row) if row else None
+
+    def create_flash_sale_claim_pending(
+        self,
+        *,
+        flash_sale_id: int,
+        user_id: int,
+        item_id: str,
+        created_at: str,
+    ) -> dict[str, Any]:
+        values = {
+            "flash_sale_id": flash_sale_id,
+            "user_id": user_id,
+            "item_id": item_id,
+            "order_id": "",
+            "status": "pending",
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+        with self.engine.begin() as connection:
+            result = connection.execute(flash_sale_claims.insert().values(**values))
+            row = (
+                connection.execute(
+                    select(flash_sale_claims).where(flash_sale_claims.c.id == result.inserted_primary_key[0])
+                )
+                .mappings()
+                .one()
+            )
+        return dict(row)
+
+    def get_flash_sale_claim(self, *, flash_sale_id: int, user_id: int) -> dict[str, Any] | None:
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(
+                    select(flash_sale_claims)
+                    .where(flash_sale_claims.c.flash_sale_id == flash_sale_id)
+                    .where(flash_sale_claims.c.user_id == user_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return dict(row) if row else None
+
+    def mark_flash_sale_claim_ordered(
+        self,
+        claim_id: int,
+        *,
+        order_id: str,
+        updated_at: str,
+    ) -> dict[str, Any] | None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                flash_sale_claims.update()
+                .where(flash_sale_claims.c.id == claim_id)
+                .values(status="ordered", order_id=order_id, updated_at=updated_at)
+            )
+            row = (
+                connection.execute(select(flash_sale_claims).where(flash_sale_claims.c.id == claim_id))
+                .mappings()
+                .one_or_none()
+            )
+        return dict(row) if row else None
+
+    def mark_flash_sale_claim_failed(
+        self,
+        claim_id: int,
+        *,
+        updated_at: str,
+    ) -> dict[str, Any] | None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                flash_sale_claims.update()
+                .where(flash_sale_claims.c.id == claim_id)
+                .values(status="failed", updated_at=updated_at)
+            )
+            row = (
+                connection.execute(select(flash_sale_claims).where(flash_sale_claims.c.id == claim_id))
+                .mappings()
+                .one_or_none()
+            )
+        return dict(row) if row else None
+
+    @staticmethod
+    def _format_flash_sale(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        item["sale_price"] = float(item["sale_price"])
+        return item
 
     def list_inventory_balance_snapshots(
         self,

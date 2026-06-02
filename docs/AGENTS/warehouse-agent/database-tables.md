@@ -29,6 +29,18 @@
   - 初始化来源：按 `inventory_batches.quantity_on_hand` 建立余额，忽略旧模型的 `quantity_reserved`。
   - 当前约束：同一 `item_id + warehouse_id` 后续采购入库复用同一个 `location_code`，避免同仓同商品分散到多个库位。
 
+- `flash_sales`
+  - 秒杀活动表，一条活动绑定一个商品，`stock_limit` 是独立营销秒杀库存配额，不等同于真实仓储库存。
+  - 关键字段：`id`、`item_id`、`sale_price`、`stock_limit`、`status`、`starts_at`、`ends_at`、`created_at`、`updated_at`。
+  - 主要状态：`draft`、`active`、`ended`、`disabled`。
+  - 运行规则：活动激活后会把 `stock_limit` 初始化到 Redis；抢购成功后仍会复用仓储订单能力扣减 `inventory_location_balances`。
+
+- `flash_sale_claims`
+  - 秒杀抢购结果表，记录用户参与结果和关联订单，数据库唯一约束保证同一活动一人一单。
+  - 关键字段：`id`、`flash_sale_id`、`user_id`、`item_id`、`order_id`、`status`、`created_at`、`updated_at`。
+  - 主要状态：`pending`、`ordered`、`failed`、`cancelled`。
+  - 补偿规则：Redis 抢购成功但订单创建失败时，结果会标记为 `failed`，同时回补 Redis 营销库存和用户集合。
+
 - `orders`
   - 订单主表，记录下单、付款、发货、到货、取消和退货状态。
   - 关键字段：`id`、`order_id`、`customer_id`、`status`、`delivery_provider_id`、`delivery_provider_name`、`courier_phone`、`tracking_no`、`shipping_address`、`shipping_province`、`shipping_city`、`selected_warehouse_id`、`selected_warehouse_name`、`paid_at`、`shipped_at`、`arrived_at`、`cancelled_at`、`returned_at`、`expires_at`、`released_at`、`release_reason`。

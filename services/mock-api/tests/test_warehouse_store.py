@@ -1,6 +1,8 @@
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from app.store import FIXTURE_DIR
 from app.warehouse_store import (
@@ -13,6 +15,8 @@ from app.warehouse_store import (
     cart_items,
     categories,
     delivery_addresses,
+    flash_sale_claims,
+    flash_sales,
     init_warehouse_schema,
     inventory_movements,
     inventory_location_balances,
@@ -43,6 +47,8 @@ WAREHOUSE_TABLES = [
     users,
     delivery_addresses,
     cart_items,
+    flash_sales,
+    flash_sale_claims,
     procurement_suppliers,
     purchase_orders,
     warehouse_inventory_sync_jobs,
@@ -77,6 +83,8 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         order_item_count = connection.execute(text("select count(*) from order_items")).scalar_one()
         user_count = connection.execute(text("select count(*) from users")).scalar_one()
         delivery_address_count = connection.execute(text("select count(*) from delivery_addresses")).scalar_one()
+        flash_sale_count = connection.execute(text("select count(*) from flash_sales")).scalar_one()
+        flash_sale_claim_count = connection.execute(text("select count(*) from flash_sale_claims")).scalar_one()
         default_address = connection.execute(
             text("select address from delivery_addresses where user_id = 1 and is_default = 1")
         ).scalar_one()
@@ -99,6 +107,8 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert order_item_count == 0
     assert user_count == 2
     assert delivery_address_count == 2
+    assert flash_sale_count == 0
+    assert flash_sale_claim_count == 0
     assert default_address == "广东省深圳市南山区示例路 100 号"
     assert cart_item_count == 0
     assert float(milk_price) == 18.4
@@ -122,6 +132,51 @@ def test_warehouse_repository_lists_delivery_addresses(tmp_path: Path) -> None:
             "is_default": 1,
         }
     ]
+
+
+def test_warehouse_repository_persists_flash_sales_and_claims(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    repository = WarehouseRepository(engine)
+
+    sale = repository.create_flash_sale(
+        {
+            "item_id": "item_milk_pure",
+            "sale_price": 9.9,
+            "stock_limit": 2,
+            "status": "active",
+            "starts_at": "2026-06-02T00:00:00+08:00",
+            "ends_at": "2026-06-03T00:00:00+08:00",
+            "created_at": "2026-06-02T00:00:00+08:00",
+            "updated_at": "2026-06-02T00:00:00+08:00",
+        }
+    )
+    claim = repository.create_flash_sale_claim_pending(
+        flash_sale_id=sale["id"],
+        user_id=1,
+        item_id="item_milk_pure",
+        created_at="2026-06-02T01:00:00+08:00",
+    )
+    ordered = repository.mark_flash_sale_claim_ordered(
+        claim["id"],
+        order_id="ORD-CODEX-FLASH-1",
+        updated_at="2026-06-02T01:00:01+08:00",
+    )
+
+    assert sale["id"] == 1
+    assert float(sale["sale_price"]) == 9.9
+    assert claim["status"] == "pending"
+    assert ordered["status"] == "ordered"
+    assert ordered["order_id"] == "ORD-CODEX-FLASH-1"
+    assert repository.get_flash_sale_claim(flash_sale_id=1, user_id=1)["order_id"] == "ORD-CODEX-FLASH-1"
+
+    with pytest.raises(IntegrityError):
+        repository.create_flash_sale_claim_pending(
+            flash_sale_id=sale["id"],
+            user_id=1,
+            item_id="item_milk_pure",
+            created_at="2026-06-02T01:00:02+08:00",
+        )
 
 
 def test_warehouse_tables_and_columns_have_chinese_comments() -> None:

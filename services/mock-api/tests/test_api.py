@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.main import (
@@ -16,9 +17,111 @@ from app.main import (
     app,
 )
 from app.routers import search as search_router
+from app.routers import flash_sales as flash_sales_router
 from app.routers.warehouse.inventory import aggregate_stock_balance_snapshot_rows
 
 client = TestClient(app)
+
+
+class FakeFlashSaleRedis:
+    def __init__(self, stock: int = 1, claimed_users: set[str] | None = None):
+        self.stock = stock
+        self.claimed_users = set(claimed_users or set())
+        self.compensated: list[str] = []
+
+    def get(self, key: str):
+        if key.endswith(":stock"):
+            return str(self.stock)
+        return None
+
+    def set(self, key: str, value: int):
+        if key.endswith(":stock"):
+            self.stock = int(value)
+
+    def delete(self, key: str):
+        if key.endswith(":users"):
+            self.claimed_users.clear()
+
+    def eval(self, script: str, numkeys: int, stock_key: str, users_key: str, user_id: str):
+        if user_id in self.claimed_users:
+            return "already_claimed"
+        if self.stock <= 0:
+            return "sold_out"
+        self.stock -= 1
+        self.claimed_users.add(user_id)
+        return "ok"
+
+    def incr(self, key: str):
+        if key.endswith(":stock"):
+            self.stock += 1
+
+    def srem(self, key: str, user_id: str):
+        self.compensated.append(str(user_id))
+        self.claimed_users.discard(str(user_id))
+
+
+class FakeFlashSaleRepository:
+    def __init__(self, sale: dict):
+        self.sale = sale
+        self.claims: dict[tuple[int, int], dict] = {}
+        self.failed_claims: list[dict] = []
+
+    def get_flash_sale(self, flash_sale_id: int):
+        if flash_sale_id == int(self.sale["id"]):
+            return dict(self.sale)
+        return None
+
+    def get_flash_sale_claim(self, *, flash_sale_id: int, user_id: int):
+        claim = self.claims.get((flash_sale_id, user_id))
+        return dict(claim) if claim else None
+
+    def create_flash_sale_claim_pending(self, *, flash_sale_id: int, user_id: int, item_id: str, created_at: str):
+        claim = {
+            "id": len(self.claims) + 1,
+            "flash_sale_id": flash_sale_id,
+            "user_id": user_id,
+            "item_id": item_id,
+            "order_id": "",
+            "status": "pending",
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+        self.claims[(flash_sale_id, user_id)] = claim
+        return dict(claim)
+
+    def mark_flash_sale_claim_ordered(self, claim_id: int, *, order_id: str, updated_at: str):
+        for claim in self.claims.values():
+            if int(claim["id"]) == claim_id:
+                claim["order_id"] = order_id
+                claim["status"] = "ordered"
+                claim["updated_at"] = updated_at
+                return dict(claim)
+        return None
+
+    def mark_flash_sale_claim_failed(self, claim_id: int, *, updated_at: str):
+        for claim in self.claims.values():
+            if int(claim["id"]) == claim_id:
+                claim["status"] = "failed"
+                claim["updated_at"] = updated_at
+                self.failed_claims.append(dict(claim))
+                return dict(claim)
+        return None
+
+
+def active_flash_sale(**overrides):
+    sale = {
+        "id": 1,
+        "item_id": "item_milk_pure",
+        "sale_price": 9.9,
+        "stock_limit": 2,
+        "status": "active",
+        "starts_at": "2026-06-01T00:00:00+00:00",
+        "ends_at": "2099-06-03T00:00:00+00:00",
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "updated_at": "2026-06-01T00:00:00+00:00",
+    }
+    sale.update(overrides)
+    return sale
 
 
 @pytest.fixture(autouse=True)
@@ -379,6 +482,100 @@ def test_delivery_addresses_rejects_missing_and_unknown_user():
     }
     assert unknown.status_code == 404
     assert unknown.json()["error"] == "user_not_found"
+
+
+def test_flash_sale_detail_returns_redis_remaining_stock(monkeypatch):
+    repository = FakeFlashSaleRepository(active_flash_sale())
+    redis_client = FakeFlashSaleRedis(stock=2)
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+
+    response = client.get("/flash-sales/1")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "flash_sale": {
+            "id": 1,
+            "item_id": "item_milk_pure",
+            "sale_price": 9.9,
+            "stock_limit": 2,
+            "stock_remaining": 2,
+            "status": "active",
+            "starts_at": "2026-06-01T00:00:00+00:00",
+            "ends_at": "2099-06-03T00:00:00+00:00",
+        },
+    }
+
+
+def test_flash_sale_purchase_creates_unpaid_order_and_records_claim(monkeypatch):
+    repository = FakeFlashSaleRepository(active_flash_sale())
+    redis_client = FakeFlashSaleRedis(stock=1)
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+
+    response = client.post(
+        "/flash-sales/1/purchase",
+        json={"user_id": 1, "shipping_address": "广东省深圳市南山区示例路 100 号"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["order"]["status"] == "未付款"
+    assert body["order"]["customer_id"] == "1"
+    assert body["items"][0]["item_id"] == "item_milk_pure"
+    assert body["claim"]["status"] == "ordered"
+    assert body["claim"]["order_id"] == body["order"]["order_id"]
+    assert redis_client.stock == 0
+    assert "1" in redis_client.claimed_users
+
+
+def test_flash_sale_purchase_rejects_duplicate_user(monkeypatch):
+    repository = FakeFlashSaleRepository(active_flash_sale())
+    redis_client = FakeFlashSaleRedis(stock=1, claimed_users={"1"})
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+
+    response = client.post(
+        "/flash-sales/1/purchase",
+        json={"user_id": 1, "shipping_address": "广东省深圳市南山区示例路 100 号"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "ok": False,
+        "error": "already_claimed",
+        "message": "user already claimed this flash sale",
+    }
+
+
+def test_flash_sale_purchase_compensates_redis_when_order_creation_fails(monkeypatch):
+    repository = FakeFlashSaleRepository(active_flash_sale(item_id="item_vinda_tissue"))
+    redis_client = FakeFlashSaleRedis(stock=1)
+    def fail_order_creation(payload):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "insufficient_available_stock",
+                "item_id": payload.items[0].item_id,
+                "warehouse_id": "wh_sz_1",
+            },
+        )
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+    monkeypatch.setattr(flash_sales_router, "create_warehouse_order", fail_order_creation)
+
+    response = client.post(
+        "/flash-sales/1/purchase",
+        json={"user_id": 1, "shipping_address": "广东省深圳市南山区示例路 100 号"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "insufficient_available_stock"
+    assert redis_client.stock == 1
+    assert "1" not in redis_client.claimed_users
+    assert repository.failed_claims[0]["status"] == "failed"
 
 
 def test_create_approval_request():

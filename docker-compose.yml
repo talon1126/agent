@@ -18,6 +18,16 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   ai-service:
     build:
       context: ./services/ai-service
@@ -45,12 +55,15 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agent_ops
       FIXTURE_DIR: /app/fixtures
+      REDIS_URL: redis://redis:6379/0
     volumes:
       - ./fixtures:/app/fixtures:ro
     ports:
       - "8002:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   feishu-adapter:
