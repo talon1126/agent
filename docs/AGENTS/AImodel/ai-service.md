@@ -6,7 +6,9 @@
   - 用途：接收前端 AI 模式对话请求，使用 LangChain + 百炼 OpenAI 兼容接口根据用户意图流式回答。
   - 请求字段：`conversation_id` 可选，`message` 必填，`links` 为用户输入或页面传递的商品链接列表。
   - 响应格式：`text/event-stream`。
-  - 流式事件：`status` 返回可见处理状态，`delta` 返回回答增量文本，`done` 返回完整 `answer`、`recommended_links` 和 `tool_results`。
+  - 流式事件：`status` 返回可见处理状态，`delta` 返回回答增量文本，`done` 返回完整 `answer` 和 `recommended_links`。
+  - 前端契约：`done` 不返回 `tool_results`，工具调用结果只在后端内部用于约束 agent 回答和生成推荐链接。
+  - 流式实现：后端使用 LangChain `messages` 流模式输出 token/chunk，不把 `values` 状态流当作前端正文。
   - 约束：不要新增 `/chat/stream`，流式响应直接复用 `/AImodel/chat`。
 
 运行配置：

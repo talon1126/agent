@@ -28,4 +28,3 @@ class AiModelChatResponse(BaseModel):
     conversation_id: str | None = None
     answer: str
     recommended_links: list[AiModelRecommendedLink] = Field(default_factory=list)
-    tool_results: list[AiModelToolResult] = Field(default_factory=list)

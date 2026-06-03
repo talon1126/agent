@@ -14,6 +14,8 @@
 - AImodel 对话接口使用 `VITE_AI_SERVICE_BASE_URL=/ai-service`，由 Vite 代理到 `ai-service`。
 - 不要让 AImodel 复用普通 `apiClient` 的 `/api` base URL，否则 `/AImodel/chat` 会打到 `mock-api` 并返回 404。
 - AImodel 不新增 `/chat/stream`，`POST /AImodel/chat` 直接返回 `text/event-stream`，前端需要解析 `status`、`delta`、`done`、`error` 事件。
+- AImodel 前端类型不包含 `tool_results`；工具调用结果只留在后端内部，前端只消费回答文本和推荐商品链接。
+- AImodel 回答展示需要按段落和列表做安全格式化，不直接使用 `v-html` 渲染模型输出。
 
 当前搜索接口：
 

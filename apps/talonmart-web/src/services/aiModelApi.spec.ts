@@ -15,7 +15,7 @@ describe('aiModelApi', () => {
         controller.enqueue(encoder.encode('event: delta\ndata: {"content":"减压魔方。"}\n\n'))
         controller.enqueue(
           encoder.encode(
-            'event: done\ndata: {"conversation_id":"conv_1","answer":"推荐减压魔方。","recommended_links":[{"item_id":"item_toy_cube","item_name":"减压魔方","url":"/items/item_toy_cube"}],"tool_results":[]}\n\n',
+            'event: done\ndata: {"conversation_id":"conv_1","answer":"推荐减压魔方。","recommended_links":[{"item_id":"item_toy_cube","item_name":"减压魔方","url":"/items/item_toy_cube"}]}\n\n',
           ),
         )
         controller.close()
@@ -58,5 +58,6 @@ describe('aiModelApi', () => {
     expect(response.recommended_links).toEqual([
       { item_id: 'item_toy_cube', item_name: '减压魔方', url: '/items/item_toy_cube' },
     ])
+    expect('tool_results' in response).toBe(false)
   })
 })

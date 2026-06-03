@@ -3,7 +3,13 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.routers.AImodel.schemas import AiModelChatRequest, AiModelChatResponse
-from app.routers.AImodel.service import _build_langchain_messages, _extract_answer, handle_chat, stream_chat_events
+from app.routers.AImodel.service import (
+    _build_langchain_messages,
+    _extract_answer,
+    _extract_stream_token,
+    handle_chat,
+    stream_chat_events,
+)
 from app.routers.AImodel.tools import (
     build_product_url,
     fetch_product_detail_from_link,
@@ -128,6 +134,16 @@ def test_chat_endpoint_streams_sse_from_existing_route(monkeypatch) -> None:
     assert any('event: delta\ndata: {"content": "减压魔方。"}' in event for event in events)
     assert events[-1].startswith("event: done\n")
     assert '"answer": "推荐减压魔方。"' in events[-1]
+    assert "tool_results" not in events[-1]
+
+
+def test_extract_stream_token_reads_ai_message_chunks() -> None:
+    class FakeAiChunk:
+        content = "推荐"
+        type = "AIMessageChunk"
+
+    assert _extract_stream_token((FakeAiChunk(), {"langgraph_node": "model"})) == "推荐"
+    assert _extract_stream_token({"messages": []}) == ""
 
 
 def test_langchain_messages_use_human_message() -> None:

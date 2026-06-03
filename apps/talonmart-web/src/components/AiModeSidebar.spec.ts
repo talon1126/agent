@@ -34,18 +34,25 @@ describe('AiModeSidebar', () => {
   })
 
   it('sends a quick prompt through AImodel and renders the answer', async () => {
+    let emitFirstDelta: (() => void) | undefined
+    let finishStream: (() => void) | undefined
     streamAiModel.mockImplementation(async (_request, handlers) => {
       handlers.onStatus('正在生成回答')
-      handlers.onDelta('推荐先看')
-      handlers.onDelta('减压魔方，并比较材质和尺寸。')
-      const response = {
-        conversation_id: 'conv_1',
-        answer: '推荐先看减压魔方，并比较材质和尺寸。',
-        recommended_links: [{ item_id: 'item_toy_cube', item_name: '减压魔方', url: '/items/item_toy_cube' }],
-        tool_results: [],
-      }
-      handlers.onDone(response)
-      return response
+      return await new Promise((resolve) => {
+        emitFirstDelta = () => {
+          handlers.onDelta('推荐先看')
+        }
+        finishStream = () => {
+          handlers.onDelta('减压魔方，并比较材质和尺寸。')
+          const response = {
+            conversation_id: 'conv_1',
+            answer: '推荐先看减压魔方，并比较材质和尺寸。',
+            recommended_links: [{ item_id: 'item_toy_cube', item_name: '减压魔方', url: '/items/item_toy_cube' }],
+          }
+          handlers.onDone(response)
+          resolve(response)
+        }
+      })
     })
     const wrapper = mount(AiModeSidebar)
 
@@ -65,7 +72,39 @@ describe('AiModeSidebar', () => {
         onDone: expect.any(Function),
       }),
     )
+    expect(wrapper.text()).not.toContain('推荐先看')
+
+    emitFirstDelta?.()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('推荐先看')
+    expect(wrapper.text()).not.toContain('减压魔方，并比较材质和尺寸。')
+
+    finishStream?.()
+    await flushPromises()
+
     expect(wrapper.text()).toContain('推荐先看减压魔方')
     expect(wrapper.text()).toContain('减压魔方')
+  })
+
+  it('formats assistant answers into readable paragraphs and list items', async () => {
+    streamAiModel.mockImplementation(async (_request, handlers) => {
+      const response = {
+        conversation_id: 'conv_1',
+        answer: '推荐这两类：\n\n- 减压魔方：适合桌面把玩。\n- 指尖陀螺：适合短时间放松。',
+        recommended_links: [],
+      }
+      handlers.onDelta(response.answer)
+      handlers.onDone(response)
+      return response
+    })
+    const wrapper = mount(AiModeSidebar)
+
+    await wrapper.get('button[aria-label="Open AI mode"]').trigger('click')
+    await wrapper.get('button[data-testid="ai-quick-prompt"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('.ai-message__paragraph')).toHaveLength(1)
+    expect(wrapper.findAll('.ai-message__list-item')).toHaveLength(2)
   })
 })

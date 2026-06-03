@@ -10,18 +10,8 @@ export interface AiModelRecommendedLink {
   url: string
 }
 
-export interface AiModelToolResult {
-  tool: string
-  ok: boolean
-  input: string
-  item_id?: string | null
-  data?: Record<string, unknown>
-  error?: string | null
-}
-
 export interface AiModelChatResponse {
   conversation_id?: string | null
   answer: string
   recommended_links: AiModelRecommendedLink[]
-  tool_results: AiModelToolResult[]
 }

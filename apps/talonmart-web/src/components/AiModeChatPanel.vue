@@ -13,6 +13,13 @@ interface ChatMessage {
   status?: string
 }
 
+interface AssistantContentBlock {
+  id: string
+  type: 'paragraph' | 'list'
+  text?: string
+  items?: string[]
+}
+
 const emit = defineEmits<{
   close: []
 }>()
@@ -29,6 +36,56 @@ const canSend = computed(() => draft.value.trim().length > 0 && !isSending.value
 function extractLinks(text: string): string[] {
   // 中文注释：用户把商品链接直接粘到输入框时，前端提取链接并交给 AImodel 工具处理。
   return Array.from(text.matchAll(/https?:\/\/[^\s]+|\/items\/[^\s]+/g), (match) => match[0])
+}
+
+function updateAssistantMessage(messageId: string, patch: Partial<ChatMessage>) {
+  // 中文注释：流式回调是异步触发的，通过替换数组项确保每个 delta 都能触发 Vue 重新渲染。
+  messages.value = messages.value.map((chatMessage) =>
+    chatMessage.id === messageId ? { ...chatMessage, ...patch } : chatMessage,
+  )
+}
+
+function appendAssistantContent(messageId: string, content: string) {
+  const currentMessage = messages.value.find((chatMessage) => chatMessage.id === messageId)
+  updateAssistantMessage(messageId, {
+    content: `${currentMessage?.content || ''}${content}`,
+  })
+}
+
+function cleanInlineMarkdown(text: string): string {
+  return text.replace(/\*\*(.*?)\*\*/g, '$1').trim()
+}
+
+function formatAssistantContent(content: string): AssistantContentBlock[] {
+  // 中文注释：模型返回 Markdown 风格文本，前端只渲染安全的段落和列表，不直接使用 v-html。
+  return content
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block, blockIndex) => {
+      const lines = block
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+      const listItems = lines
+        .map((line) => line.match(/^(?:[-*]|\d+\.)\s+(.+)$/)?.[1])
+        .filter((line): line is string => Boolean(line))
+
+      if (listItems.length === lines.length) {
+        return {
+          id: `list-${blockIndex}`,
+          type: 'list',
+          items: listItems.map(cleanInlineMarkdown),
+        }
+      }
+
+      return {
+        id: `paragraph-${blockIndex}`,
+        type: 'paragraph',
+        text: cleanInlineMarkdown(lines.join('\n')),
+      }
+    })
 }
 
 async function sendMessage(messageText = draft.value) {
@@ -58,15 +115,18 @@ async function sendMessage(messageText = draft.value) {
       },
       {
         onStatus: (content) => {
-          assistantMessage.status = content
+          updateAssistantMessage(assistantMessage.id, { status: content })
         },
         onDelta: (content) => {
-          assistantMessage.content += content
+          appendAssistantContent(assistantMessage.id, content)
         },
         onDone: (doneResponse) => {
-          assistantMessage.status = ''
-          assistantMessage.content = doneResponse.answer || assistantMessage.content
-          assistantMessage.links = doneResponse.recommended_links
+          const currentMessage = messages.value.find((chatMessage) => chatMessage.id === assistantMessage.id)
+          updateAssistantMessage(assistantMessage.id, {
+            status: '',
+            content: doneResponse.answer || currentMessage?.content || '',
+            links: doneResponse.recommended_links,
+          })
         },
       },
     )
@@ -130,7 +190,17 @@ function useQuickPrompt(prompt: string) {
           :class="`ai-message--${message.role}`"
         >
           <span v-if="message.status" class="ai-message__status">{{ message.status }}</span>
-          <p>{{ message.content }}</p>
+          <template v-if="message.role === 'assistant'">
+            <div class="ai-message__content">
+              <template v-for="block in formatAssistantContent(message.content)" :key="block.id">
+                <p v-if="block.type === 'paragraph'" class="ai-message__paragraph">{{ block.text }}</p>
+                <ul v-else class="ai-message__list">
+                  <li v-for="item in block.items" :key="item" class="ai-message__list-item">{{ item }}</li>
+                </ul>
+              </template>
+            </div>
+          </template>
+          <p v-else>{{ message.content }}</p>
           <div v-if="message.links?.length" class="ai-message__links">
             <a v-for="link in message.links" :key="link.item_id" :href="link.url">
               {{ link.item_name }}
@@ -274,6 +344,26 @@ function useQuickPrompt(prompt: string) {
 
 .ai-message p {
   margin: 0;
+}
+
+.ai-message__content {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-message__paragraph {
+  white-space: pre-line;
+}
+
+.ai-message__list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.ai-message__list-item {
+  padding-left: 2px;
 }
 
 .ai-message__status {

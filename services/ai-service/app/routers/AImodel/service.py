@@ -40,6 +40,7 @@ SYSTEM_PROMPT = """
 只能推荐工具返回的真实商品和链接，不能编造商品、价格、库存或链接。
 如果工具没有找到合适商品，请明确说明未找到。
 回答使用中文，简洁、实用，并优先给出可执行建议。
+回答必须使用清晰 Markdown 格式：短段落说明结论，多个要点使用无序列表，每个列表项只表达一个建议。
 """.strip()
 
 
@@ -80,7 +81,6 @@ def handle_chat(
             AiModelRecommendedLink(**link)
             for link in recommended_links_from_tool_results(tool_results)
         ],
-        tool_results=tool_results,
     )
 
 
@@ -144,7 +144,6 @@ def stream_chat_events(
             "conversation_id": request.conversation_id,
             "answer": answer,
             "recommended_links": recommended_links_from_tool_results(tool_results),
-            "tool_results": [tool_result.model_dump() for tool_result in tool_results],
         },
     )
 
@@ -242,14 +241,9 @@ def _run_langchain_agent_stream(
         tools=[get_product_detail_from_link, search_product_catalog],
         system_prompt=SYSTEM_PROMPT,
     )
-    previous_answer = ""
     # 中文注释：这里只向前端流式输出可见回答文本，不暴露模型内部隐藏推理链路。
-    for update in agent.stream({"messages": _build_langchain_messages(request)}, stream_mode="values"):
-        answer = _extract_answer(update)
-        if not answer or answer == previous_answer:
-            continue
-        chunk = answer[len(previous_answer) :] if answer.startswith(previous_answer) else answer
-        previous_answer = answer
+    for update in agent.stream({"messages": _build_langchain_messages(request)}, stream_mode="messages"):
+        chunk = _extract_stream_token(update)
         if chunk:
             yield chunk
 
@@ -273,6 +267,28 @@ def _extract_answer(result: Any) -> str:
         content = getattr(message, "content", "")
         if isinstance(content, str) and content.strip():
             return content.strip()
+    return ""
+
+
+def _extract_stream_token(update: Any) -> str:
+    if not isinstance(update, tuple) or not update:
+        return ""
+
+    message = update[0]
+    if getattr(message, "tool_call_chunks", None):
+        return ""
+
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "".join(parts)
     return ""
 
 

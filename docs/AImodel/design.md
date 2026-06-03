@@ -34,7 +34,7 @@ services/ai-service/app/routers/AImodel/
 职责划分：
 
 - `router.py`：定义 FastAPI 路由，并把请求转交给 service。
-- `schemas.py`：定义请求、响应、工具结果等 Pydantic schema。
+- `schemas.py`：定义请求、前端响应、推荐链接和内部工具结果等 Pydantic schema。
 - `service.py`：初始化 LangChain agent、组织模型流式调用、汇总响应。
 - `tools.py`：封装商品链接解析、商品详情查询、商品搜索等工具。
 
@@ -79,14 +79,14 @@ event: delta
 data: {"content":"推荐"}
 
 event: done
-data: {"conversation_id":"可选会话 ID","answer":"agent 的完整自然语言回答","recommended_links":[],"tool_results":[]}
+data: {"conversation_id":"可选会话 ID","answer":"agent 的完整自然语言回答","recommended_links":[]}
 ```
 
 事件说明：
 
 - `status`：展示可见处理状态，例如理解问题、识别商品链接、调用商品工具、生成回答。
-- `delta`：展示最终回答的增量文本。
-- `done`：返回完整回答、推荐链接和工具结果，供前端落最终状态。
+- `delta`：展示最终回答的增量文本。后端使用 LangChain `messages` 流模式输出 token/chunk，不使用 `values` 状态流当作前端正文。
+- `done`：返回完整回答和推荐链接，供前端落最终状态；不向前端返回 `tool_results`。
 - `error`：流式生成过程失败时返回错误内容。
 
 `done` 事件数据结构：
@@ -100,15 +100,6 @@ data: {"conversation_id":"可选会话 ID","answer":"agent 的完整自然语言
       "item_id": "item_a",
       "item_name": "商品名称",
       "url": "/items/item_a"
-    }
-  ],
-  "tool_results": [
-    {
-      "tool": "get_product_detail_from_link",
-      "ok": true,
-      "input": "https://example.com/items/item_a",
-      "item_id": "item_a",
-      "data": {}
     }
   ]
 }
@@ -169,7 +160,7 @@ apps/talonmart-web/src/types/
 - `AiModeSidebar.vue`：展示右侧侧边栏和 `AI模式` 入口。
 - `AiModeChatPanel.vue`：展示对话展开面板、快捷问题、消息列表和输入区。
 - `aiModelApi.ts`：封装 `POST /AImodel/chat` 的 SSE 流式读取。
-- `aiModel.ts`：定义请求、响应、推荐链接和工具结果类型。
+- `aiModel.ts`：定义请求、前端响应和推荐链接类型；工具结果只在后端内部使用，不暴露给前端。
 
 接口代理：
 
@@ -182,6 +173,7 @@ apps/talonmart-web/src/types/
 - 侧边栏保持轻量，不遮挡商品浏览主流程。
 - 对话面板宽度需要适配桌面和移动端，移动端可改为全屏抽屉。
 - 输入区固定在面板底部，消息区域独立滚动。
+- assistant 回答按安全的段落和列表格式渲染，保留换行结构，不直接使用 `v-html`。
 - 快捷问题只作为填充输入或直接发起提问的入口，不硬编码商品推荐结果。
 - 所有新增前端业务逻辑代码同样需要中文注释，说明 AI 模式入口、对话请求和链接传递规则。
 
