@@ -36,6 +36,10 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-qwen3.6plus}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      DASHSCOPE_BASE_URL: ${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      AIMODEL_MODEL: ${AIMODEL_MODEL:-deepseek-v4-flash}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:5173}
       POLICY_PATH: /app/fixtures/policies/after_sales_policy.md
       MOCK_API_URL: http://mock-api:8000
       DATABASE_URL: postgresql://agent:agent@postgres:5432/agent_ops

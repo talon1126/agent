@@ -6,6 +6,13 @@
 当前商品详情接口文档：`docs/development/product-detail-api-integration.zh.md`。
 当前购物车 / 结算接口文档：`docs/development/cart-api-integration.zh.md`。
 当前秒杀接口文档：`docs/development/flash-sale-api-integration.zh.md`。
+当前 AImodel 设计文档：`docs/AImodel/design.md`。
+
+本地代理约定：
+
+- 商品、购物车、结算、秒杀等业务接口使用 `VITE_API_BASE_URL=/api`，由 Vite 代理到 `mock-api`。
+- AImodel 对话接口使用 `VITE_AI_SERVICE_BASE_URL=/ai-service`，由 Vite 代理到 `ai-service`。
+- 不要让 AImodel 复用普通 `apiClient` 的 `/api` base URL，否则 `/AImodel/chat` 会打到 `mock-api` 并返回 404。
 
 当前搜索接口：
 

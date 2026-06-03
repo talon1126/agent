@@ -12,9 +12,11 @@ from app.message_schemas import (
     MessageRequest,
 )
 from app.schemas import DecisionOutput, EventContext
+from app.routers.AImodel import router as aimodel_router
 from app.session_store import get_session_store
 
 app = FastAPI(title="Ecommerce After-sales AI Service")
+app.include_router(aimodel_router)
 
 
 @app.on_event("startup")

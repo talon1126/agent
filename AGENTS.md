@@ -54,6 +54,13 @@
 - 其他 workflow 可能会用到的契约：[customer-support-agent/cross-workflow-contracts.md](docs/AGENTS/customer-support-agent/cross-workflow-contracts.md)
 - 维护原则：[customer-support-agent/maintenance-principles.md](docs/AGENTS/customer-support-agent/maintenance-principles.md)
 
+## AImodel
+
+- 总览：[AImodel/README.md](docs/AGENTS/AImodel/README.md)
+- ai-service：[AImodel/ai-service.md](docs/AGENTS/AImodel/ai-service.md)
+- 后端工具契约：[AImodel/backend-tool-contracts.md](docs/AGENTS/AImodel/backend-tool-contracts.md)
+- 维护原则：[AImodel/maintenance-principles.md](docs/AGENTS/AImodel/maintenance-principles.md)
+
 ## 前端
 
 - 总览：[frontend/README.md](docs/AGENTS/frontend/README.md)
