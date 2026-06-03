@@ -41,6 +41,7 @@ SYSTEM_PROMPT = """
 如果工具没有找到合适商品，请明确说明未找到。
 回答使用中文，简洁、实用，并优先给出可执行建议。
 回答必须使用清晰 Markdown 格式：短段落说明结论，多个要点使用无序列表，每个列表项只表达一个建议。
+不要把工具调用过程、工具名称、工具参数、工具返回 JSON、原始字段名或 Python/JSON 对象展示给用户。
 """.strip()
 
 
@@ -121,6 +122,7 @@ def stream_chat_events(
     yield _format_sse("status", {"content": "正在生成回答"})
 
     try:
+        tool_json_filter = _ToolJsonStreamFilter()
         chunks = (
             streaming_agent_runner(request, tool_results)
             if streaming_agent_runner
@@ -129,8 +131,12 @@ def stream_chat_events(
         for chunk in chunks:
             if not chunk:
                 continue
-            answer_parts.append(chunk)
-            yield _format_sse("delta", {"content": chunk})
+            for safe_chunk in tool_json_filter.feed(chunk):
+                answer_parts.append(safe_chunk)
+                yield _format_sse("delta", {"content": safe_chunk})
+        for safe_chunk in tool_json_filter.flush():
+            answer_parts.append(safe_chunk)
+            yield _format_sse("delta", {"content": safe_chunk})
     except HTTPException:
         raise
     except Exception as error:
@@ -290,6 +296,94 @@ def _extract_stream_token(update: Any) -> str:
                 parts.append(str(block.get("text", "")))
         return "".join(parts)
     return ""
+
+
+class _ToolJsonStreamFilter:
+    # 中文注释：模型偶发会把工具返回 JSON 当正文吐出，这里按完整 JSON 对象过滤，避免前端看到内部工具数据。
+    def __init__(self) -> None:
+        self.pending = ""
+
+    def feed(self, chunk: str) -> list[str]:
+        self.pending += chunk
+        return self._drain(final=False)
+
+    def flush(self) -> list[str]:
+        return self._drain(final=True)
+
+    def _drain(self, *, final: bool) -> list[str]:
+        output: list[str] = []
+        while self.pending:
+            object_start = self.pending.find("{")
+            if object_start == -1:
+                output.append(self.pending)
+                self.pending = ""
+                break
+
+            if object_start > 0:
+                output.append(self.pending[:object_start])
+                self.pending = self.pending[object_start:]
+
+            object_end = _find_json_object_end(self.pending)
+            if object_end is None:
+                if final:
+                    if not _looks_like_tool_json(self.pending):
+                        output.append(self.pending)
+                    self.pending = ""
+                break
+
+            candidate = self.pending[: object_end + 1]
+            self.pending = self.pending[object_end + 1 :]
+            if not _is_tool_result_json(candidate):
+                output.append(candidate)
+
+        return [chunk for chunk in output if chunk]
+
+
+def _find_json_object_end(text: str) -> int | None:
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+
+    return None
+
+
+def _looks_like_tool_json(text: str) -> bool:
+    return '"tool"' in text or "'tool'" in text
+
+
+def _is_tool_result_json(text: str) -> bool:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+
+    if not isinstance(data, dict):
+        return False
+
+    tool_name = data.get("tool")
+    return isinstance(tool_name, str) and (
+        tool_name in {"search_products", "search_product_catalog", "get_product_detail_from_link"}
+        or {"ok", "input"}.issubset(data.keys())
+    )
 
 
 def _format_sse(event: str, data: dict[str, Any]) -> str:

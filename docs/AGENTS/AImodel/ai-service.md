@@ -9,6 +9,7 @@
   - 流式事件：`status` 返回可见处理状态，`delta` 返回回答增量文本，`done` 返回完整 `answer` 和 `recommended_links`。
   - 前端契约：`done` 不返回 `tool_results`，工具调用结果只在后端内部用于约束 agent 回答和生成推荐链接。
   - 流式实现：后端使用 LangChain `messages` 流模式输出 token/chunk，不把 `values` 状态流当作前端正文。
+  - 防泄漏规则：模型不得输出工具 JSON；后端流式层会过滤包含 `tool` 字段的工具结果 JSON。
   - 约束：不要新增 `/chat/stream`，流式响应直接复用 `/AImodel/chat`。
 
 运行配置：

@@ -137,6 +137,37 @@ def test_chat_endpoint_streams_sse_from_existing_route(monkeypatch) -> None:
     assert "tool_results" not in events[-1]
 
 
+def test_stream_chat_filters_tool_json_from_model_answer(monkeypatch) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    leaked_tool_json = (
+        '{"tool": "search_products", "ok": true, "input": "无线耳机", '
+        '"item_id": null, "data": {"ok": true, "items": []}, "error": null}'
+    )
+
+    def fake_streaming_agent_runner(request: AiModelChatRequest, tool_results: list) -> list[str]:
+        return [
+            "我先查询商品。\n\n",
+            leaked_tool_json[:45],
+            leaked_tool_json[45:],
+            "目前没有找到无线耳机商品。\n- 可以关注续航\n- 可以关注佩戴舒适度",
+        ]
+
+    events = list(
+        stream_chat_events(
+            AiModelChatRequest(conversation_id="conv_1", message="如何挑选高性价比的无线耳机?", links=[]),
+            mock_api_url="http://mock-api",
+            streaming_agent_runner=fake_streaming_agent_runner,
+        )
+    )
+    response_text = "".join(events)
+
+    assert '"tool": "search_products"' not in response_text
+    assert '\\"tool\\": \\"search_products\\"' not in response_text
+    assert '"data": {"ok": true' not in response_text
+    assert '\\"data\\": {\\"ok\\": true' not in response_text
+    assert "目前没有找到无线耳机商品" in response_text
+
+
 def test_extract_stream_token_reads_ai_message_chunks() -> None:
     class FakeAiChunk:
         content = "推荐"
