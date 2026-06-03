@@ -7,6 +7,22 @@ interface AiModelStreamHandlers {
 }
 
 const aiServiceBaseUrl = (import.meta.env.VITE_AI_SERVICE_BASE_URL?.trim() || '/ai-service').replace(/\/$/, '')
+const aiModelUserIdStorageKey = 'aimodel_user_id'
+
+export function getOrCreateAiModelUserId(): string {
+  const existingUserId = localStorage.getItem(aiModelUserIdStorageKey)
+  if (existingUserId) {
+    return existingUserId
+  }
+
+  // 中文注释：AImodel 长期偏好记忆按匿名用户 ID 归属；没有登录系统时用 localStorage 稳定标识同一浏览器用户。
+  const randomId =
+    globalThis.crypto?.randomUUID?.() ||
+    `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const userId = `anon_${randomId}`
+  localStorage.setItem(aiModelUserIdStorageKey, userId)
+  return userId
+}
 
 export async function streamAiModel(
   request: AiModelChatRequest,

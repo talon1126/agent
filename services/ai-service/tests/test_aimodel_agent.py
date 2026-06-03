@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.routers.AImodel.schemas import AiModelChatRequest, AiModelChatResponse
+from app.routers.AImodel.memory import AiModelMemoryMessage, AiModelUserMemory, NoopAiModelMemoryStore
 from app.routers.AImodel.service import (
     _build_langchain_messages,
     _extract_answer,
@@ -105,7 +106,7 @@ def test_handle_chat_returns_503_when_dashscope_api_key_is_missing(monkeypatch) 
 
     response = TestClient(app).post(
         "/AImodel/chat",
-        json={"message": "有推荐的解压玩具吗", "links": []},
+        json={"user_id": "anon_test", "message": "有推荐的解压玩具吗", "links": []},
     )
 
     assert response.status_code == 503
@@ -114,6 +115,7 @@ def test_handle_chat_returns_503_when_dashscope_api_key_is_missing(monkeypatch) 
 
 def test_chat_endpoint_streams_sse_from_existing_route(monkeypatch) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    memory_store = NoopAiModelMemoryStore()
 
     def fake_streaming_agent_runner(request: AiModelChatRequest, tool_results: list) -> list[str]:
         assert request.message == "有推荐的解压玩具吗"
@@ -122,9 +124,10 @@ def test_chat_endpoint_streams_sse_from_existing_route(monkeypatch) -> None:
 
     events = list(
         stream_chat_events(
-            AiModelChatRequest(conversation_id="conv_1", message="有推荐的解压玩具吗", links=[]),
+            AiModelChatRequest(user_id="anon_test", conversation_id=None, message="有推荐的解压玩具吗", links=[]),
             mock_api_url="http://mock-api",
             streaming_agent_runner=fake_streaming_agent_runner,
+            memory_store=memory_store,
         )
     )
 
@@ -133,8 +136,12 @@ def test_chat_endpoint_streams_sse_from_existing_route(monkeypatch) -> None:
     assert any('event: delta\ndata: {"content": "推荐"}' in event for event in events)
     assert any('event: delta\ndata: {"content": "减压魔方。"}' in event for event in events)
     assert events[-1].startswith("event: done\n")
+    assert '"conversation_id": 1' in events[-1]
     assert '"answer": "推荐减压魔方。"' in events[-1]
     assert "tool_results" not in events[-1]
+    stored_messages = memory_store.load_recent_messages(1, limit=5)
+    assert [message.role for message in stored_messages] == ["user", "assistant"]
+    assert [message.content for message in stored_messages] == ["有推荐的解压玩具吗", "推荐减压魔方。"]
 
 
 def test_stream_chat_filters_tool_json_from_model_answer(monkeypatch) -> None:
@@ -154,9 +161,10 @@ def test_stream_chat_filters_tool_json_from_model_answer(monkeypatch) -> None:
 
     events = list(
         stream_chat_events(
-            AiModelChatRequest(conversation_id="conv_1", message="如何挑选高性价比的无线耳机?", links=[]),
+            AiModelChatRequest(user_id="anon_test", conversation_id=1, message="如何挑选高性价比的无线耳机?", links=[]),
             mock_api_url="http://mock-api",
             streaming_agent_runner=fake_streaming_agent_runner,
+            memory_store=NoopAiModelMemoryStore(),
         )
     )
     response_text = "".join(events)
@@ -180,6 +188,7 @@ def test_extract_stream_token_reads_ai_message_chunks() -> None:
 def test_langchain_messages_use_human_message() -> None:
     messages = _build_langchain_messages(
         AiModelChatRequest(
+            user_id="anon_test",
             message="帮我对比这两个商品",
             links=["https://shop.example.com/items/item_milk_pure"],
         )
@@ -190,8 +199,37 @@ def test_langchain_messages_use_human_message() -> None:
     assert "用户问题：帮我对比这两个商品" in messages[0].content
 
 
+def test_langchain_messages_include_recent_history_and_user_memories() -> None:
+    messages = _build_langchain_messages(
+        AiModelChatRequest(
+            user_id="anon_test",
+            message="那我刚才喜欢什么?",
+            links=[],
+        ),
+        history=[
+            AiModelMemoryMessage(role="user", content="我喜欢小米"),
+            AiModelMemoryMessage(role="assistant", content="我记住了你喜欢小米。"),
+        ],
+        user_memories=[
+            AiModelUserMemory(
+                memory_type="brand_preference",
+                memory_value="小米",
+                evidence="用户表达了对小米的品牌偏好。",
+                confidence=0.8,
+            )
+        ],
+    )
+
+    assert [message.type for message in messages] == ["human", "human", "ai", "human"]
+    assert "用户长期偏好" in messages[0].content
+    assert "品牌偏好：小米" in messages[0].content
+    assert messages[1].content == "我喜欢小米"
+    assert messages[2].content == "我记住了你喜欢小米。"
+    assert "用户问题：那我刚才喜欢什么?" in messages[3].content
+
+
 def test_extract_answer_ignores_human_message_stream_updates() -> None:
-    messages = _build_langchain_messages(AiModelChatRequest(message="你好", links=[]))
+    messages = _build_langchain_messages(AiModelChatRequest(user_id="anon_test", message="你好", links=[]))
 
     assert _extract_answer({"messages": messages}) == ""
 
@@ -223,7 +261,8 @@ def test_handle_chat_uses_injected_agent_runner_without_real_dashscope(monkeypat
 
     response = handle_chat(
         AiModelChatRequest(
-            conversation_id="conv_1",
+            user_id="anon_test",
+            conversation_id=1,
             message="帮我对比这两个商品",
             links=["https://shop.example.com/items/item_milk_pure"],
         ),
@@ -233,6 +272,6 @@ def test_handle_chat_uses_injected_agent_runner_without_real_dashscope(monkeypat
     )
 
     assert isinstance(response, AiModelChatResponse)
-    assert response.conversation_id == "conv_1"
+    assert response.conversation_id == 1
     assert response.answer == "纯牛奶更适合早餐场景。"
     assert response.recommended_links[0].item_id == "item_milk_pure"

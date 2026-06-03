@@ -3,17 +3,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AiModeSidebar from './AiModeSidebar.vue'
 
-const { streamAiModel } = vi.hoisted(() => ({
+const { getOrCreateAiModelUserId, streamAiModel } = vi.hoisted(() => ({
+  getOrCreateAiModelUserId: vi.fn(),
   streamAiModel: vi.fn(),
 }))
 
 vi.mock('@/services/aiModelApi', () => ({
+  getOrCreateAiModelUserId,
   streamAiModel,
 }))
 
 describe('AiModeSidebar', () => {
   beforeEach(() => {
     streamAiModel.mockReset()
+    getOrCreateAiModelUserId.mockReset()
+    getOrCreateAiModelUserId.mockReturnValue('anon_component_test')
+    localStorage.clear()
   })
 
   it('opens and closes the AI mode chat panel from the sidebar entry', async () => {
@@ -45,7 +50,7 @@ describe('AiModeSidebar', () => {
         finishStream = () => {
           handlers.onDelta('减压魔方，并比较材质和尺寸。')
           const response = {
-            conversation_id: 'conv_1',
+            conversation_id: 123,
             answer: '推荐先看减压魔方，并比较材质和尺寸。',
             recommended_links: [{ item_id: 'item_toy_cube', item_name: '减压魔方', url: '/items/item_toy_cube' }],
           }
@@ -62,7 +67,8 @@ describe('AiModeSidebar', () => {
 
     expect(streamAiModel).toHaveBeenCalledWith(
       {
-        conversation_id: expect.any(String),
+        user_id: 'anon_component_test',
+        conversation_id: null,
         message: '居家提升幸福感好物',
         links: [],
       },
@@ -90,7 +96,7 @@ describe('AiModeSidebar', () => {
   it('formats assistant answers into readable paragraphs and list items', async () => {
     streamAiModel.mockImplementation(async (_request, handlers) => {
       const response = {
-        conversation_id: 'conv_1',
+        conversation_id: 123,
         answer: '推荐这两类：\n\n- 减压魔方：适合桌面把玩。\n- 指尖陀螺：适合短时间放松。',
         recommended_links: [],
       }

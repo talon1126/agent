@@ -8,7 +8,7 @@ import httpx
 from fastapi import HTTPException
 
 try:
-    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import AIMessage, HumanMessage
 except ModuleNotFoundError:
     # 中文注释：本地未安装 LangChain 时仍允许 FastAPI 和单元测试导入；生产镜像会安装真实 HumanMessage。
     class HumanMessage:  # type: ignore[no-redef]
@@ -17,6 +17,19 @@ except ModuleNotFoundError:
         def __init__(self, content: str) -> None:
             self.content = content
 
+    class AIMessage:  # type: ignore[no-redef]
+        type = "ai"
+
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+from app.routers.AImodel.memory import (
+    AiModelMemoryMessage,
+    AiModelMemoryStore,
+    AiModelUserMemory,
+    extract_user_memories_from_text,
+    get_aimodel_memory_store,
+)
 from app.routers.AImodel.schemas import (
     AiModelChatRequest,
     AiModelChatResponse,
@@ -99,12 +112,33 @@ def stream_chat_events(
     mock_api_url: str,
     http_client: httpx.Client | None = None,
     streaming_agent_runner: StreamingAgentRunner | None = None,
+    memory_store: AiModelMemoryStore | None = None,
 ) -> Iterator[str]:
     ensure_aimodel_configured()
+    memory_store = memory_store or get_aimodel_memory_store()
     tool_results: list[AiModelToolResult] = []
     answer_parts: list[str] = []
 
     yield _format_sse("status", {"content": "正在理解问题"})
+
+    try:
+        # 中文注释：会话 ID 由 ai-service 的 conversation.id 管理，缺失时创建新会话并在 done 中返回给前端。
+        conversation_id = memory_store.ensure_conversation(
+            request.conversation_id,
+            user_id=request.user_id,
+            first_message=request.message,
+        )
+        history = memory_store.load_recent_messages(conversation_id, limit=5)
+        user_memories = memory_store.load_user_memories(request.user_id, limit=10)
+        memory_store.append_user_message(
+            conversation_id,
+            user_id=request.user_id,
+            content=request.message,
+            links=request.links,
+        )
+    except Exception as error:
+        yield _format_sse("error", {"content": f"AImodel memory failed: {error}"})
+        return
 
     if request.links:
         yield _format_sse("status", {"content": "正在识别商品链接"})
@@ -126,7 +160,14 @@ def stream_chat_events(
         chunks = (
             streaming_agent_runner(request, tool_results)
             if streaming_agent_runner
-            else _run_langchain_agent_stream(request, tool_results, mock_api_url, http_client)
+            else _run_langchain_agent_stream(
+                request,
+                tool_results,
+                mock_api_url,
+                http_client,
+                history=history,
+                user_memories=user_memories,
+            )
         )
         for chunk in chunks:
             if not chunk:
@@ -144,12 +185,32 @@ def stream_chat_events(
         return
 
     answer = "".join(answer_parts).strip()
+    recommended_links = recommended_links_from_tool_results(tool_results)
+    try:
+        memory_store.append_assistant_message(
+            conversation_id,
+            user_id=request.user_id,
+            content=answer,
+            recommended_links=recommended_links,
+        )
+        for memory in extract_user_memories_from_text(request.message, user_id=request.user_id):
+            memory_store.upsert_user_memory(
+                request.user_id,
+                memory_type=memory.memory_type,
+                memory_value=memory.memory_value,
+                evidence=memory.evidence,
+                confidence=memory.confidence,
+            )
+    except Exception:
+        # 中文注释：assistant 记忆写入失败不阻断已经生成给用户的回答，避免前端丢失本轮结果。
+        pass
+
     yield _format_sse(
         "done",
         {
-            "conversation_id": request.conversation_id,
+            "conversation_id": conversation_id,
             "answer": answer,
-            "recommended_links": recommended_links_from_tool_results(tool_results),
+            "recommended_links": recommended_links,
         },
     )
 
@@ -207,6 +268,9 @@ def _run_langchain_agent_stream(
     tool_results: list[AiModelToolResult],
     mock_api_url: str,
     http_client: httpx.Client | None,
+    *,
+    history: list[AiModelMemoryMessage] | None = None,
+    user_memories: list[AiModelUserMemory] | None = None,
 ) -> Iterator[str]:
     from langchain.agents import create_agent
     from langchain.tools import tool
@@ -248,7 +312,10 @@ def _run_langchain_agent_stream(
         system_prompt=SYSTEM_PROMPT,
     )
     # 中文注释：这里只向前端流式输出可见回答文本，不暴露模型内部隐藏推理链路。
-    for update in agent.stream({"messages": _build_langchain_messages(request)}, stream_mode="messages"):
+    for update in agent.stream(
+        {"messages": _build_langchain_messages(request, history=history, user_memories=user_memories)},
+        stream_mode="messages",
+    ):
         chunk = _extract_stream_token(update)
         if chunk:
             yield chunk
@@ -260,9 +327,42 @@ def _build_user_prompt(request: AiModelChatRequest) -> str:
     return f"用户问题：{request.message}\n用户提供的商品链接：\n{links}"
 
 
-def _build_langchain_messages(request: AiModelChatRequest) -> list[HumanMessage]:
+def _build_langchain_messages(
+    request: AiModelChatRequest,
+    *,
+    history: list[AiModelMemoryMessage] | None = None,
+    user_memories: list[AiModelUserMemory] | None = None,
+) -> list[HumanMessage | AIMessage]:
     # 中文注释：LangChain 输入显式使用 HumanMessage，避免手写 role dict 在不同模型适配器中行为不一致。
-    return [HumanMessage(content=_build_user_prompt(request))]
+    messages: list[HumanMessage | AIMessage] = []
+    memory_prompt = _build_user_memory_prompt(user_memories or [])
+    if memory_prompt:
+        messages.append(HumanMessage(content=memory_prompt))
+
+    for message in history or []:
+        if message.role == "assistant":
+            messages.append(AIMessage(content=message.content))
+        else:
+            messages.append(HumanMessage(content=message.content))
+
+    messages.append(HumanMessage(content=_build_user_prompt(request)))
+    return messages
+
+
+def _build_user_memory_prompt(user_memories: list[AiModelUserMemory]) -> str:
+    if not user_memories:
+        return ""
+
+    labels = {
+        "brand_preference": "品牌偏好",
+        "price_preference": "价格偏好",
+        "category_preference": "品类偏好",
+    }
+    lines = ["用户长期偏好："]
+    for memory in user_memories:
+        label = labels.get(memory.memory_type, memory.memory_type)
+        lines.append(f"- {label}：{memory.memory_value}")
+    return "\n".join(lines)
 
 
 def _extract_answer(result: Any) -> str:

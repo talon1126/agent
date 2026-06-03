@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { Bot, MoreHorizontal, Send, X } from 'lucide-vue-next'
 
-import { streamAiModel } from '@/services/aiModelApi'
+import { getOrCreateAiModelUserId, streamAiModel } from '@/services/aiModelApi'
 import type { AiModelRecommendedLink } from '@/types/aiModel'
 
 interface ChatMessage {
@@ -25,7 +25,8 @@ const emit = defineEmits<{
 }>()
 
 const quickPrompts = ['居家提升幸福感好物', '换季修护必备护肤品', '如何挑选高性价比的无线耳机?', '2026早春流行穿搭']
-const conversationId = ref(`web-${Date.now()}`)
+const userId = getOrCreateAiModelUserId()
+const conversationId = ref<number | null>(null)
 const draft = ref('')
 const isSending = ref(false)
 const errorMessage = ref('')
@@ -109,6 +110,7 @@ async function sendMessage(messageText = draft.value) {
   try {
     const response = await streamAiModel(
       {
+        user_id: userId,
         conversation_id: conversationId.value,
         message,
         links: extractLinks(message),
@@ -130,7 +132,7 @@ async function sendMessage(messageText = draft.value) {
         },
       },
     )
-    conversationId.value = response.conversation_id || conversationId.value
+    conversationId.value = response.conversation_id ?? conversationId.value
   } catch (error) {
     messages.value = messages.value.filter((chatMessage) => chatMessage.id !== assistantMessage.id)
     errorMessage.value = error instanceof Error ? error.message : 'AI模式暂时不可用，请稍后再试。'

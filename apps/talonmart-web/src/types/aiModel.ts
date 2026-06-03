@@ -1,5 +1,6 @@
 export interface AiModelChatRequest {
-  conversation_id?: string
+  user_id: string
+  conversation_id?: number | null
   message: string
   links: string[]
 }
@@ -11,7 +12,7 @@ export interface AiModelRecommendedLink {
 }
 
 export interface AiModelChatResponse {
-  conversation_id?: string | null
+  conversation_id?: number | null
   answer: string
   recommended_links: AiModelRecommendedLink[]
 }
