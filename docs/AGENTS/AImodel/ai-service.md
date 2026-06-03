@@ -3,9 +3,11 @@
 `AImodel` 的后端入口位于 `services/ai-service/app/routers/AImodel/`，对外提供页面可调用的通用购物对话接口。
 
 - `POST /AImodel/chat`
-  - 用途：接收前端 AI 模式对话请求，使用 LangChain + DeepSeek 根据用户意图回答。
+  - 用途：接收前端 AI 模式对话请求，使用 LangChain + 百炼 OpenAI 兼容接口根据用户意图流式回答。
   - 请求字段：`conversation_id` 可选，`message` 必填，`links` 为用户输入或页面传递的商品链接列表。
-  - 响应字段：`answer` 返回自然语言回答，`recommended_links` 返回真实商品链接，`tool_results` 返回工具调用结果。
+  - 响应格式：`text/event-stream`。
+  - 流式事件：`status` 返回可见处理状态，`delta` 返回回答增量文本，`done` 返回完整 `answer`、`recommended_links` 和 `tool_results`。
+  - 约束：不要新增 `/chat/stream`，流式响应直接复用 `/AImodel/chat`。
 
 运行配置：
 

@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.routers.AImodel.schemas import AiModelChatRequest, AiModelChatResponse
-from app.routers.AImodel.service import handle_chat
+from app.routers.AImodel.service import _build_langchain_messages, _extract_answer, handle_chat, stream_chat_events
 from app.routers.AImodel.tools import (
     build_product_url,
     fetch_product_detail_from_link,
@@ -104,6 +104,49 @@ def test_handle_chat_returns_503_when_dashscope_api_key_is_missing(monkeypatch) 
 
     assert response.status_code == 503
     assert response.json()["detail"] == "AImodel is not configured. Provide DASHSCOPE_API_KEY."
+
+
+def test_chat_endpoint_streams_sse_from_existing_route(monkeypatch) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+
+    def fake_streaming_agent_runner(request: AiModelChatRequest, tool_results: list) -> list[str]:
+        assert request.message == "有推荐的解压玩具吗"
+        assert tool_results == []
+        return ["推荐", "减压魔方。"]
+
+    events = list(
+        stream_chat_events(
+            AiModelChatRequest(conversation_id="conv_1", message="有推荐的解压玩具吗", links=[]),
+            mock_api_url="http://mock-api",
+            streaming_agent_runner=fake_streaming_agent_runner,
+        )
+    )
+
+    assert events[0].startswith("event: status\n")
+    assert 'data: {"content": "正在理解问题"}' in events[0]
+    assert any('event: delta\ndata: {"content": "推荐"}' in event for event in events)
+    assert any('event: delta\ndata: {"content": "减压魔方。"}' in event for event in events)
+    assert events[-1].startswith("event: done\n")
+    assert '"answer": "推荐减压魔方。"' in events[-1]
+
+
+def test_langchain_messages_use_human_message() -> None:
+    messages = _build_langchain_messages(
+        AiModelChatRequest(
+            message="帮我对比这两个商品",
+            links=["https://shop.example.com/items/item_milk_pure"],
+        )
+    )
+
+    assert len(messages) == 1
+    assert messages[0].type == "human"
+    assert "用户问题：帮我对比这两个商品" in messages[0].content
+
+
+def test_extract_answer_ignores_human_message_stream_updates() -> None:
+    messages = _build_langchain_messages(AiModelChatRequest(message="你好", links=[]))
+
+    assert _extract_answer({"messages": messages}) == ""
 
 
 def test_handle_chat_uses_injected_agent_runner_without_real_dashscope(monkeypatch) -> None:

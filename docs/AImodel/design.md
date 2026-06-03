@@ -35,7 +35,7 @@ services/ai-service/app/routers/AImodel/
 
 - `router.py`：定义 FastAPI 路由，并把请求转交给 service。
 - `schemas.py`：定义请求、响应、工具结果等 Pydantic schema。
-- `service.py`：初始化 LangChain agent、组织模型调用、汇总响应。
+- `service.py`：初始化 LangChain agent、组织模型流式调用、汇总响应。
 - `tools.py`：封装商品链接解析、商品详情查询、商品搜索等工具。
 
 `services/ai-service/app/main.py` 只负责挂载 router，不承载 AImodel 业务逻辑。
@@ -67,12 +67,34 @@ POST /AImodel/chat
 - `message`：必填，用户原始问题。
 - `links`：可选，用户提供的商品链接列表。
 
-响应体建议：
+响应使用 `text/event-stream`，保留同一个 `/AImodel/chat` 路由，不新增单独 stream 接口。
+
+事件格式：
+
+```text
+event: status
+data: {"content":"正在理解问题"}
+
+event: delta
+data: {"content":"推荐"}
+
+event: done
+data: {"conversation_id":"可选会话 ID","answer":"agent 的完整自然语言回答","recommended_links":[],"tool_results":[]}
+```
+
+事件说明：
+
+- `status`：展示可见处理状态，例如理解问题、识别商品链接、调用商品工具、生成回答。
+- `delta`：展示最终回答的增量文本。
+- `done`：返回完整回答、推荐链接和工具结果，供前端落最终状态。
+- `error`：流式生成过程失败时返回错误内容。
+
+`done` 事件数据结构：
 
 ```json
 {
   "conversation_id": "可选会话 ID",
-  "answer": "agent 的自然语言回答",
+  "answer": "agent 的完整自然语言回答",
   "recommended_links": [
     {
       "item_id": "item_a",
@@ -125,7 +147,7 @@ agent 框架采用 LangChain。
 - 点击 `AI模式` 后，在页面右侧展开一个白色对话面板。
 - 对话面板顶部展示 AI 助手名称、更多操作入口和关闭按钮。
 - 面板初始状态展示问候语、能力说明和若干快捷问题。
-- 面板底部固定输入框，用户输入问题后调用 `POST /AImodel/chat`。
+- 面板底部固定输入框，用户输入问题后调用 `POST /AImodel/chat` 并读取 SSE 流式事件。
 - 用户提供商品链接时，前端把链接放入 `links` 字段；普通问题只传 `message`。
 
 建议首版前端文件边界：
@@ -146,7 +168,7 @@ apps/talonmart-web/src/types/
 
 - `AiModeSidebar.vue`：展示右侧侧边栏和 `AI模式` 入口。
 - `AiModeChatPanel.vue`：展示对话展开面板、快捷问题、消息列表和输入区。
-- `aiModelApi.ts`：封装 `POST /AImodel/chat` 调用。
+- `aiModelApi.ts`：封装 `POST /AImodel/chat` 的 SSE 流式读取。
 - `aiModel.ts`：定义请求、响应、推荐链接和工具结果类型。
 
 接口代理：
@@ -250,18 +272,18 @@ docker compose -p after-sales-implementation up -d --build ai-service
   -> AImodel service 初始化 LangChain agent
   -> agent 根据意图调用 tools
   -> tools 调用 mock-api 商品详情或搜索接口
-  -> agent 基于工具结果生成回答
-  -> ai-service 返回 answer、recommended_links、tool_results
+  -> agent 基于工具结果流式生成回答
+  -> ai-service 通过 SSE 返回 status、delta、done
 ```
 
 ## 错误处理
 
 - `message` 为空：返回 422，由 Pydantic 校验处理。
-- `DEEPSEEK_API_KEY` 缺失：返回 503。
+- `DASHSCOPE_API_KEY` 缺失：返回 503。
 - 链接无法解析：记录失败工具结果，agent 根据可用上下文继续回答。
 - `mock-api` 返回 404：记录对应商品未找到，不中断其他商品查询。
 - `mock-api` 返回 503：提示后端商品服务暂不可用。
-- DeepSeek 调用失败：返回 502，并保留已成功获取的工具上下文，便于前端排查。
+- 百炼模型调用失败：通过 SSE `error` 事件返回错误内容，并保留已成功获取的工具上下文，便于前端排查。
 
 ## 测试计划
 
@@ -278,9 +300,9 @@ services/ai-service/tests/test_aimodel_agent.py
 - 商品详情工具会调用 `MOCK_API_URL/ip/{item_id}`。
 - 商品搜索工具会调用 `MOCK_API_URL/search?q={keyword}`。
 - `FRONTEND_BASE_URL` 配置和未配置时的链接生成。
-- 缺少 `DEEPSEEK_API_KEY` 时返回 503。
-- 使用 fake LLM 或 mock agent 验证接口响应结构，避免单元测试依赖真实 DeepSeek 网络调用。
-- 前端 `aiModelApi.ts` 会按约定提交 `message` 和 `links`。
+- 缺少 `DASHSCOPE_API_KEY` 时返回 503。
+- 使用 fake LLM 或 mock agent 验证 SSE 响应结构，避免单元测试依赖真实百炼网络调用。
+- 前端 `aiModelApi.ts` 会按约定提交 `message` 和 `links`，并解析 `status`、`delta`、`done` 事件。
 - 前端 `AI模式` 入口可以打开和关闭对话面板。
 
 建议验证命令：

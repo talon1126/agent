@@ -1,6 +1,6 @@
 # 后端接口对接
 
-前端通过 Axios 调用后端 API，不直接访问 Postgres、n8n 或飞书表。
+前端通常通过 Axios 调用后端 API，不直接访问 Postgres、n8n 或飞书表。AImodel 的 SSE 流式对话接口使用 `fetch` + `ReadableStream` 读取。
 
 当前商品列表 / 搜索接口文档：`docs/development/search-api-integration.zh.md`。
 当前商品详情接口文档：`docs/development/product-detail-api-integration.zh.md`。
@@ -13,6 +13,7 @@
 - 商品、购物车、结算、秒杀等业务接口使用 `VITE_API_BASE_URL=/api`，由 Vite 代理到 `mock-api`。
 - AImodel 对话接口使用 `VITE_AI_SERVICE_BASE_URL=/ai-service`，由 Vite 代理到 `ai-service`。
 - 不要让 AImodel 复用普通 `apiClient` 的 `/api` base URL，否则 `/AImodel/chat` 会打到 `mock-api` 并返回 404。
+- AImodel 不新增 `/chat/stream`，`POST /AImodel/chat` 直接返回 `text/event-stream`，前端需要解析 `status`、`delta`、`done`、`error` 事件。
 
 当前搜索接口：
 

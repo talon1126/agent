@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { Bot, MoreHorizontal, Send, X } from 'lucide-vue-next'
 
-import { askAiModel } from '@/services/aiModelApi'
+import { streamAiModel } from '@/services/aiModelApi'
 import type { AiModelRecommendedLink } from '@/types/aiModel'
 
 interface ChatMessage {
@@ -10,6 +10,7 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   links?: AiModelRecommendedLink[]
+  status?: string
 }
 
 const emit = defineEmits<{
@@ -40,21 +41,38 @@ async function sendMessage(messageText = draft.value) {
   isSending.value = true
   draft.value = ''
   messages.value.push({ id: `user-${Date.now()}`, role: 'user', content: message })
+  const assistantMessage: ChatMessage = {
+    id: `assistant-${Date.now()}`,
+    role: 'assistant',
+    content: '',
+    status: '正在理解问题',
+  }
+  messages.value.push(assistantMessage)
 
   try {
-    const response = await askAiModel({
-      conversation_id: conversationId.value,
-      message,
-      links: extractLinks(message),
-    })
+    const response = await streamAiModel(
+      {
+        conversation_id: conversationId.value,
+        message,
+        links: extractLinks(message),
+      },
+      {
+        onStatus: (content) => {
+          assistantMessage.status = content
+        },
+        onDelta: (content) => {
+          assistantMessage.content += content
+        },
+        onDone: (doneResponse) => {
+          assistantMessage.status = ''
+          assistantMessage.content = doneResponse.answer || assistantMessage.content
+          assistantMessage.links = doneResponse.recommended_links
+        },
+      },
+    )
     conversationId.value = response.conversation_id || conversationId.value
-    messages.value.push({
-      id: `assistant-${Date.now()}`,
-      role: 'assistant',
-      content: response.answer,
-      links: response.recommended_links,
-    })
   } catch (error) {
+    messages.value = messages.value.filter((chatMessage) => chatMessage.id !== assistantMessage.id)
     errorMessage.value = error instanceof Error ? error.message : 'AI模式暂时不可用，请稍后再试。'
   } finally {
     isSending.value = false
@@ -111,6 +129,7 @@ function useQuickPrompt(prompt: string) {
           class="ai-message"
           :class="`ai-message--${message.role}`"
         >
+          <span v-if="message.status" class="ai-message__status">{{ message.status }}</span>
           <p>{{ message.content }}</p>
           <div v-if="message.links?.length" class="ai-message__links">
             <a v-for="link in message.links" :key="link.item_id" :href="link.url">
@@ -255,6 +274,14 @@ function useQuickPrompt(prompt: string) {
 
 .ai-message p {
   margin: 0;
+}
+
+.ai-message__status {
+  display: block;
+  margin-bottom: 6px;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .ai-message--user {

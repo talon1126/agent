@@ -1,53 +1,62 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { axiosCreate, aiServicePost } = vi.hoisted(() => ({
-  axiosCreate: vi.fn(),
-  aiServicePost: vi.fn(),
-}))
-
-vi.mock('axios', () => ({
-  default: {
-    create: axiosCreate,
-  },
-}))
-
 describe('aiModelApi', () => {
   beforeEach(() => {
     vi.resetModules()
-    aiServicePost.mockReset()
-    axiosCreate.mockReset()
-    axiosCreate.mockReturnValue({
-      post: aiServicePost,
-    })
+    vi.unstubAllGlobals()
   })
 
-  it('creates a dedicated ai-service client instead of using the mock-api client', async () => {
-    const { askAiModel } = await import('@/services/aiModelApi')
-
-    aiServicePost.mockResolvedValue({
-      data: {
-        conversation_id: 'conv_1',
-        answer: '可以优先选择减压魔方。',
-        recommended_links: [{ item_id: 'item_toy_cube', item_name: '减压魔方', url: '/items/item_toy_cube' }],
-        tool_results: [],
+  it('streams AImodel chat events from the existing chat route', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: status\ndata: {"content":"正在理解问题"}\n\n'))
+        controller.enqueue(encoder.encode('event: delta\ndata: {"content":"推荐"}\n\n'))
+        controller.enqueue(encoder.encode('event: delta\ndata: {"content":"减压魔方。"}\n\n'))
+        controller.enqueue(
+          encoder.encode(
+            'event: done\ndata: {"conversation_id":"conv_1","answer":"推荐减压魔方。","recommended_links":[{"item_id":"item_toy_cube","item_name":"减压魔方","url":"/items/item_toy_cube"}],"tool_results":[]}\n\n',
+          ),
+        )
+        controller.close()
       },
     })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: stream,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { streamAiModel } = await import('@/services/aiModelApi')
 
-    const response = await askAiModel({
-      conversation_id: 'conv_1',
-      message: '有推荐的解压玩具吗',
-      links: ['https://shop.example.com/items/item_toy_cube'],
-    })
+    const statuses: string[] = []
+    const deltas: string[] = []
 
-    expect(axiosCreate).toHaveBeenCalledWith({
-      baseURL: '/ai-service',
-      timeout: 30_000,
+    const response = await streamAiModel(
+      {
+        conversation_id: 'conv_1',
+        message: '有推荐的解压玩具吗',
+        links: ['https://shop.example.com/items/item_toy_cube'],
+      },
+      {
+        onStatus: (content) => statuses.push(content),
+        onDelta: (content) => deltas.push(content),
+      },
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith('/ai-service/AImodel/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_id: 'conv_1',
+        message: '有推荐的解压玩具吗',
+        links: ['https://shop.example.com/items/item_toy_cube'],
+      }),
     })
-    expect(aiServicePost).toHaveBeenCalledWith('/AImodel/chat', {
-      conversation_id: 'conv_1',
-      message: '有推荐的解压玩具吗',
-      links: ['https://shop.example.com/items/item_toy_cube'],
-    })
-    expect(response.answer).toBe('可以优先选择减压魔方。')
+    expect(statuses).toEqual(['正在理解问题'])
+    expect(deltas).toEqual(['推荐', '减压魔方。'])
+    expect(response.answer).toBe('推荐减压魔方。')
+    expect(response.recommended_links).toEqual([
+      { item_id: 'item_toy_cube', item_name: '减压魔方', url: '/items/item_toy_cube' },
+    ])
   })
 })

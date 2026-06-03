@@ -3,17 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AiModeSidebar from './AiModeSidebar.vue'
 
-const { askAiModel } = vi.hoisted(() => ({
-  askAiModel: vi.fn(),
+const { streamAiModel } = vi.hoisted(() => ({
+  streamAiModel: vi.fn(),
 }))
 
 vi.mock('@/services/aiModelApi', () => ({
-  askAiModel,
+  streamAiModel,
 }))
 
 describe('AiModeSidebar', () => {
   beforeEach(() => {
-    askAiModel.mockReset()
+    streamAiModel.mockReset()
   })
 
   it('opens and closes the AI mode chat panel from the sidebar entry', async () => {
@@ -34,11 +34,18 @@ describe('AiModeSidebar', () => {
   })
 
   it('sends a quick prompt through AImodel and renders the answer', async () => {
-    askAiModel.mockResolvedValue({
-      conversation_id: 'conv_1',
-      answer: '推荐先看减压魔方，并比较材质和尺寸。',
-      recommended_links: [{ item_id: 'item_toy_cube', item_name: '减压魔方', url: '/items/item_toy_cube' }],
-      tool_results: [],
+    streamAiModel.mockImplementation(async (_request, handlers) => {
+      handlers.onStatus('正在生成回答')
+      handlers.onDelta('推荐先看')
+      handlers.onDelta('减压魔方，并比较材质和尺寸。')
+      const response = {
+        conversation_id: 'conv_1',
+        answer: '推荐先看减压魔方，并比较材质和尺寸。',
+        recommended_links: [{ item_id: 'item_toy_cube', item_name: '减压魔方', url: '/items/item_toy_cube' }],
+        tool_results: [],
+      }
+      handlers.onDone(response)
+      return response
     })
     const wrapper = mount(AiModeSidebar)
 
@@ -46,11 +53,18 @@ describe('AiModeSidebar', () => {
     await wrapper.get('button[data-testid="ai-quick-prompt"]').trigger('click')
     await flushPromises()
 
-    expect(askAiModel).toHaveBeenCalledWith({
-      conversation_id: expect.any(String),
-      message: '居家提升幸福感好物',
-      links: [],
-    })
+    expect(streamAiModel).toHaveBeenCalledWith(
+      {
+        conversation_id: expect.any(String),
+        message: '居家提升幸福感好物',
+        links: [],
+      },
+      expect.objectContaining({
+        onStatus: expect.any(Function),
+        onDelta: expect.any(Function),
+        onDone: expect.any(Function),
+      }),
+    )
     expect(wrapper.text()).toContain('推荐先看减压魔方')
     expect(wrapper.text()).toContain('减压魔方')
   })

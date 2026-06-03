@@ -4,7 +4,7 @@
 
 **Goal:** 在 `ai-service` 新增 LangChain + DeepSeek 的 AImodel 对话 agent，并在 TalonMart 前端新增右侧 `AI模式` 对话入口。
 
-**Architecture:** 后端以 `services/ai-service/app/routers/AImodel/` 独立 router 包承载接口、schema、service 和工具；前端以独立组件、类型和 API service 接入 `POST /AImodel/chat`。商品推荐和商品链接回答只基于 `mock-api` 已有 `/ip/{item_id}` 与 `/search` 返回的真实商品。
+**Architecture:** 后端以 `services/ai-service/app/routers/AImodel/` 独立 router 包承载接口、schema、service 和工具；前端以独立组件、类型和 API service 接入 `POST /AImodel/chat` 并读取 SSE 流式事件。商品推荐和商品链接回答只基于 `mock-api` 已有 `/ip/{item_id}` 与 `/search` 返回的真实商品。
 
 **Tech Stack:** FastAPI、Pydantic、httpx、LangChain、langchain-deepseek、Vue 3、TypeScript、Vitest。
 
@@ -24,7 +24,7 @@
 
 - [ ] **Step 1: Write failing backend tests**
 
-覆盖 `/items/{item_id}` 解析、`FRONTEND_BASE_URL` 链接生成、工具调用路径、缺少 `DEEPSEEK_API_KEY` 的 503、以及 `/AImodel/chat` 路由响应结构。
+覆盖 `/items/{item_id}` 解析、`FRONTEND_BASE_URL` 链接生成、工具调用路径、缺少 `DASHSCOPE_API_KEY` 的 503、以及 `/AImodel/chat` SSE 响应结构。
 
 - [ ] **Step 2: Run backend tests to verify RED**
 
