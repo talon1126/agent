@@ -4,7 +4,6 @@ describe('aiModelApi', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.unstubAllGlobals()
-    localStorage.clear()
   })
 
   it('streams AImodel chat events from the existing chat route', async () => {
@@ -35,7 +34,7 @@ describe('aiModelApi', () => {
     const response = await streamAiModel(
       {
         conversation_id: null,
-        user_id: 'anon_test',
+        user_id: 1,
         message: '有推荐的解压玩具吗',
         links: ['https://shop.example.com/items/item_toy_cube'],
       },
@@ -50,7 +49,7 @@ describe('aiModelApi', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         conversation_id: null,
-        user_id: 'anon_test',
+        user_id: 1,
         message: '有推荐的解压玩具吗',
         links: ['https://shop.example.com/items/item_toy_cube'],
       }),
@@ -65,17 +64,44 @@ describe('aiModelApi', () => {
     expect('tool_results' in response).toBe(false)
   })
 
-  it('creates and reuses a local anonymous AImodel user id', async () => {
-    const randomUUID = vi.fn().mockReturnValue('00000000-0000-4000-8000-000000000001')
-    vi.stubGlobal('crypto', { randomUUID })
-    const { getOrCreateAiModelUserId } = await import('@/services/aiModelApi')
+  it('fetches AImodel conversations and stored messages for the numeric user id', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{ id: 123, title: '我喜欢小米', created_at: null, updated_at: null }],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          {
+            id: 1,
+            role: 'user',
+            content: '我喜欢小米',
+            links: [],
+            recommended_links: [],
+            created_at: null,
+          },
+        ],
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    const { fetchAiModelConversationMessages, fetchAiModelConversations } = await import('@/services/aiModelApi')
 
-    const firstUserId = getOrCreateAiModelUserId()
-    const secondUserId = getOrCreateAiModelUserId()
+    const conversations = await fetchAiModelConversations(1)
+    const messages = await fetchAiModelConversationMessages(123, 1)
 
-    expect(firstUserId).toBe('anon_00000000-0000-4000-8000-000000000001')
-    expect(secondUserId).toBe(firstUserId)
-    expect(localStorage.getItem('aimodel_user_id')).toBe(firstUserId)
-    expect(randomUUID).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/ai-service/AImodel/conversations?user_id=1')
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/ai-service/AImodel/conversations/123/messages?user_id=1')
+    expect(conversations).toEqual([{ id: 123, title: '我喜欢小米', created_at: null, updated_at: null }])
+    expect(messages).toEqual([
+      {
+        id: 1,
+        role: 'user',
+        content: '我喜欢小米',
+        links: [],
+        recommended_links: [],
+        created_at: null,
+      },
+    ])
   })
 })

@@ -1,3 +1,5 @@
+import importlib
+
 import httpx
 from fastapi.testclient import TestClient
 
@@ -17,6 +19,8 @@ from app.routers.AImodel.tools import (
     parse_item_id_from_link,
     search_products,
 )
+
+aimodel_router = importlib.import_module("app.routers.AImodel.router")
 
 
 def test_parse_item_id_from_frontend_product_link() -> None:
@@ -106,7 +110,7 @@ def test_handle_chat_returns_503_when_dashscope_api_key_is_missing(monkeypatch) 
 
     response = TestClient(app).post(
         "/AImodel/chat",
-        json={"user_id": "anon_test", "message": "有推荐的解压玩具吗", "links": []},
+        json={"user_id": 1, "message": "有推荐的解压玩具吗", "links": []},
     )
 
     assert response.status_code == 503
@@ -124,7 +128,7 @@ def test_chat_endpoint_streams_sse_from_existing_route(monkeypatch) -> None:
 
     events = list(
         stream_chat_events(
-            AiModelChatRequest(user_id="anon_test", conversation_id=None, message="有推荐的解压玩具吗", links=[]),
+            AiModelChatRequest(user_id=1, conversation_id=None, message="有推荐的解压玩具吗", links=[]),
             mock_api_url="http://mock-api",
             streaming_agent_runner=fake_streaming_agent_runner,
             memory_store=memory_store,
@@ -161,7 +165,7 @@ def test_stream_chat_filters_tool_json_from_model_answer(monkeypatch) -> None:
 
     events = list(
         stream_chat_events(
-            AiModelChatRequest(user_id="anon_test", conversation_id=1, message="如何挑选高性价比的无线耳机?", links=[]),
+            AiModelChatRequest(user_id=1, conversation_id=1, message="如何挑选高性价比的无线耳机?", links=[]),
             mock_api_url="http://mock-api",
             streaming_agent_runner=fake_streaming_agent_runner,
             memory_store=NoopAiModelMemoryStore(),
@@ -188,7 +192,7 @@ def test_extract_stream_token_reads_ai_message_chunks() -> None:
 def test_langchain_messages_use_human_message() -> None:
     messages = _build_langchain_messages(
         AiModelChatRequest(
-            user_id="anon_test",
+            user_id=1,
             message="帮我对比这两个商品",
             links=["https://shop.example.com/items/item_milk_pure"],
         )
@@ -202,7 +206,7 @@ def test_langchain_messages_use_human_message() -> None:
 def test_langchain_messages_include_recent_history_and_user_memories() -> None:
     messages = _build_langchain_messages(
         AiModelChatRequest(
-            user_id="anon_test",
+            user_id=1,
             message="那我刚才喜欢什么?",
             links=[],
         ),
@@ -229,7 +233,7 @@ def test_langchain_messages_include_recent_history_and_user_memories() -> None:
 
 
 def test_extract_answer_ignores_human_message_stream_updates() -> None:
-    messages = _build_langchain_messages(AiModelChatRequest(user_id="anon_test", message="你好", links=[]))
+    messages = _build_langchain_messages(AiModelChatRequest(user_id=1, message="你好", links=[]))
 
     assert _extract_answer({"messages": messages}) == ""
 
@@ -261,7 +265,7 @@ def test_handle_chat_uses_injected_agent_runner_without_real_dashscope(monkeypat
 
     response = handle_chat(
         AiModelChatRequest(
-            user_id="anon_test",
+            user_id=1,
             conversation_id=1,
             message="帮我对比这两个商品",
             links=["https://shop.example.com/items/item_milk_pure"],
@@ -275,3 +279,44 @@ def test_handle_chat_uses_injected_agent_runner_without_real_dashscope(monkeypat
     assert response.conversation_id == 1
     assert response.answer == "纯牛奶更适合早餐场景。"
     assert response.recommended_links[0].item_id == "item_milk_pure"
+
+
+def test_conversation_routes_list_conversations_and_messages(monkeypatch) -> None:
+    store = NoopAiModelMemoryStore()
+    conversation_id = store.ensure_conversation(None, user_id=1, first_message="我喜欢小米")
+    store.append_user_message(conversation_id, user_id=1, content="我喜欢小米", links=[])
+    store.append_assistant_message(conversation_id, user_id=1, content="已记住。", recommended_links=[])
+    monkeypatch.setattr(aimodel_router, "get_aimodel_memory_store", lambda: store)
+
+    client = TestClient(app)
+    conversations_response = client.get("/AImodel/conversations", params={"user_id": 1})
+    messages_response = client.get(f"/AImodel/conversations/{conversation_id}/messages", params={"user_id": 1})
+
+    assert conversations_response.status_code == 200
+    assert conversations_response.json() == [
+        {
+            "id": conversation_id,
+            "title": "我喜欢小米",
+            "created_at": None,
+            "updated_at": None,
+        }
+    ]
+    assert messages_response.status_code == 200
+    assert messages_response.json() == [
+        {
+            "id": 1,
+            "role": "user",
+            "content": "我喜欢小米",
+            "links": [],
+            "recommended_links": [],
+            "created_at": None,
+        },
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": "已记住。",
+            "links": [],
+            "recommended_links": [],
+            "created_at": None,
+        },
+    ]

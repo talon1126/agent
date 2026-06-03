@@ -1,4 +1,9 @@
-import type { AiModelChatRequest, AiModelChatResponse } from '@/types/aiModel'
+import type {
+  AiModelChatRequest,
+  AiModelChatResponse,
+  AiModelConversationSummary,
+  AiModelStoredMessage,
+} from '@/types/aiModel'
 
 interface AiModelStreamHandlers {
   onStatus?: (content: string) => void
@@ -7,21 +12,28 @@ interface AiModelStreamHandlers {
 }
 
 const aiServiceBaseUrl = (import.meta.env.VITE_AI_SERVICE_BASE_URL?.trim() || '/ai-service').replace(/\/$/, '')
-const aiModelUserIdStorageKey = 'aimodel_user_id'
 
-export function getOrCreateAiModelUserId(): string {
-  const existingUserId = localStorage.getItem(aiModelUserIdStorageKey)
-  if (existingUserId) {
-    return existingUserId
+export async function fetchAiModelConversations(userId: number): Promise<AiModelConversationSummary[]> {
+  // 中文注释：AI 模式打开时按当前 users.id 拉取历史会话，供用户选择继续或新建。
+  const response = await fetch(`${aiServiceBaseUrl}/AImodel/conversations?user_id=${encodeURIComponent(userId)}`)
+  if (!response.ok) {
+    throw new Error(await response.text())
   }
+  return await response.json()
+}
 
-  // 中文注释：AImodel 长期偏好记忆按匿名用户 ID 归属；没有登录系统时用 localStorage 稳定标识同一浏览器用户。
-  const randomId =
-    globalThis.crypto?.randomUUID?.() ||
-    `${Date.now()}-${Math.random().toString(16).slice(2)}`
-  const userId = `anon_${randomId}`
-  localStorage.setItem(aiModelUserIdStorageKey, userId)
-  return userId
+export async function fetchAiModelConversationMessages(
+  conversationId: number,
+  userId: number,
+): Promise<AiModelStoredMessage[]> {
+  // 中文注释：选择旧会话后再拉取消息正文，避免打开面板时一次性加载所有历史内容。
+  const response = await fetch(
+    `${aiServiceBaseUrl}/AImodel/conversations/${encodeURIComponent(conversationId)}/messages?user_id=${encodeURIComponent(userId)}`,
+  )
+  if (!response.ok) {
+    throw new Error(await response.text())
+  }
+  return await response.json()
 }
 
 export async function streamAiModel(

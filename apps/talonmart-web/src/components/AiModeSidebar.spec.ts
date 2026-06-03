@@ -3,22 +3,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AiModeSidebar from './AiModeSidebar.vue'
 
-const { getOrCreateAiModelUserId, streamAiModel } = vi.hoisted(() => ({
-  getOrCreateAiModelUserId: vi.fn(),
+const { fetchAiModelConversationMessages, fetchAiModelConversations, streamAiModel } = vi.hoisted(() => ({
+  fetchAiModelConversationMessages: vi.fn(),
+  fetchAiModelConversations: vi.fn(),
   streamAiModel: vi.fn(),
 }))
 
 vi.mock('@/services/aiModelApi', () => ({
-  getOrCreateAiModelUserId,
+  fetchAiModelConversationMessages,
+  fetchAiModelConversations,
   streamAiModel,
 }))
 
 describe('AiModeSidebar', () => {
   beforeEach(() => {
     streamAiModel.mockReset()
-    getOrCreateAiModelUserId.mockReset()
-    getOrCreateAiModelUserId.mockReturnValue('anon_component_test')
-    localStorage.clear()
+    fetchAiModelConversations.mockReset()
+    fetchAiModelConversationMessages.mockReset()
+    fetchAiModelConversations.mockResolvedValue([])
+    fetchAiModelConversationMessages.mockResolvedValue([])
   })
 
   it('opens and closes the AI mode chat panel from the sidebar entry', async () => {
@@ -31,8 +34,11 @@ describe('AiModeSidebar', () => {
     expect(wrapper.text()).not.toContain('有问题，找京言')
 
     await wrapper.get('button[aria-label="Open AI mode"]').trigger('click')
+    await flushPromises()
+
     expect(wrapper.text()).toContain('有问题，找京言')
     expect(wrapper.find('textarea[aria-label="请输入你的问题"]').exists()).toBe(true)
+    expect(fetchAiModelConversations).toHaveBeenCalledWith(1)
 
     await wrapper.get('button[aria-label="Close AI mode"]').trigger('click')
     expect(wrapper.text()).not.toContain('有问题，找京言')
@@ -62,12 +68,13 @@ describe('AiModeSidebar', () => {
     const wrapper = mount(AiModeSidebar)
 
     await wrapper.get('button[aria-label="Open AI mode"]').trigger('click')
+    await flushPromises()
     await wrapper.get('button[data-testid="ai-quick-prompt"]').trigger('click')
     await flushPromises()
 
     expect(streamAiModel).toHaveBeenCalledWith(
       {
-        user_id: 'anon_component_test',
+        user_id: 1,
         conversation_id: null,
         message: '居家提升幸福感好物',
         links: [],
@@ -107,10 +114,45 @@ describe('AiModeSidebar', () => {
     const wrapper = mount(AiModeSidebar)
 
     await wrapper.get('button[aria-label="Open AI mode"]').trigger('click')
+    await flushPromises()
     await wrapper.get('button[data-testid="ai-quick-prompt"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.findAll('.ai-message__paragraph')).toHaveLength(1)
     expect(wrapper.findAll('.ai-message__list-item')).toHaveLength(2)
+  })
+
+  it('loads messages when a previous conversation is selected', async () => {
+    fetchAiModelConversations.mockResolvedValue([
+      { id: 123, title: '我喜欢小米', created_at: null, updated_at: null },
+    ])
+    fetchAiModelConversationMessages.mockResolvedValue([
+      {
+        id: 1,
+        role: 'user',
+        content: '我喜欢小米',
+        links: [],
+        recommended_links: [],
+        created_at: null,
+      },
+      {
+        id: 2,
+        role: 'assistant',
+        content: '已记住。',
+        links: [],
+        recommended_links: [],
+        created_at: null,
+      },
+    ])
+    const wrapper = mount(AiModeSidebar)
+
+    await wrapper.get('button[aria-label="Open AI mode"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('button[data-testid="ai-conversation-item"]').trigger('click')
+    await flushPromises()
+
+    expect(fetchAiModelConversationMessages).toHaveBeenCalledWith(123, 1)
+    expect(wrapper.text()).toContain('我喜欢小米')
+    expect(wrapper.text()).toContain('已记住。')
   })
 })

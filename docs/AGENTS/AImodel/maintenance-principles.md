@@ -6,8 +6,8 @@
 - 会话记忆只保存用户自然语言和 assistant 最终回答，不保存工具 JSON、隐藏推理或 system prompt。
 - `conversation.id` 和 `message.id` 必须保持 int 自增主键；`message.conversation_id` 只做逻辑外键，不补物理外键约束。
 - 当前窗口只注入最近 5 条 `message`，不要在没有摘要设计前无限注入历史消息。
-- 长期记忆按前端匿名 `user_id` 归属，只保存明确购物偏好，不从一次普通查询中过度推断。
-- 前端必须通过 `localStorage.aimodel_user_id` 生成或复用匿名用户 ID，并随 `/AImodel/chat` 请求传给后端。
+- 长期记忆按数字 `user_id` 归属，只保存明确购物偏好，不从一次普通查询中过度推断。
+- 前端首版必须复用现有 `CART_USER_ID = 1`，随 `/AImodel/chat` 和会话查询请求传给后端；后续接登录后再切换为真实 `users.id`。
 - 前端 `AI模式` 入口只负责收集用户问题和商品链接，不在前端硬编码推荐结果。
 - 新增或修改 AImodel 业务代码时，必须添加中文注释说明关键业务意图。
 - 变更接口字段、表结构、工具返回结构、推荐链接规则、记忆策略或模型配置时，同步更新 `docs/AImodel/design.md` 和本目录文档。

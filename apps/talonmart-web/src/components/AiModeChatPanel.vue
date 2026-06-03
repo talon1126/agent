@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Bot, MoreHorizontal, Send, X } from 'lucide-vue-next'
 
-import { getOrCreateAiModelUserId, streamAiModel } from '@/services/aiModelApi'
-import type { AiModelRecommendedLink } from '@/types/aiModel'
+import {
+  fetchAiModelConversationMessages,
+  fetchAiModelConversations,
+  streamAiModel,
+} from '@/services/aiModelApi'
+import { CART_USER_ID } from '@/services/cartApi'
+import type { AiModelConversationSummary, AiModelRecommendedLink, AiModelStoredMessage } from '@/types/aiModel'
 
 interface ChatMessage {
   id: string
@@ -25,14 +30,21 @@ const emit = defineEmits<{
 }>()
 
 const quickPrompts = ['居家提升幸福感好物', '换季修护必备护肤品', '如何挑选高性价比的无线耳机?', '2026早春流行穿搭']
-const userId = getOrCreateAiModelUserId()
+const userId = CART_USER_ID
 const conversationId = ref<number | null>(null)
+const conversations = ref<AiModelConversationSummary[]>([])
 const draft = ref('')
 const isSending = ref(false)
+const isLoadingConversations = ref(false)
+const isLoadingMessages = ref(false)
 const errorMessage = ref('')
 const messages = ref<ChatMessage[]>([])
 
 const canSend = computed(() => draft.value.trim().length > 0 && !isSending.value)
+
+onMounted(() => {
+  void loadConversations()
+})
 
 function extractLinks(text: string): string[] {
   // 中文注释：用户把商品链接直接粘到输入框时，前端提取链接并交给 AImodel 工具处理。
@@ -89,6 +101,55 @@ function formatAssistantContent(content: string): AssistantContentBlock[] {
     })
 }
 
+function mapStoredMessage(message: AiModelStoredMessage): ChatMessage {
+  return {
+    id: `stored-${message.id}`,
+    role: message.role,
+    content: message.content,
+    links: message.recommended_links,
+  }
+}
+
+async function loadConversations() {
+  isLoadingConversations.value = true
+  try {
+    conversations.value = await fetchAiModelConversations(userId)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '会话列表加载失败，请稍后再试。'
+  } finally {
+    isLoadingConversations.value = false
+  }
+}
+
+async function selectConversation(conversation: AiModelConversationSummary) {
+  if (isSending.value) {
+    return
+  }
+
+  errorMessage.value = ''
+  isLoadingMessages.value = true
+  try {
+    // 中文注释：用户选择旧会话后，前端加载该会话的自然语言消息并继续沿用同一个 conversation_id。
+    const storedMessages = await fetchAiModelConversationMessages(conversation.id, userId)
+    conversationId.value = conversation.id
+    messages.value = storedMessages.map(mapStoredMessage)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '历史消息加载失败，请稍后再试。'
+  } finally {
+    isLoadingMessages.value = false
+  }
+}
+
+function startNewConversation() {
+  if (isSending.value) {
+    return
+  }
+  // 中文注释：新对话不提前创建数据库记录，首条消息发送成功后由后端返回新的 conversation_id。
+  conversationId.value = null
+  messages.value = []
+  errorMessage.value = ''
+}
+
 async function sendMessage(messageText = draft.value) {
   const message = messageText.trim()
   if (!message || isSending.value) {
@@ -133,6 +194,7 @@ async function sendMessage(messageText = draft.value) {
       },
     )
     conversationId.value = response.conversation_id ?? conversationId.value
+    void loadConversations()
   } catch (error) {
     messages.value = messages.value.filter((chatMessage) => chatMessage.id !== assistantMessage.id)
     errorMessage.value = error instanceof Error ? error.message : 'AI模式暂时不可用，请稍后再试。'
@@ -168,6 +230,32 @@ function useQuickPrompt(prompt: string) {
       <div class="ai-panel__intro">
         <p class="ai-panel__hi">Hi!</p>
         <p>我是京言，你的专属 AI 购物助手，我可以为你解答各种购物问题，提供实用信息。有问题问京言~</p>
+      </div>
+
+      <div class="ai-panel__conversation-bar" aria-label="AI conversations">
+        <button
+          class="ai-panel__conversation"
+          :class="{ 'ai-panel__conversation--active': conversationId === null }"
+          type="button"
+          data-testid="ai-new-conversation"
+          :disabled="isSending"
+          @click="startNewConversation"
+        >
+          新对话
+        </button>
+        <button
+          v-for="conversation in conversations"
+          :key="conversation.id"
+          class="ai-panel__conversation"
+          :class="{ 'ai-panel__conversation--active': conversationId === conversation.id }"
+          type="button"
+          data-testid="ai-conversation-item"
+          :disabled="isSending || isLoadingMessages"
+          @click="selectConversation(conversation)"
+        >
+          {{ conversation.title || '未命名会话' }}
+        </button>
+        <span v-if="isLoadingConversations || isLoadingMessages" class="ai-panel__conversation-status">加载中</span>
       </div>
 
       <div class="ai-panel__prompts" aria-label="AI quick prompts">
@@ -312,6 +400,46 @@ function useQuickPrompt(prompt: string) {
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 20px;
+}
+
+.ai-panel__conversation-bar {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.ai-panel__conversation {
+  max-width: 148px;
+  min-height: 34px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #344054;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-panel__conversation:hover,
+.ai-panel__conversation--active {
+  border-color: #ff8aa0;
+  background: #fff0f3;
+  color: #101828;
+}
+
+.ai-panel__conversation-status {
+  align-self: center;
+  color: #667085;
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .ai-panel__prompt {

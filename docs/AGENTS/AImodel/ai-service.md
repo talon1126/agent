@@ -16,7 +16,7 @@
 
 - `conversation`：保存聊天窗口会话，主键为 `id` int 自增，`title` 为 `VARCHAR(40)`，不设置 `conversation_id` 文本字段。
 - `message`：保存用户消息和 assistant 最终回答，主键为 `id` int 自增，`conversation_id` 只做逻辑外键，不创建物理外键约束。
-- `user_memory`：按匿名 `user_id` 保存长期购物偏好，例如品牌偏好和高性价比偏好。
+- `user_memory`：按数字 `user_id` 保存长期购物偏好，例如品牌偏好和高性价比偏好；首版前端复用 `CART_USER_ID = 1`，对应 `users.id`。
 - 窗口记忆：每次请求只读取当前 `conversation_id` 最近 5 条 `message` 注入 LangChain。
 - 长期记忆：从用户明确表达中规则型提取，后续请求按 `user_id` 注入上下文，不在 SSE 响应中直接暴露。
 - 工具结果、工具 JSON、隐藏推理和 system prompt 不写入 `message`，也不作为长期偏好保存。
