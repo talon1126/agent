@@ -1,0 +1,4 @@
+interface:
+  display_name: "DEV_SPEC Writer"
+  short_description: "Create full lifecycle DEV_SPEC docs."
+  default_prompt: "Help me create a DEV_SPEC.md for my project."

@@ -1,0 +1,3128 @@
+# AImodel RAG DEV_SPEC
+
+> 本文档用于指导 `services/ai-service/rag` 下模块化 RAG 系统的开发。文档面向后续开发者和 agent，要求实现过程遵循 TDD、配置驱动、模块化边界和中文业务注释规范。
+
+## 1. 项目概述
+
+### 1.1 项目定位
+
+`AImodel RAG` 是 `ai-service` 内的检索增强生成子系统，用于为 AImodel 购物对话 agent 提供“可引用、可追踪、可评估”的知识检索能力。
+
+首版定位不是替代商品搜索、商品详情、价格、库存和商品链接推荐。实时商品事实仍由现有后端商品 API 工具提供，RAG 负责补充以下知识：
+
+- 品类选购指南，例如无线耳机、解压玩具、护肤品、家居好物、小家电。
+- 平台政策和 FAQ，例如退换货、优惠券、物流、售后说明。
+- 商品说明文档和品牌知识，例如使用方法、适用人群、避坑点。
+- 对比决策标准，例如高性价比、送礼、学生党、敏感肌、降噪通勤等判断规则。
+
+### 1.2 设计理念
+
+本项目强调“架构清晰、易于讲解、可逐步替换”。所有核心能力都通过抽象接口和工厂模式接入，运行时通过 `settings.yaml` 切换 Provider。
+
+核心原则：
+
+- **本地优先**：Dashboard、Trace、评估和索引管理优先在本地完成。
+- **可独立部署**：`services/ai-service/rag` 可作为独立 Python 模块通过 Docker 部署，也可以作为 `ai-service` 内部子系统被 AImodel 调用。
+- **PostgreSQL 统一持久化**：文档、chunk、embedding、BM25 统计、摄取任务、Trace、评估结果全部写入 PostgreSQL。
+- **pgvector 首发**：首版只实现 `pgvector` 向量库，接口层预留后续扩展。
+- **不绑定 RAG 框架**：不使用 LlamaIndex，不使用 LangChain RAG 链路；仅允许使用 `langchain-text-splitters` 中的 splitter。
+- **多模态轻量化**：图片采用 Image-to-Text 策略，由 Vision LLM 生成中文图片描述，再注入 chunk 文本，不使用 CLIP 多模态向量。
+- **可观测和可评估**：Ingestion 和 Query 全链路都有 Trace，RAG 质量通过 Ragas 和自定义指标持续评估。
+- **安全边界明确**：RAG 结果必须带来源引用，不允许替商品库编造商品名称、商品价格或商品链接。
+
+### 1.3 首批知识库
+
+首批 collection：
+
+```text
+shopping_guides
+```
+
+首批人工维护 Markdown 指南：
+
+- 无线耳机选购指南
+- 解压玩具选购指南
+- 护肤品选购指南
+- 家居好物选购指南
+- 小家电选购指南
+
+每篇指南建议使用统一结构：
+
+```markdown
+# 类目选购指南
+
+## 适合人群
+## 核心判断标准
+## 高性价比怎么判断
+## 常见坑点
+## 推荐决策规则
+## 用户常见问题
+```
+
+## 2. 核心特点
+
+### 2.1 智能分块
+
+传统 RAG 项目常见问题是把文档按固定长度硬切，容易把一个完整观点拆散，导致检索命中的片段缺少语义上下文。
+
+本项目采用 **智能分块** 思路：不是简单定长切分，而是结合 Markdown 标题层级、段落结构、列表结构和语义边界进行切分，尽量让每个 chunk 保留一个相对完整的知识点。
+
+这样做的价值是：
+
+- 检索结果更容易命中完整观点，而不是零碎句子。
+- Agent 总结时上下文更完整，回答更自然。
+- 后续引用来源时，可以更清楚地对应到原文章节。
+
+### 2.2 上下文增强
+
+普通 chunk 往往只保存正文片段，一旦脱离原始文档，就可能看不懂“这里的它”“这个方法”“上述参数”指的是什么。
+
+本项目会做 **上下文增强**：在 chunk 进入索引前，把标题路径、文档主题、关键元数据、相邻段落摘要和图片描述等信息补充到 chunk 中，让每个 chunk 尽量具备独立表达能力。
+
+上下文增强的作用：
+
+- 提升短问题和口语化问题的命中率。
+- 降低模型拿到片段后误解上下文的概率。
+- 让最终回答更容易解释“为什么推荐这个判断标准”。
+
+### 2.3 混合检索
+
+单一检索方式很难覆盖所有问题。关键词检索擅长命中明确词语，但不理解同义表达；向量检索能理解语义相似，但可能漏掉关键型号、品牌、术语。
+
+本项目采用 **混合检索**：
+
+- **稀疏检索 BM25**：根据关键词、词频和文档相关性进行匹配，适合品牌名、类目名、参数名、政策关键词等精确查询。
+- **稠密检索 Dense Embedding**：使用 `text-embedding-3-small` 把问题和 chunk 转成向量，适合理解“高性价比”“适合送人”“通勤降噪”这类语义问题。
+
+两路结果再做融合排序，既保留关键词检索的稳定性，也利用语义检索的泛化能力。
+
+这个设计适合购物问答场景，因为用户既可能输入明确商品词，也可能输入非常主观的需求描述。
+
+### 2.4 两段式重排
+
+检索系统一般先追求“召回足够多”，再追求“排序足够准”。如果只靠第一阶段检索结果直接回答，可能会把相关但不够关键的片段排在前面。
+
+本项目采用 **粗排到精排** 的两段式设计：
+
+- 粗排阶段：用 BM25 和 Dense 检索快速召回候选片段。
+- 精排阶段：支持 Cross-Encoder 或 LLM Rerank，对候选片段重新排序。
+
+这样可以在性能和质量之间取得平衡：粗排保证速度和覆盖面，精排提升最终提供给 Agent 的上下文质量。
+
+### 2.5 全链路可插拔
+
+RAG 系统里最容易变化的是模型、向量库、重排器和评估方式。如果直接把某个 Provider 写死在业务代码里，后续替换成本会很高。
+
+本项目采用 **可插拔架构**：LLM、Embedding、Reranker、VectorStore、Splitter、Evaluator 都通过抽象接口、工厂模式和 `settings.yaml` 配置创建。
+
+首批支持方向包括：
+
+- LLM：Azure OpenAI、OpenAI、Ollama、DeepSeek。
+- Embedding：OpenAI `text-embedding-3-small`。
+- VectorStore：PostgreSQL + pgvector。
+- Splitter：仅使用 LangChain 的 `RecursiveCharacterTextSplitter`，不依赖 LangChain RAG 框架。
+
+这个设计的亮点是：项目可以清楚展示“工程可扩展性”，而不是只做一个临时 Demo。
+
+### 2.6 MCP 集成
+
+本项目会通过 **Python 官方 MCP SDK** 把 RAG 能力暴露为标准工具，让外部 agent 或开发工具可以直接调用知识库。
+
+核心工具包括：
+
+- `query_knowledge_hub`：查询知识库并返回带引用的结果。
+- `list_collections`：查看当前有哪些知识集合。
+- `get_document_summary`：获取某个文档的摘要和结构。
+
+MCP 的价值是让 RAG 不只服务当前 AImodel，也可以作为一个通用知识服务被其他 agent 复用。
+
+### 2.7 可视化管理平台
+
+很多 RAG 项目只有后端接口，出了问题只能翻日志，难以向非开发者解释“知识库里有什么、检索为什么命中、策略调整有没有变好”。
+
+本项目提供 **可视化管理平台**，用 Streamlit 构建本地 Dashboard，把摄取、检索、追踪和评估过程都放到页面上展示。
+
+平台包含六大功能页面：
+
+- **系统总览**：展示当前启用的可插拔组件，包括 LLM、Embedding、Splitter、Reranker 等
+- **Ingestion 管理**：支持在页面选择文件进行摄入，实时展示 Markdown 转换、智能分块、上下文增强、Embedding、入库等阶段进度，也支持删除已摄入文档。
+- **数据浏览器**：查询已经索引的文档和 chunk 详情，方便确认知识是否真的进入系统，以及 chunk 内容是否适合被检索。
+- **Query 追踪**：查看查询历史、耗时瀑布图、Dense/BM25 召回对比，以及 rerank 前后的排名变化，用可视化方式解释一次查询是如何得到结果的。
+- **Ingestion 追踪**：展示每次摄取任务在各阶段的耗时和状态，帮助定位是文件解析慢、分块慢、模型调用慢，还是数据库写入慢。
+- **评估面板**：展示运行中的评估任务、各项指标对比和历史趋势对比，确保每一次分块、检索、重排或提示词策略调整都有量化分数支撑。
+
+这个平台的亮点是把 RAG 从“黑盒问答接口”变成 **可观察、可调试、可量化优化的工程系统**。
+
+### 2.8 可观测性
+
+RAG 系统的难点不是“能不能回答”，而是回答不好时能不能定位原因。问题可能出在文档摄取、分块、embedding、检索、重排或最终生成。
+
+本项目内置 **全链路可观测性**：
+
+- Ingestion 链路记录文档转换、分块、增强、embedding、入库等步骤。
+- Query 链路记录问题处理、稀疏检索、稠密检索、融合、重排和引用构造。
+- Trace 使用结构化 JSON Lines 日志，并把关键索引写入 PostgreSQL。
+- Dashboard 使用 Streamlit 本地启动，不依赖 LangSmith 等外部平台。
+
+这个设计方便展示系统工程能力：不仅能做 RAG，还能解释 RAG 为什么这样回答。
+
+### 2.9 质量评估
+
+RAG 项目不能只靠人工体验判断效果，需要有可重复的质量评估。
+
+本项目设计了 **可插拔评估体系**：
+
+- 使用 Ragas 评估回答的忠实度、上下文相关性等生成质量。
+- 使用自定义指标评估检索质量，例如 `hit_rate`、`MRR`、引用命中率、空结果率。
+- 评估结果写入 PostgreSQL，并在 Dashboard 中展示趋势。
+
+这样可以把 RAG 从“能跑的功能”提升为“能持续优化的系统”。
+
+## 3. 技术选型
+
+### 3.1 运行时技术栈
+
+| 类别 | 首版选择 | 说明 |
+| --- | --- | --- |
+| 语言 | Python 3.12 | 与现有 `ai-service` 保持一致 |
+| Web 服务 | FastAPI | AImodel 已使用 FastAPI |
+| 数据库 | PostgreSQL | 唯一持久化层 |
+| 向量库 | pgvector | 首版唯一实现 |
+| Embedding | OpenAI `text-embedding-3-small` | 默认维度 1536 |
+| Splitter | `langchain-text-splitters` | 只使用 splitter，不使用 LangChain RAG |
+| PDF 转 Markdown | MarkItDown | 统一进入 Markdown 中间格式 |
+| MCP | Python 官方 MCP SDK | 暴露 RAG tools |
+| Dashboard | Streamlit | 本地轻量 Dashboard |
+| 测试 | pytest | 单元、集成、E2E、评估测试 |
+
+### 3.2 RAG 流水线设计
+
+RAG 流水线分为两条主链路：**数据摄取流水线** 和 **检索流水线**。
+
+整体设计参考 LlamaIndex 的分层思想，但不直接依赖 LlamaIndex 框架。项目内部自定义轻量接口，例如 `BaseLoader`、`BaseSplitter`、`BaseTransform`、`BaseEmbedding`、`BaseVectorStore`，让每一层都可以独立替换、组合和测试。
+
+#### 3.2.1 流水线框架
+
+数据摄取流水线负责把外部文件变成可检索的向量和索引数据：
+
+```text
+Dedup -> Loader -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25Indexer -> BatchProcessor -> Upsert -> 文档生命周期管理
+```
+
+检索流水线负责把用户问题变成可引用的上下文结果：
+
+```text
+查询预处理 -> 双路混合检索 -> 候选过滤 -> 重排 -> 引用结果构造
+```
+
+流水线要支持 **可组合**：不同 Loader、Splitter、Transform、Embedding 和 VectorStore 可以通过配置组合成不同策略。例如首版使用 PDF/Markdown Loader + RecursiveCharacterTextSplitter + ImageCaptioner + OpenAI Embedding + pgvector，后续可以替换某一层而不重写整条链路。
+
+#### 3.2.2 数据摄取流水线
+
+数据摄取的目标是先识别原始资料是否发生变化，再把 PDF、Markdown、文档说明等资料转换为统一的 `Document(id + text + metadata)` 对象，随后逐步加工为 chunk、embedding 和可追踪的索引记录。
+
+| 层级 | 职责 | 关键实现要素 |
+| --- | --- | --- |
+| `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹，若 `ingestion_history` 中存在相同哈希且状态为 `success`，则直接跳过，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
+| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + metadata)` 对象 | 负责文件识别、PDF -> Markdown、编码处理、基础 metadata 抽取和图片提取；只处理去重判断后确认需要摄取的文档 |
+| `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
+| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、继承 `document.metadata`、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并按图片占位符位置分发 `image_refs` |
+| `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
+| `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后写入 chunk metadata；未启用 Vision LLM、无 `image_refs` 或生成失败时安全跳过并写入状态 |
+| `BaseEmbedding` | 将增强后的 chunk 执行双路索引 | 在编码前先计算 `content_hash`，只对数据库中不存在的内容哈希执行新编码；DenseEncoder 调用 `text-embedding-3-small` 生成语义向量；BM25Indexer 生成词项、词频和倒排索引；BatchProcessor 统一处理批量、限流、重试和失败隔离 |
+| `BaseVectorStore` | 将 chunk、metadata、Dense 向量和 Sparse 检索数据写入 PostgreSQL | 首版只实现 PostgreSQL + pgvector；upsert 时保证同一文档版本的 chunk 可覆盖更新；`chunk_id` 使用 `hash(source_path + section_path + content_hash)` 生成，确保同一来源、同一章节、同一内容具有稳定标识 |
+| 文档生命周期管理 | 管理文档从摄取、更新、删除到重建索引的状态 | 支持 `pending`、`processing`、`success`、`failed`、`deleted`；删除文档时同步删除对应 chunk、向量、BM25 统计和检索可见状态 |
+
+chunk 标识规则：
+
+```text
+chunk_id = hash(source_path + section_path + content_hash)
+```
+
+其中 `source_path` 表示文档来源路径，`section_path` 表示标题层级或逻辑章节，`content_hash` 表示 chunk 最终文本内容哈希。这个规则让 chunk 在重复摄取、差量更新和引用追踪时保持稳定。
+
+Splitter 职责边界：
+
+- `libs.splitter`：纯文本切分工具，输入 `str`，输出 `List[str]`，只负责切分策略，不涉及业务对象。
+- `DocumentChunker`：业务适配器，输入 `Document` 对象，输出 `List[Chunk]` 对象，负责补齐 chunk 业务字段和类型转换。
+
+摄取链路的重点不是只完成入库，而是保证 **可重复执行、可差量计算、可跳过重复、可追踪失败、可删除重建**。
+
+Indexing Pipeline 首版必须并入统一摄取入口：`IngestionPipeline.run()` 在完成 Loader、Splitter、Transform 和 ImageCaptioner 后继续调用 `IngestionPipeline.run_indexing()`，串联 `content_hash` 差量判断、Dense 向量编码、BM25Indexer 和 pgvector/BM25 upsert。该统一入口必须有集成测试，不能只实现分散的 encoder 或 upsert step。
+
+#### 3.2.3 核心数据对象设计
+
+RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象。Loader 只负责生成 `Document`，Splitter 和 Transform 负责把 `Document` 加工为 `Chunk`，Embedding 和 Storage 只面向稳定的 `Chunk` 写入索引。
+
+`Document` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `str` | 文档稳定 ID，建议由 `collection + source_path + source_hash` 生成 |
+| `text` | `str` | 文档统一文本内容，PDF 先转 Markdown，图片位置写入占位符 |
+| `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息 |
+
+`Chunk` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `str` | chunk 稳定 ID，使用 `hash(source_path + section_path + content_hash)` |
+| `text` | `str` | chunk 最终可检索文本，包含上下文增强和可选图片描述 |
+| `chunk_index` | `int` | chunk 在当前 Document 中的排序，从 0 开始递增 |
+| `start_offset` | `int` | chunk 在 `Document.text` 中的起始位置 |
+| `end_offset` | `int` | chunk 在 `Document.text` 中的结束位置 |
+| `source_ref` | `dict/null` | 可选来源引用，建议包含 `document_id`、`source_path`、`section_path`、`page`、`collection`，用于引用构造和 trace 回溯 |
+
+`metadata.images[]` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `str` | 图片稳定 ID |
+| `path` | `str` | 原始图片在文件系统中的存储路径 |
+| `page` | `int/null` | 图片在原文中的页码；Markdown 图片可为空 |
+| `text_offset` | `int` | 图片占位符在 `Document.text` 中的起始位置 |
+| `text_length` | `int` | 图片占位符文本长度 |
+| `position` | `dict` | 图片在原文中的物理位置信息，例如 `x`、`y`、`width`、`height`、`bbox` |
+
+说明：
+
+- 字段命名统一使用 `start_offset`，不使用 `start_offest`。
+- `text_offset` 和 `text_length` 基于完整 `Document.text` 计算，Splitter 根据 offset 交集为 chunk 生成 `image_refs`。
+- `source_ref` 是可选字段，但首版建议保留，方便 Dashboard 展示引用来源、原文位置和关联图片。
+- `DocumentChunker` 必须把 `Document.metadata` 复制到 `Chunk.metadata`，再追加 `chunk_index`、`image_refs`、`source_ref` 等 chunk 级字段，避免丢失文档来源信息。
+
+`RetrievalResult` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `chunk_id` | `str` | 命中的 chunk ID |
+| `text` | `str` | 命中的 chunk 文本 |
+| `score` | `float` | 当前检索路线返回的相关性分数；Dense/BM25 分数量纲不同，只记录，不直接互相比大小 |
+| `metadata` | `dict` | chunk metadata，包含 collection、source_ref、section_path、image_refs、文档状态等过滤和引用信息 |
+
+#### 3.2.4 检索流水线
+
+检索流水线的目标是把用户自然语言问题转换为高质量上下文，供 AImodel 生成最终回答。
+
+| 阶段 | 职责 | 关键实现要素 |
+| --- | --- | --- |
+| 查询预处理 | 清洗和理解用户问题 | 做 query normalize、关键词提取、可选 query rewrite；识别 collection、top_k、用户意图和是否需要商品工具协同 |
+| 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery`，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
+| Rerank 前候选过滤 | 在精排前过滤候选 | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker |
+| 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
+| 引用结果构造 | 输出可被 Agent 使用的上下文和引用 | 返回答案上下文、来源标题、文档路径、章节、score、trace id；Agent 只能基于命中内容总结，不编造来源 |
+
+RRF 融合不直接比较 Dense 分数和 BM25 分数，因为两类分数的量纲不同。融合时基于候选在各自检索结果中的排名进行倒数加权，排名越靠前贡献越大，从而让语义召回和关键词召回都能公平参与最终排序。
+
+检索链路必须能解释每一步：原始 query 如何被预处理，BM25 和 Dense 各自召回了什么，哪些结果在 rerank 前被过滤，rerank 如何改变排序，最终引用来自哪里。
+
+### 3.3 MCP 服务设计
+
+MCP 工具一：`query_knowledge_hub`
+
+输入：
+
+```json
+{
+  "query": "如何挑选高性价比无线耳机？",
+  "collection": "shopping_guides",
+  "top_k": 5
+}
+```
+
+输出：
+
+```json
+{
+  "ok": true,
+  "content": "可用于回答的知识摘要",
+  "citations": [
+    {
+      "document_id": 1,
+      "chunk_id": 12,
+      "title": "无线耳机选购指南",
+      "heading_path": ["核心判断标准"],
+      "source_uri": "shopping_guides/wireless-earbuds.md",
+      "score": 0.82
+    }
+  ],
+  "trace_id": "query_20260604_xxx"
+}
+```
+
+MCP 工具二：`list_collections`
+
+用途：列出当前可检索 collection、文档数量、chunk 数量、最近更新时间。
+
+MCP 工具三：`get_document_summary`
+
+用途：按 `document_id` 或 `source_uri` 返回文档摘要、章节列表和摄取状态。
+
+### 3.4 可插拔架构设计
+
+可插拔架构的目标是让 RAG 系统的核心能力可以替换，但上层业务逻辑不需要感知底层 Provider 差异。业务代码只依赖统一接口，具体实现由配置和工厂决定。
+
+核心设计原则：
+
+- **接口隔离**：为每类组件定义最小化抽象接口，上层业务逻辑只依赖接口，不依赖具体实现类。
+- **工厂模式**：使用工厂根据配置动态实例化实现类，避免在业务流程里写 Provider 判断逻辑。
+- **配置驱动**：通过统一 `settings.yaml` 切换组件，无需修改代码即可替换 LLM、Embedding、Reranker、VectorStore 等能力。
+- **优雅降级**：当前组件不可用时，应自动回退到默认或安全方案。例如 rerank 不可用时回退到 RRF 排序，LLM query rewrite 不可用时回退到原始 query。
+- **统一调用方式**：同一类组件对外暴露一致方法，上层调用代码保持稳定。
+
+通用结构示意：
+
+```text
+业务代码
+  -> <Component>Factory.get_xxx(settings)
+  -> 读取配置并决定具体实现
+  -> {Implementation A | Implementation B | Implementation C}
+  -> 都实现同一个最小化接口
+```
+
+#### 3.4.1 统一接口设计
+
+| 组件 | 最小接口 | 说明 |
+| --- | --- | --- |
+| `LLMClient` | `chat(messages) -> response` | 上层只传入统一 messages，不关心 Azure OpenAI、OpenAI、Ollama、DeepSeek 的 SDK 差异 |
+| `EmbeddingClient` | `embed(text) -> vector`，`embed_batch(texts) -> vectors` | 单文本和批量文本使用同一抽象，方便 ingestion 批处理和 query embedding |
+| `RerankerClient` | `rerank(query, candidates) -> ranked_candidates` | Cross-Encoder 和 LLM Rerank 都实现同一排序接口 |
+| `VectorStoreClient` | `upsert(chunks)`，`search(vector, filters, top_k)` | 首版实现 pgvector，上层检索流程不直接写 SQL |
+| `SplitterClient` | `split(text) -> List[str]` | 首版包装 LangChain `RecursiveCharacterTextSplitter`，只做纯文本切分；业务 `Chunk` 由 `DocumentChunker` 生成 |
+| `EvaluatorClient` | `evaluate(dataset, predictions) -> metrics` | Ragas 和自定义指标都走统一评估入口 |
+
+LLM 和 Embedding Provider 必须统一调用接口：
+
+```text
+LLMClient.chat(messages) -> response
+EmbeddingClient.embed(text) -> vector
+EmbeddingClient.embed_batch(texts) -> vectors
+```
+
+这样 AImodel RAG 的 pipeline 不需要知道底层使用的是 OpenAI、Azure OpenAI、Ollama 还是 DeepSeek。Provider 的差异集中在 adapter 层处理。
+
+#### 3.4.2 工厂与配置
+
+工厂类建议：
+
+```text
+LLMFactory
+EmbeddingFactory
+RerankerFactory
+VectorStoreFactory
+SplitterFactory
+EvaluatorFactory
+```
+
+工厂读取配置后返回对应实现：
+
+```yaml
+llm:
+  provider: deepseek
+  model: deepseek-v4-flash
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+
+rerank:
+  provider: cross_encoder
+  fallback: rrf
+```
+
+业务代码只调用：
+
+```text
+llm = LLMFactory.get_llm(settings)
+embedding = EmbeddingFactory.get_embedding(settings)
+reranker = RerankerFactory.get_reranker(settings)
+```
+
+#### 3.4.3 Provider 选项
+
+| 能力 | Provider |
+| --- | --- |
+| LLM | Azure OpenAI、OpenAI、Ollama、DeepSeek |
+| Embedding | OpenAI `text-embedding-3-small`；后续可扩展 Azure OpenAI Embedding、Ollama Embedding |
+| VectorStore | pgvector；接口预留 Qdrant、Milvus、Chroma |
+| Splitter | RecursiveCharacterTextSplitter |
+| Reranker | Cross-Encoder、LLM Rerank、None |
+| Evaluator | Ragas、自定义指标 |
+
+#### 3.4.4 优雅降级策略
+
+| 组件 | 不可用场景 | 降级方案 |
+| --- | --- | --- |
+| Query Rewrite LLM | LLM 超时、限流、配置缺失 | 使用原始 query 继续检索 |
+| Reranker | Cross-Encoder/LLM Rerank 不可用 | 回退到 RRF 融合排序 |
+| Dense Embedding | Embedding API 临时失败 | 返回可观测错误，不写入半成品向量；Query 阶段可仅用 Sparse Route 返回候选 |
+| Sparse Route | BM25 索引缺失或构建中 | 仅使用 Dense Route，并在 Trace 中记录降级原因 |
+| Dashboard | Streamlit 启动失败 | 不影响 MCP 和 AImodel 查询主链路 |
+
+### 3.5 配置管理
+
+配置文件：`services/ai-service/rag/config/settings.yaml`
+
+配置设计目标：
+
+- **统一入口**：所有可插拔组件都从 `settings.yaml` 读取配置，不在业务代码中写死 Provider、模型名和参数。
+- **分层清晰**：按 `llm`、`embedding`、`splitter`、`vector_store`、`reranker`、`retrieval`、`ingestion`、`observability` 等模块组织。
+- **环境变量隔离敏感信息**：API Key、数据库连接串等敏感信息只写环境变量名，不直接写入配置文件。
+- **支持默认与降级**：每类组件都允许配置 fallback，便于组件不可用时回退到安全方案。
+- **适合 Dashboard 展示**：Dashboard 可以直接读取配置，展示当前启用的 LLM、Embedding、Splitter、Reranker、VectorStore 和 Evaluator。
+
+`settings.yaml` 示例：
+
+```yaml
+project:
+  name: aimodel-rag
+  default_collection: shopping_guides
+  environment: local
+
+database:
+  provider: postgresql
+  url_env: DATABASE_URL
+  pool_size: 5
+  echo_sql: false
+
+llm:
+  default: deepseek
+  fallback: openai
+  providers:
+    deepseek:
+      model: deepseek-v4-flash
+      api_key_env: DASHSCOPE_API_KEY
+      base_url_env: DASHSCOPE_BASE_URL
+      timeout_seconds: 60
+    openai:
+      model: gpt-4.1-mini
+      api_key_env: OPENAI_API_KEY
+      timeout_seconds: 60
+    ollama:
+      model: qwen2.5:7b
+      base_url: http://localhost:11434
+      timeout_seconds: 120
+
+vision_llm:
+  default: qwen_vl_max
+  enabled: true
+  providers:
+    qwen_vl_max:
+      model: Qwen-VL-Max
+      api_key_env: DASHSCOPE_API_KEY
+      base_url_env: DASHSCOPE_BASE_URL
+      timeout_seconds: 90
+    openai:
+      model: gpt-4o
+      api_key_env: OPENAI_API_KEY
+      timeout_seconds: 90
+
+embedding:
+  default: openai
+  fallback: none
+  batch_size: 64
+  cache_enabled: true
+  providers:
+    openai:
+      model: text-embedding-3-small
+      dimensions: 1536
+      api_key_env: OPENAI_API_KEY
+      timeout_seconds: 60
+
+vector_store:
+  provider: pgvector
+  collection_table: rag_collections
+  document_table: rag_documents
+  chunk_table: rag_chunks
+  distance: cosine
+  embedding_dimensions: 1536
+
+splitter:
+  default: recursive_character
+  providers:
+    recursive_character:
+      chunk_size: 900
+      chunk_overlap: 150
+      separators:
+        - "\n## "
+        - "\n### "
+        - "\n\n"
+        - "\n"
+        - "。"
+        - " "
+
+transform:
+  rewrite_chunk:
+    enabled: true
+    prompt_path: config/prompts/rewrite_chunk_prompt.yaml
+  semantic_merge:
+    enabled: true
+  denoise:
+    enabled: true
+  image_to_text:
+    enabled: true
+    prompt_path: config/prompts/image_to_text_prompt.yaml
+
+retrieval:
+  query_rewrite_enabled: true
+  dense_top_k: 30
+  sparse_top_k: 30
+  fusion_top_k: 12
+  final_top_k: 5
+  rrf_k: 60
+  filters:
+    include_deleted: false
+    default_collection: shopping_guides
+
+rerank:
+  enabled: true
+  default: llm
+  fallback: rrf
+  prompt_path: config/prompts/rerank_prompt.yaml
+  top_k: 5
+  providers:
+    llm:
+      llm_provider: deepseek
+      timeout_seconds: 60
+    cross_encoder:
+      model: BAAI/bge-reranker-base
+      device: cpu
+
+ingestion:
+  raw_data_dir: data/raw
+  markdown_dir: data/markdown
+  image_dir: data/images
+  dedup:
+    document_hash: sha256
+    chunk_hash: sha256
+  lifecycle:
+    allow_delete: true
+    soft_delete: true
+
+storage:
+  bm25_index_dir: data/db/bm25
+  postgres_data_dir: data/db/postgres
+  embedding_cache_dir: src/cache/embedding
+  caption_cache_dir: src/cache/captions
+  processing_cache_dir: src/cache/processing
+
+observability:
+  app_log_path: src/logs/app.log
+  trace_jsonl_path: src/logs/traces.jsonl
+  persist_to_postgresql: true
+  json_formatter: true
+
+dashboard:
+  enabled: true
+  port: 8501
+  pages:
+    - overview
+    - ingestion_manage
+    - data_browser
+    - query_trace
+    - ingestion_trace
+    - evaluation
+
+evaluation:
+  golden_set_path: tests/fixtures/golden_set.json
+  metrics:
+    retrieval:
+      hit_rate_at_k: true
+      mrr: true
+      ndcg: true
+    generation:
+      faithfulness: true
+      answer_relevancy: true
+
+mcp:
+  enabled: true
+  tools:
+    - query_knowledge_hub
+    - list_collections
+    - get_document_summary
+```
+
+### 3.6 PostgreSQL 数据设计
+
+PostgreSQL 是唯一持久化层，不使用 SQLite。
+
+建议表：
+
+| 表名 | 用途 |
+| --- | --- |
+| `rag_collections` | collection 元数据 |
+| `rag_documents` | 文档元数据、SHA256、摄取状态 |
+| `rag_chunks` | chunk 文本、metadata、embedding vector |
+| `rag_bm25_terms` | BM25 词项统计 |
+| `image_index` | 图片文件路径和来源索引 |
+| `ingestion_history` | 摄取历史、SHA256 去重、历史结果摘要 |
+| `rag_query_traces` | Query Trace 索引 |
+| `rag_ingestion_traces` | Ingestion Trace 索引 |
+| `rag_evaluation_runs` | 评估任务 |
+| `rag_evaluation_results` | 评估结果 |
+
+`rag_chunks.embedding` 使用 pgvector：
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS rag_chunks (
+    id BIGSERIAL PRIMARY KEY,
+    collection TEXT NOT NULL,
+    document_id BIGINT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    heading_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    embedding vector(1536),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+`image_index` 用于保存原始图片文件索引，图片文件由 `ImageStorage` 落盘到 `data/images/{collection}/`：
+
+```sql
+CREATE TABLE image_index (
+    image_id TEXT PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    collection TEXT,
+    doc_hash TEXT,
+    page_num INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_collection ON image_index(collection);
+CREATE INDEX idx_doc_hash ON image_index(doc_hash);
+```
+
+### 3.7 多模态图片处理设计
+
+多模态处理选型为 **Image-to-Text 策略**。图片不单独建立 CLIP 多模态向量，而是先由 Vision LLM 转换为可检索的文本描述，再把描述注入 chunk 正文或 metadata 中。
+
+#### 3.7.1 图片处理全流程
+
+```text
+文档
+  -> Loader 提取图片并生成 image_id
+  -> 在文档文本中写入图片占位符
+  -> 输出 Document(id + text + metadata.images[])
+  -> Splitter 保留图片引用标记到对应 chunk
+  -> ImageCaptioner 判断 vision_llm 和 image_refs
+  -> 满足条件时生成 caption 并写入 chunk metadata
+  -> Storage 存储增强后的 chunk 和原始图片
+```
+
+各阶段输出：
+
+| 阶段 | 输出 |
+| --- | --- |
+| Loader | `Document(id + text + metadata.images[])`，其中 `text` 包含图片占位符，`metadata.images[]` 保存图片基础信息 |
+| Splitter | chunk 文本保留图片引用标记，chunk metadata 增加 `image_refs: List[image_id]` |
+| ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption，并写入 chunk metadata |
+| Storage | 向量库存储增强后的 chunk，文件系统保存原始图片，PostgreSQL `image_index` 表保存图片索引信息 |
+
+#### 3.7.2 Loader 技术要点
+
+Loader 负责从 PDF、Markdown 或其他文档中抽取图片，并建立图片与文档文本之间的引用关系。
+
+关键实现：
+
+- **提取策略**：按文档页码、段落位置或 Markdown 图片语法提取图片。
+- **图片 ID**：为每张图片生成稳定 `image_id`，建议基于 `source_doc + page + image_index + image_hash`。
+- **引用标记**：在文档文本中写入图片占位符，例如 `[[image:image_xxx]]`，确保后续 splitter 能保留图片与上下文的关系。
+- **原始图片存储**：原始图片保存到本地文件系统，数据库只保存索引和 metadata。
+
+#### 3.7.3 Splitter 技术要点
+
+Splitter 必须保留图片引用和文本上下文之间的关联，不能在切分时丢失图片占位符。
+
+关键实现：
+
+- **关联保持**：如果图片占位符位于某个标题或段落附近，应保留在对应 chunk 中。
+- **chunk metadata 扩展**：每个 chunk 增加 `image_refs: List[image_id]`。
+- **上下文保护**：当图片前后文本共同解释图片含义时，splitter 应尽量避免把图片占位符和说明文字切到不同 chunk。
+
+#### 3.7.4 ImageCaptioner 技术要点
+
+ImageCaptioner 是图片 caption 的业务编排层。它只在 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时调用 Vision LLM；底层图片理解能力由 `ImageToTextTransform` 提供，ImageCaptioner 负责读取图片引用、调用图片描述能力、写入 chunk metadata，并处理 skipped、failed、low_quality 等状态。
+
+Vision LLM 选型：
+
+| 模型 | 提供商 | 特点 | 适用场景 | 推荐星级 |
+| --- | --- | --- | --- | --- |
+| GPT-4o | OpenAI | 图像理解能力强，文本描述稳定，适合复杂图文场景 | 高质量图片描述、复杂图表、商品图理解 | ★★★★★ |
+| Qwen-VL-Max | 阿里云百炼 | 中文场景友好，适合中文文档和中文商品图片 | 中文图片说明、商品图、截图理解 | ★★★★☆ |
+| Gemini Vision | Google | 多模态能力强，适合复杂视觉理解 | 复杂图表、跨语言图片理解 | ★★★★☆ |
+| LLaVA / 本地 Vision 模型 | 本地模型 | 本地可控，成本低，但稳定性取决于部署质量 | 离线实验、低敏感度图片处理 | ★★★☆☆ |
+
+Image-to-Text Prompt 设计：
+
+```text
+你是 RAG 文档摄取系统中的图片理解模块。
+请根据图片内容生成一段适合检索的中文描述。
+要求：
+1. 描述图片中可见的关键对象、文字、结构、流程或数据。
+2. 如果图片与商品、参数、步骤或对比有关，请突出可用于问答检索的信息。
+3. 不要编造图片中不存在的品牌、价格、型号或结论。
+4. 如果图片无法识别，请返回 low_quality，并说明原因。
+```
+
+不同图片类型的理解策略：
+
+| 图片类型 | 理解重点 | Prompt 引导方向 |
+| --- | --- | --- |
+| 商品图片 | 商品外观、材质、结构、使用场景、可见卖点 | 描述用户可能用于比较和购买决策的可见特征 |
+| 参数截图 | 参数项、数值、单位、适用条件 | 提取关键参数，避免遗漏限制条件 |
+| 流程图 | 节点、箭头、顺序、输入输出 | 按步骤描述流程，保留节点关系 |
+| 表格图片 | 表头、行列关系、对比维度 | 转换为结构化文字摘要 |
+| UI 截图 | 页面模块、按钮、状态、错误提示 | 描述界面功能和可见状态 |
+| 装饰图或低信息图片 | 判断是否有检索价值 | 标记低价值或 low_quality，避免污染索引 |
+
+#### 3.7.5 Storage 技术要点
+
+Storage 负责同时保存增强后的 chunk 和原始图片索引。
+
+关键实现：
+
+- 增强后的 chunk 写入 PostgreSQL + pgvector，chunk metadata 包含 `image_refs`。
+- 原始图片文件保存在本地文件系统。
+- PostgreSQL 新增 `image_index` 表保存图片索引信息。
+- 检索命中 chunk 后，如果 chunk metadata 中包含 `image_refs`，响应可以返回相关图片信息，供 Dashboard 或前端展示。
+
+`image_index` 表建议字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `image_id` | 图片稳定 ID |
+| `file_path` | 原始图片在文件系统中的路径 |
+| `source_doc` | 来源文档 |
+| `page` | 所在页码 |
+| `width` | 图片宽度 |
+| `height` | 图片高度 |
+| `mime_type` | 图片 MIME 类型 |
+| `image_hash` | 图片内容哈希 |
+| `quality_status` | 图片描述质量，例如 `ok`、`low_quality`、`skipped` |
+
+注入格式：
+
+```markdown
+图片说明：这张图展示了无线耳机佩戴方式，重点体现耳塞大小、耳挂结构和运动场景稳定性。
+```
+
+#### 3.7.6 质量保障
+
+- **描述质量检测**：如果生成描述过短、内容为空、Vision LLM 明确表示无法识别，图片应标记为 `low_quality`。
+- **图片压缩**：大尺寸图片在调用 Vision LLM 前应提前压缩，降低请求成本和超时概率。
+- **Vision LLM 降级**：如果 Vision LLM 不可用，图片保留占位符，但不生成描述、不参与检索，并在 chunk metadata 中标记 `image_description_status=skipped`。
+- **批量处理优化**：图片描述应支持批处理、并发限流和失败重试，避免大量图片摄取时阻塞整个 Ingestion Pipeline。
+
+### 3.8 可观测性与可视化管理平台设计
+
+为了避免 RAG 系统常见的“黑盒问题”，本项目需要覆盖 Ingestion 和 Query 两条链路的全流程监控，同时提供数据浏览、文档管理、组件概览和评估面板，让整个系统具备 **可量化、透明化、可回溯** 的工程能力。
+
+#### 3.8.1 设计理念
+
+- **双链路全覆盖追踪**：同时追踪数据摄取链路和查询链路，不只看最终结果，也记录中间阶段。
+- **透明可回溯**：能够解释系统为什么召回这些文档、Dense/BM25 各自返回了什么、Rerank 之后结果如何变化。
+- **低侵入性**：追踪逻辑与业务逻辑隔离，通过 `TraceContext` 注入 trace id、stage、provider、method、details，避免在业务流程中散落日志代码。
+- **轻量化**：采用结构化 JSON Lines 日志和本地 Streamlit Dashboard，不依赖 LangSmith 等外部平台。
+- **动态组件感知**：Dashboard 基于 trace 中的 `method`、`provider`、`details` 动态渲染组件状态和执行细节，切换 LLM、Embedding、Splitter、Reranker 后不需要修改 Dashboard 代码。
+
+#### 3.8.2 Ingestion Trace 数据结构
+
+Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各阶段详情、汇总指标、评估指标**。
+
+基础信息：
+
+| 字段 | 记录内容 |
+| --- | --- |
+| `trace_id` | 单次摄取链路追踪 ID |
+| `trace_type` | 固定为 `ingestion` |
+| `started_at` | 摄取开始时间 |
+| `collection` | 摄取目标知识集合 |
+| `source_uri` | 原始文档路径或外部来源 |
+| `source_hash` | 原始文档 SHA256 哈希纹 |
+
+各阶段详情：
+
+| 阶段 | 记录内容 |
+| --- | --- |
+| `dedup` | 原始文件 SHA256、`ingestion_history` 命中结果、是否跳过摄取、跳过原因、耗时、失败详情 |
+| `load` | Loader 类型、原始文件类型、转换后的 `Document(id + text + metadata)` 摘要、图片提取数量、耗时、失败详情 |
+| `split` | Splitter 类型、粗切分 chunk 数量、标题层级识别结果、平均 chunk 长度、耗时、失败详情 |
+| `transform` | Transform 方法、LLM Provider、合并的 chunk 数量、去噪内容摘要、图片描述注入数量、上下文增强摘要、耗时、失败详情 |
+| `embed` | Embedding Provider、`content_hash` 命中数量、新增 embedding 数量、Dense 编码批次数、Sparse/BM25 编码批次数、耗时、失败详情 |
+| `upsert` | VectorStore Provider、写入 chunk 数量、更新 chunk 数量、跳过 chunk 数量、删除旧版本数量、耗时、失败详情 |
+
+汇总指标：
+
+| 字段 | 记录内容 |
+| --- | --- |
+| `total_duration_ms` | 从 load 到 upsert 的端到端耗时 |
+| `document_status` | 摄取结果，例如 `success`、`skipped`、`failed` |
+| `chunk_count` | 最终可检索 chunk 数量 |
+| `embedded_count` | 实际执行 embedding 的 chunk 数量 |
+| `skipped_count` | 因文档哈希或 chunk 内容哈希命中而跳过的数量 |
+| `error` | 链路级错误信息；无错误时为空 |
+
+评估指标：
+
+| 字段 | 记录内容 |
+| --- | --- |
+| `chunk_quality_score` | chunk 语义完整性或人工/LLM 质量评分 |
+| `noise_reduction_summary` | 去噪效果摘要，例如删除页眉页脚、重复目录、解析残留的数量 |
+| `embedding_coverage` | 成功生成 Dense/BM25Indexer 的 chunk 占比 |
+| `index_ready` | 文档是否达到可检索状态 |
+
+#### 3.8.3 Query Trace 数据结构
+
+Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详情、汇总指标、评估指标**。
+
+基础信息：
+
+| 字段 | 记录内容 |
+| --- | --- |
+| `trace_id` | 单次查询链路追踪 ID |
+| `trace_type` | 固定为 `query` |
+| `started_at` | 查询开始时间 |
+| `raw_query` | 用户原始询问 |
+| `collection` | 查询目标知识集合 |
+| `request_source` | 调用来源，例如 AImodel、MCP tool、Dashboard |
+
+各阶段详情：
+
+| 阶段 | 记录内容 |
+| --- | --- |
+| `query_processing` | 原始 query、改写 query（若有）、query normalize 方法、意图识别结果、耗时 |
+| `dense` | Query Embedding 模型、向量库 Provider、Top-k 语义候选、候选分数、候选数量、耗时 |
+| `sparse` | BM25 方法、倒排索引命中词、Top-k 关键词候选、候选分数、候选数量、耗时 |
+| `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后排名、重复候选合并结果、耗时 |
+| `filter` | 过滤参数、过滤前候选数量、过滤后候选数量、被过滤原因、耗时 |
+| `rerank` | Reranker Provider、过滤后 rerank 前排名、rerank 后排名、fallback 原因（若有）、耗时 |
+
+汇总指标：
+
+| 字段 | 记录内容 |
+| --- | --- |
+| `total_duration_ms` | 从 query_processing 到 response 的端到端耗时 |
+| `top_k_results` | 最终返回给 Agent 的 Top-k 结果摘要 |
+| `candidate_count_by_stage` | dense、sparse、fusion、filter、rerank 各阶段候选数量 |
+| `fallback_used` | 是否触发降级，例如 rerank fallback 到 RRF |
+| `error` | 链路级错误信息；无错误时为空 |
+
+评估指标：
+
+| 字段 | 记录内容 |
+| --- | --- |
+| `query_document_relevance` | 召回文档与 query 的相关性分数 |
+| `citation_hit_rate` | 最终引用是否来自实际召回文档 |
+| `rerank_delta` | Rerank 前后排名变化摘要 |
+| `empty_result` | 是否为空结果 |
+
+#### 3.8.4 Trace 结构化日志与追踪机制
+
+Trace 结构化日志基于 **Python logging + JSONFormatter** 实现。日志以 JSON Lines 形式追加到本地日志文件，方便 Dashboard 按行读取、过滤和聚合。
+
+本地 Dashboard 基于 **Streamlit** 读取日志文件，并提供交互式可视化能力。Dashboard 不直接侵入 pipeline 执行逻辑，只消费 Trace 日志和 PostgreSQL 中的索引数据。
+
+追踪机制实现：
+
+| 时机 | 设计 |
+| --- | --- |
+| 请求开始 | 在 pipeline 入口创建 `TraceContext` 实例，生成唯一 `trace_id`，并写入请求基础信息，例如 `trace_type`、`started_at`、`collection`、`raw_query` 或 `source_uri` |
+| 阶段记录 | 每个阶段执行结束后调用 `trace_context.record_stage()`，记录阶段名、耗时、输入摘要、输出摘要、候选数量、错误信息、Provider 和 method |
+| 请求结束 | pipeline 结束时调用 `trace_context.flush()`，将基础信息、阶段详情、汇总指标和评估指标序列化为 JSON，并追加写入日志文件 |
+
+Trace 事件示例：
+
+```json
+{"trace_id":"query_xxx","stage":"dense","method":"pgvector_search","provider":"pgvector","duration_ms":42,"candidate_count":30,"status":"success","details":{"top_k":30}}
+```
+
+#### 3.8.5 Dashboard 功能设计
+
+Dashboard 使用 Streamlit 实现，面向开发者、面试官和项目演示场景。页面设计以“看配置、管文档、查数据、追链路、跑评估”为核心。
+
+页面 1：**系统总览**
+
+| 模块 | 功能 |
+| --- | --- |
+| 组件配置 | 读取 `settings.yaml`，展示当前可插拔组件，包括 LLM、Embedding、Splitter、Reranker、VectorStore、Evaluator |
+| 数据资产统计 | 展示各 collection 的文档数量、chunk 数量、Dense 向量状态、Sparse 索引状态 |
+| 系统健康指标 | 展示最近一次 Ingestion 和 Query 的耗时、状态、错误摘要和最近 Trace 时间 |
+
+页面 2：**评估面板**
+
+| 模块 | 功能 |
+| --- | --- |
+| 评估运行 | 选择评估后端，例如 Ragas 或自定义指标，点击运行评估任务 |
+| 指标展示 | 展示 `hit_rate`、`MRR`、`query_document_relevance`、`citation_hit_rate` 等指标 |
+| 历史趋势 | 对比不同策略版本下的指标变化，确保每次策略调整都有量化分数支撑 |
+
+页面 3：**Query Trace**
+
+| 模块 | 功能 |
+| --- | --- |
+| 历史列表 | 展示历史 query trace，支持按 collection、状态、耗时、是否 fallback 过滤 |
+| 单次查询详情 | 展示 query 原文、改写 query、各阶段耗时瀑布图、Dense/BM25 召回对比、RRF 融合结果、Rerank 前后对比和最终 Top-k 结果 |
+
+页面 4：**Ingestion 管理**
+
+| 模块 | 功能 |
+| --- | --- |
+| 文档选择与摄取 | 通过页面选择文件并触发摄取流程，展示 load、split、transform、embed、upsert 的实时阶段进度 |
+| 文档删除 | 支持删除已摄入文档，并同步处理文档状态、chunk、向量、Sparse 索引和检索可见性 |
+
+页面 5：**数据浏览器**
+
+| 模块 | 功能 |
+| --- | --- |
+| 文档列表视图 | 展示 collection 下的文档列表、摄取状态、来源路径、更新时间、chunk 数量 |
+| Chunk 详情视图 | 查看 chunk 文本、metadata、标题路径、Dense 向量状态、Sparse 索引状态和引用来源 |
+| 数据来源 | 展示文档原始来源、source hash、摄取批次和关联 trace id |
+
+页面 6：**Ingestion Trace**
+
+| 模块 | 功能 |
+| --- | --- |
+| 历史列表 | 展示历史 ingestion trace，支持按文档、collection、状态、耗时过滤 |
+| 单次摄取详情 | 展示阶段耗时瀑布图、处理统计、跳过原因、失败详情和各阶段详情展开 |
+
+### 3.9 AImodel 集成边界
+
+AImodel 侧新增 RAG 工具时，应保持工具边界清晰：
+
+- 商品推荐仍调用商品搜索工具。
+- 商品链接详情仍调用商品详情工具。
+- RAG 工具只返回知识片段、引用和 trace id。
+- SSE 正文不能暴露 RAG 原始工具 JSON。
+- Assistant 最终回答可以展示引用标题，但不展示内部 chunk id。
+
+建议工具名：
+
+```text
+search_shopping_guides
+```
+
+## 4. 测试方案
+
+### 4.1 TDD 原则
+
+RAG 项目涉及文档解析、分块、检索、重排、评估和可视化，多数问题如果等到端到端阶段才发现，定位成本会非常高。因此本项目采用 TDD 作为核心开发方法。
+
+核心原则：
+
+- **早测试，常测试**：任何功能模块在实现的同时就应当生成单元测试，避免业务逻辑先堆起来再补测试。
+- **测试即文档**：测试用例本身就是最标准的行为规范。一个组件应该如何处理正常输入、异常输入、边界条件，都应当能从测试中看出来。
+- **快速反馈循环**：单元测试应当在秒级内执行完毕，支持开发者高频执行，快速发现问题。
+- **分层测试金字塔**：大量单元测试作为基座，少量关键路径集成测试作为保障，极少数端到端测试验证完整流程。
+
+执行要求：
+
+- 单元测试不依赖真实 OpenAI、DeepSeek、PostgreSQL 网络环境。
+- Provider 通过 fake client 或 monkeypatch 测试。
+- 集成测试可以依赖本地 PostgreSQL/pgvector。
+- LLM 和 Vision LLM 实测测试必须加 marker，默认 CI 不跑。
+- 每个阶段的实现至少包含一个正向用例、一个边界用例和一个失败用例。
+
+pytest marker：
+
+```ini
+markers =
+    unit: fast unit tests
+    integration: local PostgreSQL or service integration tests
+    e2e: end-to-end tests
+    llm: tests requiring real model API
+    slow: slow tests
+```
+
+### 4.2 分层测试
+
+#### 4.2.1 测试分层策略
+
+测试分层采用 **测试金字塔** 结构：底层用大量快速单元测试保证组件正确性，中层用集成和契约测试保证模块协作，顶层用少量端到端测试验证完整用户路径。
+
+```text
+             E2E / 质量评估
+          少量，验证完整主流程
+
+       集成测试 / 契约测试 / Dashboard 测试
+       中等数量，验证模块协作和外部接口
+
+  单元测试 / Repository 测试 / 检索算法测试
+  大量，秒级反馈，覆盖独立组件和核心算法
+```
+
+| 层级 | 测试类型 | 数量占比 | 运行频率 | 主要目标 | 代表场景 |
+| --- | --- | --- | --- | --- | --- |
+| 底层 | 单元测试 | 最高 | 每次开发高频运行 | 验证独立组件内部逻辑 | Loader、Splitter、Transformer、Embedding、BM25、Retrieval、Reranker、TraceContext、Factory |
+| 底层 | Repository 测试 | 较高 | 本地数据库可用时运行 | 验证 PostgreSQL 持久化边界 | schema 初始化、文档去重、chunk upsert、`image_index` 写入、ImageStorage 落盘、trace 写入、评估记录写入 |
+| 底层 | 检索算法测试 | 较高 | 每次修改检索策略时运行 | 验证排序、融合和 fallback 行为 | Dense Route、Sparse Route、RRF、过滤、Rerank、Rerank fallback |
+| 中层 | Ingestion 集成测试 | 中等 | 修改摄取链路时运行 | 验证摄取链路模块协作 | PDF/Markdown -> Document -> Chunk -> Transform -> Embedding -> pgvector upsert |
+| 中层 | Indexing 集成测试 | 中等 | 修改索引链路时运行 | 验证索引 MVP 编排 | content_hash 差量判断 -> Dense 编码 -> BM25Indexer -> pgvector/BM25 upsert |
+| 中层 | Query 集成测试 | 中等 | 修改检索链路时运行 | 验证查询链路模块协作 | Query Processing -> Dense/BM25 -> RRF -> Rerank -> Citation |
+| 中层 | MCP 契约测试 | 中等 | 修改 MCP tool 时运行 | 验证外部工具接口稳定 | tools schema、正常查询、空 collection、异常返回 |
+| 中层 | Dashboard 测试 | 较少 | 修改可视化页面时运行 | 验证本地 Dashboard 六大页面可读取数据并渲染 | 系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板 |
+| 顶层 | E2E 测试 | 最少 | AImodel 集成前、发布前或关键改动后运行 | 验证完整用户路径 | 摄取 shopping guide -> 索引 -> 查询 -> Trace -> Dashboard 展示 -> AImodel 工具返回引用 |
+| 顶层 | RAG 质量评估 | 最少但持续保留 | 策略调整后运行 | 验证检索和回答质量是否提升 | hit_rate、MRR、query_document_relevance、citation_hit_rate、历史趋势对比 |
+
+#### 4.2.2 单元测试重点
+
+| 模块 | 测试重点 | 典型测试用例 |
+| --- | --- | --- |
+| Loader | 格式解析、元数据提取、图片引用收集、文档哈希去重 | 测试解析 PDF/Markdown；检查图片占位符 `[[image:image_id]]`；验证 Markdown 标题层级提取；验证相同 SHA256 且历史状态为 `success` 时跳过 |
+| Splitter | 语义边界切分、标题层级保留、图片引用保持 | 验证不会简单按固定长度硬切；检查 chunk metadata 中的 `image_refs`；验证图片占位符不会和相关说明文字分离 |
+| Transformer | LLM 语义二次加工、chunk 合并、去噪、幂等性 | 验证逻辑相关 chunk 可合并；验证页眉页脚和重复目录被去除；验证同一输入重复 transform 不会重复合并 chunk |
+| ImageCaptioner | Vision LLM 图片 caption、条件触发、降级和幂等性 | 验证 `vision_llm.enabled=true` 且存在 `image_refs` 时生成 caption；验证未启用 Vision LLM 或无 `image_refs` 时跳过；验证低质量图片标记为 `low_quality`；验证重复执行不会重复注入 caption |
+| Embedding | 差量计算、批处理、Dense/BM25Indexer 双路索引、幂等性 | 验证已有 `content_hash` 不重复 embedding；验证批处理被调用；验证 Dense 向量和 BM25Indexer 索引数据都被生成；验证同一批 chunk 重复执行 embedding 时不会重复调用模型或生成重复向量记录 |
+| BM25 | 分词、倒排索引、关键词候选召回 | 验证关键词命中文档；验证品牌、型号、政策词能精确召回；验证空 query 或停用词 query 的处理 |
+| Retrieval | Query 预处理、Dense Route、Sparse Route、RRF 融合、过滤 | 验证 Query Embedding 被调用；验证 BM25 和 pgvector 双路候选合并；验证 RRF 基于排名倒数融合；验证 deleted/failed 文档不会进入结果 |
+| Reranker | Cross-Encoder/LLM Rerank、排序变化、fallback | 验证 rerank 前后排名变化被记录；验证 reranker 超时或异常时 fallback 到 RRF 排序 |
+| TraceContext | 阶段记录、耗时统计、JSON Lines 输出 | 验证 `record_stage()` 记录阶段详情；验证 `flush()` 写出结构化 JSON；验证 error 和 fallback 信息进入汇总指标 |
+| Factory | 配置驱动、接口隔离、优雅降级 | 验证根据 `settings.yaml` 创建指定 Provider；验证未知 Provider 抛出可读错误；验证默认 fallback 策略生效 |
+
+#### 4.2.3 集成与端到端测试重点
+
+| 测试类型 | 测试重点 | 典型测试用例 |
+| --- | --- | --- |
+| Ingestion 集成测试 | 验证摄取链路可完整写入 PostgreSQL/pgvector | 使用一份小型 Markdown 指南，执行 load -> split -> transform -> image_caption -> batch -> upsert，验证文档、chunk、caption metadata、Dense 向量、BM25 索引、`image_index` 和 ingestion trace 都存在 |
+| Indexing 集成测试 | 验证索引 MVP 编排 | 准备测试文档或增强后 chunk fixture，执行 `IngestionPipeline.run()` 或 `IngestionPipeline.run_indexing()`，检查 content_hash 跳过、Dense/BM25Indexer 和 upsert 结果 |
+| Query 集成测试 | 验证查询链路可返回带引用的 Top-k 结果 | 摄取测试文档后查询“如何挑选高性价比无线耳机”，验证 Dense/BM25 候选、RRF 结果、最终引用来源 |
+| MCP 集成测试 | 验证 MCP tool 契约稳定 | 调用 `query_knowledge_hub`，验证返回 `content`、`citations`、`trace_id`，并且空 collection 返回可读错误 |
+| Dashboard 集成测试 | 验证 Dashboard 六大页面能读取真实数据 | 准备 trace JSON Lines 和测试数据库记录，验证系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板都能读取并渲染数据 |
+
+端到端测试应覆盖两个核心场景：
+
+| 场景 | 流程 | 验证重点 |
+| --- | --- | --- |
+| 数据准备（离线摄取） | 准备测试文档 -> 离线摄取 -> 检查 chunk 结果 -> 检查 storage -> 验证幂等性 | chunk 质量是否达标；图片是否被正确提取、描述和关联；metadata 是否完整；Dense/BM25 索引是否正确；重复执行摄取不会重复生成 chunk、embedding 或图片记录 |
+| 召回测试 | 基于已摄取知识库准备不同难度、不同类型 query -> 执行混合检索 -> 验证召回结果 -> 对比不同策略效果 | Top-k 结果命中率是否达标；包含图片的 chunk 是否能被命中；空查询、超长查询、无结果查询等边界处理是否正确；排序质量是否稳定；对比 Hybrid、Dense-only、Sparse-only 策略；验证 rerank 对最终排序的影响 |
+
+### 4.3 RAG 质量评估
+
+RAG 质量评估需要准备 **黄金测试集**，每条样本包含问题、标准答案和来源文档，用于同时评估检索质量和生成质量。
+
+黄金测试集使用 JSON 格式：
+
+```json
+[
+  {
+    "id": "guide_wireless_earbuds_001",
+    "question": "如何挑选高性价比无线耳机？",
+    "golden_answer": "高性价比无线耳机应重点关注连接稳定性、续航、佩戴舒适度、通话质量和售后保障。如果用于通勤，还应关注主动降噪和抗风噪表现。",
+    "expected_sources": [
+      "shopping_guides/wireless-earbuds.md"
+    ],
+    "expected_keywords": [
+      "连接稳定性",
+      "续航",
+      "主动降噪",
+      "售后保障"
+    ]
+  }
+]
+```
+
+检索指标：
+
+| 指标 | 目标 |
+| --- | --- |
+| `Hit Rate@K` | >= 90% |
+| `MRR` | >= 0.8 |
+| `NDCG@K` | >= 0.85 |
+
+生成指标：
+
+| 指标 | 目标 |
+| --- | --- |
+| `Faithfulness` | >= 0.9 |
+| `Answer Relevancy` | >= 0.85 |
+
+评估运行要求：
+
+- 定期运行评估任务，监控指标是否回归。
+- 每次调整 splitter、transform、embedding、BM25、RRF、rerank 或 prompt 后，都应运行同一批黄金测试集进行对比。
+- 评估结果写入 PostgreSQL，并在 Dashboard 评估面板展示历史趋势。
+- 如果检索指标下降，需要优先检查 chunk 质量、metadata、Dense/BM25 召回和 RRF 排序。
+- 如果生成指标下降，需要优先检查引用来源、上下文注入和回答 prompt。
+
+## 5. 系统架构与模块设计
+
+### 5.1 整体架构图
+
+```text
+                                  +----------------------+
+                                  |      AImodel Agent   |
+                                  |  search_shopping_guides
+                                  +----------+-----------+
+                                             |
+                                             v
++--------------------------------------------------------------------------------+
+|                                  RAG System                                    |
+|                                                                                |
+|  +---------------------------- Core Layer ----------------------------------+  |
+|  |                                                                            |  |
+|  |  Query Engine                                                              |  |
+|  |   -> Query Processor                                                       |  |
+|  |   -> Hybrid Engine                                                         |  |
+|  |       -> Dense Route                                                       |  |
+|  |       -> Sparse Route                                                      |  |
+|  |       -> Fusion (RRF)                                                      |  |
+|  |   -> Reranker                                                              |  |
+|  |   -> Response Builder                                                      |  |
+|  |                                                                            |  |
+|  |  Trace Controller                                                          |  |
+|  +-------------------------------+--------------------------------------------+  |
+|                                  |                                               |
+|                                  v                                               |
+|  +--------------------------- Storage Layer --------------------------------+  |
+|  |  Vector Storage(pgvector) | BM25 Index | Image Storage | Trace Logs        |  |
+|  +-------------------------------+--------------------------------------------+  |
+|                                  ^                                               |
+|                                  |                                               |
+|  +---------------------- Ingestion Pipeline(Offline) -----------------------+  |
+|  |  Loader(pdf -> md, metadata, images) -> Splitter -> Transformer           |  |
+|  |      -> Embedding(Dense + Sparse) -> Upsert                               |  |
+|  +-------------------------------+--------------------------------------------+  |
+|                                  ^                                               |
+|                                  |                                               |
+|  +------------------------ Pluggable Libs Layer ----------------------------+  |
+|  |  loader | llm | splitter | embedding | vector_store | reranker | evaluator |  |
+|  |  each package contains: base interface + factory + implementations        |  |
+|  +-------------------------------+--------------------------------------------+  |
+|                                  |                                               |
+|                                  v                                               |
+|  +------------------------ Observability Layer -----------------------------+  |
+|  |  TraceContext | Evaluation | Dashboard(Streamlit) | Structured Log        |  |
+|  +----------------------------------------------------------------------------+  |
+|                                                                                |
+|  MCP Server exposes: query_knowledge_hub / list_collections / get_document_summary |
++--------------------------------------------------------------------------------+
+```
+
+### 5.2 目录结构树
+
+```text
+services/ai-service/rag/
+├── DEV_SPEC.md                                    # RAG 子系统开发规范文档
+├── README.md                                      # 独立 RAG 模块说明、启动方式和开发命令
+├── pyproject.toml                                 # Python 包配置、依赖、pytest 和 lint 配置
+├── main.py                                        # 独立部署入口，启动 FastAPI/MCP 或本地调试命令
+├── Dockerfile                                     # 独立 Docker 镜像构建文件
+├── .dockerignore                                  # Docker 构建上下文忽略规则
+├── .gitignore                                     # RAG 模块本地缓存、日志和临时文件忽略规则
+├── config/
+│   ├── settings.yaml                              # 统一运行配置，控制组件选择和参数
+│   └── prompts/
+│       ├── rerank_prompt.yaml                     # Rerank 阶段使用的提示词模板
+│       ├── rewrite_chunk_prompt.yaml              # chunk 语义改写与增强提示词模板
+│       └── image_to_text_prompt.yaml              # 图片转文字描述提示词模板
+├── data/
+│   ├── raw/                                       # 按 collection 分类存放原始测试文档和本地摄取文件
+│   │   └── shopping_guides/                       # shopping_guides collection 的原始文档
+│   ├── markdown/                                  # PDF 转换后的 Markdown 中间文件
+│   ├── db/                                        # 本地开发数据库数据和索引文件
+│   │   ├── postgres/                              # PostgreSQL 本地数据、dump 或初始化辅助文件
+│   │   └── bm25/                                  # BM25 倒排索引和词项统计缓存
+│   └── eval/                                      # 黄金测试集和评估数据
+├── src/
+│   ├── core/
+│   │   ├── config.py                              # 读取 settings.yaml 和 prompt 配置
+│   │   ├── types.py                               # Document、Chunk、RetrievalResult 等核心类型
+│   │   ├── errors.py                              # RAG 子系统统一异常定义
+│   │   ├── query_engine/
+│   │   │   ├── query_processor.py                 # 查询预处理、query normalize 和可选 rewrite
+│   │   │   ├── hybrid_engine.py                   # 编排 Dense Route、Sparse Route 和融合流程
+│   │   │   ├── dense_route.py                     # Query Embedding 和 pgvector 语义召回
+│   │   │   ├── sparse_route.py                    # BM25 和倒排索引关键词召回
+│   │   │   ├── fusion.py                          # RRF 排名倒数融合
+│   │   │   └── reranker.py                        # 调用 reranker 并处理 fallback
+│   │   ├── response/
+│   │   │   ├── response_builder.py                # 构建最终返回给 Agent 的上下文响应
+│   │   │   ├── citation_builder.py                # 组装引用来源和文档出处
+│   │   │   └── multimodal_assembler.py            # 组装命中 chunk 关联的图片等多模态内容
+│   │   └── trace/
+│   │       ├── trace_context.py                   # 单次 ingestion/query 的 trace 上下文
+│   │       └── trace_controller.py                # trace 阶段记录和 flush 编排
+│   ├── libs/
+│   │   ├── loader/
+│   │   │   ├── base_loader.py                     # Loader 最小抽象接口
+│   │   │   ├── loader_factory.py                  # 根据配置创建 Loader 实现
+│   │   │   ├── markdown_loader.py                 # Markdown 文档加载实现
+│   │   │   └── pdf_loader.py                      # PDF 转 Markdown 并抽取图片的加载实现
+│   │   ├── llm/
+│   │   │   ├── base_llm.py                        # LLMClient 最小抽象接口
+│   │   │   ├── llm_factory.py                     # 根据配置创建 LLMClient
+│   │   │   ├── openai_client.py                   # OpenAI Chat 实现
+│   │   │   ├── azure_openai_client.py             # Azure OpenAI Chat 实现
+│   │   │   ├── ollama_client.py                   # Ollama 本地 LLM 实现
+│   │   │   └── deepseek_client.py                 # DeepSeek 兼容接口实现
+│   │   ├── splitter/
+│   │   │   ├── base_splitter.py                   # Splitter 最小抽象接口
+│   │   │   ├── splitter_factory.py                # 根据配置创建 Splitter
+│   │   │   └── recursive_character_splitter.py    # LangChain RecursiveCharacterTextSplitter 包装
+│   │   ├── transform/
+│   │   │   ├── base_transform.py                  # Transform 最小抽象接口
+│   │   │   ├── transform_factory.py               # 根据配置创建 Transform
+│   │   │   ├── metadata_enricher.py               # metadata 注入 Transform 实现
+│   │   │   ├── chunk_rewriter.py                  # LLM chunk rewrite Transform 实现
+│   │   │   ├── semantic_merge_transform.py        # 语义合并 Transform 实现
+│   │   │   ├── denoise_transform.py               # 去噪 Transform 实现
+│   │   │   ├── image_to_text_transform.py         # Vision LLM 图片 caption 适配实现
+│   │   │   └── fake_transform.py                  # 单元测试使用的假 Transform 实现
+│   │   ├── embedding/
+│   │   │   ├── base_embedding.py                  # EmbeddingClient 最小抽象接口
+│   │   │   ├── embedding_factory.py               # 根据配置创建 EmbeddingClient
+│   │   │   ├── openai_embedding.py                # text-embedding-3-small 实现
+│   │   │   └── fake_embedding.py                  # 单元测试使用的假 embedding 实现
+│   │   ├── vector_store/
+│   │   │   ├── base_vector_store.py               # VectorStore 最小抽象接口
+│   │   │   ├── vector_store_factory.py            # 根据配置创建向量存储实现
+│   │   │   └── pgvector_store.py                  # PostgreSQL pgvector 实现
+│   │   ├── reranker/
+│   │   │   ├── base_reranker.py                   # Reranker 最小抽象接口
+│   │   │   ├── reranker_factory.py                # 根据配置创建 Reranker
+│   │   │   ├── cross_encoder_reranker.py          # Cross-Encoder 精排实现
+│   │   │   └── llm_reranker.py                    # LLM Rerank 实现
+│   │   └── evaluator/
+│   │       ├── base_evaluator.py                  # Evaluator 最小抽象接口
+│   │       ├── evaluator_factory.py               # 根据配置创建评估器
+│   │       ├── ragas_evaluator.py                 # Ragas 指标评估实现
+│   │       └── custom_evaluator.py                # Hit Rate、MRR、NDCG 等自定义指标实现
+│   ├── ingestion/
+│   │   ├── pipeline.py                            # 离线摄取与 Indexing Pipeline MVP 统一编排
+│   │   ├── chunk/
+│   │   │   ├── splitter_step.py                   # 调用 splitter 并生成初始 chunk
+│   │   │   ├── document_chunker.py                # 将 Document 适配为符合 core.types 契约的 Chunk
+│   │   │   └── chunk_id.py                        # 生成 hash(source_path + section_path + content_hash)
+│   │   ├── transform/
+│   │   │   ├── transformer.py                     # Transform 主编排
+│   │   │   ├── rewrite_chunk.py                   # 利用 LLM 对 chunk 进行语义改写
+│   │   │   ├── semantic_merge.py                  # 合并逻辑相关但被物理切割的 chunk
+│   │   │   ├── denoise.py                         # 去除页眉页脚、重复目录和解析噪声
+│   │   │   └── image_captioner.py                 # 根据 image_refs 生成 caption 并写入 metadata
+│   │   ├── embedding/
+│   │   │   ├── embedding_step.py                  # Embedding 阶段主编排
+│   │   │   ├── dense_encoder.py                   # Dense 向量编码
+│   │   │   ├── bm25_indexer.py                    # BM25Indexer 倒排索引构建
+│   │   │   └── batch_processor.py                 # 批处理、限流和重试优化
+│   │   ├── storage/
+│   │   │   └── upsert_step.py                     # 写入 chunk、向量、BM25 和图片索引
+│   │   ├── loader.py                              # 调用 libs.loader 并输出 Document
+│   │   └── pdf_to_markdown.py                     # PDF 转 Markdown 辅助逻辑
+│   ├── storage/
+│   │   ├── postgres.py                            # PostgreSQL 连接池和事务封装
+│   │   ├── schema.sql                             # PostgreSQL/pgvector 表结构
+│   │   ├── vector_storage.py                      # 向量存储 repository
+│   │   ├── bm25_storage.py                        # BM25 倒排索引和词项统计存储
+│   │   ├── image_storage.py                       # image_index 表和原始图片索引存储
+│   │   ├── trace_log_storage.py                   # Trace JSON Lines 日志写入和读取
+│   │   └── repositories.py                        # 文档、chunk、评估等通用 repository
+│   ├── logs/
+│   │   ├── app.log                                # 应用运行日志
+│   │   └── traces.jsonl                           # ingestion/query 结构化 Trace 日志
+│   ├── cache/
+│   │   ├── embedding/                             # embedding 批处理和差量计算缓存
+│   │   ├── captions/                              # Vision LLM 图片描述缓存
+│   │   └── processing/                            # 摄取过程中的临时处理缓存
+│   ├── scripts/
+│   │   ├── run_dashboard.py                       # 启动 Streamlit Dashboard
+│   │   ├── run_evaluation.py                      # 运行黄金测试集评估任务
+│   │   ├── query.py                               # 本地执行完整 hybridsearch + rerank 查询
+│   │   └── ingest.py                              # 本地执行离线文档摄取
+│   ├── observability/
+│   │   ├── structured_log.py                      # Python logging + JSONFormatter 配置
+│   │   ├── services/
+│   │   │   ├── config_reader.py                   # Dashboard 读取 settings 和组件配置
+│   │   │   ├── data_browser_service.py            # Dashboard 查询文档、chunk、图片数据
+│   │   │   ├── trace_reader_service.py            # Dashboard 读取 query/ingestion trace
+│   │   │   └── evaluation_service.py              # Dashboard 运行评估和读取历史趋势
+│   │   ├── pages/
+│   │   │   ├── overview.py                        # 系统总览页面
+│   │   │   ├── query_trace.py                     # Query Trace 页面
+│   │   │   ├── ingestion_trace.py                 # Ingestion Trace 页面
+│   │   │   ├── ingestion_manage.py                # Ingestion 管理页面
+│   │   │   ├── data_browser.py                    # 数据浏览器页面
+│   │   │   └── evaluation.py                      # 评估面板页面
+│   │   ├── dashboard/
+│   │   │   ├── app.py                             # Streamlit Dashboard 入口
+│   │   │   └── layout.py                          # Dashboard 公共布局
+│   │   └── evaluation/
+│   │       ├── runner.py                          # 评估任务运行器
+│   │       ├── metrics.py                         # 自定义指标实现
+│   │       └── ragas_adapter.py                   # Ragas 指标适配
+│   ├── mcp_server/
+│   │   ├── server.py                              # Python 官方 MCP SDK server 入口
+│   │   └── tools.py                               # query_knowledge_hub 等 MCP tools
+│   └── adapter/
+│       └── aimodel_tool.py                        # AImodel LangChain tool 适配层
+└── tests/
+    ├── test_smoke.py                              # 独立模块导入、main.py 导入和配置样例冒烟测试
+    ├── unit/
+    │   ├── test_config.py                         # settings.yaml、prompt 和环境变量配置读取测试
+    │   ├── test_types.py                          # Document、Chunk、ImageMetadata 等核心类型测试
+    │   ├── test_loader.py                         # Loader 解析、元数据和图片引用测试
+    │   ├── test_splitter.py                       # Splitter 语义切分和 image_refs 测试
+    │   ├── test_transformer.py                    # Transform、ImageCaptioner、caption 和幂等性测试
+    │   ├── test_embedding.py                      # Embedding 差量计算、双路编码和批处理测试
+    │   ├── test_bm25.py                           # BM25 分词、倒排索引和关键词召回测试
+    │   ├── test_retrieval.py                      # Dense/BM25/RRF/过滤测试
+    │   ├── test_reranker.py                       # Rerank 排序和 fallback 测试
+    │   ├── test_trace_context.py                  # TraceContext record_stage/flush 测试
+    │   └── test_factories.py                      # libs 内 factory 配置驱动测试
+    ├── integration/
+    │   ├── test_repositories.py                   # PostgreSQL schema 和 repository 测试
+    │   ├── test_ingestion_pipeline.py             # 离线摄取与索引编排完整链路测试
+    │   ├── test_query_pipeline.py                 # 查询链路和引用结果测试
+    │   ├── test_mcp_tools.py                      # MCP tools 契约测试
+    │   ├── test_dashboard_services.py             # Dashboard services 读取数据测试
+    │   └── test_dashboard_pages.py                # Dashboard 六大页面渲染和数据注入测试
+    ├── e2e/
+    │   ├── test_offline_ingestion_idempotency.py  # 离线摄取和幂等性端到端测试
+    │   ├── test_recall_quality.py                 # Hybrid/Dense/BM25 召回质量端到端测试
+    │   ├── test_full_rag_flow.py                  # 摄取、索引、查询、Trace、Dashboard 的全链路 E2E 验收
+    │   └── test_aimodel_rag_tool.py               # AImodel RAG 工具端到端测试
+    └── fixtures/
+        ├── shopping_guides/                       # 测试用购物指南文档
+        ├── images/                                # 测试图片素材
+        └── golden_set.json                        # 黄金测试集
+```
+
+### 5.3 模块职责说明表
+
+#### 5.3.1 配置与数据层
+
+| 文件 | 具体职责 | 关键技术点 |
+| --- | --- | --- |
+| `README.md` | 说明 RAG 独立模块的定位、启动方式和常用命令 | 面向开发者和部署人员，包含 Docker、pytest、Dashboard、MCP 入口 |
+| `pyproject.toml` | 管理 Python 项目元数据、依赖和测试配置 | PEP 621、pytest markers、可选 extras、统一工具配置 |
+| `main.py` | 提供独立运行入口 | 可启动 FastAPI/MCP 服务，也可分发到 ingestion、query、dashboard 调试命令 |
+| `Dockerfile` | 构建独立 RAG 服务镜像 | Python 3.12、依赖安装、非 root 运行、健康检查预留 |
+| `.dockerignore` | 控制 Docker 构建上下文 | 排除缓存、日志、测试数据和本地数据库文件 |
+| `.gitignore` | 控制 RAG 模块本地忽略文件 | 排除 `src/logs/*.log`、`src/cache/`、`data/db/`、临时图片和模型缓存 |
+| `config/settings.yaml` | 管理运行时配置和组件选择 | 配置驱动切换 LLM、Embedding、Splitter、VectorStore、Reranker、Evaluator |
+| `config/prompts/rerank_prompt.yaml` | 保存 rerank 阶段提示词 | prompt 与代码分离，便于评估不同 rerank 策略 |
+| `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段做 chunk rewrite、语义合并和去噪 |
+| `config/prompts/image_to_text_prompt.yaml` | 保存图片转文字提示词 | 支持按图片类型生成可检索中文描述 |
+| `data/raw/shopping_guides/` | 存放 shopping_guides collection 原始文档 | 按 collection 分类，便于离线摄取和回归测试 |
+| `data/db/postgres/` | 存放 PostgreSQL 本地开发辅助数据 | 保存初始化辅助文件、dump 或本地持久化数据 |
+| `data/db/bm25/` | 存放 BM25 本地索引辅助数据 | 保存倒排索引和词项统计缓存 |
+| `data/eval/golden_set.json` | 存放黄金测试集 | JSON 格式，包含问题、标准答案、来源文档和关键词 |
+
+#### 5.3.2 Core 层
+
+| 文件 | 具体职责 | 关键技术点 |
+| --- | --- | --- |
+| `src/core/config.py` | 加载 settings 和 prompt 配置 | Pydantic/YAML 校验、环境变量覆盖、默认值处理 |
+| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`metadata.images[]`、`Citation`、`TraceRecord` |
+| `src/core/errors.py` | 定义统一异常类型 | 配置错误、Provider 错误、检索错误、摄取错误、MCP 错误 |
+| `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、意图识别 |
+| `src/core/query_engine/hybrid_engine.py` | 编排混合检索主流程 | `HybridSearch`、Dense/BM25 双路召回、RRF Fusion、候选去重、rerank 前 metadata 过滤、单路失败降级 |
+| `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
+| `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult` |
+| `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
+| `src/core/query_engine/reranker.py` | 对过滤后的融合结果做精排 | Cross-Encoder/LLM Rerank、超时异常 fallback 到过滤后的 RRF 结果 |
+| `src/core/response/response_builder.py` | 构建 RAG 工具响应 | 输出 answer_context、citations、metadata、trace_id |
+| `src/core/response/citation_builder.py` | 构建引用来源 | 文档标题、source_uri、section_path、chunk_id、score |
+| `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 根据 `image_refs` 返回相关图片 metadata 和 file_path |
+| `src/core/trace/trace_context.py` | 管理单次 trace 上下文 | `trace_id`、基础信息、阶段列表、汇总指标、评估指标 |
+| `src/core/trace/trace_controller.py` | 编排 trace 写入 | `record_stage()`、`flush()`、错误和 fallback 记录 |
+
+#### 5.3.3 Libs 可插拔抽象层
+
+| 文件 | 具体职责 | 关键技术点 |
+| --- | --- | --- |
+| `src/libs/loader/base_loader.py` | 定义 Loader 抽象接口 | `load(source) -> Document(id + text + metadata)` |
+| `src/libs/loader/loader_factory.py` | 创建 Loader 实现 | 根据文件类型和配置选择 Markdown/PDF Loader |
+| `src/libs/loader/markdown_loader.py` | 加载 Markdown 文档 | 提取标题层级、metadata、图片引用 |
+| `src/libs/loader/pdf_loader.py` | 加载 PDF 文档 | PDF -> Markdown、图片提取、图片占位符写入 |
+| `src/libs/llm/base_llm.py` | 定义 LLMClient 抽象接口 | `chat(messages) -> response` |
+| `src/libs/llm/llm_factory.py` | 创建 LLMClient | 根据 settings 选择 OpenAI/Azure/Ollama/DeepSeek |
+| `src/libs/llm/openai_client.py` | OpenAI Chat 实现 | OpenAI SDK、统一 messages 输入输出 |
+| `src/libs/llm/azure_openai_client.py` | Azure OpenAI Chat 实现 | Azure endpoint、deployment、api-version |
+| `src/libs/llm/ollama_client.py` | Ollama 本地 LLM 实现 | 本地模型调用、离线降级 |
+| `src/libs/llm/deepseek_client.py` | DeepSeek 兼容接口实现 | OpenAI-compatible chat API |
+| `src/libs/splitter/base_splitter.py` | 定义 Splitter 抽象接口 | 纯文本工具，接口固定为 `split(text: str) -> List[str]` |
+| `src/libs/splitter/splitter_factory.py` | 创建 Splitter | 根据配置选择 splitter 实现 |
+| `src/libs/splitter/recursive_character_splitter.py` | 包装 LangChain splitter | 只输出文本片段 `List[str]`，不创建业务 `Chunk`，不引入 LangChain RAG 链路 |
+| `src/libs/transform/base_transform.py` | 定义 Transform 抽象接口 | `transform(chunks, context) -> chunks` |
+| `src/libs/transform/transform_factory.py` | 创建 Transform 实现 | 根据 settings 和 transform 配置组装 metadata、rewrite、merge、denoise、image-to-text 适配能力 |
+| `src/libs/transform/metadata_enricher.py` | metadata 注入实现 | 标题路径、来源、文档主题、业务 metadata 注入 |
+| `src/libs/transform/chunk_rewriter.py` | LLM chunk rewrite 实现 | 调用 LLMClient 对粗切分 chunk 做语义改写 |
+| `src/libs/transform/semantic_merge_transform.py` | 语义合并实现 | 合并逻辑相关但被物理切开的 chunk |
+| `src/libs/transform/denoise_transform.py` | 去噪实现 | 删除页眉页脚、目录、解析残留 |
+| `src/libs/transform/image_to_text_transform.py` | Image-to-Text 适配 | 调用 Vision LLM 生成结构化 caption 结果，不直接负责 pipeline 编排 |
+| `src/libs/transform/fake_transform.py` | 测试 Transform 实现 | 单元测试中稳定返回增强 chunk，不访问外部模型 |
+| `src/libs/embedding/base_embedding.py` | 定义 EmbeddingClient 抽象接口 | `embed(text)`、`embed_batch(texts)` |
+| `src/libs/embedding/embedding_factory.py` | 创建 EmbeddingClient | 根据配置选择 OpenAI/fake embedding |
+| `src/libs/embedding/openai_embedding.py` | OpenAI embedding 实现 | `text-embedding-3-small`、批量调用 |
+| `src/libs/embedding/fake_embedding.py` | 测试 embedding 实现 | 单元测试稳定向量，不访问外部 API |
+| `src/libs/vector_store/base_vector_store.py` | 定义 VectorStore 抽象接口 | `upsert(chunks)`、`search(vector, filters, top_k)` |
+| `src/libs/vector_store/vector_store_factory.py` | 创建向量存储实现 | 首版创建 pgvector store，预留扩展 |
+| `src/libs/vector_store/pgvector_store.py` | pgvector 实现 | PostgreSQL vector(1536)、cosine search、metadata filter |
+| `src/libs/reranker/base_reranker.py` | 定义 Reranker 抽象接口 | `rerank(query, candidates)` |
+| `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、LLM Rerank、None/fallback |
+| `src/libs/reranker/cross_encoder_reranker.py` | Cross-Encoder 精排实现 | query-document pair 打分、排序 |
+| `src/libs/reranker/llm_reranker.py` | LLM Rerank 实现 | prompt 驱动排序、超时 fallback |
+| `src/libs/evaluator/base_evaluator.py` | 定义 Evaluator 抽象接口 | `evaluate(dataset, predictions) -> metrics` |
+| `src/libs/evaluator/evaluator_factory.py` | 创建 Evaluator | Ragas 或自定义指标 |
+| `src/libs/evaluator/ragas_evaluator.py` | Ragas 指标实现 | Faithfulness、Answer Relevancy |
+| `src/libs/evaluator/custom_evaluator.py` | 自定义指标实现 | Hit Rate、MRR、NDCG、citation_hit_rate |
+
+#### 5.3.4 Ingestion 层
+
+| 文件 | 具体职责 | 关键技术点 |
+| --- | --- | --- |
+| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | dedup -> load -> split -> transform -> image_caption -> content_hash -> Dense/BM25Indexer -> BatchProcessor -> upsert，接入 TraceContext，提供 MVP 集成测试入口 |
+| `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 文档哈希、ingestion_history 去重、Document 标准化 |
+| `src/ingestion/pdf_to_markdown.py` | PDF 转 Markdown 辅助逻辑 | MarkItDown、页码、图片抽取 |
+| `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
+| `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、继承 metadata、添加 `chunk_index`、建立 `source_ref`、按需分发 `image_refs` |
+| `src/ingestion/chunk/chunk_id.py` | 生成稳定 chunk_id | `hash(source_path + section_path + content_hash)` |
+| `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 串联 rewrite、semantic_merge、denoise，ImageCaptioner 作为图片 caption 专用步骤独立执行 |
+| `src/ingestion/transform/rewrite_chunk.py` | LLM 改写 chunk | 提升语义完整性和检索可读性 |
+| `src/ingestion/transform/semantic_merge.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk |
+| `src/ingestion/transform/denoise.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留 |
+| `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、caption 写入 chunk metadata |
+| `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | DenseEncoder、BM25Indexer、BatchProcessor 和 upsert 前结果汇总 |
+| `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | `text-embedding-3-small`、content_hash 差量判断、Dense 向量生成 |
+| `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | BM25 分词、词频、倒排索引构建和关键词查询 |
+| `src/ingestion/embedding/batch_processor.py` | 批处理优化 | 在 DenseEncoder 和 BM25Indexer 之后统一处理批量、限流、重试、失败隔离 |
+| `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | chunk、向量、BM25、images、trace 统一 upsert |
+
+#### 5.3.5 Storage 与本地运行层
+
+| 文件 | 具体职责 | 关键技术点 |
+| --- | --- | --- |
+| `src/storage/postgres.py` | 管理 PostgreSQL 连接 | 连接池、事务、超时、健康检查 |
+| `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`image_index`、traces、evaluation |
+| `src/storage/vector_storage.py` | 管理向量存储 | pgvector upsert/search、metadata filter |
+| `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | 倒排索引、词项统计、chunk 词频 |
+| `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`，`image_index` 表记录 image_id、file_path、collection、doc_hash、page_num |
+| `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
+| `src/storage/repositories.py` | 管理通用 repository | documents、chunks、ingestion_history、evaluation_runs |
+| `src/logs/app.log` | 保存应用运行日志 | 普通运行日志和错误排查 |
+| `src/logs/traces.jsonl` | 保存结构化 trace 日志 | ingestion/query trace JSON Lines |
+| `src/cache/embedding/` | 缓存 embedding 结果 | content_hash 差量计算和重复请求复用 |
+| `src/cache/captions/` | 缓存图片描述 | image_hash 命中后跳过 Vision LLM |
+| `src/cache/processing/` | 缓存摄取中间状态 | PDF 转换、临时图片、失败恢复 |
+| `src/scripts/run_dashboard.py` | 启动 Dashboard | 本地 Streamlit 启动脚本 |
+| `src/scripts/run_evaluation.py` | 运行评估任务 | 读取 golden_set.json，输出指标并写库 |
+| `src/scripts/query.py` | 本地查询调试 | 调用完整 `hybridsearch + rerank`，支持 `--query`、`--top-k`、`--collection`、`--verbose`、`--no-rerank` |
+| `src/scripts/ingest.py` | 本地离线摄取 | 调用 ingestion pipeline，支持 `--collection`、`--path`、`--force` |
+
+#### 5.3.6 Observability 层
+
+| 文件 | 具体职责 | 关键技术点 |
+| --- | --- | --- |
+| `src/observability/structured_log.py` | 配置结构化日志 | Python logging + JSONFormatter |
+| `src/observability/services/config_reader.py` | Dashboard 读取配置 | 展示当前启用组件和 provider |
+| `src/observability/services/data_browser_service.py` | Dashboard 查询数据资产 | 文档、chunk、图片、metadata、索引状态 |
+| `src/observability/services/trace_reader_service.py` | Dashboard 读取 trace | query/ingestion 历史、瀑布图数据、fallback 原因 |
+| `src/observability/services/evaluation_service.py` | Dashboard 运行评估 | 触发评估、读取历史趋势 |
+| `src/observability/pages/overview.py` | 系统总览页面 | 组件配置、collection 统计、健康指标 |
+| `src/observability/pages/query_trace.py` | Query Trace 页面 | Dense/BM25 对比、RRF、rerank 前后对比 |
+| `src/observability/pages/ingestion_trace.py` | Ingestion Trace 页面 | 阶段耗时瀑布图、跳过原因、失败详情 |
+| `src/observability/pages/ingestion_manage.py` | Ingestion 管理页面 | 文件选择、摄取进度、文档删除 |
+| `src/observability/pages/data_browser.py` | 数据浏览器页面 | 文档列表、chunk 详情、图片引用 |
+| `src/observability/pages/evaluation.py` | 评估面板页面 | 指标展示、历史趋势、策略对比 |
+| `src/observability/dashboard/app.py` | Streamlit 入口 | 页面路由和启动入口 |
+| `src/observability/dashboard/layout.py` | Dashboard 公共布局 | 导航、筛选器、通用图表容器 |
+| `src/observability/evaluation/runner.py` | 评估任务运行器 | 读取黄金测试集、执行检索和生成评估 |
+| `src/observability/evaluation/metrics.py` | 自定义指标 | Hit Rate、MRR、NDCG、citation_hit_rate |
+| `src/observability/evaluation/ragas_adapter.py` | Ragas 适配 | Faithfulness、Answer Relevancy |
+
+#### 5.3.7 外部接口层
+
+| 文件 | 具体职责 | 关键技术点 |
+| --- | --- | --- |
+| `src/mcp_server/server.py` | 启动 MCP Server | Python 官方 MCP SDK、stdio/http 生命周期 |
+| `src/mcp_server/tools.py` | 暴露 MCP tools | `query_knowledge_hub`、`list_collections`、`get_document_summary` |
+| `src/adapter/aimodel_tool.py` | AImodel 工具适配 | 封装 `search_shopping_guides`，隐藏内部工具 JSON |
+
+### 5.4 数据流设计
+
+RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查询数据流** 和 **管理操作数据流**。离线摄取负责把原始资料变成可检索索引，在线查询负责把用户问题变成带引用的上下文结果，管理操作负责支撑 Dashboard 中的文档管理、数据浏览、Trace 查看和评估运行。
+
+#### 5.4.1 离线摄取数据流
+
+离线摄取数据流从 PDF、Markdown 等原始资料开始，先执行 SHA256 去重判断；只有确认文档发生变化后，才进入 Loader、Splitter、Transform、Embedding 和 Upsert，最终写入 PostgreSQL、pgvector、BM25 索引、图片存储和 trace 日志。
+
+```text
+[1] 原始文档
+    PDF / Markdown / 商品说明文档 / 选购指南
+    |
+    v
+[2] 文档 SHA256 去重判断
+    - 直接基于原始文件计算 SHA256
+    - 查询 ingestion_history / rag_documents
+    - 如果 hash 未变更：记录 skipped，流程结束
+    - 如果 hash 已变更：继续执行 Loader
+    |
+    v
+[3] Loader
+    - PDF -> Markdown
+    - 提取标题、来源、页码等 metadata
+    - 提取图片，为图片生成 image_id
+    - 在正文中保留图片占位符
+    |
+    v
+[4] 生成 Document
+    - Document = markdown + metadata + images
+    |
+    v
+[5] Splitter
+    - 语义感知切分，不做简单定长切分
+    - 保留标题层级 section_path
+    - 保留图片引用 image_refs
+    |
+    v
+[6] Transform
+    - LLM 重写 chunk
+    - 元数据注入
+    - 智能合并逻辑相关 chunk
+    - 去除噪声内容
+    |
+    v
+[7] ImageCaptioner
+    - 判断 vision_llm.enabled
+    - 判断 chunk metadata 是否存在 image_refs
+    - 满足条件时生成 caption 并写入 metadata
+    - 无 image_refs 或未启用 Vision LLM 时写入 skipped 状态
+    |
+    v
+[8] Indexing Pipeline MVP
+    - 编排 chunk content_hash 差量判断
+    - 如果 content_hash 已存在：跳过 embedding，复用已有索引数据
+    - 如果 content_hash 不存在：执行 Dense 向量生成、BM25Indexer 和批处理计算
+    - 串联 Dense/BM25Indexer 和 upsert
+    |
+    v
+[9] Upsert
+    - 写入文档、chunk、pgvector、BM25、图片记录
+    |
+    v
+[10] Ingestion Trace
+    - 记录阶段耗时、跳过原因、失败详情和汇总指标
+```
+
+关键说明：
+
+- 文档级去重依赖 `SHA256`，未变更文档直接结束，避免重复摄取。
+- chunk 级差量依赖 `content_hash`，只对新增或变更 chunk 执行 embedding。
+- Transform 阶段负责把粗切分结果加工成更适合检索的知识片段，包括 **LLM 重写、元数据注入、图片描述生成、智能合并和去噪**。
+- Upsert 阶段统一写入 PostgreSQL 相关表，并保持文档生命周期、chunk、向量、BM25 和图片记录的一致性。
+
+#### 5.4.2 在线查询数据流
+
+在线查询数据流从 AImodel、MCP 工具或本地 `query.py` 脚本请求开始，经过 Query Processor、HybridSearch、Rerank 前候选过滤、Rerank 和 Response Builder，最终返回带引用来源的上下文结果。
+
+```text
+[1] 用户问题 / AImodel 请求
+    例如：帮我推荐高性价比无线耳机
+    |
+    v
+[2] Query Processor
+    - query 标准化
+    - 用户意图识别
+    - 可选 query rewrite
+    - 判断是否需要商品 API 工具协同
+    |
+    v
+[3] TraceContext
+    - 创建 query trace
+    - 记录基础请求信息
+    |
+    v
+[4] HybridSearch
+    |
+    |-- Dense Route
+    |   - 计算 Query Embedding
+    |   - 检索 pgvector
+    |   - 返回 List[RetrievalResult]
+    |
+    |-- Sparse Route
+    |   - 使用 ProcessedQuery.keywords
+    |   - bm25_indexer.query(keywords, top_k)
+    |   - vector_store.get_by_ids(chunk_ids)
+    |   - 返回 List[RetrievalResult]
+    |
+    |-- RRF Fusion
+        - 基于排名倒数融合
+        - 不直接比较 Dense 分数和 BM25 分数
+    |
+    v
+[5] Rerank 前候选过滤
+    - 根据 collection、doc_type、来源类型等参数过滤融合候选
+    - deleted / failed / 无权限候选不会进入 Reranker
+    |
+    v
+[6] Reranker 可用性判断
+    - 如果可用：对过滤后的候选执行 Cross-Encoder 或 LLM Rerank，输出精排结果
+    - 如果不可用 / 超时 / 异常：fallback 到过滤后的 RRF 排序结果
+    |
+    v
+[7] Response Builder
+    - 构造引用来源
+    - 组装多模态内容
+    - 隐藏内部工具调用细节
+    |
+    v
+[8] 返回 MCP / AImodel / query.py
+    - 上下文 + 引用 + trace_id
+    |
+    v
+[9] Query Trace
+     - 记录召回对比、rerank 前后变化和端到端耗时
+```
+
+关键说明：
+
+- 在线查询不直接生成最终购物答案，而是为 AImodel 提供 **可引用的知识上下文**。
+- Dense Route 解决语义相似问题，Sparse Route 解决关键词、品牌、型号、术语等精确匹配问题。
+- HybridSearch 负责集成 Dense/BM25、候选去重和 RRF Fusion。
+- RRF Fusion 基于排名融合，避免 Dense 分数和 BM25 分数量纲不同导致排序失真。
+- 候选过滤必须发生在 Rerank 前，避免不符合 `collection`、`doc_type`、权限或生命周期状态的内容进入重排阶段。
+- Reranker 不可用时必须优雅降级，保证查询链路仍然可以返回可用结果。
+- Response Builder 负责隐藏内部工具细节，只返回适合 Agent 使用的格式化内容、引用和多模态材料。
+
+#### 5.4.3 管理操作数据流
+
+管理操作数据流服务于 Streamlit Dashboard，覆盖文档摄取、文档删除、数据浏览、Trace 查看、评估运行和组件配置查看等后台管理动作。
+
+```text
+[1] Dashboard 用户操作
+    用户在 Streamlit 管理平台发起操作
+    |
+    v
+[2] 操作类型判断
+    |
+    |-- A. 选择文件摄取
+    |   |
+    |   v
+    |   Ingestion 管理页创建摄取任务
+    |   |
+    |   v
+    |   执行离线摄取数据流
+    |   |
+    |   v
+    |   写入 PostgreSQL / pgvector / BM25 / 图片存储 / ingestion trace
+    |
+    |-- B. 删除已摄入文档
+    |   |
+    |   v
+    |   文档生命周期管理标记 deleted
+    |   |
+    |   v
+    |   同步处理 chunk、向量、BM25、图片引用的可见状态或清理动作
+    |   |
+    |   v
+    |   写入 PostgreSQL 和 traces.jsonl
+    |
+    |-- C. 浏览已索引数据
+    |   |
+    |   v
+    |   数据浏览服务读取文档、chunk、图片和 metadata
+    |   |
+    |   v
+    |   数据浏览器页面展示文档列表和 chunk 详情
+    |
+    |-- D. 查看 Query / Ingestion Trace
+    |   |
+    |   v
+    |   Trace 读取服务读取 traces.jsonl
+    |   |
+    |   v
+    |   Trace 页面展示耗时瀑布图、召回对比、rerank 前后变化和失败详情
+    |
+    |-- E. 运行评估
+    |   |
+    |   v
+    |   评估服务读取黄金测试集
+    |   |
+    |   v
+    |   Evaluation Runner 执行检索评估和生成评估
+    |   |
+    |   v
+    |   评估结果写入 PostgreSQL
+    |   |
+    |   v
+    |   评估面板展示指标对比和历史趋势
+    |
+    |-- F. 查看系统总览
+        |
+        v
+        配置读取服务读取 settings.yaml
+        |
+        v
+        系统总览页面展示组件配置、collection 数据资产和最近健康指标
+```
+
+关键说明：
+
+- Dashboard 不直接绕过业务流程修改索引，摄取和删除都必须通过统一服务层执行，保证 trace、数据库和索引状态一致。
+- 数据浏览和 Trace 查看以只读为主，用于解释“知识库里有什么”和“为什么这次查询召回这些内容”。
+- 评估运行会把结果写入 PostgreSQL，便于在 Dashboard 中展示不同策略的量化对比和历史趋势。
+- 管理操作数据流必须和离线摄取、在线查询共用配置和组件工厂，避免 Dashboard 展示的组件状态与真实运行状态不一致。
+
+## 6. 项目排期
+
+### 6.1 阶段预览表
+
+状态标记说明：`[ ]` 表示未开始，`[~]` 表示进行中，`[✔]` 表示已完成。
+
+| 阶段 | 阶段标题 | 目标 | 状态 |
+| --- | --- | --- | --- |
+| Phase A | 配置与项目骨架 | 独立模块基础文件、Docker 部署骨架、pytest 冒烟测试、`settings.yaml`、prompt 配置、核心类型和配置加载 | [ ] |
+| Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [ ] |
+| Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [ ] |
+| Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [ ] |
+| Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [ ] |
+| Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [ ] |
+| Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、策略对比和评估趋势 | [ ] |
+| Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调和端到端测试 | [ ] |
+
+### 6.2 交付里程碑
+
+每完成一个阶段后，必须维护该阶段的交付里程碑。里程碑不是重复任务列表，而是面向后续开发者、面试官和项目讲解者说明：**当前项目已经走到哪里、已经有哪些可用功能、下一阶段从哪里继续**。
+
+维护要求：
+
+- **项目当前位置**：说明当前阶段完成后，RAG 系统处于什么能力状态。
+- **可用功能**：列出此时已经可以实际运行、测试或演示的功能。
+- **验证方式**：列出该阶段完成后最小验证命令或页面入口。
+- **下一阶段入口**：说明下一个阶段依赖当前阶段的哪些产物继续开发。
+- **状态更新时间**：记录阶段完成日期，便于进度追踪。
+
+里程碑记录模板：
+
+    #### 阶段 X 交付里程碑：阶段标题
+    
+    完成日期：
+    
+    项目当前位置：
+    
+    可用功能：
+    
+    - 
+    
+    验证方式：
+    
+    - `pytest ...`
+    - Dashboard 页面入口：
+    
+    下一阶段入口：
+
+阶段里程碑表：
+
+| 阶段 | 阶段标题 | 项目当前位置 | 可用功能 | 验证方式 | 完成日期 |
+| --- | --- | --- | --- | --- | --- |
+| Phase A | 配置与项目骨架 | 未完成 | 暂无 | 暂无 |  |
+| Phase B | 数据持久化与可插拔组件 | 未完成 | 暂无 | 暂无 |  |
+| Phase C | Ingestion & Indexing Pipeline | 未完成 | 暂无 | 暂无 |  |
+| Phase D | Retrieval | 未完成 | 暂无 | 暂无 |  |
+| Phase E | MCP 工具服务 | 未完成 | 暂无 | 暂无 |  |
+| Phase F | 可观测与管理平台 | 未完成 | 暂无 | 暂无 |  |
+| Phase G | 质量评估体系 | 未完成 | 暂无 | 暂无 |  |
+| Phase H | AImodel 联调集成 | 未完成 | 暂无 | 暂无 |  |
+
+### 6.3 阶段任务跟踪表
+
+任务拆分原则：
+
+- 每个子任务都应尽量控制为 **45-75 分钟** 可完成、可验收的增量，避免过薄的纯占位任务，也避免一次覆盖多个模块的厚重任务。
+- 每个子任务默认都包含 **TDD 流程**：先写对应 pytest 单元测试或冒烟测试，再实现最小代码让测试通过。
+- 若某个任务需要数据库、LLM 或外部模型，应优先使用 fake provider、mock 或测试容器，真实外部调用使用 pytest marker 隔离。
+
+#### 阶段 A：配置与项目骨架
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| A1 | 创建独立模块基础文件 | [ ] |  | `README.md`、`pyproject.toml`、`.gitignore`、基础包入口 |
+| A2 | 创建独立运行入口和 Docker 骨架 | [ ] |  | `main.py`、`Dockerfile`、`.dockerignore` |
+| A3 | 创建 `config/settings.yaml` 示例配置 | [ ] |  | 覆盖 LLM、Vision LLM、Embedding、VectorStore、Splitter、Reranker、Retrieval、Dashboard |
+| A4 | 创建 prompt 配置目录 | [ ] |  | `rerank`、`rewrite_chunk`、`image-to-text` |
+| A5 | 实现配置读取和校验 | [ ] |  | `RagSettings`、环境变量引用、默认值校验 |
+| A6 | 定义核心类型和统一异常 | [ ] |  | Document、Chunk、Trace、RetrievalResult |
+| A7 | 引入 pytest 并新增冒烟测试 | [ ] |  | 在 `tests/` 下新增 `test_smoke.py`，验证包可导入和配置样例可读取 |
+
+#### 阶段 B：数据持久化与可插拔组件
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| B1 | 编写 collection/document/chunk schema | [ ] |  | PostgreSQL + pgvector，含单元或集成测试 |
+| B2 | 编写 image/trace/evaluation schema | [ ] |  | `image_index`、Trace 索引、评估历史 |
+| B3 | 实现数据库连接池和 schema 初始化 | [ ] |  | `PostgresPool`、`init_schema()` |
+| B4 | 实现 Document/Chunk/Image Repository | [ ] |  | 文档、chunk、ImageStorage 图片落盘和 `image_index` 入库 |
+| B5 | 实现 Trace/Evaluation Repository | [ ] |  | Trace 索引和评估历史写入 PostgreSQL |
+| B6 | 实现文档生命周期管理 | [ ] |  | `pending`、`processing`、`success`、`failed`、`deleted` |
+| B7 | 建立 libs 可插拔组件包结构 | [ ] |  | loader、llm、splitter、transform、embedding、vector_store、reranker、evaluator |
+| B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [ ] |  | `libs.splitter` 保持 `str -> List[str]`，`DocumentChunker` 负责 `Document -> List[Chunk]` |
+| B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [ ] |  | 统一 `chat()`、`embed()`、`embed_batch()` |
+| B10 | 实现 Transform libs 基类、factory 和 fake 实现 | [ ] |  | `BaseTransform`、`TransformFactory`、`FakeTransform` |
+| B11 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [ ] |  | 覆盖 fallback 和未知 provider 错误 |
+| B12 | 实现首批真实组件最小适配 | [ ] |  | OpenAI、DeepSeek、pgvector、RecursiveCharacterTextSplitter；真实调用用 marker 隔离 |
+
+#### 阶段 C：Ingestion & Indexing Pipeline
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [ ] |  | 去重必须先于 Loader；hash 未变更时直接结束并写入 trace |
+| C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [ ] |  | PDF -> Markdown、metadata 提取；若存在图片则提取图片并写入占位符 |
+| C3 | 实现 DocumentChunker 业务适配与引用保留验证 | [ ] |  | chunk_id、metadata 继承、chunk_index、source_ref、标题层级和图片引用保留 |
+| C4 | 实现 Transform 具体实现 | [ ] |  | settings.yaml 配置真实 Transform；覆盖 metadata 注入、rewrite、合并、去噪和典型噪声场景 |
+| C5 | 实现 ImageCaptioner | [ ] |  | 当启用 `vision_llm` 且 chunk 存在 `image_refs` 时，生成 caption 并写入 metadata |
+| C6 | 实现 chunk_id 生成工具并接入 DocumentChunker | [ ] |  | `hash(source_path + section_path + content_hash)`，由 DocumentChunker 调用 |
+| C7 | 实现 DenseEncoder | [ ] |  | 封装 `text-embedding-3-small`、content_hash 差量判断和 Dense 向量生成 |
+| C8 | 实现 BM25Indexer | [ ] |  | 生成 BM25 词项、词频和倒排索引数据 |
+| C9 | 实现 BatchProcessor 批处理优化 | [ ] |  | 放在 DenseEncoder 和 BM25Indexer 之后，统一处理批量、限流、重试和失败隔离 |
+| C10 | 实现 pgvector upsert | [ ] |  | 同一 chunk 两次 upsert 产生相同 id；内容变更 id 变更；支持批量 upsert 且保持顺序 |
+| C11 | 实现统一 Pipeline MVP 编排和集成测试 | [ ] |  | 串联摄取、ImageCaptioner、content_hash、Dense、BM25Indexer、batch、upsert，验证最小可运行索引链路 |
+| C12 | 新增 `ingest.py` 摄取脚本入口 | [ ] |  | 调用 pipeline，支持 `--collection`、`--path`、`--force` |
+
+#### 阶段 D：Retrieval
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| D1 | 实现 Query Processor | [ ] |  | query 标准化、意图识别、可选 query rewrite |
+| D2 | 实现 Dense Route 向量检索 | [ ] |  | 输入 query/ProcessedQuery，完成 Query Embedding、pgvector 检索并返回 `RetrievalResult` |
+| D3 | 实现 Sparse Route BM25 回表检索 | [ ] |  | `ProcessedQuery.keywords -> bm25_indexer.query -> chunk_ids -> vector_store.get_by_ids` |
+| D4 | 实现 RRF Fusion | [ ] |  | 基于排名倒数融合，不比较两路分数 |
+| D5 | 实现 HybridSearch 编排 | [ ] |  | 依赖 D1/D2/D3/D4，集成候选去重、双路召回、融合和降级 |
+| D6 | 实现 Rerank 前候选过滤 | [ ] |  | 在进入 Reranker 前按 `collection`、`doc_type` 等参数过滤候选 |
+| D7 | 实现 Cross-Encoder Reranker 适配 | [ ] |  |  |
+| D8 | 实现 LLM Rerank 适配 | [ ] |  |  |
+| D9 | 实现 rerank fallback | [ ] |  | 不可用、超时、异常时回退过滤后的 RRF 结果 |
+| D10 | 实现引用构造 | [ ] |  | 来源标题、章节、路径、trace_id |
+| D11 | 实现多模态 Response Builder | [ ] |  | 组装 chunk 关联图片，隐藏内部工具 JSON |
+| D12 | 新增 `query.py` 脚本入口 | [ ] |  | 调用完整 `hybridsearch + filter + rerank`，支持 query/top-k/collection/verbose/no-rerank |
+| D13 | 实现 Retrieval 单元测试矩阵 | [ ] |  | Query Processor、Dense、Sparse、RRF、HybridSearch、Filter、Rerank、Response、query.py |
+| D14 | 实现 Retrieval 集成测试 | [ ] |  | 覆盖 Dense/BM25/Hybrid/Filter/Rerank/fallback/query.py |
+
+#### 阶段 E：MCP 工具服务
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| E1 | 搭建 MCP Server | [ ] |  |  |
+| E2 | 暴露 `query_knowledge_hub` | [ ] |  |  |
+| E3 | 暴露 `list_collections` 和 `get_document_summary` | [ ] |  |  |
+| E4 | 完成 MCP tools 测试 | [ ] |  |  |
+
+#### 阶段 F：可观测与管理平台
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| F1 | 实现 TraceContext 和 TraceController | [ ] |  |  |
+| F2 | 实现 ingestion trace 数据结构 | [ ] |  | 基础信息、阶段详情、汇总指标、评估指标 |
+| F3 | 实现 query trace 数据结构 | [ ] |  | Dense/BM25、fusion、filter、rerank 前后变化 |
+| F4 | 实现 Python logging + JSONFormatter | [ ] |  | 追加写入 `src/logs/traces.jsonl` |
+| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [ ] |  | 每个 pipeline 阶段调用 `record_stage()`，结束时 flush |
+| F6 | 实现配置读取和数据浏览服务 | [ ] |  | Dashboard services，配套单元测试 |
+| F7 | 实现 Trace 读取和评估服务 | [ ] |  | Dashboard services，配套单元测试 |
+| F8 | 实现系统总览与 Ingestion 管理页面 | [ ] |  | Streamlit 页面可启动 |
+| F9 | 实现数据浏览器与 Query Trace 页面 | [ ] |  | 文档、chunk、召回对比、rerank 变化 |
+| F10 | 实现 Ingestion Trace 与评估面板页面 | [ ] |  | 阶段耗时、评估趋势 |
+| F11 | 实现 Dashboard 启动脚本和冒烟测试 | [ ] |  | `src/scripts/run_dashboard.py` |
+| F12 | 完成 Dashboard 六大页面测试 | [ ] |  | 系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板 |
+
+#### 阶段 G：质量评估体系
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| G1 | 准备黄金测试集格式 | [ ] |  |  |
+| G2 | 实现自定义检索指标 | [ ] |  | Hit Rate@K、MRR、NDCG |
+| G3 | 接入 Ragas 生成指标 | [ ] |  | Faithfulness、Answer Relevancy |
+| G4 | 实现策略对比评估 | [ ] |  | Hybrid、Dense-only、Sparse-only、Rerank 对比 |
+| G5 | 实现评估历史趋势展示 | [ ] |  | Dashboard 评估面板 |
+
+#### 阶段 H：AImodel 联调集成
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| H1 | 执行 AImodel 集成前验收门禁 | [ ] |  | Dashboard 六大页面测试和 RAG 全链路 E2E 通过后才进入集成 |
+| H2 | 实现 AImodel RAG 工具适配 | [ ] |  |  |
+| H3 | 将 RAG 工具接入 Agent 工具列表 | [ ] |  |  |
+| H4 | 验证商品 API 工具与 RAG 工具协同 | [ ] |  | 商品事实走 API，知识补充走 RAG |
+| H5 | 验证简单询问和商品链接场景 | [ ] |  | 推荐、对比、选购指南、政策 FAQ |
+| H6 | 完成前后端联调和端到端测试 | [ ] |  | AImodel 工具响应不暴露 tool result |
+
+### 6.4 总体进度表
+
+| 阶段 | 总任务数 | 已完成 | 进度 |
+| --- | ---: | ---: | --- |
+| Phase A | 7 | 0 | 0% |
+| Phase B | 12 | 0 | 0% |
+| Phase C | 12 | 0 | 0% |
+| Phase D | 14 | 0 | 0% |
+| Phase E | 4 | 0 | 0% |
+| Phase F | 12 | 0 | 0% |
+| Phase G | 5 | 0 | 0% |
+| Phase H | 6 | 0 | 0% |
+| **总计** | **72** | **0** | **0%** |
+
+### 6.5 阶段实施明细
+
+> 每个子任务都必须按 TDD 执行：先写测试，再写实现。每个子任务都采用“标题 -> 文字”的结构，避免宽表格影响阅读。真实 LLM/API 调用必须使用 pytest marker 隔离。
+
+#### 阶段 A：配置与项目骨架
+
+##### A1：创建独立模块基础文件
+
+目标：让 RAG 子系统具备独立 Python 项目的基础文件，方便后续单独开发、测试和说明。
+
+修改文件：`README.md`、`pyproject.toml`、`.gitignore`、`src/__init__.py`、`tests/__init__.py`
+
+实现类/函数：
+
+- 项目元数据
+- 依赖声明
+- pytest 配置
+- 模块忽略规则
+- 包初始化文件
+
+验收标准：`pyproject.toml` 可被 Python 工具识别，README 说明独立模块定位，目录可被 Python 导入。
+
+测试方法：`pytest services\ai-service\rag\tests\test_smoke.py -v`
+
+##### A2：创建独立运行入口和 Docker 骨架
+
+目标：让 RAG 子系统可以作为独立模块构建 Docker 镜像，并预留本地运行入口。
+
+修改文件：`main.py`、`Dockerfile`、`.dockerignore`、`tests/test_smoke.py`
+
+实现类/函数：
+
+- `main()`：命令行或服务入口
+- 健康检查占位
+- Docker 构建入口
+
+验收标准：`main.py` 可导入，Dockerfile 明确 Python 版本、依赖安装和启动命令，构建上下文不会包含日志、缓存和本地数据库数据。
+
+测试方法：`pytest services\ai-service\rag\tests\test_smoke.py -v`
+
+##### A3：创建统一配置示例
+
+目标：提供首版 `settings.yaml` 示例，作为配置驱动开发的入口。
+
+修改文件：`config/settings.yaml`
+
+实现类/函数：
+
+- 配置字段样例
+
+验收标准：LLM、Embedding、Transform、Retrieval、Dashboard 配置齐全。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_config.py -v`
+
+##### A4：创建 prompt 配置目录
+
+目标：将提示词从业务代码中分离，便于后续评估和策略替换。
+
+修改文件：`config/prompts/rerank_prompt.yaml`、`config/prompts/rewrite_chunk_prompt.yaml`、`config/prompts/image_to_text_prompt.yaml`
+
+实现类/函数：
+
+- prompt 模板
+
+验收标准：三类 prompt 可被读取。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_config.py -v`
+
+##### A5：实现配置读取和校验
+
+目标：实现配置加载、环境变量引用和缺失配置校验。
+
+修改文件：`src/core/config.py`、`tests/unit/test_config.py`
+
+实现类/函数：
+
+- `RagSettings`：定义 settings.yaml 的配置结构和校验规则
+- `load_settings()`：加载配置或模板
+- `load_prompt()`：加载配置或模板
+
+验收标准：缺配置时抛可读异常，环境变量引用可校验。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_config.py -v`
+
+##### A6：定义核心类型和异常
+
+目标：建立 Ingestion、Retrieval、Trace 共用的数据类型和异常基类。
+
+修改文件：`src/core/types.py`、`src/core/errors.py`、`tests/unit/test_types.py`
+
+实现类/函数：
+
+- `Document(id,text,metadata)`：定义核心数据契约
+- `Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`：定义核心数据契约
+- `ImageMetadata`：定义核心数据契约
+- `RetrievalResult`：定义流程返回结果
+- `RagError`：定义 RAG 子系统统一异常基类
+
+验收标准：`Document.metadata.images[]` 支持 `id/path/page/text_offset/text_length/position`；`Chunk` 支持 `start_offset`、`end_offset` 和可选 `source_ref`；类型可被 Ingestion、Retrieval、Trace 复用。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_types.py -v`
+
+##### A7：引入 pytest 冒烟测试
+
+目标：建立最小测试入口，验证包导入、pytest 运行和配置样例读取。
+
+修改文件：`tests/test_smoke.py`
+
+实现类/函数：
+
+- `test_rag_package_importable()`：验证对应行为
+
+验收标准：包可导入，pytest 可运行，配置样例可读取。
+
+测试方法：`pytest services\ai-service\rag\tests\test_smoke.py -v`
+
+#### 阶段 B：数据持久化与可插拔组件
+
+##### B1：建立核心文档 schema
+
+目标：创建 collection、document、chunk 的 PostgreSQL/pgvector 基础表。
+
+修改文件：`src/storage/schema.sql`、`tests/integration/test_repositories.py`
+
+实现类/函数：
+
+- `rag_collections`：定义数据库表结构
+- `rag_documents`：定义数据库表结构
+- `rag_chunks`：定义数据库表结构
+
+验收标准：pgvector extension 和核心表可初始化。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+
+##### B2：建立图片、Trace、评估 schema
+
+目标：补齐 `image_index` 图片索引、Trace 索引和评估历史相关表。
+
+修改文件：`src/storage/schema.sql`、`tests/integration/test_repositories.py`
+
+实现类/函数：
+
+- `image_index`：记录图片文件路径、collection、doc_hash 和页码
+- `rag_query_traces`：定义数据库表结构
+- `rag_ingestion_traces`：定义数据库表结构
+- `rag_evaluation_runs`：定义数据库表结构
+
+验收标准：`image_index`、Trace 和评估表可初始化；`idx_collection`、`idx_doc_hash` 索引存在；schema 可重复执行。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+
+##### B3：实现数据库连接和 schema 初始化
+
+目标：封装 PostgreSQL 连接池和 schema 初始化入口。
+
+修改文件：`src/storage/postgres.py`、`tests/integration/test_repositories.py`
+
+实现类/函数：
+
+- `PostgresPool`：管理 PostgreSQL 连接池和事务入口
+- `init_schema()`：初始化基础设施
+
+验收标准：连接池可创建，schema 初始化失败有明确异常。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+
+##### B4：实现文档、chunk、图片仓储
+
+目标：实现 RAG 核心数据的 repository 写入和读取。
+
+修改文件：`src/storage/repositories.py`、`src/storage/image_storage.py`、`tests/integration/test_repositories.py`
+
+实现类/函数：
+
+- `DocumentRepository`：封装数据访问逻辑
+- `ChunkRepository`：封装数据访问逻辑
+- `ImageStorage.save_image()`：保存图片到 `data/images/{collection}/`
+- `ImageStorage.upsert_index()`：写入 `image_index` 图片索引
+
+验收标准：文档、chunk 可写入和读取；图片文件保存到 `data/images/{collection}/`；`image_index` 可按 `collection` 和 `doc_hash` 查询。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+
+##### B5：实现 Trace 和评估仓储
+
+目标：支持 Trace 索引和评估结果写入 PostgreSQL。
+
+修改文件：`src/storage/repositories.py`、`tests/integration/test_repositories.py`
+
+实现类/函数：
+
+- `TraceRepository`：封装数据访问逻辑
+- `EvaluationRepository`：封装数据访问逻辑
+
+验收标准：Trace 和评估结果可写入和查询。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+
+##### B6：实现文档生命周期管理
+
+目标：统一文档状态流转，避免 deleted/failed 文档进入检索。
+
+修改文件：`src/storage/repositories.py`、`tests/integration/test_repositories.py`
+
+实现类/函数：
+
+- `mark_processing()`：更新生命周期状态
+- `mark_success()`：更新生命周期状态
+- `mark_deleted()`：更新生命周期状态
+
+验收标准：文档状态按生命周期流转，deleted 不进入检索。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+
+##### B7：创建 libs 可插拔包结构
+
+目标：创建所有可插拔组件包，为后续接口和工厂提供目录边界。
+
+修改文件：`src/libs/*`、`tests/unit/test_factories.py`
+
+实现类/函数：
+
+- 包初始化文件
+
+验收标准：loader、llm、splitter、transform、embedding、vector_store、reranker、evaluator 包存在。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+
+##### B8：实现 Loader/Splitter 抽象和工厂
+
+目标：实现 Loader 与纯文本 Splitter 的最小接口、工厂和测试实现，并明确 `DocumentChunker` 的业务适配契约。
+
+修改文件：`src/libs/loader/*`、`src/libs/splitter/*`、`src/ingestion/chunk/document_chunker.py`、`tests/unit/test_factories.py`、`tests/unit/test_splitter.py`
+
+实现类/函数：
+
+- `BaseLoader`：定义最小抽象接口
+- `LoaderFactory`：根据配置创建实现
+- `BaseSplitter.split(text) -> List[str]`：定义输入输出契约
+- `SplitterFactory`：根据配置创建实现
+- `DocumentChunker.chunk(document) -> List[Chunk]`：定义输入输出契约
+
+验收标准：可创建 fake/markdown/pdf loader 和 splitter；`libs.splitter` 只接收文本并返回 `List[str]`；`DocumentChunker` 契约测试覆盖 `chunk_id`、metadata 继承、`chunk_index`、`source_ref`、图片引用分发，以及 `List[str] -> List[Chunk]` 类型转换。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py services\ai-service\rag\tests\unit\test_splitter.py -v`
+
+##### B9：实现 LLM/Embedding 抽象和工厂
+
+目标：统一 LLM 与 Embedding 调用接口，支持 fake provider 测试。
+
+修改文件：`src/libs/llm/*`、`src/libs/embedding/*`、`tests/unit/test_factories.py`
+
+实现类/函数：
+
+- `BaseLLM`：定义最小抽象接口
+- `LLMFactory`：根据配置创建实现
+- `BaseEmbedding`：定义最小抽象接口
+- `EmbeddingFactory`：根据配置创建实现
+
+验收标准：`chat()`、`embed()`、`embed_batch()` 接口统一。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+
+##### B10：实现 Transform 抽象和工厂
+
+目标：补齐 Transform 可插拔基类、工厂和 fake 实现。
+
+修改文件：`src/libs/transform/base_transform.py`、`src/libs/transform/transform_factory.py`、`src/libs/transform/fake_transform.py`、`tests/unit/test_factories.py`
+
+实现类/函数：
+
+- `BaseTransform`：定义最小抽象接口
+- `TransformFactory`：根据配置创建实现
+- `FakeTransform`：执行具体转换逻辑
+
+验收标准：Transform 可按配置创建，fake transform 可用于单元测试。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+
+##### B11：实现 VectorStore/Reranker/Evaluator 抽象和工厂
+
+目标：统一向量存储、重排和评估组件的可插拔接口。
+
+修改文件：`src/libs/vector_store/*`、`src/libs/reranker/*`、`src/libs/evaluator/*`、`tests/unit/test_factories.py`
+
+实现类/函数：
+
+- `BaseVectorStore`：定义最小抽象接口
+- `BaseReranker`：定义最小抽象接口
+- `BaseEvaluator`：定义最小抽象接口
+
+验收标准：未知 provider 抛可读错误，fallback 可配置。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+
+##### B12：实现首批真实组件最小适配
+
+目标：接入首批真实 provider 的最小可用实现，并保留 fake 默认测试路径。
+
+修改文件：`src/libs/llm/*`、`src/libs/embedding/openai_embedding.py`、`src/libs/vector_store/pgvector_store.py`、`tests/unit/test_factories.py`
+
+实现类/函数：
+
+- `DeepSeekClient`：封装 DeepSeek Chat 模型调用
+- `OpenAIEmbedding`：封装 text-embedding-3-small 向量生成
+- `PgVectorStore`：封装存储访问能力
+
+验收标准：真实调用默认不跑，marker 隔离；fake provider 默认可测。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+
+#### 阶段 C：Ingestion & Indexing Pipeline
+
+##### C1：实现文档 SHA256 去重与 skipped 快速结束
+
+目标：在进入 Loader 前判断文档是否变化，未变化直接走 skipped 快速结束，并记录 trace 摘要。
+
+修改文件：`src/ingestion/pipeline.py`、`src/storage/repositories.py`、`tests/unit/test_loader.py`
+
+实现类/函数：
+
+- `calculate_sha256()`：计算文档稳定哈希标识
+- `should_skip_document()`：判断文档是否可以跳过处理
+- `IngestionPipeline.run()`：在 Loader 前执行去重判断并处理 skipped 分支
+
+验收标准：hash 未变更时不进入 Loader，不执行 PDF 转换、图片提取、Splitter 和 Transform；skipped 分支写入 trace 摘要。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_loader.py -v`
+
+##### C2：实现文档加载、Markdown 标准化与图片引用提取
+
+目标：将输入文档转换为标准 `Document(id, text, metadata)`；完成 PDF -> Markdown、Markdown 标准化、标题层级 metadata 提取；若文档存在图片，则执行图片提取、生成 `image_id`、写入图片占位符，并填充 `metadata.images[]`。
+
+修改文件：`src/ingestion/pdf_to_markdown.py`、`src/libs/loader/markdown_loader.py`、`src/libs/loader/pdf_loader.py`、`tests/unit/test_loader.py`
+
+实现类/函数：
+
+- `MarkItDownConverter`：将 PDF 转换为 canonical Markdown
+- `MarkdownLoader.load()`：加载 Markdown 并提取标题层级与 metadata
+- `PdfLoader.load()`：加载 PDF 并输出标准 Document
+- `extract_images()`：仅在文档存在图片时抽取图片资源并生成图片引用
+
+验收标准：PDF 可转换为 canonical Markdown；Markdown 可输出标准 `Document(id + text + metadata)`；无图片文档不生成无效图片 metadata；有图片文档生成 `image_id`、图片占位符和 `metadata.images[]`。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_loader.py -v`
+
+##### C3：实现 DocumentChunker 业务适配与引用保留验证
+
+目标：把 `libs.splitter` 输出的 `List[str]` 转换为符合 `core.types` 契约的 `List[Chunk]`，并验证标题层级、offset 和图片引用不会在业务适配中丢失。
+
+修改文件：`src/ingestion/chunk/document_chunker.py`、`src/ingestion/chunk/splitter_step.py`、`src/ingestion/chunk/chunk_id.py`、`tests/unit/test_splitter.py`
+
+实现类/函数：
+
+- `DocumentChunker.chunk()`：将 Document 转换为带业务 metadata 的 Chunk 列表
+- `build_chunk_id()`：生成稳定 chunk 标识
+- `build_source_ref()`：建立 chunk 到来源文档的引用
+- `attach_section_path()`：将标题层级写入 chunk metadata
+- `distribute_image_refs()`：根据图片占位符 offset 分发图片引用
+
+验收标准：每个 chunk 都包含稳定 `chunk_id`；`Document.metadata` 被复制到 `Chunk.metadata`；按顺序添加 `chunk_index`；根据文档来源建立 `source_ref`；chunk metadata 包含 `section_path` 和按需分发的 `image_refs`；没有图片的 chunk 不添加无效引用；完成 `List[str] -> List[Chunk]` 类型转换。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
+
+##### C4：实现 Transform 具体实现
+
+目标：集中实现 Transform 阶段的具体能力，包括 metadata 注入、LLM chunk rewrite、智能合并和去噪。
+
+修改文件：`config/settings.yaml`、`src/libs/transform/metadata_enricher.py`、`src/libs/transform/chunk_rewriter.py`、`src/libs/transform/semantic_merge_transform.py`、`src/libs/transform/denoise_transform.py`、`tests/fixtures/noisy_documents/`、`tests/unit/test_transformer.py`
+
+实现类/函数：
+
+- `MetadataEnricher.transform()`：注入标题路径、来源、文档主题等上下文 metadata
+- `ChunkRewriter.transform()`：利用 LLM 重写 chunk，使片段语义更完整
+- `SemanticMergeTransform.transform()`：合并逻辑相关但被物理切开的相邻 chunk
+- `DenoiseTransform.transform()`：清理空白、页眉页脚、目录和解析残留噪声
+
+验收标准：chunk 包含标题、来源、主题上下文；fake LLM 下可 rewrite；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
+
+补充要求：执行该任务时必须在 `settings.yaml` 中配置真实启用的 Transform 链路，测试不能只依赖 fake transform；需要创建典型噪声场景 fixture，例如连续空白、页眉页脚、重复目录、页码水印、PDF 解析断行、无意义符号残留和图片占位符附近噪声。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
+
+##### C5：实现 ImageCaptioner
+
+目标：当 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时，为关联图片生成 caption，并将 caption 写入 chunk metadata；未启用 Vision LLM 或没有 `image_refs` 时必须安全跳过。
+
+修改文件：`src/ingestion/transform/image_captioner.py`、`src/libs/transform/image_to_text_transform.py`、`config/settings.yaml`、`tests/unit/test_transformer.py`
+
+实现类/函数：
+
+- `ImageCaptioner.caption()`：读取 chunk 的 `image_refs` 并生成图片描述
+- `ImageCaptioner.should_caption()`：判断是否满足 `vision_llm.enabled=true` 且存在 `image_refs`
+- `ImageCaptioner.write_metadata()`：将 caption、caption_provider、caption_status 写入 chunk metadata
+- `ImageToTextTransform.transform()`：调用 Vision LLM 生成图片描述并返回结构化 caption 结果
+
+验收标准：启用 `vision_llm` 且存在 `image_refs` 时会生成 caption 并写入 chunk metadata；未启用 `vision_llm` 时不调用 Vision LLM，并写入 skipped 状态；没有 `image_refs` 的 chunk 不生成 caption；Vision LLM 失败时写入 failed/low_quality 状态并保留原 chunk；caption 可被后续 DenseEncoder 和 BM25Indexer 使用。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
+
+##### C6：生成稳定 chunk_id 并接入 DocumentChunker
+
+目标：为 DocumentChunker 生成业务 Chunk 时提供稳定可追踪的 ID 规则。
+
+修改文件：`src/ingestion/chunk/chunk_id.py`、`src/ingestion/chunk/document_chunker.py`、`tests/unit/test_splitter.py`
+
+实现类/函数：
+
+- `build_chunk_id()`：生成稳定 chunk 标识
+
+验收标准：同来源、章节、内容生成稳定 ID；DocumentChunker 创建的每个 Chunk 都调用该规则写入 `chunk.id`。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
+
+##### C7：实现 DenseEncoder
+
+目标：将默认 embedding 模型适配、chunk `content_hash` 差量判断和 Dense 向量生成统一收敛到 `DenseEncoder`。
+
+修改文件：`src/libs/embedding/openai_embedding.py`、`src/ingestion/embedding/dense_encoder.py`、`src/ingestion/embedding/embedding_step.py`、`tests/unit/test_embedding.py`
+
+实现类/函数：
+
+- `OpenAIEmbedding.embed()`：调用 `text-embedding-3-small` 生成单条文本向量
+- `DenseEncoder.should_encode()`：基于 chunk `content_hash` 判断是否需要重新生成 Dense 向量
+- `DenseEncoder.encode()`：生成单个 chunk 的 Dense 语义向量
+- `EmbeddingStep.run_dense()`：编排 DenseEncoder 并输出待写入向量结果
+
+验收标准：fake 默认可测，真实调用 marker 隔离；已存在 content_hash 不重复调用模型；新 chunk 可以生成 Dense 向量；DenseEncoder 不承担批处理职责。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_embedding.py -v`
+
+##### C8：实现 BM25Indexer
+
+目标：为 Sparse Route 构建 BM25 词项、词频和倒排索引数据。
+
+修改文件：`src/ingestion/embedding/bm25_indexer.py`、`tests/unit/test_bm25.py`
+
+实现类/函数：
+
+- `BM25Indexer.index()`：生成 BM25 词项、词频和倒排索引数据
+- `BM25Indexer.query()`：根据关键词返回候选 `chunk_id` 和 BM25 分数
+
+验收标准：可为 chunk 构建 BM25 索引；可按关键词召回候选 chunk；索引结果可被 Sparse Route 复用。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_bm25.py -v`
+
+##### C9：实现 BatchProcessor 批处理优化
+
+目标：在 DenseEncoder 和 BM25Indexer 均完成后，提供统一批处理能力，处理批量输入、限流、重试和失败隔离。
+
+修改文件：`src/ingestion/embedding/batch_processor.py`、`src/ingestion/embedding/embedding_step.py`、`tests/unit/test_embedding.py`、`tests/unit/test_bm25.py`
+
+实现类/函数：
+
+- `BatchProcessor.run()`：按配置批量执行编码或索引任务
+- `BatchProcessor.retry_failed()`：对可重试失败执行有限重试
+- `EmbeddingStep.run_batch()`：编排 DenseEncoder 与 BM25Indexer 的批处理执行
+
+验收标准：批处理大小受配置控制；Dense 和 BM25 两路都能复用 BatchProcessor；部分失败不影响其他 chunk；重试次数和失败记录可测试。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_embedding.py services\ai-service\rag\tests\unit\test_bm25.py -v`
+
+##### C10：实现统一 upsert
+
+目标：将文档、chunk、向量、BM25 和图片索引一致写入，并保证 upsert 幂等性和批量顺序。
+
+修改文件：`src/ingestion/storage/upsert_step.py`、`src/storage/image_storage.py`、`tests/integration/test_ingestion_pipeline.py`
+
+实现类/函数：
+
+- `UpsertStep.run()`：统一写入 chunk、向量、BM25 和图片索引
+- `ImageStorage.upsert_index()`：写入图片索引并保持数据库记录一致
+
+验收标准：同一 chunk 两次 upsert 产生相同 id；chunk 内容变更时 id 随 `content_hash` 变更；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 记录一致写入。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
+
+##### C11：实现统一 Pipeline MVP 编排和集成测试
+
+目标：在统一 `pipeline.py` 中把摄取结果、ImageCaptioner、DenseEncoder、BM25Indexer、BatchProcessor 和 upsert 串成最小可运行链路。
+
+修改文件：`src/ingestion/pipeline.py`、`tests/integration/test_ingestion_pipeline.py`
+
+实现类/函数：
+
+- `IngestionPipeline.run_indexing()`：编排索引 MVP 子链路
+- `IngestionPipeline.run()`：串联摄取与索引主链路
+- `IngestionPipelineResult`：定义统一摄取与索引流程返回结果
+
+验收标准：给定原始文档路径，可以完成去重、Loader、Splitter、Transform、ImageCaptioner 条件 caption、DenseEncoder 差量编码、BM25Indexer 索引、BatchProcessor 批处理和 upsert；重复执行时具备幂等性。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
+
+##### C12：新增 ingest.py 摄取脚本入口
+
+目标：提供本地命令行入口，调用 Ingestion Pipeline 执行离线文档摄取。
+
+修改文件：`src/scripts/ingest.py`、`tests/unit/test_loader.py`
+
+实现类/函数：
+
+- `parse_args()`：解析命令行参数
+- `run_ingest_cli()`：执行本地摄取流程
+
+验收标准：支持 `--collection` 指定 collection；支持 `--path` 指定待摄取文件或目录；支持 `--force` 强制重新摄取并绕过 SHA256 skipped 快速结束；参数缺失时返回可读错误。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_loader.py -v`
+#### 阶段 D：Retrieval
+
+##### D1：实现 query 预处理
+
+目标：完成 query 标准化、意图识别和可选 rewrite。
+
+修改文件：`src/core/query_engine/query_processor.py`、`tests/unit/test_retrieval.py`
+
+实现类/函数：
+
+- `QueryProcessor.process()`：处理输入并输出标准对象
+
+验收标准：支持 normalize、意图识别、可选 rewrite。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+
+##### D2：实现 Dense Route 向量检索
+
+目标：输入用户 query 或 `ProcessedQuery`，完成 Query Embedding、pgvector 向量检索，并返回统一的 `RetrievalResult(chunk_id,text,score,metadata)`。
+
+修改文件：`src/core/query_engine/dense_route.py`、`tests/unit/test_retrieval.py`
+
+实现类/函数：
+
+- `DenseRoute.search()`：执行 Query Embedding 和 pgvector 语义召回
+
+验收标准：调用 `EmbeddingClient.embed(processed_query.normalized_query)`；调用 vector store 完成 Top-k 向量检索；返回结果字段统一为 `chunk_id`、`text`、`score`、`metadata`；空 query、embedding 失败、空结果都有可测试分支；trace details 记录 route、top_k、候选数量和耗时。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+
+##### D3：实现 Sparse Route BM25 回表检索
+
+目标：使用 `QueryProcessor.process()` 生成的 `ProcessedQuery.keywords` 进行 BM25 检索，再通过 chunk_id 回表读取 chunk 正文和 metadata。
+
+修改文件：`src/core/query_engine/sparse_route.py`、`tests/unit/test_retrieval.py`
+
+实现类/函数：
+
+- `SparseRoute.search()`：执行 BM25 关键词召回并按 chunk_id 回表
+- `BM25Indexer.query()`：执行索引查询
+- `VectorStore.get_by_ids()`：按 ID 回表读取数据
+
+验收标准：流程固定为 `keywords -> bm25_indexer.query(keywords, top_k) -> [{chunk_id, score}] -> vector_store.get_by_ids(chunk_ids) -> [{id, text, metadata}] -> List[RetrievalResult]`；keywords 为空时返回空结果并记录 skipped 原因；BM25 返回的 chunk_id 顺序应被保留；缺失 chunk_id 应被跳过并写入 trace details。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+
+##### D4：实现 RRF Fusion
+
+目标：融合 Dense/BM25 两路候选，避免直接比较不同分数。
+
+修改文件：`src/core/query_engine/fusion.py`、`tests/unit/test_retrieval.py`
+
+实现类/函数：
+
+- `reciprocal_rank_fusion()`：按排名倒数融合 Dense/BM25 候选
+
+验收标准：基于排名倒数融合，不比较分数。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+
+##### D5：实现 HybridSearch 编排
+
+目标：编排 Dense Route、Sparse Route 和 RRF Fusion，完成候选去重、双路召回融合和单路失败降级。
+
+修改文件：`src/core/query_engine/hybrid_engine.py`、`tests/unit/test_retrieval.py`
+
+实现类/函数：
+
+- `HybridSearch.search()`：编排双路召回、候选去重和 RRF 融合
+- `HybridSearchResult`：定义流程返回结果
+
+验收标准：前置依赖为 D1、D2、D3、D4；输入 `ProcessedQuery`；分别执行 Dense/BM25 两路检索；按 `chunk_id` 去重并保留 `dense_rank`、`sparse_rank`、`dense_score`、`sparse_score`；调用 RRF Fusion 生成融合排序；单路失败时允许降级为另一条路线并写入 trace details。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+
+##### D6：实现 Rerank 前候选过滤
+
+目标：在 RRF Fusion 之后、Reranker 之前，根据调用参数过滤候选，避免把不符合限定条件的 chunk 送入重排阶段。
+
+修改文件：`src/core/query_engine/hybrid_engine.py`、`tests/unit/test_retrieval.py`
+
+实现类/函数：
+
+- `CandidateFilter.apply()`：按参数过滤候选结果
+- `HybridSearch.apply_metadata_filter()`：在进入 rerank 前执行 metadata 过滤
+
+验收标准：支持 `collection`、`doc_type`、来源类型、文档状态、权限、生命周期状态等参数；过滤发生在 RRF Fusion 之后、Rerank 之前；`--collection` 等脚本参数复用同一过滤逻辑；过滤结果数量和过滤原因写入 trace details。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+
+##### D7：实现 Cross-Encoder Reranker
+
+目标：支持 Cross-Encoder 对过滤后的候选进行精排。
+
+修改文件：`src/libs/reranker/cross_encoder_reranker.py`、`tests/unit/test_reranker.py`
+
+实现类/函数：
+
+- `CrossEncoderReranker.rerank()`：执行候选重排
+
+验收标准：只接收过滤后的候选；可按 query-doc pair 重新排序。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
+
+##### D8：实现 LLM Rerank
+
+目标：支持 LLM 对过滤后的候选进行重排。
+
+修改文件：`src/libs/reranker/llm_reranker.py`、`tests/unit/test_reranker.py`
+
+实现类/函数：
+
+- `LLMReranker.rerank()`：执行候选重排
+
+验收标准：只接收过滤后的候选；fake LLM 下可稳定排序。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
+
+##### D9：实现 rerank fallback
+
+目标：在 reranker 不可用、超时或异常时回退到过滤后的 RRF 结果。
+
+修改文件：`src/core/query_engine/reranker.py`、`tests/unit/test_reranker.py`
+
+实现类/函数：
+
+- `RerankController.rerank_or_fallback()`：执行 rerank 并在异常时回退过滤后的 RRF 结果
+
+验收标准：超时、异常、不可用时回退过滤后的 RRF 排序；不会重新引入已被过滤的候选。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
+
+##### D10：实现引用构造
+
+目标：为最终上下文构建可展示的引用来源。
+
+修改文件：`src/core/response/citation_builder.py`、`tests/unit/test_response_builder.py`
+
+实现类/函数：
+
+- `CitationBuilder.build()`：构建输出对象
+
+验收标准：输出来源标题、章节、路径、trace_id。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
+
+##### D11：实现多模态响应组装
+
+目标：组装命中 chunk 关联图片，并隐藏内部工具 JSON。
+
+修改文件：`src/core/response/multimodal_assembler.py`、`src/core/response/response_builder.py`、`tests/unit/test_response_builder.py`
+
+实现类/函数：
+
+- `MultimodalAssembler`：组装多模态内容
+- `KnowledgeHubResponseBuilder`：构建知识库工具返回内容和引用信息
+
+验收标准：可组装图片信息，不泄漏内部 JSON。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
+
+##### D12：新增 query.py 脚本入口
+
+目标：提供本地命令行入口，完整调用 `hybridsearch + filter + rerank` 查询链路，方便调试和验收。
+
+修改文件：`src/scripts/query.py`、`tests/unit/test_retrieval.py`
+
+实现类/函数：
+
+- `main()`：命令行或服务入口
+- `parse_args()`：解析命令行参数
+- `run_query_cli()`：执行本地查询流程
+
+验收标准：支持 `--query "问题"` 必填参数；支持 `--top-k 10` 默认返回 10 条；支持 `--collection xxx` 限定检索集合，并在 rerank 前过滤候选；支持 `--verbose` 展示 QueryProcessor、Dense、Sparse、Fusion、Filter、Rerank 等中间结果；支持 `--no-rerank` 跳过 Reranker 阶段。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+
+##### D13：建立 Retrieval 单元测试矩阵
+
+目标：集中覆盖 Retrieval 链路的核心单元行为。
+
+修改文件：`tests/unit/test_retrieval.py`、`tests/unit/test_reranker.py`、`tests/unit/test_response_builder.py`
+
+实现类/函数：
+
+- 测试用例
+
+验收标准：Query、Dense、Sparse、RRF、HybridSearch、Rerank 前过滤、Rerank、Response、query.py 参数解析均覆盖。
+
+测试方法：`pytest services\ai-service\rag\tests\unit -v`
+
+##### D14：实现 Retrieval 集成测试
+
+目标：验证完整查询链路可串联运行。
+
+修改文件：`tests/integration/test_query_pipeline.py`
+
+实现类/函数：
+
+- `test_query_pipeline_hybrid()`：验证对应行为
+
+验收标准：覆盖 Dense/BM25/Hybrid/Filter/Rerank/fallback。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
+#### 阶段 E：MCP 工具服务
+
+##### E1：搭建 MCP Server
+
+目标：创建 MCP Server 入口并注册工具。
+
+修改文件：`src/mcp_server/server.py`、`tests/unit/test_mcp_tools.py`
+
+实现类/函数：
+
+- `create_mcp_server()`：创建服务实例
+
+验收标准：server 可启动并注册 tools。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
+
+##### E2：暴露知识库查询工具
+
+目标：提供 `query_knowledge_hub` 工具。
+
+修改文件：`src/mcp_server/tools.py`、`tests/unit/test_mcp_tools.py`
+
+实现类/函数：
+
+- `query_knowledge_hub`：暴露对外工具能力
+
+验收标准：返回 content、citations、trace_id。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
+
+##### E3：暴露 collection 和 summary 工具
+
+目标：提供 collection 列表和文档摘要查询工具。
+
+修改文件：`src/mcp_server/tools.py`、`tests/unit/test_mcp_tools.py`
+
+实现类/函数：
+
+- `list_collections`：暴露对外工具能力
+- `get_document_summary`：暴露对外工具能力
+
+验收标准：空集合返回可读错误。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
+
+##### E4：完成 MCP schema 测试
+
+目标：验证 MCP tools schema 与文档契约一致。
+
+修改文件：`tests/unit/test_mcp_tools.py`
+
+实现类/函数：
+
+- schema 测试
+
+验收标准：tools schema 与文档一致，不泄漏内部 JSON。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
+
+#### 阶段 F：可观测与管理平台
+
+##### F1：实现 Trace 上下文
+
+目标：提供 ingestion/query 链路通用 Trace 上下文。
+
+修改文件：`src/core/trace/trace_context.py`、`src/core/trace/trace_controller.py`、`tests/unit/test_trace_context.py`
+
+实现类/函数：
+
+- `TraceContext`：保存单次 query/ingestion 的 trace 上下文
+- `TraceController`：统一记录阶段信息并 flush 结构化日志
+
+验收标准：可记录阶段耗时和输入输出摘要。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
+
+##### F2：实现 ingestion trace 结构
+
+目标：定义 ingestion trace 的基础信息、阶段详情、汇总指标和评估指标。
+
+修改文件：`src/core/trace/trace_context.py`、`tests/unit/test_trace_context.py`
+
+实现类/函数：
+
+- `build_ingestion_trace()`：构建标准对象
+
+验收标准：包含基础信息、阶段详情、汇总指标、评估指标。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
+
+##### F3：实现 query trace 结构
+
+目标：定义 query trace 的检索、融合和重排追踪结构。
+
+修改文件：`src/core/trace/trace_context.py`、`tests/unit/test_trace_context.py`
+
+实现类/函数：
+
+- `build_query_trace()`：构建标准对象
+
+验收标准：包含 Dense/BM25、fusion、rerank 变化。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
+
+##### F4：实现 JSON Lines 日志
+
+目标：将 Trace 按 JSON Lines 追加写入本地日志。
+
+修改文件：`src/observability/structured_log.py`、`src/storage/trace_log_storage.py`、`tests/unit/test_trace_context.py`
+
+实现类/函数：
+
+- `JsonlTraceWriter`：将 trace 追加写入 JSON Lines 日志
+
+验收标准：每行合法 JSON，可追加写入。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
+
+##### F5：将 Trace 打点注入 ingestion 和 query 链路
+
+目标：让 Trace 不停留在独立工具层，而是真正进入 ingestion 和 query 的运行主链路。
+
+修改文件：`src/ingestion/pipeline.py`、`src/core/query_engine/query_processor.py`、`src/core/query_engine/hybrid_engine.py`、`tests/integration/test_ingestion_pipeline.py`、`tests/integration/test_query_pipeline.py`
+
+实现类/函数：
+
+- `TraceController.record_stage()` 注入点：记录链路阶段信息
+- `IngestionPipeline.run()` trace 打点：注入链路追踪点
+- `IngestionPipeline.run_indexing()` trace 打点：注入索引子链路追踪点
+- `HybridEngine.search()` trace 打点：注入链路追踪点
+
+验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常结束和异常 fallback 都会 flush trace。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
+
+##### F6：实现配置读取和数据浏览服务
+
+目标：为 Dashboard 提供配置读取和文档/chunk 查询能力。
+
+修改文件：`src/observability/services/config_reader.py`、`src/observability/services/data_browser_service.py`、`tests/integration/test_dashboard_services.py`
+
+实现类/函数：
+
+- `ConfigReaderService`：读取 settings 并展示当前组件配置
+- `DataBrowserService`：查询文档、chunk、图片和索引状态
+
+验收标准：可读取 settings 和文档/chunk 数据。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+
+##### F7：实现 Trace 读取和评估服务
+
+目标：为 Dashboard 提供 trace 历史和评估趋势数据。
+
+修改文件：`src/observability/services/trace_reader_service.py`、`src/observability/services/evaluation_service.py`、`tests/integration/test_dashboard_services.py`
+
+实现类/函数：
+
+- `TraceReaderService`：读取 query/ingestion trace 历史和详情
+- `EvaluationService`：运行评估任务并读取指标趋势
+
+验收标准：可读取 trace 历史和评估趋势。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+
+##### F8：实现总览和摄取管理页面
+
+目标：实现系统总览和 Ingestion 管理页面。
+
+修改文件：`src/observability/pages/overview.py`、`src/observability/pages/ingestion_manage.py`、`tests/integration/test_dashboard_services.py`
+
+实现类/函数：
+
+- 页面渲染函数
+
+验收标准：总览和摄取管理页面可启动。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+
+##### F9：实现数据浏览和 Query Trace 页面
+
+目标：实现数据浏览器和 Query Trace 可视化页面。
+
+修改文件：`src/observability/pages/data_browser.py`、`src/observability/pages/query_trace.py`、`tests/integration/test_dashboard_services.py`
+
+实现类/函数：
+
+- 页面渲染函数
+
+验收标准：可展示文档、chunk、召回对比、rerank 变化。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+
+##### F10：实现 Ingestion Trace 和评估页面
+
+目标：实现摄取追踪和评估趋势页面。
+
+修改文件：`src/observability/pages/ingestion_trace.py`、`src/observability/pages/evaluation.py`、`tests/integration/test_dashboard_services.py`
+
+实现类/函数：
+
+- 页面渲染函数
+
+验收标准：可展示阶段耗时和评估趋势。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+
+##### F11：实现 Dashboard 启动脚本
+
+目标：提供本地启动 Streamlit Dashboard 的脚本入口。
+
+修改文件：`src/scripts/run_dashboard.py`、`tests/integration/test_dashboard_services.py`
+
+实现类/函数：
+
+- `run_dashboard()`：启动 Streamlit Dashboard 入口
+
+验收标准：脚本可加载 app，不要求真实启动浏览器。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+
+##### F12：完成 Dashboard 六大页面测试
+
+目标：在进入 AImodel 集成前，验证六大 Dashboard 页面都能基于测试数据正常渲染。
+
+修改文件：`tests/integration/test_dashboard_pages.py`、`src/observability/pages/overview.py`、`src/observability/pages/ingestion_manage.py`、`src/observability/pages/data_browser.py`、`src/observability/pages/query_trace.py`、`src/observability/pages/ingestion_trace.py`、`src/observability/pages/evaluation.py`
+
+实现类/函数：
+
+- 六个页面的 `render_*()` 函数测试夹具
+
+验收标准：系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板都可以读取测试配置、测试数据库记录和测试 trace，并完成页面渲染入口调用。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py -v`
+
+#### 阶段 G：质量评估体系
+
+##### G1：准备黄金测试集格式
+
+目标：定义黄金测试集字段和 fixture 样例。
+
+修改文件：`tests/fixtures/golden_set.json`、`tests/unit/test_evaluation.py`
+
+实现类/函数：
+
+- fixture schema
+
+验收标准：问题、答案、来源文档字段完整。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+
+##### G2：实现自定义检索指标
+
+目标：实现 Hit Rate、MRR、NDCG 等检索指标。
+
+修改文件：`src/observability/evaluation/metrics.py`、`tests/unit/test_evaluation.py`
+
+实现类/函数：
+
+- `HitRateMetric`：计算评估指标
+- `MRRMetric`：计算评估指标
+- `NDCGMetric`：计算评估指标
+
+验收标准：指标计算无需真实 LLM。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+
+##### G3：接入 Ragas 指标
+
+目标：封装 Ragas 生成质量指标。
+
+修改文件：`src/observability/evaluation/ragas_adapter.py`、`tests/unit/test_evaluation.py`
+
+实现类/函数：
+
+- `RagasEvaluator`：封装评估执行逻辑
+
+验收标准：Ragas 测试使用 marker 隔离。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+
+##### G4：实现策略对比评估
+
+目标：支持 Hybrid、Dense-only、Sparse-only、Rerank 等策略对比。
+
+修改文件：`src/observability/evaluation/runner.py`、`tests/unit/test_evaluation.py`
+
+实现类/函数：
+
+- `EvaluationRunner.compare_strategies()`：对比不同检索策略
+
+验收标准：可对比 Hybrid、Dense-only、Sparse-only、Rerank。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+
+##### G5：实现评估趋势输出
+
+目标：保存评估结果，供 Dashboard 展示历史趋势。
+
+修改文件：`src/observability/evaluation/runner.py`、`tests/unit/test_evaluation.py`
+
+实现类/函数：
+
+- `EvaluationRunner.save_results()`：保存评估结果
+
+验收标准：评估结果可写入 PostgreSQL 并供 Dashboard 展示。
+
+测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+
+#### 阶段 H：AImodel 联调集成
+
+##### H1：执行 AImodel 集成前验收门禁
+
+目标：在接入 AImodel 前确认 RAG 独立模块已经完成 Dashboard 六大页面测试和全链路 E2E 验收。
+
+修改文件：`tests/integration/test_dashboard_pages.py`、`tests/e2e/test_full_rag_flow.py`
+
+实现类/函数：
+
+- `test_dashboard_six_pages_render()`：验证对应行为
+- `test_full_rag_flow_before_aimodel_integration()`：验证对应行为
+
+验收标准：Dashboard 六大页面测试通过；全链路 E2E 覆盖离线摄取、Indexing Pipeline、Hybrid Query、Trace 写入、Dashboard 可读和引用结果构造。
+
+测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`
+
+##### H2：实现 AImodel RAG 工具适配
+
+目标：封装 AImodel 可调用的 RAG 工具。
+
+修改文件：`services/ai-service/app/routers/AImodel/tools.py`、`services/ai-service/tests/test_aimodel_rag_tool.py`
+
+实现类/函数：
+
+- `search_shopping_guides`：暴露对外工具能力
+
+验收标准：工具返回格式化内容和引用。
+
+测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+
+##### H3：接入 Agent 工具列表
+
+目标：把 RAG 工具加入 AImodel Agent 工具集合。
+
+修改文件：`services/ai-service/app/routers/AImodel/service.py`、`services/ai-service/tests/test_aimodel_rag_tool.py`
+
+实现类/函数：
+
+- `build_rag_tool()`：构建标准对象
+
+验收标准：Agent 可调用 RAG 工具。
+
+测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+
+##### H4：验证商品 API 与 RAG 边界
+
+目标：明确商品事实走商品 API，知识补充走 RAG。
+
+修改文件：`services/ai-service/app/routers/AImodel/service.py`、`services/ai-service/tests/test_aimodel_rag_tool.py`
+
+实现类/函数：
+
+- system prompt 工具边界
+
+验收标准：商品事实走 API，知识补充走 RAG。
+
+测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+
+##### H5：验证简单询问和链接场景
+
+目标：覆盖推荐、对比、选购指南、政策 FAQ 等用户场景。
+
+修改文件：`services/ai-service/tests/test_aimodel_rag_tool.py`
+
+实现类/函数：
+
+- 场景测试
+
+验收标准：推荐、对比、选购指南、政策 FAQ 都有覆盖。
+
+测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+
+##### H6：完成端到端联调测试
+
+目标：验证前端/Agent/RAG 的端到端输出契约。
+
+修改文件：`services/ai-service/tests/test_aimodel_rag_tool.py`
+
+实现类/函数：
+
+- E2E 测试
+
+验收标准：前端/Agent 响应不暴露 tool result 或 chunk id。
+
+测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+
+## 7. 开发规范
+
+### 7.1 中文注释要求
+
+所有新增业务代码必须包含中文注释。注释重点说明：
+
+- 业务意图
+- 工具边界
+- 异常处理策略
+- 配置开关影响
+- 与 AImodel 前端契约相关的行为
+
+避免无意义逐行翻译。
+
+### 7.2 错误处理规范
+
+RAG 子系统错误分为：
+
+- 配置错误：启动阶段直接失败。
+- Provider 错误：返回可读错误并写 trace。
+- 检索空结果：返回 `ok=true`、`is_empty=true`，让 agent 自然说明没有知识命中。
+- 数据库错误：写 trace 后抛出服务异常。
+- MCP 参数错误：返回 MCP tool error content。
+
+### 7.3 安全输出规范
+
+- 不输出内部工具 JSON。
+- 不输出隐藏 prompt。
+- 不编造 citation。
+- 不把 RAG 内容当作实时商品事实。
+- 不把过期知识用于价格、库存、优惠券有效期判断。
+
+### 7.4 环境变量
+
+```dotenv
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agent
+OPENAI_API_KEY=你的 OpenAI API Key
+RAG_SETTINGS_PATH=services/ai-service/rag/config/settings.yaml
+RAG_DEFAULT_COLLECTION=shopping_guides
+RAG_ENABLED=true
+```
+
+### 7.5 首版完成定义
+
+首版完成需要同时满足：
+
+- 能摄取 5 篇 `shopping_guides` Markdown 文档。
+- 能写入 PostgreSQL 和 pgvector。
+- Indexing Pipeline MVP 并入 `IngestionPipeline` 统一编排，并具备集成测试。
+- 能通过 hybrid search 找到相关 chunk。
+- 能返回 citation。
+- 能通过 MCP tool 查询。
+- 能被 AImodel 作为工具调用。
+- pytest 单元测试和核心集成测试通过。
+- Ingestion 和 Query 链路都接入 Trace 打点，并能在 trace 日志中回溯阶段耗时和候选变化。
+- Dashboard 六大页面测试通过，能看到文档、chunk、trace 和评估结果。
+- AImodel 集成前全链路 E2E 验收通过。
