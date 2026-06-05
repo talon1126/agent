@@ -10,6 +10,7 @@
 - 鼠标放到主图上时，显示局部图片放大效果。
 - 中间展示品牌、商品名、评分、商品卖点、配料、规格等内容。
 - 右侧展示价格、加入购物车按钮、购买方式和配送方式。
+- 页面下方展示商品评论栏目，评论接口见 `docs/development/product-reviews-api-integration.zh.md`。
 - 页面后续可从搜索结果页、秒杀专区、购物车推荐等入口跳转进入。
 
 ## 接口
@@ -181,6 +182,22 @@ POST /cart
 
 请求体继续使用现有购物车契约，`user_id` 暂时固定为 `1`，`item_id` 使用详情接口返回的 `item.item_id`。
 
+### 商品评论
+
+商品详情页评论栏目调用：
+
+```http
+GET /items/{item_id}/reviews
+POST /items/{item_id}/reviews
+```
+
+说明：
+
+- 评论数据落到 `item_reviews` 表。
+- 当前前端创建评论时沿用 `CART_USER_ID=1`。
+- 评论字段包含 `rating`、`title`、`content`、`created_at`、`updated_at`。
+- 评论提交成功后刷新评论列表和汇总评分。
+
 ### 空状态和错误状态
 
 - 商品不存在：展示 `Item not found`，提供返回搜索页或首页入口。
@@ -196,3 +213,4 @@ POST /cart
 3. 前端访问 `/items/item_milk_pure`，预期商品详情页展示商品基础信息、主图、卖点、规格和履约信息。
 4. 验证主图 hover 时出现局部放大效果。
 5. 验证点击 `Add to cart` 后购物车数量变化。
+6. 验证评论栏目展示已有评论，并能提交新评论。

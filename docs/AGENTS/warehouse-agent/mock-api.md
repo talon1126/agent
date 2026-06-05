@@ -10,6 +10,18 @@
   - 返回重点：`item_id`、`item_name`、`brand`、`spec`、`category_id`、`price`、`images`、`rating`、`features`、`details`、`fulfillment`。
   - 找不到商品时返回 `404 item_not_found`。
 
+- `GET /items/{item_id}/reviews`
+  - 用途：按商品 ID 查询商品评论列表和汇总评分。
+  - 数据来源：`item_reviews` 表。
+  - 返回重点：`summary.average_rating`、`summary.review_count`、`reviews[].rating`、`reviews[].title`、`reviews[].content`。
+  - 找不到商品时返回 `404 item_not_found`。
+
+- `POST /items/{item_id}/reviews`
+  - 用途：为商品创建用户评论，当前前端固定使用测试用户 `user_id=1`。
+  - 入参重点：`user_id`、`rating`、`title`、`content`。
+  - 约束：`rating` 范围 1 到 5；标题和正文不能为空。
+  - 找不到商品时返回 `404 item_not_found`；非法评论返回 `400 invalid_review`。
+
 - `GET /warehouse/inventory/{item_id}`
   - 用途：查询某个商品在多个仓库、库位、批次上的库存汇总和明细。
   - 返回重点：`total_quantity_on_hand`、`total_quantity_reserved`、`total_quantity_available`、`risk_level`、`recommendation`、`batches`。

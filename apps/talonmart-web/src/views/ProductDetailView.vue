@@ -18,7 +18,9 @@ import {
 
 import { addCartItem, CART_USER_ID } from '@/services/cartApi'
 import { fetchProductDetail } from '@/services/productDetailApi'
+import { createItemReview, fetchItemReviews } from '@/services/productReviewApi'
 import type { ProductDetail, ProductImage } from '@/types/productDetail'
+import type { ItemReview, ItemReviewSummary } from '@/types/productReview'
 
 const route = useRoute()
 const router = useRouter()
@@ -33,6 +35,17 @@ const cartErrorMessage = ref('')
 const searchQuery = ref('')
 const isZooming = ref(false)
 const zoomPosition = ref({ x: 50, y: 50 })
+const reviews = ref<ItemReview[]>([])
+const reviewSummary = ref<ItemReviewSummary>({ average_rating: 0, review_count: 0 })
+const isReviewLoading = ref(false)
+const isSubmittingReview = ref(false)
+const reviewMessage = ref('')
+const reviewErrorMessage = ref('')
+const reviewForm = ref({
+  rating: 5,
+  title: '',
+  content: '',
+})
 
 const topTabs = [
   'Departments',
@@ -74,6 +87,18 @@ function formatCurrency(value: number | string | undefined) {
 
 function formatCount(value: number) {
   return new Intl.NumberFormat('en-US').format(value)
+}
+
+function formatReviewDate(value: string) {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(parsed)
 }
 
 function handleImageEnter() {
@@ -118,12 +143,70 @@ async function loadProductDetail() {
     // 中文注释：详情页按前端路由参数读取后端 /ip/{item_id}，缺失扩展字段时由模板隐藏对应模块。
     const response = await fetchProductDetail(itemId.value)
     product.value = response.item
+    await loadItemReviews(response.item.item_id)
   } catch (error) {
     product.value = null
+    reviews.value = []
+    reviewSummary.value = { average_rating: 0, review_count: 0 }
     errorMessage.value =
       error instanceof Error ? error.message : 'Product detail service is unavailable.'
   } finally {
     isLoading.value = false
+  }
+}
+
+async function loadItemReviews(targetItemId = itemId.value) {
+  if (!targetItemId) {
+    return
+  }
+
+  isReviewLoading.value = true
+  reviewErrorMessage.value = ''
+
+  try {
+    const response = await fetchItemReviews(targetItemId, { limit: 20, offset: 0 })
+    reviews.value = response.reviews
+    reviewSummary.value = response.summary
+  } catch (error) {
+    reviews.value = []
+    reviewSummary.value = { average_rating: 0, review_count: 0 }
+    reviewErrorMessage.value =
+      error instanceof Error ? error.message : 'Unable to load customer reviews.'
+  } finally {
+    isReviewLoading.value = false
+  }
+}
+
+async function handleCreateReview() {
+  if (!product.value) {
+    return
+  }
+
+  const title = reviewForm.value.title.trim()
+  const content = reviewForm.value.content.trim()
+  if (!title || !content) {
+    reviewErrorMessage.value = 'Review title and content are required.'
+    return
+  }
+
+  isSubmittingReview.value = true
+  reviewMessage.value = ''
+  reviewErrorMessage.value = ''
+
+  try {
+    await createItemReview(product.value.item_id, {
+      user_id: CART_USER_ID,
+      rating: Number(reviewForm.value.rating),
+      title,
+      content,
+    })
+    reviewForm.value = { rating: 5, title: '', content: '' }
+    reviewMessage.value = 'Review submitted'
+    await loadItemReviews(product.value.item_id)
+  } catch (error) {
+    reviewErrorMessage.value = error instanceof Error ? error.message : 'Unable to submit review.'
+  } finally {
+    isSubmittingReview.value = false
   }
 }
 
@@ -274,10 +357,8 @@ onMounted(() => {
       </div>
     </section>
 
-    <section
-      v-else-if="product"
-      class="mx-auto grid max-w-[1440px] gap-8 px-6 py-8 xl:grid-cols-[760px_1fr_360px]"
-    >
+    <template v-else-if="product">
+    <section class="mx-auto grid max-w-[1440px] gap-8 px-6 py-8 xl:grid-cols-[760px_1fr_360px]">
       <section class="grid gap-5 md:grid-cols-[96px_1fr]">
         <div class="hidden gap-4 md:grid md:content-start">
           <button
@@ -500,5 +581,115 @@ onMounted(() => {
         </section>
       </aside>
     </section>
+    <section class="mx-auto max-w-[1440px] px-6 pb-12">
+      <div class="border-t border-[#D8E0E8] pt-8">
+        <div class="grid gap-6 lg:grid-cols-[320px_1fr]">
+          <section class="rounded-lg border border-[#D8E0E8] bg-[#F7F8FA] p-6">
+            <p class="text-sm font-black uppercase tracking-wide text-[#0053E2]">Customer reviews</p>
+            <div class="mt-4 flex items-end gap-3">
+              <p class="text-5xl font-black">{{ reviewSummary.average_rating.toFixed(1) }}</p>
+              <div class="pb-1">
+                <div class="flex text-[#F59E0B]">
+                  <Star v-for="index in 5" :key="index" class="h-5 w-5 fill-current" aria-hidden="true" />
+                </div>
+                <p class="mt-1 text-sm font-semibold text-[#667085]">
+                  {{ formatCount(reviewSummary.review_count) }} reviews
+                </p>
+              </div>
+            </div>
+
+            <form
+              data-testid="item-review-form"
+              class="mt-6 grid gap-4"
+              @submit.prevent="handleCreateReview"
+            >
+              <label class="grid gap-2 text-sm font-bold">
+                Rating
+                <select
+                  v-model.number="reviewForm.rating"
+                  aria-label="Review rating"
+                  class="min-h-11 rounded-md border border-[#D8E0E8] bg-white px-3 outline-none focus:border-[#0053E2]"
+                >
+                  <option v-for="rating in [5, 4, 3, 2, 1]" :key="rating" :value="rating">
+                    {{ rating }} stars
+                  </option>
+                </select>
+              </label>
+              <label class="grid gap-2 text-sm font-bold">
+                Title
+                <input
+                  v-model="reviewForm.title"
+                  aria-label="Review title"
+                  class="min-h-11 rounded-md border border-[#D8E0E8] px-3 outline-none focus:border-[#0053E2]"
+                  maxlength="120"
+                  type="text"
+                />
+              </label>
+              <label class="grid gap-2 text-sm font-bold">
+                Review
+                <textarea
+                  v-model="reviewForm.content"
+                  aria-label="Review content"
+                  class="min-h-28 rounded-md border border-[#D8E0E8] px-3 py-3 outline-none focus:border-[#0053E2]"
+                  maxlength="2000"
+                />
+              </label>
+              <button
+                class="min-h-11 rounded-full bg-[#0053E2] px-5 font-black text-white transition hover:bg-[#003A9B] disabled:cursor-not-allowed disabled:bg-[#8CB7FF]"
+                type="submit"
+                :disabled="isSubmittingReview"
+              >
+                <span v-if="isSubmittingReview" class="inline-flex items-center gap-2">
+                  <LoaderCircle class="h-5 w-5 animate-spin" aria-hidden="true" />
+                  Submitting
+                </span>
+                <span v-else>Submit review</span>
+              </button>
+            </form>
+
+            <p v-if="reviewMessage" class="mt-4 rounded-md bg-[#ECFDF3] p-3 text-sm font-bold text-[#027A48]" role="status">
+              {{ reviewMessage }}
+            </p>
+            <p v-if="reviewErrorMessage" class="mt-4 rounded-md bg-[#FEF2F2] p-3 text-sm font-bold text-[#991B1B]" role="alert">
+              {{ reviewErrorMessage }}
+            </p>
+          </section>
+
+          <section>
+            <div v-if="isReviewLoading" class="flex min-h-40 items-center gap-3 text-[#0053E2]">
+              <LoaderCircle class="h-5 w-5 animate-spin" aria-hidden="true" />
+              <span class="font-bold">Loading reviews</span>
+            </div>
+            <div v-else-if="reviews.length === 0" class="rounded-lg border border-dashed border-[#D8E0E8] p-8 text-[#667085]">
+              No reviews yet
+            </div>
+            <div v-else class="grid gap-4">
+              <article
+                v-for="review in reviews"
+                :key="review.id"
+                class="rounded-lg border border-[#D8E0E8] bg-white p-5"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="flex items-center gap-2 text-[#F59E0B]">
+                    <Star
+                      v-for="index in review.rating"
+                      :key="index"
+                      class="h-4 w-4 fill-current"
+                      aria-hidden="true"
+                    />
+                    <span class="text-sm font-black text-[#101828]">{{ review.rating }}.0</span>
+                  </div>
+                  <p class="text-sm font-semibold text-[#667085]">{{ formatReviewDate(review.created_at) }}</p>
+                </div>
+                <h3 class="mt-3 text-lg font-black">{{ review.title }}</h3>
+                <p class="mt-2 leading-7 text-[#344054]">{{ review.content }}</p>
+                <p class="mt-4 text-sm font-semibold text-[#667085]">User {{ review.user_id }}</p>
+              </article>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+    </template>
   </main>
 </template>

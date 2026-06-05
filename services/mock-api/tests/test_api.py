@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 
 from app.main import (
     CART_ITEMS,
@@ -19,7 +20,10 @@ from app.main import (
 from app.routers import search as search_router
 from app.routers import flash_sales as flash_sales_router
 from app.routers import product_details as product_details_router
+from app.routers import product_reviews as product_reviews_router
 from app.routers.warehouse.inventory import aggregate_stock_balance_snapshot_rows
+from app.store import FIXTURE_DIR
+from app.warehouse_store import WarehouseRepository, init_warehouse_schema, seed_warehouse_fixtures
 
 client = TestClient(app)
 
@@ -560,6 +564,81 @@ def test_delivery_addresses_rejects_missing_and_unknown_user():
     }
     assert unknown.status_code == 404
     assert unknown.json()["error"] == "user_not_found"
+
+
+def test_item_reviews_list_returns_reviews_and_summary(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+    monkeypatch.setattr(product_reviews_router, "get_warehouse_repository", lambda: repository)
+
+    response = client.get("/items/item_milk_pure/reviews")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["item_id"] == "item_milk_pure"
+    assert body["count"] == 2
+    assert body["summary"] == {"average_rating": 4.5, "review_count": 2}
+    assert body["reviews"][0] == {
+        "id": 2,
+        "item_id": "item_milk_pure",
+        "user_id": 2,
+        "rating": 5,
+        "title": "Family pack is convenient",
+        "content": "The 1L multipack is easy to store and works well for breakfast.",
+        "created_at": "2026-06-01T10:00:00+08:00",
+        "updated_at": "2026-06-01T10:00:00+08:00",
+    }
+
+
+def test_item_reviews_create_and_reject_invalid_payload(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+    monkeypatch.setattr(product_reviews_router, "get_warehouse_repository", lambda: repository)
+
+    created = client.post(
+        "/items/item_milk_pure/reviews",
+        json={
+            "user_id": 1,
+            "rating": 5,
+            "title": "Good value",
+            "content": "Fresh taste and good price for a family pack.",
+        },
+    )
+    invalid = client.post(
+        "/items/item_milk_pure/reviews",
+        json={
+            "user_id": 1,
+            "rating": 6,
+            "title": "Invalid",
+            "content": "Rating is too high.",
+        },
+    )
+    missing_item = client.get("/items/item_missing/reviews")
+
+    assert created.status_code == 200
+    assert created.json()["review"] == {
+        "id": 5,
+        "item_id": "item_milk_pure",
+        "user_id": 1,
+        "rating": 5,
+        "title": "Good value",
+        "content": "Fresh taste and good price for a family pack.",
+        "created_at": created.json()["review"]["created_at"],
+        "updated_at": created.json()["review"]["updated_at"],
+    }
+    assert invalid.status_code == 400
+    assert invalid.json() == {
+        "ok": False,
+        "error": "invalid_review",
+        "message": "Rating must be between 1 and 5.",
+    }
+    assert missing_item.status_code == 404
+    assert missing_item.json()["error"] == "item_not_found"
 
 
 def test_flash_sale_detail_returns_redis_remaining_stock(monkeypatch):

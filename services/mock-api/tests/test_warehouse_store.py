@@ -21,6 +21,7 @@ from app.warehouse_store import (
     inventory_movements,
     inventory_location_balances,
     inventory_batches,
+    item_reviews,
     items,
     delivery_providers,
     order_items,
@@ -49,6 +50,7 @@ WAREHOUSE_TABLES = [
     cart_items,
     flash_sales,
     flash_sale_claims,
+    item_reviews,
     procurement_suppliers,
     purchase_orders,
     warehouse_inventory_sync_jobs,
@@ -88,6 +90,7 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
             text("select count(*) from flash_sales where status = 'active'")
         ).scalar_one()
         flash_sale_claim_count = connection.execute(text("select count(*) from flash_sale_claims")).scalar_one()
+        item_review_count = connection.execute(text("select count(*) from item_reviews")).scalar_one()
         default_address = connection.execute(
             text("select address from delivery_addresses where user_id = 1 and is_default = 1")
         ).scalar_one()
@@ -113,9 +116,49 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert flash_sale_count == 8
     assert active_flash_sale_count == 7
     assert flash_sale_claim_count == 0
+    assert item_review_count == 4
     assert default_address == "广东省深圳市南山区示例路 100 号"
     assert cart_item_count == 0
     assert float(milk_price) == 18.4
+
+
+def test_warehouse_repository_lists_and_creates_item_reviews(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    reviews = repository.list_item_reviews("item_milk_pure", limit=20, offset=0)
+    summary = repository.item_review_summary("item_milk_pure")
+    created = repository.create_item_review(
+        "item_milk_pure",
+        {
+            "user_id": 1,
+            "rating": 5,
+            "title": "Good value",
+            "content": "Fresh taste and good price for a family pack.",
+        },
+        created_at="2026-06-03T10:00:00+08:00",
+    )
+
+    assert len(reviews) == 2
+    assert reviews[0]["item_id"] == "item_milk_pure"
+    assert reviews[0]["rating"] == 5
+    assert summary == {"average_rating": 4.5, "review_count": 2}
+    assert created == {
+        "id": 5,
+        "item_id": "item_milk_pure",
+        "user_id": 1,
+        "rating": 5,
+        "title": "Good value",
+        "content": "Fresh taste and good price for a family pack.",
+        "created_at": "2026-06-03T10:00:00+08:00",
+        "updated_at": "2026-06-03T10:00:00+08:00",
+    }
+    assert repository.item_review_summary("item_milk_pure") == {
+        "average_rating": 4.7,
+        "review_count": 3,
+    }
 
 
 def test_warehouse_repository_lists_delivery_addresses(tmp_path: Path) -> None:

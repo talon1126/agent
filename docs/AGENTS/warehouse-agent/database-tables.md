@@ -19,6 +19,11 @@
   - 关键字段：`item_id`、`category_id`、`item_name`、`brand`、`spec`、`price`、`unit`、`barcode`、`shelf_life_days`、`search_text`。
   - `price` 是前台商品展示和购物车写入的可信价格来源；`search_text` 用于 `pg_search` BM25 检索。
 
+- `item_reviews`
+  - 商品评论表，每个 `item_id` 可以对应多条用户评价。
+  - 关键字段：`id`、`item_id`、`user_id`、`rating`、`title`、`content`、`created_at`、`updated_at`。
+  - `rating` 范围为 1 到 5；前端商品详情页通过 `/items/{item_id}/reviews` 查询和创建评论。
+
 - `inventory_batches`
   - 批次入库事实表，用于进货记录和商品批次溯源，不再被订单扣减。
   - 关键字段：`warehouse_id`、`location_code`、`item_id`、`batch_no`、`production_date`、`expiry_date`、`quantity_on_hand`、`quantity_reserved`、`reorder_threshold`、`storage_status`。

@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ProductDetailView from './ProductDetailView.vue'
 
 const routerPush = vi.fn()
-const { fetchProductDetail, addCartItem } = vi.hoisted(() => ({
+const { fetchProductDetail, addCartItem, fetchItemReviews, createItemReview } = vi.hoisted(() => ({
   fetchProductDetail: vi.fn(),
   addCartItem: vi.fn(),
+  fetchItemReviews: vi.fn(),
+  createItemReview: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({
@@ -31,10 +33,17 @@ vi.mock('@/services/cartApi', () => ({
   addCartItem,
 }))
 
+vi.mock('@/services/productReviewApi', () => ({
+  fetchItemReviews,
+  createItemReview,
+}))
+
 describe('ProductDetailView', () => {
   beforeEach(() => {
     routerPush.mockClear()
     addCartItem.mockReset()
+    fetchItemReviews.mockReset()
+    createItemReview.mockReset()
     fetchProductDetail.mockResolvedValue({
       ok: true,
       item: {
@@ -78,6 +87,37 @@ describe('ProductDetailView', () => {
         quantity: 1,
       },
     })
+    fetchItemReviews.mockResolvedValue({
+      ok: true,
+      item_id: 'item_milk_pure',
+      count: 1,
+      summary: { average_rating: 4.5, review_count: 2 },
+      reviews: [
+        {
+          id: 2,
+          item_id: 'item_milk_pure',
+          user_id: 2,
+          rating: 5,
+          title: 'Family pack is convenient',
+          content: 'The 1L multipack is easy to store and works well for breakfast.',
+          created_at: '2026-06-01T10:00:00+08:00',
+          updated_at: '2026-06-01T10:00:00+08:00',
+        },
+      ],
+    })
+    createItemReview.mockResolvedValue({
+      ok: true,
+      review: {
+        id: 5,
+        item_id: 'item_milk_pure',
+        user_id: 1,
+        rating: 5,
+        title: 'Good value',
+        content: 'Fresh taste and good price for a family pack.',
+        created_at: '2026-06-03T10:00:00+08:00',
+        updated_at: '2026-06-03T10:00:00+08:00',
+      },
+    })
   })
 
   it('loads product detail, shows zoom preview on image hover, and adds the item to cart', async () => {
@@ -86,8 +126,11 @@ describe('ProductDetailView', () => {
     await flushPromises()
 
     expect(fetchProductDetail).toHaveBeenCalledWith('item_milk_pure')
+    expect(fetchItemReviews).toHaveBeenCalledWith('item_milk_pure', { limit: 20, offset: 0 })
     expect(wrapper.text()).toContain('Pure milk 1L multipack')
     expect(wrapper.text()).toContain('Pure milk for everyday use')
+    expect(wrapper.text()).toContain('Customer reviews')
+    expect(wrapper.text()).toContain('Family pack is convenient')
 
     await wrapper.get('[data-testid="product-main-image"]').trigger('mouseenter')
     await wrapper.get('[data-testid="product-main-image"]').trigger('mousemove', {
@@ -108,5 +151,27 @@ describe('ProductDetailView', () => {
       quantity: 1,
     })
     expect(wrapper.text()).toContain('Added to cart')
+  })
+
+  it('creates a product review and refreshes the review list', async () => {
+    const wrapper = mount(ProductDetailView)
+
+    await flushPromises()
+    await wrapper.get('select[aria-label="Review rating"]').setValue('5')
+    await wrapper.get('input[aria-label="Review title"]').setValue('Good value')
+    await wrapper
+      .get('textarea[aria-label="Review content"]')
+      .setValue('Fresh taste and good price for a family pack.')
+    await wrapper.get('form[data-testid="item-review-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(createItemReview).toHaveBeenCalledWith('item_milk_pure', {
+      user_id: 1,
+      rating: 5,
+      title: 'Good value',
+      content: 'Fresh taste and good price for a family pack.',
+    })
+    expect(fetchItemReviews).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('Review submitted')
   })
 })

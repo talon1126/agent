@@ -71,6 +71,19 @@ items = Table(
     Column("shelf_life_days", Integer, nullable=False, default=365),
 )
 
+item_reviews = Table(
+    "item_reviews",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("item_id", String(64), nullable=False, index=True),
+    Column("user_id", Integer, nullable=False, index=True),
+    Column("rating", Integer, nullable=False),
+    Column("title", String(120), nullable=False),
+    Column("content", Text, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+)
+
 inventory_batches = Table(
     "inventory_batches",
     metadata,
@@ -327,6 +340,7 @@ WAREHOUSE_TABLE_COMMENTS = {
     "storage_locations": "具体库位表，保存仓库内 A1、B1、C1 等可存储位置及容量属性。",
     "categories": "商品分类表，保存纸品、乳制品、饮料等业务分类和存储要求。",
     "items": "商品主数据表，保存每个商品的名称、品牌、规格、单位和条码。",
+    "item_reviews": "商品评论表，保存用户对商品的星级评分、标题和正文。",
     "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
     "inventory_location_balances": "批次级库位库存余额表，保存订单创建扣减和退回后的当前可售库存。",
     "replenishment_requests": "补货申请表，保存仓储发现低库存后交给采购审核的结构化需求。",
@@ -376,6 +390,16 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "unit": "库存计量单位。",
         "barcode": "商品条码。",
         "shelf_life_days": "商品实际保质期天数，用于采购到仓同步时计算批次过期日期。",
+    },
+    "item_reviews": {
+        "id": "评论自增整数主键。",
+        "item_id": "评论所属商品编号。",
+        "user_id": "评论用户 ID。",
+        "rating": "星级评分，范围 1 到 5。",
+        "title": "评论标题。",
+        "content": "评论正文。",
+        "created_at": "评论创建时间。",
+        "updated_at": "评论更新时间。",
     },
     "inventory_batches": {
         "batch_id": "库存批次自增整数主键。",
@@ -590,6 +614,7 @@ def init_warehouse_schema(engine: Engine) -> None:
             storage_locations,
             categories,
             items,
+            item_reviews,
             inventory_batches,
             inventory_location_balances,
             replenishment_requests,
@@ -842,6 +867,51 @@ def default_delivery_address_rows() -> list[dict[str, Any]]:
     ]
 
 
+def default_item_review_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": 1,
+            "item_id": "item_milk_pure",
+            "user_id": 1,
+            "rating": 4,
+            "title": "Reliable daily milk",
+            "content": "Fresh taste and enough stock for the weekly grocery run.",
+            "created_at": "2026-05-30T09:30:00+08:00",
+            "updated_at": "2026-05-30T09:30:00+08:00",
+        },
+        {
+            "id": 2,
+            "item_id": "item_milk_pure",
+            "user_id": 2,
+            "rating": 5,
+            "title": "Family pack is convenient",
+            "content": "The 1L multipack is easy to store and works well for breakfast.",
+            "created_at": "2026-06-01T10:00:00+08:00",
+            "updated_at": "2026-06-01T10:00:00+08:00",
+        },
+        {
+            "id": 3,
+            "item_id": "item_cola_zero",
+            "user_id": 1,
+            "rating": 4,
+            "title": "Good party drink",
+            "content": "Crisp taste, fair price, and the pack size is useful for gatherings.",
+            "created_at": "2026-05-31T16:20:00+08:00",
+            "updated_at": "2026-05-31T16:20:00+08:00",
+        },
+        {
+            "id": 4,
+            "item_id": "item_vinda_tissue",
+            "user_id": 2,
+            "rating": 5,
+            "title": "Soft and easy to restock",
+            "content": "Good household tissue option when the pantry stock is running low.",
+            "created_at": "2026-06-02T11:15:00+08:00",
+            "updated_at": "2026-06-02T11:15:00+08:00",
+        },
+    ]
+
+
 def default_flash_sale_rows() -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     active_starts_at = (now - timedelta(days=1)).isoformat()
@@ -981,6 +1051,7 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         connection.execute(cart_items.delete())
         connection.execute(flash_sale_claims.delete())
         connection.execute(flash_sales.delete())
+        connection.execute(item_reviews.delete())
         connection.execute(delivery_addresses.delete())
         connection.execute(inventory_location_balances.delete())
         connection.execute(inventory_batches.delete())
@@ -997,6 +1068,17 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         )
         connection.execute(categories.insert(), load_fixture_rows(fixture_dir, "categories.json"))
         connection.execute(items.insert(), load_item_fixture_rows(fixture_dir))
+        connection.execute(item_reviews.insert(), default_item_review_rows())
+        if engine.dialect.name == "postgresql":
+            connection.execute(
+                text(
+                    "SELECT setval("
+                    "pg_get_serial_sequence('item_reviews', 'id'), "
+                    "COALESCE((SELECT MAX(id) FROM item_reviews), 1), "
+                    "true"
+                    ")"
+                )
+            )
         connection.execute(users.insert(), default_user_rows())
         connection.execute(delivery_addresses.insert(), default_delivery_address_rows())
         connection.execute(flash_sales.insert(), default_flash_sale_rows())
@@ -1158,6 +1240,52 @@ class WarehouseRepository:
         if not row:
             return None
         return {**dict(row), "price": float(row["price"])}
+
+    def list_item_reviews(self, item_id: str, *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        statement = (
+            select(item_reviews)
+            .where(item_reviews.c.item_id == item_id)
+            .order_by(item_reviews.c.created_at.desc(), item_reviews.c.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [self._format_item_review(row) for row in rows]
+
+    def item_review_summary(self, item_id: str) -> dict[str, Any]:
+        statement = select(
+            func.avg(item_reviews.c.rating).label("average_rating"),
+            func.count(item_reviews.c.id).label("review_count"),
+        ).where(item_reviews.c.item_id == item_id)
+        with self.engine.connect() as connection:
+            row = connection.execute(statement).mappings().first()
+        review_count = int(row["review_count"] or 0) if row else 0
+        average_rating = round(float(row["average_rating"] or 0), 1) if review_count else 0
+        return {"average_rating": average_rating, "review_count": review_count}
+
+    def create_item_review(
+        self,
+        item_id: str,
+        payload: dict[str, Any],
+        *,
+        created_at: str,
+    ) -> dict[str, Any]:
+        values = {
+            "item_id": item_id,
+            "user_id": int(payload["user_id"]),
+            "rating": int(payload["rating"]),
+            "title": str(payload["title"]).strip(),
+            "content": str(payload["content"]).strip(),
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+        with self.engine.begin() as connection:
+            result = connection.execute(item_reviews.insert().values(**values))
+            row = connection.execute(
+                select(item_reviews).where(item_reviews.c.id == result.inserted_primary_key[0])
+            ).mappings().first()
+        return self._format_item_review(row)
 
     def list_cart_items(self, user_id: int) -> list[dict[str, Any]]:
         statement = select(cart_items).where(cart_items.c.user_id == user_id).order_by(cart_items.c.id)
@@ -1336,6 +1464,14 @@ class WarehouseRepository:
     def _format_flash_sale(row: Any) -> dict[str, Any]:
         item = dict(row)
         item["sale_price"] = float(item["sale_price"])
+        return item
+
+    @staticmethod
+    def _format_item_review(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        item["id"] = int(item["id"])
+        item["user_id"] = int(item["user_id"])
+        item["rating"] = int(item["rating"])
         return item
 
     def list_inventory_balance_snapshots(
