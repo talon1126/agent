@@ -26,11 +26,18 @@ errors_module = importlib.import_module("src.core.errors")
 types_module = importlib.import_module("src.core.types")
 loader_module = importlib.import_module("src.libs.loader")
 splitter_module = importlib.import_module("src.libs.splitter")
+llm_module = importlib.import_module("src.libs.llm")
+embedding_module = importlib.import_module("src.libs.embedding")
 
 ConfigurationError = errors_module.ConfigurationError
 Document = types_module.Document
+ChatMessage = llm_module.ChatMessage
+EmbeddingFactory = embedding_module.EmbeddingFactory
 FakeLoader = loader_module.FakeLoader
+FakeEmbedding = embedding_module.FakeEmbedding
+FakeLLM = llm_module.FakeLLM
 FakeSplitter = splitter_module.FakeSplitter
+LLMFactory = llm_module.LLMFactory
 LoaderFactory = loader_module.LoaderFactory
 MarkdownLoader = loader_module.MarkdownLoader
 PdfLoader = loader_module.PdfLoader
@@ -155,3 +162,90 @@ def test_factories_raise_configuration_error_for_unknown_providers() -> None:
 
     assert loader_error.value.context["provider"] == "missing"
     assert splitter_error.value.context["provider"] == "missing"
+
+
+def test_factories_register_builtin_providers_through_explicit_method() -> None:
+    """Require factories to inject built-ins through one explicit method.
+
+    Factory registries should not be maintained as pre-filled class-variable
+    maps. Each factory owns a ``register_builtin_providers()`` method and callers
+    can rely on ``list_providers()`` to ensure built-ins are available.
+    """
+
+    LoaderFactory.register_builtin_providers()
+    SplitterFactory.register_builtin_providers()
+    LLMFactory.register_builtin_providers()
+    EmbeddingFactory.register_builtin_providers()
+
+    assert {"fake", "markdown", "pdf"}.issubset(LoaderFactory.list_providers())
+    assert {"fake", "recursive_character"}.issubset(SplitterFactory.list_providers())
+    assert "fake" in LLMFactory.list_providers()
+    assert "fake" in EmbeddingFactory.list_providers()
+
+
+def test_llm_factory_creates_fake_llm_with_unified_chat_interface() -> None:
+    """Require LLMFactory to return a chat client with a stable message contract.
+
+    B9 only implements a fake provider, but the caller-facing shape must already
+    match future OpenAI, Azure, Ollama, and DeepSeek adapters: business code
+    supplies normalized messages and receives a provider-independent response.
+    """
+
+    llm = LLMFactory.create(
+        provider="fake",
+        response_text="Use soft silicone stress balls for quiet decompression.",
+    )
+    response = llm.chat(
+        [
+            ChatMessage(role="system", content="Answer in Chinese."),
+            ChatMessage(role="user", content="Any relaxing toy recommendation?"),
+        ]
+    )
+
+    assert isinstance(llm, FakeLLM)
+    assert response.content == "Use soft silicone stress balls for quiet decompression."
+    assert response.model == "fake-llm"
+    assert response.provider == "fake"
+    assert response.raw["message_count"] == 2
+
+
+def test_embedding_factory_creates_fake_embedding_with_batch_interface() -> None:
+    """Require EmbeddingFactory to expose consistent single and batch methods.
+
+    Ingestion and query code should not care whether vectors come from OpenAI or
+    a deterministic fake. ``embed_batch()`` must preserve input order and match
+    repeated ``embed()`` calls for the same text.
+    """
+
+    embedding = EmbeddingFactory.create(provider="fake", dimensions=6)
+    texts = ["wireless headphones", "quiet stress toy"]
+
+    single_vector = embedding.embed(texts[0])
+    batch_vectors = embedding.embed_batch(texts)
+
+    assert isinstance(embedding, FakeEmbedding)
+    assert len(single_vector) == 6
+    assert batch_vectors == [embedding.embed(text) for text in texts]
+    assert batch_vectors[0] == single_vector
+    assert batch_vectors[0] != batch_vectors[1]
+
+
+def test_model_factories_read_settings_default_and_fail_fast_when_unimplemented() -> None:
+    """Require factories to read configured providers before reporting gaps.
+
+    The checked-in settings select real providers whose adapters arrive in later
+    tasks. B9 factories should still read those selectors from settings and
+    raise structured configuration errors instead of silently falling back.
+    """
+
+    settings = load_settings(validate_environment=False)
+
+    with pytest.raises(ConfigurationError) as llm_error:
+        LLMFactory.create(settings=settings)
+    with pytest.raises(ConfigurationError) as embedding_error:
+        EmbeddingFactory.create(settings=settings)
+
+    assert llm_error.value.context["provider"] == settings.llm.default
+    assert embedding_error.value.context["provider"] == settings.embedding.default
+    assert "fake" in llm_error.value.context["available"]
+    assert "fake" in embedding_error.value.context["available"]

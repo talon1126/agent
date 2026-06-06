@@ -1,9 +1,10 @@
 """Create loader implementations from provider names or source paths.
 
 The factory centralizes provider lookup so ingestion code never needs to repeat
-suffix checks or instantiate concrete loader classes directly. Providers live in
-a registry dictionary; later tasks can register additional loaders without
-editing pipeline business logic.
+suffix checks or instantiate concrete loader classes directly. The registry
+starts empty and is populated through ``register_builtin_providers()`` so the
+list of built-in implementations stays in one explicit method instead of being
+hidden in class-variable initialization.
 """
 
 from __future__ import annotations
@@ -21,16 +22,30 @@ from src.libs.loader.pdf_loader import PdfLoader
 class LoaderFactory:
     """Resolve loader providers into concrete ``BaseLoader`` instances."""
 
-    _LOADERS: dict[str, type[BaseLoader]] = {
-        "fake": FakeLoader,
-        "markdown": MarkdownLoader,
-        "pdf": PdfLoader,
-    }
+    _REGISTRY: dict[str, type[BaseLoader]] = {}
+    _builtins_registered = False
     _SOURCE_SUFFIXES: dict[str, str] = {
         ".md": "markdown",
         ".markdown": "markdown",
         ".pdf": "pdf",
     }
+
+    @classmethod
+    def register_builtin_providers(cls) -> None:
+        """Register project-owned loader implementations once per process.
+
+        Side Effects:
+            Populates the loader registry with fake, Markdown, and PDF loaders.
+            The method is idempotent so factories and diagnostics can call it
+            freely without duplicating registrations.
+        """
+
+        if cls._builtins_registered:
+            return
+        cls.register("fake", FakeLoader)
+        cls.register("markdown", MarkdownLoader)
+        cls.register("pdf", PdfLoader)
+        cls._builtins_registered = True
 
     @classmethod
     def register(cls, provider: str, loader_class: type[BaseLoader]) -> None:
@@ -53,7 +68,7 @@ class LoaderFactory:
                 "Loader provider must implement BaseLoader",
                 context={"provider": provider, "loader_class": loader_class.__name__},
             )
-        cls._LOADERS[normalized] = loader_class
+        cls._REGISTRY[normalized] = loader_class
 
     @classmethod
     def create(cls, provider: str, **kwargs: Any) -> BaseLoader:
@@ -71,12 +86,13 @@ class LoaderFactory:
                 fails.
         """
 
+        cls.register_builtin_providers()
         provider_name = provider.strip().lower()
-        loader_class = cls._LOADERS.get(provider_name)
+        loader_class = cls._REGISTRY.get(provider_name)
         if loader_class is None:
             raise ConfigurationError(
                 "Unsupported loader provider",
-                context={"provider": provider, "available": sorted(cls._LOADERS)},
+                context={"provider": provider, "available": sorted(cls._REGISTRY)},
             )
         try:
             return loader_class(**kwargs)
@@ -120,4 +136,5 @@ class LoaderFactory:
     def list_providers(cls) -> list[str]:
         """Return registered loader providers for diagnostics and Dashboard use."""
 
-        return sorted(cls._LOADERS)
+        cls.register_builtin_providers()
+        return sorted(cls._REGISTRY)

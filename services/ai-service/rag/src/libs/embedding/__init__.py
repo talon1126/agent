@@ -6,4 +6,12 @@ configuration. This package is an empty B7 boundary until B9 introduces the
 base interface, factory, OpenAI implementation, and fake implementation.
 """
 
-__all__: tuple[str, ...] = ()
+from src.libs.embedding.base_embedding import BaseEmbedding
+from src.libs.embedding.embedding_factory import EmbeddingFactory
+from src.libs.embedding.fake_embedding import FakeEmbedding
+
+__all__ = (
+    "BaseEmbedding",
+    "EmbeddingFactory",
+    "FakeEmbedding",
+)

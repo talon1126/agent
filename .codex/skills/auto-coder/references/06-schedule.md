@@ -117,7 +117,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | B6 | 实现文档生命周期管理 | [✔] | 2026-06-06 | 已实现 `lifecycle_status` schema、状态流转、retrievable 查询过滤和 deleted 清理 chunks/images；23 个集成测试通过 |
 | B7 | 建立 libs 可插拔组件包结构 | [✔] | 2026-06-06 | 已创建八个 libs 可插拔组件包和稳定导入契约；2 个单元测试通过 |
 | B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [✔] | 2026-06-06 | 已实现 loader/splitter 基类、注册表工厂、fake/markdown/pdf loader、fake/recursive splitter 和 DocumentChunker 契约；9 个指定单元测试通过 |
-| B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [ ] |  | 统一 `chat()`、`embed()`、`embed_batch()` |
+| B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现 BaseLLM/LLMFactory/FakeLLM 与 BaseEmbedding/EmbeddingFactory/FakeEmbedding，统一 `chat()`、`embed()`、`embed_batch()`；10 个指定单元测试通过 |
 | B10 | 实现 Transform libs 基类、factory 和 fake 实现 | [ ] |  | `BaseTransform`、`TransformFactory`、`FakeTransform` |
 | B11 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [ ] |  | 覆盖 fallback 和未知 provider 错误 |
 | B12 | 实现首批真实组件最小适配 | [ ] |  | OpenAI、DeepSeek、pgvector、RecursiveCharacterTextSplitter；真实调用用 marker 隔离 |
@@ -210,14 +210,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 8 | 67% |
+| Phase B | 12 | 9 | 75% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **14** | **20%** |
+| **总计** | **71** | **15** | **21%** |
 
 ### 6.5 阶段实施明细
 
@@ -503,9 +503,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 实现类/函数：
 
 - `BaseLoader`：定义最小抽象接口
-- `LoaderFactory`：根据配置创建实现
+- `LoaderFactory.register_builtin_providers()`：一次性注入 fake/markdown/pdf 内置实现
+- `LoaderFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
 - `BaseSplitter.split(text) -> List[str]`：定义输入输出契约
-- `SplitterFactory`：根据配置创建实现
+- `SplitterFactory.register_builtin_providers()`：一次性注入 fake/recursive_character 内置实现
+- `SplitterFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
 - `DocumentChunker.chunk(document) -> List[Chunk]`：定义输入输出契约
 
 验收标准：可创建 fake/markdown/pdf loader 和 splitter；`libs.splitter` 只接收文本并返回 `List[str]`；`DocumentChunker` 契约测试覆盖 `chunk_id`、metadata 继承、`chunk_index`、`source_ref`、图片引用分发，以及 `List[str] -> List[Chunk]` 类型转换。
@@ -521,9 +523,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 实现类/函数：
 
 - `BaseLLM`：定义最小抽象接口
-- `LLMFactory`：根据配置创建实现
+- `LLMFactory.register_builtin_providers()`：一次性注入 fake 内置实现，真实 provider 在 B12 注册
+- `LLMFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
 - `BaseEmbedding`：定义最小抽象接口
-- `EmbeddingFactory`：根据配置创建实现
+- `EmbeddingFactory.register_builtin_providers()`：一次性注入 fake 内置实现，真实 provider 在 B12 注册
+- `EmbeddingFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
 
 验收标准：`chat()`、`embed()`、`embed_batch()` 接口统一。
 
@@ -538,7 +542,8 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 实现类/函数：
 
 - `BaseTransform`：定义最小抽象接口
-- `TransformFactory`：根据配置创建实现
+- `TransformFactory.register_builtin_providers()`：一次性注入 fake 和内置 Transform 实现
+- `TransformFactory.create()`：根据配置创建实现，内部自动确保内置实现已注册
 - `FakeTransform`：执行具体转换逻辑
 
 验收标准：Transform 可按配置创建，fake transform 可用于单元测试。
@@ -556,6 +561,9 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `BaseVectorStore`：定义最小抽象接口
 - `BaseReranker`：定义最小抽象接口
 - `BaseEvaluator`：定义最小抽象接口
+- `VectorStoreFactory.register_builtin_providers()`：一次性注入 fake/pgvector 内置实现
+- `RerankerFactory.register_builtin_providers()`：一次性注入 fake/none/fallback 内置实现
+- `EvaluatorFactory.register_builtin_providers()`：一次性注入 fake/custom 内置实现
 
 验收标准：未知 provider 抛可读错误，fallback 可配置。
 

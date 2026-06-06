@@ -237,7 +237,10 @@ SplitterFactory
 EvaluatorFactory
 ```
 
-工厂读取配置后返回对应实现：
+工厂读取配置后返回对应实现。Factory 的注册表默认保持为空，通过
+`register_builtin_providers()` 统一注入项目内置实现类；`create()` 和
+`list_providers()` 内部必须自动确保内置实现已注册，业务代码不需要手动调用
+注册步骤。
 
 ```yaml
 llm:
@@ -260,6 +263,15 @@ llm = LLMFactory.get_llm(settings)
 embedding = EmbeddingFactory.get_embedding(settings)
 reranker = RerankerFactory.get_reranker(settings)
 ```
+
+Factory 注册表约束：
+
+- **空注册表启动**：Factory 类变量不直接写死 provider -> implementation 映射。
+- **显式内置注入**：每个 Factory 提供 `register_builtin_providers()`，集中注册 fake 和项目内置 provider。
+- **自动 ensure**：`create()`、`list_providers()` 在读取注册表前自动调用 `register_builtin_providers()`。
+- **可扩展注册**：仍保留 `register(provider, implementation_class)`，用于测试或后续扩展。
+- **接口校验**：注册时必须校验实现类继承对应 Base 接口。
+- **业务无感知**：Pipeline、Dashboard、MCP 等上层业务只传 settings/provider，不直接 import 具体实现类。
 
 #### 3.4.3 Provider 选项
 

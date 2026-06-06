@@ -1,4 +1,10 @@
-"""Create text splitter implementations from settings-backed provider names."""
+"""Create text splitter implementations from settings-backed provider names.
+
+The registry is populated through ``register_builtin_providers()`` rather than a
+pre-filled class variable. This keeps the built-in splitter list explicit,
+idempotent, and aligned with the shared Factory pattern used by the other
+pluggable components.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +20,24 @@ from src.libs.splitter.recursive_character_splitter import RecursiveCharacterSpl
 class SplitterFactory:
     """Resolve splitter providers through a registry-backed factory."""
 
-    _SPLITTERS: dict[str, type[BaseSplitter]] = {
-        "fake": FakeSplitter,
-        "recursive_character": RecursiveCharacterSplitter,
-    }
+    _REGISTRY: dict[str, type[BaseSplitter]] = {}
+    _builtins_registered = False
+
+    @classmethod
+    def register_builtin_providers(cls) -> None:
+        """Register project-owned splitter implementations once per process.
+
+        Side Effects:
+            Populates the splitter registry with the deterministic fake splitter
+            and the recursive character splitter. The method is idempotent so
+            ``create()`` and ``list_providers()`` can safely call it.
+        """
+
+        if cls._builtins_registered:
+            return
+        cls.register("fake", FakeSplitter)
+        cls.register("recursive_character", RecursiveCharacterSplitter)
+        cls._builtins_registered = True
 
     @classmethod
     def register(cls, provider: str, splitter_class: type[BaseSplitter]) -> None:
@@ -40,7 +60,7 @@ class SplitterFactory:
                 "Splitter provider must implement BaseSplitter",
                 context={"provider": provider, "splitter_class": splitter_class.__name__},
             )
-        cls._SPLITTERS[normalized] = splitter_class
+        cls._REGISTRY[normalized] = splitter_class
 
     @classmethod
     def create(
@@ -68,16 +88,17 @@ class SplitterFactory:
                 unknown, or construction arguments are invalid.
         """
 
+        cls.register_builtin_providers()
         configured_provider = settings.splitter.default if settings else ""
         provider_name = (provider or configured_provider).strip().lower()
         if not provider_name:
             raise ConfigurationError("Splitter provider must be supplied")
 
-        splitter_class = cls._SPLITTERS.get(provider_name)
+        splitter_class = cls._REGISTRY.get(provider_name)
         if splitter_class is None:
             raise ConfigurationError(
                 "Unsupported splitter provider",
-                context={"provider": provider_name, "available": sorted(cls._SPLITTERS)},
+                context={"provider": provider_name, "available": sorted(cls._REGISTRY)},
             )
 
         options: dict[str, Any] = {}
@@ -98,4 +119,5 @@ class SplitterFactory:
     def list_providers(cls) -> list[str]:
         """Return registered splitter providers for diagnostics and Dashboard use."""
 
-        return sorted(cls._SPLITTERS)
+        cls.register_builtin_providers()
+        return sorted(cls._REGISTRY)
