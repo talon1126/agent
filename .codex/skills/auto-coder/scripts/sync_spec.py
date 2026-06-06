@@ -23,6 +23,7 @@ SECTION_FILES = {
     "测试方案": ("04-testing.md", "测试规范"),
     "系统架构与模块设计": ("05-architecture.md", "架构与模块设计"),
     "项目排期": ("06-schedule.md", "任务计划与状态"),
+    "开发规范": ("07-development-rules.md", "开发与提交规范"),
 }
 
 

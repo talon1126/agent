@@ -65,6 +65,7 @@ Load only the references needed for the selected task:
 - Testing expectations: `references/04-testing.md`
 - Feature behavior: `references/02-features.md`
 - Task status and implementation details: `references/06-schedule.md`
+- Development, feedback-sync, and commit rules: `references/07-development-rules.md`
 
 Extract from the spec:
 
@@ -140,5 +141,9 @@ Only after the user answers should you commit or continue.
 ## Commit Behavior
 
 Use atomic commits. Stage only files related to the completed task and synchronized references. Do not include unrelated dirty files.
+
+Before committing, read `references/07-development-rules.md` and use the commit structure defined there. The commit subject must include the task ID. The body must include `Changes`, `Testing`, `Design Principles`, `Task`, `Spec`, and a fresh `Tests` result.
+
+When the user corrects architecture, naming, workflow order, testing, documentation, or commit behavior, update `DEV_SPEC.md` before continuing. Re-sync references after the edit. Do not leave reusable decisions only in conversation context.
 
 If the user answers `next`, commit the completed task first, then restart from step 1.
