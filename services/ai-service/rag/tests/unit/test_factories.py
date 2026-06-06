@@ -29,6 +29,9 @@ splitter_module = importlib.import_module("src.libs.splitter")
 llm_module = importlib.import_module("src.libs.llm")
 embedding_module = importlib.import_module("src.libs.embedding")
 transform_module = importlib.import_module("src.libs.transform")
+vector_store_module = importlib.import_module("src.libs.vector_store")
+reranker_module = importlib.import_module("src.libs.reranker")
+evaluator_module = importlib.import_module("src.libs.evaluator")
 
 ConfigurationError = errors_module.ConfigurationError
 Document = types_module.Document
@@ -40,6 +43,10 @@ FakeEmbedding = embedding_module.FakeEmbedding
 FakeLLM = llm_module.FakeLLM
 FakeSplitter = splitter_module.FakeSplitter
 FakeTransform = transform_module.FakeTransform
+FakeVectorStore = vector_store_module.FakeVectorStore
+FakeReranker = reranker_module.FakeReranker
+NoOpReranker = reranker_module.NoOpReranker
+FakeEvaluator = evaluator_module.FakeEvaluator
 LLMFactory = llm_module.LLMFactory
 LoaderFactory = loader_module.LoaderFactory
 MarkdownLoader = loader_module.MarkdownLoader
@@ -47,6 +54,9 @@ PdfLoader = loader_module.PdfLoader
 RecursiveCharacterSplitter = splitter_module.RecursiveCharacterSplitter
 SplitterFactory = splitter_module.SplitterFactory
 TransformFactory = transform_module.TransformFactory
+VectorStoreFactory = vector_store_module.VectorStoreFactory
+RerankerFactory = reranker_module.RerankerFactory
+EvaluatorFactory = evaluator_module.EvaluatorFactory
 load_settings = config_module.load_settings
 
 COMPONENT_PACKAGES = (
@@ -181,12 +191,20 @@ def test_factories_register_builtin_providers_through_explicit_method() -> None:
     LLMFactory.register_builtin_providers()
     EmbeddingFactory.register_builtin_providers()
     TransformFactory.register_builtin_providers()
+    VectorStoreFactory.register_builtin_providers()
+    RerankerFactory.register_builtin_providers()
+    EvaluatorFactory.register_builtin_providers()
 
     assert {"fake", "markdown", "pdf"}.issubset(LoaderFactory.list_providers())
     assert {"fake", "recursive_character"}.issubset(SplitterFactory.list_providers())
     assert "fake" in LLMFactory.list_providers()
     assert "fake" in EmbeddingFactory.list_providers()
     assert "fake" in TransformFactory.list_providers()
+    assert VectorStoreFactory.list_providers() == ["fake"]
+    assert {"fake", "none", "rrf", "fallback"}.issubset(
+        RerankerFactory.list_providers()
+    )
+    assert EvaluatorFactory.list_providers() == ["fake"]
 
 
 def test_llm_factory_creates_fake_llm_with_unified_chat_interface() -> None:
@@ -296,3 +314,148 @@ def test_transform_factory_raises_configuration_error_for_unknown_provider() -> 
 
     assert transform_error.value.context["provider"] == "missing"
     assert "fake" in transform_error.value.context["available"]
+
+
+def test_vector_store_factory_creates_order_preserving_fake_store() -> None:
+    """Protect the minimal vector-store contract needed by ingestion and retrieval.
+
+    The fake store must accept chunk/vector pairs, rank dense candidates
+    deterministically, apply exact metadata filters, and preserve caller order
+    when sparse retrieval asks for chunks by ID.
+    """
+
+    store = VectorStoreFactory.create(provider="fake")
+    first = Chunk(
+        id="chunk-1",
+        text="Quiet silicone stress ball.",
+        metadata={"collection": "shopping_guides", "doc_type": "guide"},
+        chunk_index=0,
+        start_offset=0,
+        end_offset=27,
+    )
+    second = Chunk(
+        id="chunk-2",
+        text="Wireless headphone comparison.",
+        metadata={"collection": "shopping_guides", "doc_type": "comparison"},
+        chunk_index=1,
+        start_offset=28,
+        end_offset=58,
+    )
+
+    upserted_ids = store.upsert(
+        [first, second],
+        [[1.0, 0.0], [0.0, 1.0]],
+    )
+    results = store.search(
+        [0.9, 0.1],
+        filters={"doc_type": "guide"},
+        top_k=5,
+    )
+    fetched = store.get_by_ids(["chunk-2", "missing", "chunk-1"])
+
+    assert isinstance(store, FakeVectorStore)
+    assert upserted_ids == ["chunk-1", "chunk-2"]
+    assert [result.chunk_id for result in results] == ["chunk-1"]
+    assert [chunk.id for chunk in fetched] == ["chunk-2", "chunk-1"]
+
+
+def test_fake_vector_store_rejects_dimension_changes_across_upserts() -> None:
+    """Keep the fake aligned with pgvector's fixed-dimension column contract."""
+
+    store = VectorStoreFactory.create(provider="fake")
+    chunk = Chunk(
+        id="chunk-1",
+        text="Stable vector dimensions.",
+        metadata={},
+        chunk_index=0,
+        start_offset=0,
+        end_offset=25,
+    )
+    store.upsert([chunk], [[1.0, 0.0]])
+
+    with pytest.raises(ValueError, match="dimensions"):
+        store.upsert([chunk], [[1.0, 0.0, 0.0]])
+
+
+def test_reranker_factory_uses_configured_rrf_fallback_when_default_is_unavailable() -> None:
+    """Require unavailable configured rerankers to degrade to stable RRF order.
+
+    B11 does not implement the configured LLM reranker yet. Factory creation
+    should therefore select ``settings.rerank.fallback`` and preserve the
+    already fused candidate order instead of failing the query.
+    """
+
+    settings = load_settings(validate_environment=False)
+    reranker = RerankerFactory.create(settings=settings)
+    candidates = [
+        types_module.RetrievalResult(
+            chunk_id="chunk-2",
+            text="Second candidate.",
+            score=0.7,
+            metadata={},
+        ),
+        types_module.RetrievalResult(
+            chunk_id="chunk-1",
+            text="First candidate.",
+            score=0.9,
+            metadata={},
+        ),
+    ]
+
+    reranked = reranker.rerank("stress toy", candidates, top_k=1)
+
+    assert isinstance(reranker, NoOpReranker)
+    assert [result.chunk_id for result in reranked] == ["chunk-2"]
+
+
+def test_fake_reranker_and_evaluator_expose_provider_independent_contracts() -> None:
+    """Require deterministic fake implementations for later pipeline tests."""
+
+    reranker = RerankerFactory.create(
+        provider="fake",
+        ordered_chunk_ids=["chunk-1", "chunk-2"],
+    )
+    evaluator = EvaluatorFactory.create(
+        provider="fake",
+        metrics={"hit_rate_at_5": 1.0, "mrr": 0.75},
+    )
+    candidates = [
+        types_module.RetrievalResult(
+            chunk_id="chunk-2",
+            text="Second candidate.",
+            score=0.8,
+            metadata={},
+        ),
+        types_module.RetrievalResult(
+            chunk_id="chunk-1",
+            text="First candidate.",
+            score=0.7,
+            metadata={},
+        ),
+    ]
+
+    reranked = reranker.rerank("query", candidates)
+    metrics = evaluator.evaluate(
+        dataset=[{"query": "query", "relevant_ids": ["chunk-1"]}],
+        predictions=[{"chunk_ids": ["chunk-1", "chunk-2"]}],
+    )
+
+    assert isinstance(reranker, FakeReranker)
+    assert [result.chunk_id for result in reranked] == ["chunk-1", "chunk-2"]
+    assert isinstance(evaluator, FakeEvaluator)
+    assert metrics == {"hit_rate_at_5": 1.0, "mrr": 0.75}
+
+
+def test_b11_factories_fail_fast_for_unknown_or_unimplemented_providers() -> None:
+    """Prevent production provider names from silently resolving to fake code."""
+
+    with pytest.raises(ConfigurationError) as vector_error:
+        VectorStoreFactory.create(provider="pgvector")
+    with pytest.raises(ConfigurationError) as reranker_error:
+        RerankerFactory.create(provider="missing")
+    with pytest.raises(ConfigurationError) as evaluator_error:
+        EvaluatorFactory.create(provider="custom")
+
+    assert vector_error.value.context["provider"] == "pgvector"
+    assert reranker_error.value.context["provider"] == "missing"
+    assert evaluator_error.value.context["provider"] == "custom"

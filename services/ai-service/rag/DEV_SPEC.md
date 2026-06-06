@@ -1917,7 +1917,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [✔] | 2026-06-06 | 已实现 loader/splitter 基类、注册表工厂、fake/markdown/pdf loader、fake/recursive splitter 和 DocumentChunker 契约；9 个指定单元测试通过 |
 | B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现 BaseLLM/LLMFactory/FakeLLM 与 BaseEmbedding/EmbeddingFactory/FakeEmbedding，统一 `chat()`、`embed()`、`embed_batch()`；10 个指定单元测试通过 |
 | B10 | 实现 Transform libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现 BaseTransform、TransformFactory 和 FakeTransform，统一 `transform(chunks, context)` 契约与内置 provider 注入；12 个指定单元测试通过 |
-| B11 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [ ] |  | 覆盖 fallback 和未知 provider 错误 |
+| B11 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现三类最小接口、注册表工厂、固定维度 fake vector store、确定性 fake 和 RRF 顺序回退；17 个指定单元测试通过 |
 | B12 | 实现首批真实组件最小适配 | [ ] |  | OpenAI、DeepSeek、pgvector、RecursiveCharacterTextSplitter；真实调用用 marker 隔离 |
 
 #### 阶段 C：Ingestion & Indexing Pipeline
@@ -2008,14 +2008,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 10 | 83% |
+| Phase B | 12 | 11 | 92% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **16** | **23%** |
+| **总计** | **71** | **17** | **24%** |
 
 ### 6.5 阶段实施明细
 
@@ -2356,14 +2356,20 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 实现类/函数：
 
-- `BaseVectorStore`：定义最小抽象接口
-- `BaseReranker`：定义最小抽象接口
-- `BaseEvaluator`：定义最小抽象接口
-- `VectorStoreFactory.register_builtin_providers()`：一次性注入 fake/pgvector 内置实现
-- `RerankerFactory.register_builtin_providers()`：一次性注入 fake/none/fallback 内置实现
-- `EvaluatorFactory.register_builtin_providers()`：一次性注入 fake/custom 内置实现
+- `BaseVectorStore.upsert()`：按 Chunk 与 Dense Vector 的位置关系执行稳定 ID upsert，并按输入顺序返回 chunk_id
+- `BaseVectorStore.search()`：执行 Dense Vector 检索和 metadata 精确过滤，返回 `List[RetrievalResult]`
+- `BaseVectorStore.get_by_ids()`：按 BM25 返回的 chunk_id 顺序回表，跳过已不存在的 ID
+- `FakeVectorStore`：使用固定向量维度、内存索引和余弦相似度提供确定性测试实现，不替代真实 pgvector
+- `BaseReranker.rerank()`：对过滤后的 `RetrievalResult` 候选进行统一重排
+- `FakeReranker`：根据配置的 chunk_id 顺序提供确定性重排结果
+- `NoOpReranker`：保持过滤后的 RRF 候选顺序，用于 none 和 rerank fallback
+- `BaseEvaluator.evaluate()`：统一黄金数据集与预测结果的批量评估入口
+- `FakeEvaluator`：校验数据集与预测数量一致后返回配置的确定性指标
+- `VectorStoreFactory.register_builtin_providers()`：一次性注入 fake 内置实现；pgvector 在 B12 注册
+- `RerankerFactory.register_builtin_providers()`：一次性注入 fake、none 和 RRF fallback 内置实现
+- `EvaluatorFactory.register_builtin_providers()`：一次性注入 fake 内置实现；custom/Ragas 在阶段 G 注册
 
-验收标准：未知 provider 抛可读错误，fallback 可配置。
+验收标准：未知 provider 抛可读错误；Reranker 可根据 `settings.rerank.fallback` 回退到保持候选顺序的安全实现；未实现的真实 provider 不得静默映射到 fake。
 
 测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
 
