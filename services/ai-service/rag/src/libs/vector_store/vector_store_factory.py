@@ -14,6 +14,7 @@ from src.core.config import RagSettings
 from src.core.errors import ConfigurationError
 from src.libs.vector_store.base_vector_store import BaseVectorStore
 from src.libs.vector_store.fake_vector_store import FakeVectorStore
+from src.libs.vector_store.pgvector_store import PgVectorStore
 
 
 class VectorStoreFactory:
@@ -27,13 +28,14 @@ class VectorStoreFactory:
         """Register project-owned vector-store implementations once.
 
         Side Effects:
-            Registers the deterministic fake provider. B12 extends this method
-            with the real pgvector implementation.
+            Registers the deterministic fake and production pgvector
+            implementations.
         """
 
         if cls._builtins_registered:
             return
         cls.register("fake", FakeVectorStore)
+        cls.register("pgvector", PgVectorStore)
         cls._builtins_registered = True
 
     @classmethod

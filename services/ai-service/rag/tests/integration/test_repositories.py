@@ -1262,3 +1262,94 @@ def test_evaluation_repository_upserts_runs_and_metric_results() -> None:
                 (collection_id,),
             )
         pool.close()
+
+
+@pytest.mark.integration
+def test_pgvector_store_updates_searches_and_restores_chunk_order() -> None:
+    """Exercise the B12 pgvector adapter against the canonical chunk schema.
+
+    The adapter must update embeddings only after ``ChunkRepository`` persists
+    chunk content, apply JSONB metadata filters during cosine search, and
+    restore caller order for sparse-route ID lookups.
+    """
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for pgvector adapter integration")
+
+    from src.core.types import Chunk, Document
+    from src.libs.vector_store import PgVectorStore
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import ChunkRepository, DocumentRepository
+
+    collection_id = f"b12-pgvector-{uuid4().hex}"
+    document_id = f"doc-{uuid4().hex}"
+    source_path = f"fixtures/{document_id}.md"
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=3),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        document = Document(
+            id=document_id,
+            text="Stress ball guide.\nWireless headphone comparison.",
+            metadata={"collection": collection_id},
+        )
+        DocumentRepository(pool).upsert(
+            document,
+            collection_id=collection_id,
+            source_path=source_path,
+            source_hash=sha256(document.text.encode()).hexdigest(),
+        )
+        chunks = [
+            Chunk(
+                id=f"chunk-{uuid4().hex}",
+                text="Stress ball guide.",
+                metadata={"doc_type": "guide", "collection": collection_id},
+                chunk_index=0,
+                start_offset=0,
+                end_offset=18,
+                source_ref={"document_id": document_id},
+            ),
+            Chunk(
+                id=f"chunk-{uuid4().hex}",
+                text="Wireless headphone comparison.",
+                metadata={"doc_type": "comparison", "collection": collection_id},
+                chunk_index=1,
+                start_offset=19,
+                end_offset=49,
+                source_ref={"document_id": document_id},
+            ),
+        ]
+        ChunkRepository(pool).upsert_many(
+            chunks,
+            collection_id=collection_id,
+            document_id=document_id,
+        )
+        store = PgVectorStore(pool=pool, embedding_dimensions=1536)
+        first_vector = [1.0, *([0.0] * 1535)]
+        second_vector = [0.0, 1.0, *([0.0] * 1534)]
+
+        upserted = store.upsert(chunks, [first_vector, second_vector])
+        repeated = store.upsert(chunks, [first_vector, second_vector])
+        results = store.search(
+            first_vector,
+            filters={"doc_type": "guide"},
+            top_k=5,
+        )
+        restored = store.get_by_ids([chunks[1].id, "missing", chunks[0].id])
+
+        assert upserted == [chunks[0].id, chunks[1].id]
+        assert repeated == upserted
+        assert [result.chunk_id for result in results] == [chunks[0].id]
+        assert results[0].score == pytest.approx(1.0)
+        assert [chunk.id for chunk in restored] == [chunks[1].id, chunks[0].id]
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()

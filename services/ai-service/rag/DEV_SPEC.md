@@ -1808,7 +1808,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | 阶段 | 阶段标题 | 目标 | 状态 |
 | --- | --- | --- | --- |
 | Phase A | 配置与项目骨架 | 独立模块基础文件、Docker 部署骨架、pytest 冒烟测试、`settings.yaml`、prompt 配置、核心类型和配置加载 | [✔] |
-| Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [~] |
+| Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [ ] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [ ] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [ ] |
@@ -1852,7 +1852,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | 阶段 | 阶段标题 | 项目当前位置 | 可用功能 | 验证方式 | 完成日期 |
 | --- | --- | --- | --- | --- | --- |
 | Phase A | 配置与项目骨架 | 独立 RAG 模块骨架、运行配置、Prompt 和共享数据契约已就绪，可进入持久化与可插拔组件开发 | 独立 CLI/Docker 入口、类型化配置加载、活动环境变量校验、英文 Prompt、核心领域类型和统一异常 | `pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q` | 2026-06-06 |
-| Phase B | 数据持久化与可插拔组件 | 未完成 | 暂无 | 暂无 |  |
+| Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Factory、DeepSeek、OpenAI Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; python -m pytest services/ai-service/rag/tests -q` | 2026-06-06 |
 | Phase C | Ingestion & Indexing Pipeline | 未完成 | 暂无 | 暂无 |  |
 | Phase D | Retrieval | 未完成 | 暂无 | 暂无 |  |
 | Phase E | MCP 工具服务 | 未完成 | 暂无 | 暂无 |  |
@@ -1883,6 +1883,34 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 下一阶段入口：
 
 阶段 B 直接复用 `RagSettings` 建立 PostgreSQL/pgvector schema 与连接池，复用核心数据对象实现 Repository，并以 `RagError` 子类统一持久化和 Provider 错误边界。
+
+#### 阶段 B 交付里程碑：数据持久化与可插拔组件
+
+完成日期：2026-06-06
+
+项目当前位置：
+
+RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和八类可插拔组件包。配置可以创建百炼 DeepSeek、OpenAI Embedding、PgVectorStore 以及不访问外部服务的 fake 实现，阶段 C 可以直接编排离线摄取链路。
+
+可用功能：
+
+- 初始化 PostgreSQL/pgvector schema，并通过连接池执行事务和健康检查。
+- 持久化 collection、document、chunk、image、trace 和 evaluation 数据。
+- 管理文档生命周期，删除文档时同步清理关联 chunks 和 images。
+- 通过空注册表、`register_builtin_providers()` 和 Factory 创建 Loader、Splitter、LLM、Embedding、Transform、VectorStore、Reranker、Evaluator。
+- 通过百炼 OpenAI-compatible endpoint 调用 `deepseek-v4-flash`。
+- 批量调用 `text-embedding-3-small` 并保持输入输出顺序。
+- 为已持久化 chunk 写入 pgvector，执行 cosine search、metadata filter 和按 chunk_id 顺序回表。
+- 使用 fake provider 和 RRF 顺序 fallback 执行无外部依赖测试。
+
+验证方式：
+
+- `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; python -m pytest services/ai-service/rag/tests -q`
+- `$env:RUN_RAG_EXTERNAL_TESTS='1'; python -m pytest services/ai-service/rag/tests/external/test_model_providers.py -v`
+
+下一阶段入口：
+
+阶段 C 复用 `DocumentRepository`、`ChunkRepository`、`ImageStorage`、`LoaderFactory`、`SplitterFactory`、`TransformFactory`、`EmbeddingFactory` 和 `VectorStoreFactory`，实现 dedup -> load -> split -> transform -> encode -> upsert 的完整 Ingestion Pipeline。
 
 ### 6.3 阶段任务跟踪表
 
@@ -1918,7 +1946,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现 BaseLLM/LLMFactory/FakeLLM 与 BaseEmbedding/EmbeddingFactory/FakeEmbedding，统一 `chat()`、`embed()`、`embed_batch()`；10 个指定单元测试通过 |
 | B10 | 实现 Transform libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现 BaseTransform、TransformFactory 和 FakeTransform，统一 `transform(chunks, context)` 契约与内置 provider 注入；12 个指定单元测试通过 |
 | B11 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现三类最小接口、注册表工厂、固定维度 fake vector store、确定性 fake 和 RRF 顺序回退；17 个指定单元测试通过 |
-| B12 | 实现首批真实组件最小适配 | [ ] |  | OpenAI、DeepSeek、pgvector、RecursiveCharacterTextSplitter；真实调用用 marker 隔离 |
+| B12 | 实现首批真实组件最小适配 | [✔] | 2026-06-06 | 已实现百炼 DeepSeek、OpenAI text-embedding-3-small 和 PgVectorStore；22 个 factory 单元测试、1 个 pgvector 集成测试通过，2 个 external smoke test 默认跳过 |
 
 #### 阶段 C：Ingestion & Indexing Pipeline
 
@@ -2008,14 +2036,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 11 | 92% |
+| Phase B | 12 | 12 | 100% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **17** | **24%** |
+| **总计** | **71** | **18** | **25%** |
 
 ### 6.5 阶段实施明细
 
@@ -2377,17 +2405,25 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：接入首批真实 provider 的最小可用实现，并保留 fake 默认测试路径。
 
-修改文件：`src/libs/llm/*`、`src/libs/embedding/openai_embedding.py`、`src/libs/vector_store/pgvector_store.py`、`tests/unit/test_factories.py`
+修改文件：`src/libs/llm/*`、`src/libs/embedding/openai_embedding.py`、`src/libs/vector_store/pgvector_store.py`、`tests/unit/test_factories.py`、`tests/integration/test_repositories.py`、`tests/external/test_model_providers.py`
 
 实现类/函数：
 
-- `DeepSeekClient`：封装 DeepSeek Chat 模型调用
-- `OpenAIEmbedding`：封装 text-embedding-3-small 向量生成
-- `PgVectorStore`：封装存储访问能力
+- `DeepSeekClient.__init__()`：从 `api_key_env` 和 `base_url_env` 解析百炼凭据与 OpenAI-compatible endpoint，支持注入 SDK client 进行单元测试，并将 SDK 初始化失败包装为不暴露凭据的 `ConfigurationError`
+- `DeepSeekClient.chat()`：将 `ChatMessage` 转换为 OpenAI-compatible messages，并返回不包含凭据和完整 SDK 对象的 `LLMResponse`
+- `OpenAIEmbedding.__init__()`：解析 OpenAI 凭据、模型、超时和固定向量维度，并将 SDK 初始化失败包装为统一配置错误
+- `OpenAIEmbedding.embed()`：复用批量接口生成单条 `text-embedding-3-small` 向量
+- `OpenAIEmbedding.embed_batch()`：单次请求生成批量向量，根据 response index 恢复输入顺序并校验数量与维度
+- `PgVectorStore.upsert()`：为 `ChunkRepository` 已持久化的 chunk 原子写入向量，不重复负责 chunk 内容和生命周期持久化
+- `PgVectorStore.search()`：使用 pgvector cosine distance 和 JSONB metadata filter 返回 `RetrievalResult`
+- `PgVectorStore.get_by_ids()`：按调用方提供的 chunk_id 顺序回表并跳过缺失 ID
+- `LLMFactory.register_builtin_providers()`：注册 fake 和 deepseek
+- `EmbeddingFactory.register_builtin_providers()`：注册 fake 和 openai
+- `VectorStoreFactory.register_builtin_providers()`：注册 fake 和 pgvector
 
-验收标准：真实调用默认不跑，marker 隔离；fake provider 默认可测。
+验收标准：单元测试通过注入 SDK client 验证真实 Provider 协议但不访问网络；真实 DeepSeek/OpenAI 调用必须同时带 `external` marker 且仅在 `RUN_RAG_EXTERNAL_TESTS=1` 时运行；PgVectorStore 在真实 PostgreSQL 中通过重复 upsert、cosine search、metadata filter 和顺序回表测试；fake provider 保持默认可测。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+测试方法：`python -m pytest services\ai-service\rag\tests\unit\test_factories.py -v`；`$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; python -m pytest services\ai-service\rag\tests\integration\test_repositories.py -v`；`$env:RUN_RAG_EXTERNAL_TESTS='1'; python -m pytest services\ai-service\rag\tests\external\test_model_providers.py -v`
 
 #### 阶段 C：Ingestion & Indexing Pipeline
 

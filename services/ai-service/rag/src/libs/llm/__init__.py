@@ -1,18 +1,20 @@
 """Define the LLM component namespace for chat-model clients.
 
-LLM implementations will expose a consistent chat contract for OpenAI, Azure
-OpenAI, Ollama, DeepSeek, and test doubles while hiding provider-specific SDK
-details from pipeline code. This package only establishes the B7 directory
-boundary; B9 adds interfaces, factories, and implementations.
+LLM implementations expose a consistent chat contract while hiding
+provider-specific SDK details from pipeline code. The package currently exports
+the deterministic fake and Bailian-hosted DeepSeek adapter; later OpenAI, Azure,
+and Ollama clients must implement the same ``BaseLLM`` interface.
 """
 
 from src.libs.llm.base_llm import BaseLLM, ChatMessage, LLMResponse
+from src.libs.llm.deepseek_client import DeepSeekClient
 from src.libs.llm.fake_llm import FakeLLM
 from src.libs.llm.llm_factory import LLMFactory
 
 __all__ = (
     "BaseLLM",
     "ChatMessage",
+    "DeepSeekClient",
     "FakeLLM",
     "LLMFactory",
     "LLMResponse",

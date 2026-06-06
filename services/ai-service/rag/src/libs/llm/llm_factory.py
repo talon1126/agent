@@ -14,6 +14,7 @@ from typing import Any
 from src.core.config import RagSettings
 from src.core.errors import ConfigurationError
 from src.libs.llm.base_llm import BaseLLM
+from src.libs.llm.deepseek_client import DeepSeekClient
 from src.libs.llm.fake_llm import FakeLLM
 
 
@@ -28,14 +29,15 @@ class LLMFactory:
         """Register project-owned LLM implementations once per process.
 
         Side Effects:
-            Populates the LLM registry with the fake provider used by tests.
-            Real OpenAI, Azure, Ollama, and DeepSeek adapters are registered in
-            later tasks without changing business orchestration code.
+            Populates the registry with the deterministic fake and the
+            Bailian-hosted DeepSeek adapter. Additional OpenAI, Azure, and
+            Ollama adapters can be added without changing business code.
         """
 
         if cls._builtins_registered:
             return
         cls.register("fake", FakeLLM)
+        cls.register("deepseek", DeepSeekClient)
         cls._builtins_registered = True
 
     @classmethod

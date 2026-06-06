@@ -14,6 +14,7 @@ from src.core.config import RagSettings
 from src.core.errors import ConfigurationError
 from src.libs.embedding.base_embedding import BaseEmbedding
 from src.libs.embedding.fake_embedding import FakeEmbedding
+from src.libs.embedding.openai_embedding import OpenAIEmbedding
 
 
 class EmbeddingFactory:
@@ -27,14 +28,14 @@ class EmbeddingFactory:
         """Register project-owned embedding implementations once per process.
 
         Side Effects:
-            Populates the embedding registry with the deterministic fake
-            provider used by tests. Real OpenAI embedding support is registered
-            in a later task.
+            Populates the registry with the deterministic fake and OpenAI
+            embedding implementations.
         """
 
         if cls._builtins_registered:
             return
         cls.register("fake", FakeEmbedding)
+        cls.register("openai", OpenAIEmbedding)
         cls._builtins_registered = True
 
     @classmethod

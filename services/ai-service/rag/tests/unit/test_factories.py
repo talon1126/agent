@@ -11,6 +11,8 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -47,6 +49,9 @@ FakeVectorStore = vector_store_module.FakeVectorStore
 FakeReranker = reranker_module.FakeReranker
 NoOpReranker = reranker_module.NoOpReranker
 FakeEvaluator = evaluator_module.FakeEvaluator
+DeepSeekClient = llm_module.DeepSeekClient
+OpenAIEmbedding = embedding_module.OpenAIEmbedding
+PgVectorStore = vector_store_module.PgVectorStore
 LLMFactory = llm_module.LLMFactory
 LoaderFactory = loader_module.LoaderFactory
 MarkdownLoader = loader_module.MarkdownLoader
@@ -197,10 +202,10 @@ def test_factories_register_builtin_providers_through_explicit_method() -> None:
 
     assert {"fake", "markdown", "pdf"}.issubset(LoaderFactory.list_providers())
     assert {"fake", "recursive_character"}.issubset(SplitterFactory.list_providers())
-    assert "fake" in LLMFactory.list_providers()
-    assert "fake" in EmbeddingFactory.list_providers()
+    assert {"deepseek", "fake"}.issubset(LLMFactory.list_providers())
+    assert {"fake", "openai"}.issubset(EmbeddingFactory.list_providers())
     assert "fake" in TransformFactory.list_providers()
-    assert VectorStoreFactory.list_providers() == ["fake"]
+    assert {"fake", "pgvector"}.issubset(VectorStoreFactory.list_providers())
     assert {"fake", "none", "rrf", "fallback"}.issubset(
         RerankerFactory.list_providers()
     )
@@ -254,25 +259,18 @@ def test_embedding_factory_creates_fake_embedding_with_batch_interface() -> None
     assert batch_vectors[0] != batch_vectors[1]
 
 
-def test_model_factories_read_settings_default_and_fail_fast_when_unimplemented() -> None:
-    """Require factories to read configured providers before reporting gaps.
-
-    The checked-in settings select real providers whose adapters arrive in later
-    tasks. B9 factories should still read those selectors from settings and
-    raise structured configuration errors instead of silently falling back.
-    """
+def test_model_factories_fail_fast_when_required_environment_is_missing() -> None:
+    """Require real providers to reject missing credentials before SDK calls."""
 
     settings = load_settings(validate_environment=False)
 
     with pytest.raises(ConfigurationError) as llm_error:
-        LLMFactory.create(settings=settings)
+        LLMFactory.create(settings=settings, environ={})
     with pytest.raises(ConfigurationError) as embedding_error:
-        EmbeddingFactory.create(settings=settings)
+        EmbeddingFactory.create(settings=settings, environ={})
 
-    assert llm_error.value.context["provider"] == settings.llm.default
-    assert embedding_error.value.context["provider"] == settings.embedding.default
-    assert "fake" in llm_error.value.context["available"]
-    assert "fake" in embedding_error.value.context["available"]
+    assert llm_error.value.context["environment_variable"] == "DASHSCOPE_API_KEY"
+    assert embedding_error.value.context["environment_variable"] == "OPENAI_API_KEY"
 
 
 def test_transform_factory_creates_fake_transform_with_unified_interface() -> None:
@@ -447,15 +445,184 @@ def test_fake_reranker_and_evaluator_expose_provider_independent_contracts() -> 
 
 
 def test_b11_factories_fail_fast_for_unknown_or_unimplemented_providers() -> None:
-    """Prevent production provider names from silently resolving to fake code."""
+    """Prevent unknown provider names from silently resolving to fake code."""
 
     with pytest.raises(ConfigurationError) as vector_error:
-        VectorStoreFactory.create(provider="pgvector")
+        VectorStoreFactory.create(provider="missing")
     with pytest.raises(ConfigurationError) as reranker_error:
         RerankerFactory.create(provider="missing")
     with pytest.raises(ConfigurationError) as evaluator_error:
         EvaluatorFactory.create(provider="custom")
 
-    assert vector_error.value.context["provider"] == "pgvector"
+    assert vector_error.value.context["provider"] == "missing"
     assert reranker_error.value.context["provider"] == "missing"
     assert evaluator_error.value.context["provider"] == "custom"
+
+
+def test_deepseek_client_uses_openai_compatible_chat_contract() -> None:
+    """Require the Bailian DeepSeek adapter to normalize SDK requests and output."""
+
+    sdk_client = Mock()
+    sdk_client.chat.completions.create.return_value = SimpleNamespace(
+        id="chat-response-1",
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Use the first product."),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=12,
+            completion_tokens=5,
+            total_tokens=17,
+        ),
+    )
+    llm = LLMFactory.create(
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        api_key_env="DASHSCOPE_API_KEY",
+        base_url_env="DASHSCOPE_BASE_URL",
+        timeout_seconds=30,
+        client=sdk_client,
+    )
+
+    response = llm.chat(
+        [
+            ChatMessage(role="system", content="Answer concisely."),
+            ChatMessage(role="user", content="Compare these products."),
+        ]
+    )
+
+    assert isinstance(llm, DeepSeekClient)
+    sdk_client.chat.completions.create.assert_called_once_with(
+        model="deepseek-v4-flash",
+        messages=[
+            {"role": "system", "content": "Answer concisely."},
+            {"role": "user", "content": "Compare these products."},
+        ],
+    )
+    assert response.content == "Use the first product."
+    assert response.provider == "deepseek"
+    assert response.raw == {
+        "response_id": "chat-response-1",
+        "finish_reason": "stop",
+        "prompt_tokens": 12,
+        "completion_tokens": 5,
+        "total_tokens": 17,
+    }
+
+
+def test_deepseek_client_wraps_sdk_failures_without_exposing_secrets() -> None:
+    """Require provider transport failures to cross the shared error boundary."""
+
+    sdk_client = Mock()
+    sdk_client.chat.completions.create.side_effect = RuntimeError(
+        "request failed with secret-key-value"
+    )
+    llm = LLMFactory.create(
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        client=sdk_client,
+    )
+
+    with pytest.raises(errors_module.ProviderError) as captured:
+        llm.chat([ChatMessage(role="user", content="Hello")])
+
+    assert captured.value.context == {
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+    }
+    assert "secret-key-value" not in str(captured.value)
+
+
+def test_openai_embedding_batches_once_and_restores_input_order() -> None:
+    """Require batch embeddings to follow response indexes rather than SDK order."""
+
+    sdk_client = Mock()
+    sdk_client.embeddings.create.return_value = SimpleNamespace(
+        data=[
+            SimpleNamespace(index=1, embedding=[0.0, 1.0, 0.0]),
+            SimpleNamespace(index=0, embedding=[1.0, 0.0, 0.0]),
+        ]
+    )
+    embedding = EmbeddingFactory.create(
+        provider="openai",
+        model="text-embedding-3-small",
+        dimensions=3,
+        api_key_env="OPENAI_API_KEY",
+        timeout_seconds=30,
+        client=sdk_client,
+    )
+
+    vectors = embedding.embed_batch(["first", "second"])
+
+    assert isinstance(embedding, OpenAIEmbedding)
+    sdk_client.embeddings.create.assert_called_once_with(
+        model="text-embedding-3-small",
+        input=["first", "second"],
+        dimensions=3,
+    )
+    assert vectors == [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+
+
+def test_real_provider_factories_read_checked_in_settings_with_injected_clients() -> None:
+    """Require B12 implementations to use settings without performing network I/O."""
+
+    settings = load_settings(validate_environment=False)
+    sdk_client = Mock()
+    pool = Mock()
+
+    llm = LLMFactory.create(settings=settings, client=sdk_client)
+    embedding = EmbeddingFactory.create(settings=settings, client=sdk_client)
+    vector_store = VectorStoreFactory.create(settings=settings, pool=pool)
+
+    assert isinstance(llm, DeepSeekClient)
+    assert isinstance(embedding, OpenAIEmbedding)
+    assert isinstance(vector_store, PgVectorStore)
+
+
+def test_real_provider_clients_wrap_sdk_initialization_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep proxy or endpoint setup failures inside the configuration boundary."""
+
+    deepseek_module = importlib.import_module("src.libs.llm.deepseek_client")
+    openai_embedding_module = importlib.import_module(
+        "src.libs.embedding.openai_embedding"
+    )
+    monkeypatch.setattr(
+        deepseek_module,
+        "OpenAI",
+        Mock(side_effect=RuntimeError("invalid proxy with secret-value")),
+    )
+
+    with pytest.raises(ConfigurationError) as deepseek_error:
+        LLMFactory.create(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            api_key_env="DASHSCOPE_API_KEY",
+            base_url_env="DASHSCOPE_BASE_URL",
+            environ={
+                "DASHSCOPE_API_KEY": "secret-value",
+                "DASHSCOPE_BASE_URL": "https://dashscope.example.test/v1",
+            },
+        )
+
+    monkeypatch.setattr(
+        openai_embedding_module,
+        "OpenAI",
+        Mock(side_effect=RuntimeError("invalid proxy with secret-value")),
+    )
+    with pytest.raises(ConfigurationError) as embedding_error:
+        EmbeddingFactory.create(
+            provider="openai",
+            model="text-embedding-3-small",
+            dimensions=3,
+            api_key_env="OPENAI_API_KEY",
+            environ={"OPENAI_API_KEY": "secret-value"},
+        )
+
+    assert deepseek_error.value.context == {"provider": "deepseek"}
+    assert embedding_error.value.context == {"provider": "openai"}
+    assert "secret-value" not in str(deepseek_error.value)
+    assert "secret-value" not in str(embedding_error.value)
