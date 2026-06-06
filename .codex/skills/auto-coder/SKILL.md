@@ -123,7 +123,12 @@ if (Test-Path .venv\Scripts\Activate.ps1) { . .\.venv\Scripts\Activate.ps1 }
 python .codex\skills\auto-coder\scripts\sync_spec.py --force
 ```
 
-4. Show a concise summary and ask for one of:
+4. Review all staged, unstaged, and untracked changes belonging to the current
+   task. Focus on correctness, contracts, error handling, configuration,
+   testing, documentation, and accidental scope expansion.
+5. If review finds an actionable issue, fix it with TDD, rerun verification,
+   and repeat the review until no actionable findings remain.
+6. Show a concise summary and ask for one of:
 
 ```text
 ✅ [TASK_ID] Task name — completed
@@ -136,7 +141,9 @@ Suggested commit: feat(scope): [TASK_ID] summary
 "next"   -> commit + start next task
 ```
 
-Only after the user answers should you commit or continue.
+Only after the user answers should you commit or continue. A completed review
+must always be the final action before this pause; do not start another task in
+the same cycle.
 
 ## Commit Behavior
 
@@ -146,4 +153,6 @@ Before committing, read `references/07-development-rules.md` and use the commit 
 
 When the user corrects architecture, naming, workflow order, testing, documentation, or commit behavior, update `DEV_SPEC.md` before continuing. Re-sync references after the edit. Do not leave reusable decisions only in conversation context.
 
-If the user answers `next`, commit the completed task first, then restart from step 1.
+If the user answers `next`, commit the already reviewed task first, then restart
+from step 1 and implement exactly one next task. After that task's review,
+always stop for confirmation again.

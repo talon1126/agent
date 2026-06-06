@@ -760,13 +760,16 @@ Vision LLM 选型：
 Image-to-Text Prompt 设计：
 
 ```text
-你是 RAG 文档摄取系统中的图片理解模块。
-请根据图片内容生成一段适合检索的中文描述。
-要求：
-1. 描述图片中可见的关键对象、文字、结构、流程或数据。
-2. 如果图片与商品、参数、步骤或对比有关，请突出可用于问答检索的信息。
-3. 不要编造图片中不存在的品牌、价格、型号或结论。
-4. 如果图片无法识别，请返回 low_quality，并说明原因。
+You are the image understanding component of a RAG document ingestion system.
+Generate a retrieval-oriented description from the visible image content.
+Requirements:
+1. Describe visible objects, text, structures, processes, and data.
+2. Emphasize facts useful for retrieval when the image contains products,
+   specifications, procedures, or comparisons.
+3. Write description and key_facts in Simplified Chinese, but preserve visible
+   source text verbatim in extracted_text.
+4. Do not invent brands, prices, models, or conclusions absent from the image.
+5. Return low_quality with a reason when the image cannot be interpreted.
 ```
 
 不同图片类型的理解策略：
@@ -1405,7 +1408,7 @@ services/ai-service/rag/
 | `config/settings.yaml` | 管理运行时配置和组件选择 | 配置驱动切换 LLM、Embedding、Splitter、VectorStore、Reranker、Evaluator |
 | `config/prompts/rerank_prompt.yaml` | 保存 rerank 阶段提示词 | prompt 与代码分离，便于评估不同 rerank 策略 |
 | `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段做 chunk rewrite、语义合并和去噪 |
-| `config/prompts/image_to_text_prompt.yaml` | 保存图片转文字提示词 | 支持按图片类型生成可检索中文描述 |
+| `config/prompts/image_to_text_prompt.yaml` | 保存图片转文字提示词 | 使用英文 Prompt 指令，按图片类型生成可检索的简体中文描述，并原样保留图片中的文字 |
 | `data/raw/shopping_guides/` | 存放 shopping_guides collection 原始文档 | 按 collection 分类，便于离线摄取和回归测试 |
 | `data/db/postgres/` | 存放 PostgreSQL 本地开发辅助数据 | 保存初始化辅助文件、dump 或本地持久化数据 |
 | `data/db/bm25/` | 存放 BM25 本地索引辅助数据 | 保存倒排索引和词项统计缓存 |
@@ -1843,7 +1846,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | A1 | 创建独立模块基础文件 | [✔] | 2026-06-06 | 已创建独立模块说明、项目元数据、依赖声明、pytest 配置、忽略规则和基础包入口 |
 | A2 | 创建独立运行入口、Docker 骨架和 pytest 冒烟测试 | [✔] | 2026-06-06 | 已创建最小运行入口、健康状态、Docker 骨架、六个关键包入口，4 个冒烟测试通过 |
 | A3 | 创建 `config/settings.yaml` 示例配置 | [✔] | 2026-06-06 | 已覆盖全部可插拔组件、流水线、存储、可观测、Dashboard、评估和 MCP 配置，5 个单元测试通过 |
-| A4 | 创建 prompt 配置目录 | [ ] |  | `rerank`、`rewrite_chunk`、`image-to-text` |
+| A4 | 创建 prompt 配置目录 | [✔] | 2026-06-06 | 已创建统一英文 Prompt YAML 契约，覆盖 rerank、chunk rewrite、六类图片理解策略和中文 caption 输出，10 个配置测试通过 |
 | A5 | 实现配置读取和校验 | [ ] |  | `RagSettings`、环境变量引用、默认值校验 |
 | A6 | 定义核心类型和统一异常 | [ ] |  | Document、Chunk、Trace、RetrievalResult |
 
@@ -1951,7 +1954,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
-| Phase A | 6 | 3 | 50% |
+| Phase A | 6 | 4 | 67% |
 | Phase B | 12 | 0 | 0% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
@@ -1959,7 +1962,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **3** | **4%** |
+| **总计** | **71** | **4** | **6%** |
 
 ### 6.5 阶段实施明细
 
@@ -2027,7 +2030,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 - prompt 模板
 
-验收标准：三类 prompt 可被读取。
+验收标准：三类 prompt 可被读取；Prompt 的 system instruction、user template、description 和策略说明统一使用英文；Image-to-Text Prompt 必须通过英文指令要求 `description` 和 `key_facts` 使用简体中文，并让 `extracted_text` 原样保留图片文字；英文检查只禁止 CJK 指令，不得错误拒绝 `°C`、`≥` 等合法技术符号。
 
 测试方法：`pytest services\ai-service\rag\tests\unit\test_config.py -v`
 
@@ -3060,17 +3063,44 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 ### 7.1 英文注释要求
 
-所有新增业务代码必须使用英文注释。该要求覆盖 Python docstring、行内注释、配置文件注释和脚本注释。注释重点说明：
+所有新增业务代码必须使用**源码级英文注释**。该要求覆盖 Python 模块、类、函数、方法、测试、配置文件和脚本。注释必须让首次接触项目的开发者无需反复追踪调用链，即可理解当前文件为什么存在、负责什么以及如何安全使用。
 
-- 业务意图
-- 工具边界
-- 异常处理策略
-- 配置开关影响
-- 与 AImodel 前端契约相关的行为
+注释要求：
 
-避免无意义逐行翻译。
+- **模块 docstring**：说明文件在系统架构中的位置、核心职责、主要协作对象和明确不负责的边界。
+- **类 docstring**：说明类所代表的业务概念、生命周期、依赖关系和调用方式。
+- **函数/方法 docstring**：说明业务目的、关键处理步骤、参数含义、返回值契约、可能抛出的异常和可观察副作用。
+- **测试 docstring**：说明被保护的行为契约、测试输入或前置条件，以及失败通常意味着哪类回归。
+- **行内注释**：只用于解释难以从代码直接读出的业务原因、算法选择、fallback、兼容处理或安全限制。
+- **配置和脚本注释**：说明配置项或命令对运行行为的影响、默认策略及使用限制。
+- **接口实现注释**：明确接口职责和具体实现职责，尤其说明 provider、factory、pipeline stage 与上层业务之间的边界。
 
-### 7.2 错误处理规范
+Python docstring 使用一致的源码级结构。存在对应内容时，应包含 `Args`、`Returns`、`Raises`、`Side Effects` 或 `Notes`；不存在参数、返回值或异常时不添加空章节。注释必须描述当前实现的真实行为，不得复制通用模板、虚构异常或为不同方法生成相同的空泛说明。
+
+注释重点说明：
+
+- 业务意图和当前文件的存在理由
+- 工具、组件和分层职责边界
+- 输入输出及数据契约
+- 异常处理和优雅降级策略
+- 配置开关对运行行为的影响
+- 与 AImodel、Dashboard、MCP 或 Pipeline 的协作关系
+
+避免无意义逐行翻译、仅重复函数名称、使用“执行该层任务”等空泛描述，或用长注释掩盖本应通过命名和结构解决的代码问题。
+
+### 7.2 Prompt 语言规范
+
+所有提交到仓库的 Prompt 配置统一使用英文编写，包括 `description`、`system_prompt`、`user_prompt`、策略说明、约束条件和输出格式说明。统一语言便于开发者审查、版本对比、评估和跨 Provider 复用。
+
+Prompt 语言规范：
+
+- Prompt 指令和模板本身必须使用英文，不得混入中文说明。
+- 输入数据可以保留用户或原始文档的自然语言，不需要在进入 Prompt 前强制翻译。
+- 当业务需要模型输出中文时，应使用英文指令明确指定输出语言，而不是把 Prompt 本身改为中文。Image-to-Text 的 `description` 和 `key_facts` 使用简体中文，`extracted_text` 原样保留图片中的文字，不执行翻译。
+- 结构化字段名、占位符和枚举值保持稳定，不因输出语言变化而改变。
+- 测试必须扫描 Prompt 配置中的 CJK 字符，防止后续修改重新引入中文指令；不得使用“非 ASCII 即非英文”的判断，因为英文 Prompt 可以合法包含弯引号、温度单位和数学符号等 Unicode 内容。
+
+### 7.3 错误处理规范
 
 RAG 子系统错误分为：
 
@@ -3080,7 +3110,7 @@ RAG 子系统错误分为：
 - 数据库错误：写 trace 后抛出服务异常。
 - MCP 参数错误：返回 MCP tool error content。
 
-### 7.3 安全输出规范
+### 7.4 安全输出规范
 
 - 不输出内部工具 JSON。
 - 不输出隐藏 prompt。
@@ -3088,7 +3118,7 @@ RAG 子系统错误分为：
 - 不把 RAG 内容当作实时商品事实。
 - 不把过期知识用于价格、库存、优惠券有效期判断。
 
-### 7.4 环境变量
+### 7.5 环境变量
 
 ```dotenv
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agent
@@ -3098,7 +3128,7 @@ RAG_DEFAULT_COLLECTION=shopping_guides
 RAG_ENABLED=true
 ```
 
-### 7.5 首版完成定义
+### 7.6 首版完成定义
 
 首版完成需要同时满足：
 
@@ -3114,7 +3144,7 @@ RAG_ENABLED=true
 - Dashboard 六大页面测试通过，能看到文档、chunk、trace 和评估结果。
 - AImodel 集成前全链路 E2E 验收通过。
 
-### 7.6 规格反馈同步规范
+### 7.7 规格反馈同步规范
 
 DEV_SPEC 是项目设计、实施和验收的**单一事实来源**。用户在开发过程中提出的更正、补充要求和质量约束不能只保留在对话上下文中，必须及时回写文档，使后续开发者和 AI 能继续遵循最新决策。
 
@@ -3136,7 +3166,7 @@ DEV_SPEC 是项目设计、实施和验收的**单一事实来源**。用户在�
 - Trace 阶段、数据流和 Pipeline 顺序是否保持一致。
 - 任务状态、完成日期和测试结果是否来源于真实执行。
 
-### 7.7 Git 提交规范
+### 7.8 Git 提交规范
 
 项目采用**一个任务一个原子提交**的方式保存进度。提交只包含当前任务实现、对应测试、DEV_SPEC 进度更新和同步后的参考文件，不混入无关修改。
 
@@ -3182,3 +3212,16 @@ Tests: ✅ 5/5 passed in 0.10s
 - **原子性**：暂存时使用精确文件路径；发现无关 dirty 文件时不纳入提交。
 - **历史重写**：已经推送的提交只有在用户明确要求时才能重写，并使用 `git push --force-with-lease` 更新远程。
 - **连续开发**：用户输入 `next` 时，先按本规范提交当前已完成任务，再开始下一个待执行任务。
+
+### 7.9 任务完成审查门禁
+
+每个开发任务完成实现、测试和 DEV_SPEC 进度同步后，必须进入代码审查模式检查当前任务的全部 staged、unstaged 和 untracked 变更。审查是任务完成流程的一部分，不能省略，也不能在审查完成后自动开始下一任务。
+
+执行规则：
+
+- **审查范围**：当前任务新增或修改的源码、测试、配置、Prompt、DEV_SPEC 和同步后的 auto-coder reference。
+- **审查重点**：正确性、数据契约、异常处理、配置驱动、测试覆盖、注释质量、规范一致性和无关文件混入。
+- **问题闭环**：发现可执行问题时，先按 TDD 修复，再重新运行相关测试和代码审查，直到没有未解决的审查问题。
+- **强制停止**：审查无问题后，输出任务摘要、测试证据和建议提交信息，然后停止并等待用户输入 `commit`、`skip` 或 `next`。
+- **连续开发约束**：用户输入 `next` 时，只提交已经通过审查的上一任务，再执行一个新任务；新任务完成审查后必须再次停止。
+- **禁止自动连跑**：单次 `next` 不得连续实现两个或更多未开始任务。

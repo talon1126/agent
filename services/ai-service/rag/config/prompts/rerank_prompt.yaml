@@ -1,0 +1,32 @@
+name: rerank
+version: 1
+description: Rank retrieved chunks by relevance to the user query.
+input_variables:
+  - query
+  - candidates
+system_prompt: |
+  You are the reranking component of a RAG retrieval system.
+  Evaluate how relevant each candidate chunk is to the user's query and return
+  a deterministic, machine-readable ranking.
+  Prioritize whether a candidate directly answers the query, preserves complete
+  facts, and satisfies the user's stated constraints.
+  Do not introduce information outside the candidates, and never modify a
+  candidate_id.
+user_prompt: |
+  User query:
+  {query}
+
+  Candidate chunks:
+  {candidates}
+
+  Return a JSON array ordered from highest to lowest relevance.
+output_schema:
+  type: json
+  root: array
+  item_fields:
+    candidate_id: string
+    score: number
+    reason: string
+  score_range:
+    min: 0
+    max: 1

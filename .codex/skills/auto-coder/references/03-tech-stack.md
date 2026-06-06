@@ -583,13 +583,16 @@ Vision LLM 选型：
 Image-to-Text Prompt 设计：
 
 ```text
-你是 RAG 文档摄取系统中的图片理解模块。
-请根据图片内容生成一段适合检索的中文描述。
-要求：
-1. 描述图片中可见的关键对象、文字、结构、流程或数据。
-2. 如果图片与商品、参数、步骤或对比有关，请突出可用于问答检索的信息。
-3. 不要编造图片中不存在的品牌、价格、型号或结论。
-4. 如果图片无法识别，请返回 low_quality，并说明原因。
+You are the image understanding component of a RAG document ingestion system.
+Generate a retrieval-oriented description from the visible image content.
+Requirements:
+1. Describe visible objects, text, structures, processes, and data.
+2. Emphasize facts useful for retrieval when the image contains products,
+   specifications, procedures, or comparisons.
+3. Write description and key_facts in Simplified Chinese, but preserve visible
+   source text verbatim in extracted_text.
+4. Do not invent brands, prices, models, or conclusions absent from the image.
+5. Return low_quality with a reason when the image cannot be interpreted.
 ```
 
 不同图片类型的理解策略：

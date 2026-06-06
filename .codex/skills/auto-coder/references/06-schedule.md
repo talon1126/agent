@@ -77,7 +77,7 @@
 | A1 | 创建独立模块基础文件 | [✔] | 2026-06-06 | 已创建独立模块说明、项目元数据、依赖声明、pytest 配置、忽略规则和基础包入口 |
 | A2 | 创建独立运行入口、Docker 骨架和 pytest 冒烟测试 | [✔] | 2026-06-06 | 已创建最小运行入口、健康状态、Docker 骨架、六个关键包入口，4 个冒烟测试通过 |
 | A3 | 创建 `config/settings.yaml` 示例配置 | [✔] | 2026-06-06 | 已覆盖全部可插拔组件、流水线、存储、可观测、Dashboard、评估和 MCP 配置，5 个单元测试通过 |
-| A4 | 创建 prompt 配置目录 | [ ] |  | `rerank`、`rewrite_chunk`、`image-to-text` |
+| A4 | 创建 prompt 配置目录 | [✔] | 2026-06-06 | 已创建统一英文 Prompt YAML 契约，覆盖 rerank、chunk rewrite、六类图片理解策略和中文 caption 输出，10 个配置测试通过 |
 | A5 | 实现配置读取和校验 | [ ] |  | `RagSettings`、环境变量引用、默认值校验 |
 | A6 | 定义核心类型和统一异常 | [ ] |  | Document、Chunk、Trace、RetrievalResult |
 
@@ -185,7 +185,7 @@
 
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
-| Phase A | 6 | 3 | 50% |
+| Phase A | 6 | 4 | 67% |
 | Phase B | 12 | 0 | 0% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
@@ -193,7 +193,7 @@
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **3** | **4%** |
+| **总计** | **71** | **4** | **6%** |
 
 ### 6.5 阶段实施明细
 
@@ -261,7 +261,7 @@
 
 - prompt 模板
 
-验收标准：三类 prompt 可被读取。
+验收标准：三类 prompt 可被读取；Prompt 的 system instruction、user template、description 和策略说明统一使用英文；Image-to-Text Prompt 必须通过英文指令要求 `description` 和 `key_facts` 使用简体中文，并让 `extracted_text` 原样保留图片文字；英文检查只禁止 CJK 指令，不得错误拒绝 `°C`、`≥` 等合法技术符号。
 
 测试方法：`pytest services\ai-service\rag\tests\unit\test_config.py -v`
 
