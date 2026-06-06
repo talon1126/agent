@@ -162,7 +162,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-06 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；24 个相关单元测试、111 个全量测试通过 |
 | C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-06 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；49 个相关测试、120 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C5 | 实现 ImageCaptioner | [✔] | 2026-06-06 | 已实现 ImageCaptioner、ImageToTextTransform、image_to_text transform step、skipped/failed/low_quality 状态和 caption metadata；34 个相关测试、125 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C6 | 实现 DenseEncoder | [ ] |  | 封装 `text-embedding-3-small`、content_hash 差量判断和 Dense 向量生成 |
+| C6 | 实现 DenseEncoder | [✔] | 2026-06-06 | 已实现 DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C7 | 实现 BM25Indexer | [ ] |  | 生成 BM25 词项、词频和倒排索引数据 |
 | C8 | 实现 BatchProcessor 批处理优化 | [ ] |  | 放在 DenseEncoder 和 BM25Indexer 之后，统一处理批量、限流、重试和失败隔离 |
 | C9 | 实现 pgvector upsert | [ ] |  | 同一 chunk 两次 upsert 产生相同 id；内容变更 id 变更；支持批量 upsert 且保持顺序 |
@@ -241,13 +241,13 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | --- | ---: | ---: | --- |
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
-| Phase C | 11 | 5 | 45% |
+| Phase C | 11 | 6 | 55% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **23** | **33%** |
+| **总计** | **70** | **24** | **34%** |
 
 ### 6.5 阶段实施明细
 
