@@ -75,7 +75,7 @@
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | A1 | 创建独立模块基础文件 | [✔] | 2026-06-06 | 已创建独立模块说明、项目元数据、依赖声明、pytest 配置、忽略规则和基础包入口 |
-| A2 | 创建独立运行入口、Docker 骨架和 pytest 冒烟测试 | [ ] |  | `main.py`、`Dockerfile`、`.dockerignore`、`tests/test_smoke.py`，校验关键包可导入 |
+| A2 | 创建独立运行入口、Docker 骨架和 pytest 冒烟测试 | [✔] | 2026-06-06 | 已创建最小运行入口、健康状态、Docker 骨架、六个关键包入口，4 个冒烟测试通过 |
 | A3 | 创建 `config/settings.yaml` 示例配置 | [ ] |  | 覆盖 LLM、Vision LLM、Embedding、VectorStore、Splitter、Reranker、Retrieval、Dashboard |
 | A4 | 创建 prompt 配置目录 | [ ] |  | `rerank`、`rewrite_chunk`、`image-to-text` |
 | A5 | 实现配置读取和校验 | [ ] |  | `RagSettings`、环境变量引用、默认值校验 |
@@ -185,7 +185,7 @@
 
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
-| Phase A | 6 | 1 | 17% |
+| Phase A | 6 | 2 | 33% |
 | Phase B | 12 | 0 | 0% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
@@ -193,7 +193,7 @@
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **1** | **1%** |
+| **总计** | **71** | **2** | **3%** |
 
 ### 6.5 阶段实施明细
 
@@ -223,7 +223,7 @@
 
 目标：让 RAG 子系统可以作为独立模块构建 Docker 镜像，具备最小本地运行入口和 pytest 测试基座，并在入口建立后验证关键包可导入。
 
-修改文件：`main.py`、`Dockerfile`、`.dockerignore`、`tests/test_smoke.py`
+修改文件：`main.py`、`Dockerfile`、`.dockerignore`、`tests/test_smoke.py`、`src/core/__init__.py`、`src/libs/__init__.py`、`src/ingestion/__init__.py`、`src/storage/__init__.py`、`src/observability/__init__.py`、`src/mcp_server/__init__.py`
 
 实现类/函数：
 
