@@ -1778,7 +1778,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 | 阶段 | 阶段标题 | 目标 | 状态 |
 | --- | --- | --- | --- |
-| Phase A | 配置与项目骨架 | 独立模块基础文件、Docker 部署骨架、pytest 冒烟测试、`settings.yaml`、prompt 配置、核心类型和配置加载 | [ ] |
+| Phase A | 配置与项目骨架 | 独立模块基础文件、Docker 部署骨架、pytest 冒烟测试、`settings.yaml`、prompt 配置、核心类型和配置加载 | [✔] |
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [ ] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [ ] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [ ] |
@@ -1822,7 +1822,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 | 阶段 | 阶段标题 | 项目当前位置 | 可用功能 | 验证方式 | 完成日期 |
 | --- | --- | --- | --- | --- | --- |
-| Phase A | 配置与项目骨架 | 未完成 | 暂无 | 暂无 |  |
+| Phase A | 配置与项目骨架 | 独立 RAG 模块骨架、运行配置、Prompt 和共享数据契约已就绪，可进入持久化与可插拔组件开发 | 独立 CLI/Docker 入口、类型化配置加载、活动环境变量校验、英文 Prompt、核心领域类型和统一异常 | `pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q` | 2026-06-06 |
 | Phase B | 数据持久化与可插拔组件 | 未完成 | 暂无 | 暂无 |  |
 | Phase C | Ingestion & Indexing Pipeline | 未完成 | 暂无 | 暂无 |  |
 | Phase D | Retrieval | 未完成 | 暂无 | 暂无 |  |
@@ -1830,6 +1830,30 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase F | 可观测与管理平台 | 未完成 | 暂无 | 暂无 |  |
 | Phase G | 质量评估体系 | 未完成 | 暂无 | 暂无 |  |
 | Phase H | AImodel 联调集成 | 未完成 | 暂无 | 暂无 |  |
+
+#### 阶段 A 交付里程碑：配置与项目骨架
+
+完成日期：2026-06-06
+
+项目当前位置：
+
+RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块。统一配置、Prompt、核心数据对象和异常边界已经稳定，后续阶段可以直接围绕这些契约实现 PostgreSQL 持久化、Provider Factory 和业务 Pipeline。
+
+可用功能：
+
+- 通过 `main.py` 输出无外部依赖的健康状态。
+- 从 `settings.yaml` 加载类型化配置，并在启动前校验 Provider、模型、活动环境变量、检索参数和 Embedding 维度。
+- 加载并校验 rerank、chunk rewrite 和 image-to-text Prompt。
+- 创建并序列化 `Document`、`ImageMetadata`、`Chunk` 和 `RetrievalResult`。
+- 通过统一 `RagError` 异常层级区分配置、Provider、数据库、摄取、检索和 MCP 错误。
+
+验证方式：
+
+- `pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q`
+
+下一阶段入口：
+
+阶段 B 直接复用 `RagSettings` 建立 PostgreSQL/pgvector schema 与连接池，复用核心数据对象实现 Repository，并以 `RagError` 子类统一持久化和 Provider 错误边界。
 
 ### 6.3 阶段任务跟踪表
 
@@ -1848,7 +1872,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | A3 | 创建 `config/settings.yaml` 示例配置 | [✔] | 2026-06-06 | 已覆盖全部可插拔组件、流水线、存储、可观测、Dashboard、评估和 MCP 配置，5 个单元测试通过 |
 | A4 | 创建 prompt 配置目录 | [✔] | 2026-06-06 | 已创建统一英文 Prompt YAML 契约，覆盖 rerank、chunk rewrite、六类图片理解策略和中文 caption 输出，10 个配置测试通过 |
 | A5 | 实现配置读取和校验 | [✔] | 2026-06-06 | 已实现完整 `RagSettings`、Provider/model selector、活动环境变量、Embedding/pgvector 维度、检索参数和 Prompt 占位符校验，18 个配置测试通过 |
-| A6 | 定义核心类型和统一异常 | [ ] |  | Document、Chunk、Trace、RetrievalResult |
+| A6 | 定义核心类型和统一异常 | [✔] | 2026-06-06 | 已实现 Document、ImageMetadata、Chunk、RetrievalResult 及六类 RagError 子类，覆盖必填位置、非空文本、来源区间和异常链校验，16 个类型测试通过 |
 
 #### 阶段 B：数据持久化与可插拔组件
 
@@ -1954,7 +1978,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
-| Phase A | 6 | 5 | 83% |
+| Phase A | 6 | 6 | 100% |
 | Phase B | 12 | 0 | 0% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
@@ -1962,7 +1986,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **5** | **7%** |
+| **总计** | **71** | **6** | **8%** |
 
 ### 6.5 阶段实施明细
 
