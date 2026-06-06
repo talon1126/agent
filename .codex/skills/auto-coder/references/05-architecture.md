@@ -338,7 +338,7 @@ services/ai-service/rag/
 | `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、caption 写入 chunk metadata |
 | `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | C6 已实现 `run_dense()`，按 content_hash 跳过已索引 chunk 并保持输出顺序；BM25、BatchProcessor 和 upsert 在后续任务接入 |
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | 单 chunk content_hash 计算、差量判断、调用 EmbeddingClient 生成 Dense 向量，不承担批处理职责 |
-| `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | BM25 分词、词频、倒排索引构建和关键词查询 |
+| `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | C7 已实现 in-memory BM25 分词、词频、倒排索引构建和关键词候选查询，为后续 Sparse Route 和 BM25 持久化提供可复用统计结果 |
 | `src/ingestion/embedding/batch_processor.py` | 批处理优化 | 在 DenseEncoder 和 BM25Indexer 之后统一处理批量、限流、重试、失败隔离 |
 | `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | chunk、向量、BM25、images、trace 统一 upsert |
 
