@@ -111,7 +111,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | --- | --- | --- | --- | --- |
 | B1 | 编写 collection/document/chunk schema | [✔] | 2026-06-06 | 已实现稳定字符串 ID、pgvector/HNSW、核心约束和索引；真实 PostgreSQL 连续初始化两次通过，5 个集成测试通过 |
 | B2 | 编写 image/trace/evaluation schema | [✔] | 2026-06-06 | 已实现图片索引、四段式 Query/Ingestion Trace、评估任务和指标结果表；真实 PostgreSQL 幂等初始化通过，8 个集成测试通过 |
-| B3 | 实现数据库连接池和 schema 初始化 | [ ] |  | `PostgresPool`、`init_schema()` |
+| B3 | 实现数据库连接池和 schema 初始化 | [✔] | 2026-06-06 | 已实现配置驱动惰性连接池、生命周期、健康检查、事务回滚和幂等 schema 初始化；15 个集成测试通过 |
 | B4 | 实现 Document/Chunk/Image Repository | [ ] |  | 文档、chunk、ImageStorage 图片落盘和 `image_index` 入库 |
 | B5 | 实现 Trace/Evaluation Repository | [ ] |  | Trace 索引和评估历史写入 PostgreSQL |
 | B6 | 实现文档生命周期管理 | [ ] |  | `pending`、`processing`、`success`、`failed`、`deleted` |
@@ -210,14 +210,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 2 | 17% |
+| Phase B | 12 | 3 | 25% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **8** | **11%** |
+| **总计** | **71** | **9** | **13%** |
 
 ### 6.5 阶段实施明细
 
@@ -380,10 +380,19 @@ schema 可重复执行。
 
 实现类/函数：
 
-- `PostgresPool`：管理 PostgreSQL 连接池和事务入口
-- `init_schema()`：初始化基础设施
+- `PostgresPool.from_settings()`：从 `settings.database.url_env` 读取 DSN，并按 `pool_size` 创建惰性连接池
+- `PostgresPool.open()`：启动连接池并等待最小连接可用
+- `PostgresPool.close()`：关闭连接池
+- `PostgresPool.connection()`：提供自动归还连接的上下文
+- `PostgresPool.transaction()`：提供提交/回滚事务上下文
+- `PostgresPool.health_check()`：执行轻量数据库可用性检查
+- `init_schema()`：读取并以事务方式执行 `schema.sql`
 
-验收标准：连接池可创建，schema 初始化失败有明确异常。
+验收标准：连接池完全由 `DatabaseSettings` 和环境变量驱动，不在源码中
+硬编码 DSN；可完成打开、健康检查、连接借用、事务提交/回滚和关闭；
+`init_schema()` 可重复执行；配置缺失、连接失败、SQL 文件缺失或 SQL
+执行失败时抛出带安全上下文和原始 cause 的 `DatabaseError` 或
+`ConfigurationError`。
 
 测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
