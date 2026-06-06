@@ -12,16 +12,29 @@ services.
 
 from __future__ import annotations
 
+import importlib
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
-
 
 RAG_ROOT = Path(__file__).resolve().parents[2]
 SETTINGS_PATH = RAG_ROOT / "config" / "settings.yaml"
 PROMPTS_DIR = RAG_ROOT / "config" / "prompts"
+
+# The RAG subsystem is independently installable, but repository-level pytest
+# runs it directly from source. Add only this module root so imports match the
+# package layout that an editable or wheel installation exposes.
+sys.path.insert(0, str(RAG_ROOT))
+
+config_module = importlib.import_module("src.core.config")
+PromptTemplate = config_module.PromptTemplate
+RagSettings = config_module.RagSettings
+load_prompt = config_module.load_prompt
+load_settings = config_module.load_settings
 
 
 def load_settings_document() -> dict[str, Any]:
@@ -299,3 +312,152 @@ def test_image_prompt_defines_quality_fallback_and_type_strategies() -> None:
         "ui_screenshot",
         "decorative",
     } <= prompt["image_type_strategies"].keys()
+
+
+def test_load_settings_returns_typed_configuration() -> None:
+    """Verify runtime loading exposes typed sections to orchestration code.
+
+    Factories and pipelines must consume attribute-based configuration instead
+    of reopening YAML or indexing unvalidated dictionaries. The supplied
+    environment mapping models a complete local deployment without modifying
+    the process environment during the test.
+    """
+    environment = {
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
+        "DASHSCOPE_API_KEY": "test-dashscope-key",
+        "DASHSCOPE_BASE_URL": "https://dashscope.example.test",
+        "OPENAI_API_KEY": "test-openai-key",
+    }
+
+    settings = load_settings(SETTINGS_PATH, environ=environment)
+
+    assert isinstance(settings, RagSettings)
+    assert settings.project.default_collection == "shopping_guides"
+    assert settings.llm.selected_provider.model == "deepseek-v4-flash"
+    assert settings.embedding.selected_provider.dimensions == 1536
+    assert settings.dashboard.pages[-1] == "evaluation"
+
+
+def test_load_settings_reports_a_missing_file_clearly(tmp_path: Path) -> None:
+    """Verify configuration path errors identify the unreadable source.
+
+    Startup must fail before provider construction when the configured settings
+    file does not exist. A readable exception gives operators the exact path
+    they need to correct instead of exposing an unrelated downstream failure.
+    """
+    missing_path = tmp_path / "missing-settings.yaml"
+
+    with pytest.raises(ValueError, match="Settings file does not exist"):
+        load_settings(missing_path, environ={}, validate_environment=False)
+
+
+def test_load_settings_rejects_unknown_selected_provider(tmp_path: Path) -> None:
+    """Verify provider selectors cannot reference an undefined implementation.
+
+    A typo in ``llm.default`` would otherwise survive startup and fail only when
+    the first chat request reaches the factory. Validation keeps this failure at
+    the configuration boundary and includes the invalid provider name.
+    """
+    document = load_settings_document()
+    document["llm"]["default"] = "missing-provider"
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing-provider"):
+        load_settings(settings_path, environ={}, validate_environment=False)
+
+
+def test_load_settings_requires_a_model_for_selected_provider(tmp_path: Path) -> None:
+    """Verify an active model provider cannot omit its model identifier.
+
+    Keeping ``model`` optional at the generic provider level is useful for
+    non-model adapters such as rerank wrappers, but selected LLM, Vision, and
+    Embedding providers cannot operate without it. Startup validation must catch
+    the omission before a factory attempts to construct an SDK client.
+    """
+    document = load_settings_document()
+    document["llm"]["providers"]["deepseek"].pop("model")
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must define a model"):
+        load_settings(settings_path, environ={}, validate_environment=False)
+
+
+def test_load_settings_rejects_embedding_dimension_mismatch(tmp_path: Path) -> None:
+    """Verify embedding output dimensions match the pgvector column contract.
+
+    A mismatch cannot be repaired during upsert and would make every generated
+    vector invalid for the configured schema. The loader therefore rejects the
+    configuration before an embedding request or database write occurs.
+    """
+    document = load_settings_document()
+    document["embedding"]["providers"]["openai"]["dimensions"] = 1024
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Embedding dimensions"):
+        load_settings(settings_path, environ={}, validate_environment=False)
+
+
+def test_environment_validation_lists_only_active_requirements() -> None:
+    """Verify missing runtime secrets are reported together and without fallback noise.
+
+    The active database, selected chat model, enabled vision model, and selected
+    embedding model require environment values. Inactive providers and fallback
+    providers must not block startup until selected, while duplicate references
+    such as the DashScope key appear only once in the error message.
+    """
+    settings = load_settings(SETTINGS_PATH, environ={}, validate_environment=False)
+
+    with pytest.raises(ValueError) as error:
+        settings.validate_environment({})
+
+    message = str(error.value)
+    assert "DATABASE_URL" in message
+    assert "DASHSCOPE_API_KEY" in message
+    assert "DASHSCOPE_BASE_URL" in message
+    assert "OPENAI_API_KEY" in message
+    assert message.count("DASHSCOPE_API_KEY") == 1
+
+
+def test_load_prompt_returns_a_validated_template() -> None:
+    """Verify Prompt loading produces a typed, render-ready configuration object.
+
+    Runtime transforms and rerankers need stable metadata, declared variables,
+    and output schemas. Loading must preserve placeholders for the later render
+    step while rejecting malformed Prompt files at the configuration boundary.
+    """
+    prompt = load_prompt("config/prompts/rerank_prompt.yaml")
+
+    assert isinstance(prompt, PromptTemplate)
+    assert prompt.name == "rerank"
+    assert prompt.input_variables == ["query", "candidates"]
+    assert "{query}" in prompt.user_prompt
+
+
+def test_load_prompt_rejects_undeclared_or_unused_variables(tmp_path: Path) -> None:
+    """Verify Prompt declarations and template placeholders cannot drift apart.
+
+    A mismatch would either cause runtime formatting errors or accept inputs
+    that never reach the model. The loader must identify the Prompt file and
+    explain that its variable contract is invalid before any provider call.
+    """
+    prompt_path = tmp_path / "invalid-prompt.yaml"
+    prompt_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "invalid",
+                "version": 1,
+                "description": "Invalid Prompt fixture.",
+                "input_variables": ["query"],
+                "system_prompt": "Return structured output.",
+                "user_prompt": "Candidates: {candidates}",
+                "output_schema": {"type": "json"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Prompt variable contract"):
+        load_prompt(prompt_path)

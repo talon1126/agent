@@ -128,12 +128,21 @@ python .codex\skills\auto-coder\scripts\sync_spec.py --force
    testing, documentation, and accidental scope expansion.
 5. If review finds an actionable issue, fix it with TDD, rerun verification,
    and repeat the review until no actionable findings remain.
-6. Show a concise summary and ask for one of:
+6. Preserve a review log for the final task summary. For every finding, report
+   its impact, root cause, affected files, concrete fix, failing evidence, and
+   passing verification. Do not omit findings merely because they were fixed.
+   When no findings occurred, explicitly state that the review found no
+   actionable issues.
+7. Show a concise summary and ask for one of:
 
 ```text
 ✅ [TASK_ID] Task name — completed
 Files: ...
 Tests: n/n passed
+Review:
+- Finding: ...
+  Fix: ...
+  Verification: ...
 Suggested commit: feat(scope): [TASK_ID] summary
 
 "commit" -> git add + commit
