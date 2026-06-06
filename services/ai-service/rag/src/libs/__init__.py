@@ -9,3 +9,14 @@ without changing orchestration code.
 This layer defines integration boundaries only; it must not contain ingestion
 or query business orchestration.
 """
+
+__all__ = (
+    "loader",
+    "llm",
+    "splitter",
+    "transform",
+    "embedding",
+    "vector_store",
+    "reranker",
+    "evaluator",
+)
