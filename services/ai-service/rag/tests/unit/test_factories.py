@@ -28,21 +28,25 @@ loader_module = importlib.import_module("src.libs.loader")
 splitter_module = importlib.import_module("src.libs.splitter")
 llm_module = importlib.import_module("src.libs.llm")
 embedding_module = importlib.import_module("src.libs.embedding")
+transform_module = importlib.import_module("src.libs.transform")
 
 ConfigurationError = errors_module.ConfigurationError
 Document = types_module.Document
+Chunk = types_module.Chunk
 ChatMessage = llm_module.ChatMessage
 EmbeddingFactory = embedding_module.EmbeddingFactory
 FakeLoader = loader_module.FakeLoader
 FakeEmbedding = embedding_module.FakeEmbedding
 FakeLLM = llm_module.FakeLLM
 FakeSplitter = splitter_module.FakeSplitter
+FakeTransform = transform_module.FakeTransform
 LLMFactory = llm_module.LLMFactory
 LoaderFactory = loader_module.LoaderFactory
 MarkdownLoader = loader_module.MarkdownLoader
 PdfLoader = loader_module.PdfLoader
 RecursiveCharacterSplitter = splitter_module.RecursiveCharacterSplitter
 SplitterFactory = splitter_module.SplitterFactory
+TransformFactory = transform_module.TransformFactory
 load_settings = config_module.load_settings
 
 COMPONENT_PACKAGES = (
@@ -176,11 +180,13 @@ def test_factories_register_builtin_providers_through_explicit_method() -> None:
     SplitterFactory.register_builtin_providers()
     LLMFactory.register_builtin_providers()
     EmbeddingFactory.register_builtin_providers()
+    TransformFactory.register_builtin_providers()
 
     assert {"fake", "markdown", "pdf"}.issubset(LoaderFactory.list_providers())
     assert {"fake", "recursive_character"}.issubset(SplitterFactory.list_providers())
     assert "fake" in LLMFactory.list_providers()
     assert "fake" in EmbeddingFactory.list_providers()
+    assert "fake" in TransformFactory.list_providers()
 
 
 def test_llm_factory_creates_fake_llm_with_unified_chat_interface() -> None:
@@ -249,3 +255,44 @@ def test_model_factories_read_settings_default_and_fail_fast_when_unimplemented(
     assert embedding_error.value.context["provider"] == settings.embedding.default
     assert "fake" in llm_error.value.context["available"]
     assert "fake" in embedding_error.value.context["available"]
+
+
+def test_transform_factory_creates_fake_transform_with_unified_interface() -> None:
+    """Require TransformFactory to build a transform with a stable chunk contract.
+
+    Transform stages should accept business ``Chunk`` objects and return a new
+    list of ``Chunk`` objects. The fake implementation proves factory wiring and
+    metadata mutation behavior without calling LLMs or image-caption providers.
+    """
+
+    transform = TransformFactory.create(
+        provider="fake",
+        metadata_updates={"transform_status": "ok"},
+    )
+    chunk = Chunk(
+        id="chunk-1",
+        text="Original chunk text.",
+        metadata={"source_path": "shopping_guides/example.md"},
+        chunk_index=0,
+        start_offset=0,
+        end_offset=20,
+        source_ref={"document_id": "doc-1"},
+    )
+
+    transformed = transform.transform([chunk], context={"trace_id": "trace-1"})
+
+    assert isinstance(transform, FakeTransform)
+    assert transformed != [chunk]
+    assert transformed[0].metadata["source_path"] == "shopping_guides/example.md"
+    assert transformed[0].metadata["transform_status"] == "ok"
+    assert "transform_status" not in chunk.metadata
+
+
+def test_transform_factory_raises_configuration_error_for_unknown_provider() -> None:
+    """Require TransformFactory to fail fast for misspelled provider names."""
+
+    with pytest.raises(ConfigurationError) as transform_error:
+        TransformFactory.create(provider="missing")
+
+    assert transform_error.value.context["provider"] == "missing"
+    assert "fake" in transform_error.value.context["available"]
