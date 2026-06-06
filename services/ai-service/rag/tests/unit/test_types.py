@@ -147,11 +147,7 @@ def test_document_rejects_image_placeholder_outside_text() -> None:
         Document(
             id="doc-1",
             text="short",
-            metadata={
-                "images": [
-                    build_image_metadata(text_offset=4, text_length=10)
-                ]
-            },
+            metadata={"images": [build_image_metadata(text_offset=4, text_length=10)]},
         )
 
 
@@ -193,9 +189,7 @@ def test_chunk_enforces_offsets_and_optional_source_reference() -> None:
     assert chunk.end_offset == 39
     assert chunk.source_ref["document_id"] == "doc-1"
 
-    synthetic_chunk = chunk.model_copy(
-        update={"id": "chunk-2", "source_ref": None}
-    )
+    synthetic_chunk = chunk.model_copy(update={"id": "chunk-2", "source_ref": None})
     assert synthetic_chunk.source_ref is None
 
 

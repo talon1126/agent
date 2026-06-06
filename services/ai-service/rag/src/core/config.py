@@ -80,11 +80,7 @@ class ProviderSettings(ConfigSection):
             they require no environment lookup.
         """
 
-        return {
-            reference
-            for reference in (self.api_key_env, self.base_url_env)
-            if reference
-        }
+        return {reference for reference in (self.api_key_env, self.base_url_env) if reference}
 
 
 class ProviderGroupSettings(ConfigSection):
@@ -113,9 +109,7 @@ class ProviderGroupSettings(ConfigSection):
                 f"available providers: {sorted(self.providers)}"
             )
         if not self.selected_provider.model:
-            raise ValueError(
-                f"Selected provider '{self.default}' must define a model"
-            )
+            raise ValueError(f"Selected provider '{self.default}' must define a model")
         if self.fallback not in (None, "none") and self.fallback not in self.providers:
             raise ValueError(
                 f"Fallback provider '{self.fallback}' is not defined; "
@@ -154,9 +148,7 @@ class EmbeddingSettings(ProviderGroupSettings):
         """
 
         if self.selected_provider.dimensions is None:
-            raise ValueError(
-                f"Selected embedding provider '{self.default}' must define dimensions"
-            )
+            raise ValueError(f"Selected embedding provider '{self.default}' must define dimensions")
         return self
 
 
@@ -238,9 +230,7 @@ class RetrievalSettings(ConfigSection):
             "sparse_top_k": self.sparse_top_k,
             "fusion_top_k": self.fusion_top_k,
         }
-        undersized = [
-            name for name, value in route_limits.items() if value < self.final_top_k
-        ]
+        undersized = [name for name, value in route_limits.items() if value < self.final_top_k]
         if undersized:
             raise ValueError(
                 "Retrieval candidate limits must be greater than or equal to "
@@ -395,14 +385,10 @@ class RagSettings(BaseModel):
         required.update(self.llm.selected_provider.environment_references())
         required.update(self.embedding.selected_provider.environment_references())
         if self.vision_llm.enabled:
-            required.update(
-                self.vision_llm.selected_provider.environment_references()
-            )
+            required.update(self.vision_llm.selected_provider.environment_references())
         return required
 
-    def validate_environment(
-        self, environ: Mapping[str, str] | None = None
-    ) -> None:
+    def validate_environment(self, environ: Mapping[str, str] | None = None) -> None:
         """Verify that every active environment reference has a non-empty value.
 
         Args:
@@ -473,9 +459,7 @@ class PromptTemplate(ConfigSection):
         return self
 
 
-def _resolve_config_path(
-    path: str | Path, *, repository_relative_root: Path = RAG_ROOT
-) -> Path:
+def _resolve_config_path(path: str | Path, *, repository_relative_root: Path = RAG_ROOT) -> Path:
     """Resolve absolute, current-working-directory, or RAG-relative paths.
 
     Args:
@@ -522,9 +506,7 @@ def _read_yaml_mapping(path: Path, *, resource_name: str) -> dict[str, Any]:
         raise ValueError(f"Unable to read {resource_name} file '{path}': {error}") from error
 
     if not isinstance(document, dict):
-        raise ValueError(
-            f"{resource_name} file '{path}' must contain a YAML mapping at its root"
-        )
+        raise ValueError(f"{resource_name} file '{path}' must contain a YAML mapping at its root")
     return document
 
 
@@ -562,9 +544,7 @@ def load_settings(
     try:
         settings = RagSettings.model_validate(document)
     except ValidationError as error:
-        raise ValueError(
-            f"Settings validation failed for '{settings_path}': {error}"
-        ) from error
+        raise ValueError(f"Settings validation failed for '{settings_path}': {error}") from error
 
     if validate_environment:
         settings.validate_environment(environment)
@@ -592,6 +572,4 @@ def load_prompt(path: str | Path) -> PromptTemplate:
     try:
         return PromptTemplate.model_validate(document)
     except ValidationError as error:
-        raise ValueError(
-            f"Prompt validation failed for '{prompt_path}': {error}"
-        ) from error
+        raise ValueError(f"Prompt validation failed for '{prompt_path}': {error}") from error

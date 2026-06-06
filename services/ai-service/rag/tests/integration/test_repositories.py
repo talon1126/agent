@@ -236,9 +236,7 @@ def test_postgres_pool_lifecycle_and_schema_initialization() -> None:
         init_schema(pool)
 
         with pool.transaction() as connection:
-            cursor = connection.execute(
-                "SELECT to_regclass('public.rag_chunks') IS NOT NULL"
-            )
+            cursor = connection.execute("SELECT to_regclass('public.rag_chunks') IS NOT NULL")
             assert cursor.fetchone() == (True,)
     finally:
         pool.close()
@@ -300,8 +298,7 @@ def test_init_schema_wraps_sql_failure_and_rolls_back(
 
     schema_path = tmp_path / "invalid-schema.sql"
     schema_path.write_text(
-        "CREATE TABLE b3_rollback_probe (id INTEGER); "
-        "SELECT b3_missing_function();",
+        "CREATE TABLE b3_rollback_probe (id INTEGER); SELECT b3_missing_function();",
         encoding="utf-8",
     )
     pool = PostgresPool.from_settings(
@@ -315,9 +312,7 @@ def test_init_schema_wraps_sql_failure_and_rolls_back(
 
         assert isinstance(captured.value.cause, psycopg.Error)
         with pool.connection() as connection:
-            cursor = connection.execute(
-                "SELECT to_regclass('public.b3_rollback_probe') IS NULL"
-            )
+            cursor = connection.execute("SELECT to_regclass('public.b3_rollback_probe') IS NULL")
             assert cursor.fetchone() == (True,)
     finally:
         pool.close()
@@ -406,9 +401,9 @@ def test_core_schema_declares_idempotent_tables_and_indexes() -> None:
     for table_name in required_tables:
         _table_definition(sql, table_name)
 
-    assert len(
-        re.findall(r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS", sql, re.IGNORECASE)
-    ) == len(required_tables)
+    assert len(re.findall(r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS", sql, re.IGNORECASE)) == len(
+        required_tables
+    )
     assert "CREATE INDEX IF NOT EXISTS idx_rag_documents_collection_id" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_rag_documents_source_hash" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_rag_chunks_document_id" in sql

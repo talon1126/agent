@@ -125,9 +125,7 @@ def test_default_component_selection_matches_the_spec() -> None:
     assert settings["llm"]["default"] == "deepseek"
     assert settings["llm"]["providers"]["deepseek"]["model"] == "deepseek-v4-flash"
     assert settings["vision_llm"]["providers"]["qwen_vl_max"]["model"] == "Qwen-VL-Max"
-    assert settings["embedding"]["providers"]["openai"]["model"] == (
-        "text-embedding-3-small"
-    )
+    assert settings["embedding"]["providers"]["openai"]["model"] == ("text-embedding-3-small")
     assert settings["vector_store"]["provider"] == "pgvector"
     assert settings["splitter"]["default"] == "recursive_character"
     assert settings["rerank"]["fallback"] == "rrf"
@@ -145,12 +143,8 @@ def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:
     serialized = SETTINGS_PATH.read_text(encoding="utf-8")
 
     assert settings["database"]["url_env"] == "DATABASE_URL"
-    assert settings["llm"]["providers"]["deepseek"]["api_key_env"] == (
-        "DASHSCOPE_API_KEY"
-    )
-    assert settings["embedding"]["providers"]["openai"]["api_key_env"] == (
-        "OPENAI_API_KEY"
-    )
+    assert settings["llm"]["providers"]["deepseek"]["api_key_env"] == ("DASHSCOPE_API_KEY")
+    assert settings["embedding"]["providers"]["openai"]["api_key_env"] == ("OPENAI_API_KEY")
     assert "sk-" not in serialized
     assert "YOUR_API_KEY" not in serialized
 
@@ -223,8 +217,7 @@ def test_prompt_definitions_share_a_stable_contract() -> None:
         assert prompt["version"] == 1
         assert prompt["input_variables"]
         assert all(
-            f"{{{variable}}}" in prompt["user_prompt"]
-            for variable in prompt["input_variables"]
+            f"{{{variable}}}" in prompt["user_prompt"] for variable in prompt["input_variables"]
         )
 
 
@@ -253,9 +246,7 @@ def test_prompt_instruction_content_is_written_in_english() -> None:
     for file_name in prompt_files:
         source = (PROMPTS_DIR / file_name).read_text(encoding="utf-8")
 
-        assert cjk_pattern.search(source) is None, (
-            f"{file_name} contains CJK Prompt instructions"
-        )
+        assert cjk_pattern.search(source) is None, f"{file_name} contains CJK Prompt instructions"
 
 
 def test_rerank_prompt_requires_structured_ranking_output() -> None:
@@ -270,9 +261,7 @@ def test_rerank_prompt_requires_structured_ranking_output() -> None:
 
     assert prompt["input_variables"] == ["query", "candidates"]
     assert prompt["output_schema"]["type"] == "json"
-    assert {"candidate_id", "score", "reason"} <= set(
-        prompt["output_schema"]["item_fields"]
-    )
+    assert {"candidate_id", "score", "reason"} <= set(prompt["output_schema"]["item_fields"])
 
 
 def test_rewrite_prompt_preserves_facts_and_image_references() -> None:

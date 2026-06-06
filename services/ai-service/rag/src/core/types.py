@@ -89,9 +89,7 @@ def _normalize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     images = normalized["images"]
     if not isinstance(images, list):
         raise ValueError("metadata.images must be a list")
-    normalized["images"] = [
-        ImageMetadata.model_validate(image).model_dump() for image in images
-    ]
+    normalized["images"] = [ImageMetadata.model_validate(image).model_dump() for image in images]
     return normalized
 
 

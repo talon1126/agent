@@ -12,7 +12,6 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
-
 RAG_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -71,8 +70,6 @@ def test_docker_context_excludes_runtime_data() -> None:
     generated caches, local logs, and database/index state from increasing the
     image size or leaking host-specific data into a deployment artifact.
     """
-    ignored_entries = set(
-        (RAG_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-    )
+    ignored_entries = set((RAG_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
 
     assert {".venv", "__pycache__", "src/cache", "src/logs", "data/db"} <= ignored_entries

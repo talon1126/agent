@@ -92,8 +92,7 @@ class PostgresPool:
         connection_info = environment.get(settings.url_env, "").strip()
         if not connection_info:
             raise ConfigurationError(
-                f"Missing PostgreSQL connection environment variable: "
-                f"{settings.url_env}",
+                f"Missing PostgreSQL connection environment variable: {settings.url_env}",
                 context={"environment_variable": settings.url_env},
             )
 
@@ -115,10 +114,7 @@ class PostgresPool:
     def __repr__(self) -> str:
         """Return lifecycle metadata without exposing the driver's DSN."""
 
-        return (
-            f"{type(self).__name__}(name={POOL_NAME!r}, "
-            f"is_open={self._is_open!r})"
-        )
+        return f"{type(self).__name__}(name={POOL_NAME!r}, is_open={self._is_open!r})"
 
     def open(self) -> None:
         """Open the pool and wait until its minimum connection is available.
