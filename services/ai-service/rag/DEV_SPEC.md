@@ -1902,7 +1902,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | B5 | 实现 Trace/Evaluation Repository | [✔] | 2026-06-06 | 已实现 Query/Ingestion Trace 与评估任务/指标的不可变记录、幂等 upsert 和历史查询；21 个集成测试通过 |
 | B6 | 实现文档生命周期管理 | [✔] | 2026-06-06 | 已实现 `lifecycle_status` schema、状态流转、retrievable 查询过滤和 deleted 清理 chunks/images；23 个集成测试通过 |
 | B7 | 建立 libs 可插拔组件包结构 | [✔] | 2026-06-06 | 已创建八个 libs 可插拔组件包和稳定导入契约；2 个单元测试通过 |
-| B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [ ] |  | `libs.splitter` 保持 `str -> List[str]`，`DocumentChunker` 负责 `Document -> List[Chunk]` |
+| B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [✔] | 2026-06-06 | 已实现 loader/splitter 基类、注册表工厂、fake/markdown/pdf loader、fake/recursive splitter 和 DocumentChunker 契约；9 个指定单元测试通过 |
 | B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [ ] |  | 统一 `chat()`、`embed()`、`embed_batch()` |
 | B10 | 实现 Transform libs 基类、factory 和 fake 实现 | [ ] |  | `BaseTransform`、`TransformFactory`、`FakeTransform` |
 | B11 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [ ] |  | 覆盖 fallback 和未知 provider 错误 |
@@ -1996,14 +1996,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 7 | 58% |
+| Phase B | 12 | 8 | 67% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **13** | **18%** |
+| **总计** | **71** | **14** | **20%** |
 
 ### 6.5 阶段实施明细
 

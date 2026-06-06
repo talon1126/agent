@@ -6,4 +6,14 @@ lower-level utility package. This B7 package boundary is filled with the base
 interface and LangChain text-splitter wrapper in B8.
 """
 
-__all__: tuple[str, ...] = ()
+from src.libs.splitter.base_splitter import BaseSplitter
+from src.libs.splitter.fake_splitter import FakeSplitter
+from src.libs.splitter.recursive_character_splitter import RecursiveCharacterSplitter
+from src.libs.splitter.splitter_factory import SplitterFactory
+
+__all__ = (
+    "BaseSplitter",
+    "FakeSplitter",
+    "RecursiveCharacterSplitter",
+    "SplitterFactory",
+)
