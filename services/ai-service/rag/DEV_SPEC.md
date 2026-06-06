@@ -1,6 +1,6 @@
 # AImodel RAG DEV_SPEC
 
-> 本文档用于指导 `services/ai-service/rag` 下模块化 RAG 系统的开发。文档面向后续开发者和 agent，要求实现过程遵循 TDD、配置驱动、模块化边界和中文业务注释规范。
+> 本文档用于指导 `services/ai-service/rag` 下模块化 RAG 系统的开发。文档面向后续开发者和 agent，要求实现过程遵循 TDD、配置驱动、模块化边界和英文代码注释规范。
 
 ## 1. 项目概述
 
@@ -1840,13 +1840,12 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| A1 | 创建独立模块基础文件 | [ ] |  | `README.md`、`pyproject.toml`、`.gitignore`、基础包入口 |
-| A2 | 创建独立运行入口和 Docker 骨架 | [ ] |  | `main.py`、`Dockerfile`、`.dockerignore` |
+| A1 | 创建独立模块基础文件 | [✔] | 2026-06-06 | 已创建独立模块说明、项目元数据、依赖声明、pytest 配置、忽略规则和基础包入口 |
+| A2 | 创建独立运行入口、Docker 骨架和 pytest 冒烟测试 | [ ] |  | `main.py`、`Dockerfile`、`.dockerignore`、`tests/test_smoke.py`，校验关键包可导入 |
 | A3 | 创建 `config/settings.yaml` 示例配置 | [ ] |  | 覆盖 LLM、Vision LLM、Embedding、VectorStore、Splitter、Reranker、Retrieval、Dashboard |
 | A4 | 创建 prompt 配置目录 | [ ] |  | `rerank`、`rewrite_chunk`、`image-to-text` |
 | A5 | 实现配置读取和校验 | [ ] |  | `RagSettings`、环境变量引用、默认值校验 |
 | A6 | 定义核心类型和统一异常 | [ ] |  | Document、Chunk、Trace、RetrievalResult |
-| A7 | 引入 pytest 并新增冒烟测试 | [ ] |  | 在 `tests/` 下新增 `test_smoke.py`，验证包可导入和配置样例可读取 |
 
 #### 阶段 B：数据持久化与可插拔组件
 
@@ -1952,7 +1951,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
-| Phase A | 7 | 0 | 0% |
+| Phase A | 6 | 1 | 17% |
 | Phase B | 12 | 0 | 0% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
@@ -1960,7 +1959,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **72** | **0** | **0%** |
+| **总计** | **71** | **1** | **1%** |
 
 ### 6.5 阶段实施明细
 
@@ -1984,11 +1983,11 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 验收标准：`pyproject.toml` 可被 Python 工具识别，README 说明独立模块定位，目录可被 Python 导入。
 
-测试方法：`pytest services\ai-service\rag\tests\test_smoke.py -v`
+测试方法：使用 `python -c` 验证 `pyproject.toml` 可被 `tomllib` 解析，并验证 `src` 包可导入。
 
-##### A2：创建独立运行入口和 Docker 骨架
+##### A2：创建独立运行入口、Docker 骨架和 pytest 冒烟测试
 
-目标：让 RAG 子系统可以作为独立模块构建 Docker 镜像，并预留本地运行入口。
+目标：让 RAG 子系统可以作为独立模块构建 Docker 镜像，具备最小本地运行入口和 pytest 测试基座，并在入口建立后验证关键包可导入。
 
 修改文件：`main.py`、`Dockerfile`、`.dockerignore`、`tests/test_smoke.py`
 
@@ -1997,8 +1996,10 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 - `main()`：命令行或服务入口
 - 健康检查占位
 - Docker 构建入口
+- `test_main_importable()`：验证最小运行入口可导入
+- `test_rag_packages_importable()`：验证 `src.core`、`src.libs`、`src.ingestion`、`src.storage`、`src.observability`、`src.mcp_server` 等关键包可导入
 
-验收标准：`main.py` 可导入，Dockerfile 明确 Python 版本、依赖安装和启动命令，构建上下文不会包含日志、缓存和本地数据库数据。
+验收标准：`main.py` 可导入；Dockerfile 明确 Python 版本、依赖安装和启动命令；构建上下文不会包含日志、缓存和本地数据库数据；pytest 可运行；关键包 import 校验通过。
 
 测试方法：`pytest services\ai-service\rag\tests\test_smoke.py -v`
 
@@ -2063,20 +2064,6 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 验收标准：`Document.metadata.images[]` 支持 `id/path/page/text_offset/text_length/position`；`Chunk` 支持 `start_offset`、`end_offset` 和可选 `source_ref`；类型可被 Ingestion、Retrieval、Trace 复用。
 
 测试方法：`pytest services\ai-service\rag\tests\unit\test_types.py -v`
-
-##### A7：引入 pytest 冒烟测试
-
-目标：建立最小测试入口，验证包导入、pytest 运行和配置样例读取。
-
-修改文件：`tests/test_smoke.py`
-
-实现类/函数：
-
-- `test_rag_package_importable()`：验证对应行为
-
-验收标准：包可导入，pytest 可运行，配置样例可读取。
-
-测试方法：`pytest services\ai-service\rag\tests\test_smoke.py -v`
 
 #### 阶段 B：数据持久化与可插拔组件
 
@@ -3073,7 +3060,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 ### 7.1 英文注释要求
 
-所有新增业务代码必须包含英文注释。注释重点说明：
+所有新增业务代码必须使用英文注释。该要求覆盖 Python docstring、行内注释、配置文件注释和脚本注释。注释重点说明：
 
 - 业务意图
 - 工具边界
