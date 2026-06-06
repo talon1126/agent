@@ -190,22 +190,34 @@ def test_markdown_loader_normalizes_text_and_extracts_heading_hierarchy(
 
     document = MarkdownLoader().load(source)
 
-    assert document.text == (
+    expected_text = (
         "# Audio Guide\n\n"
         "Choose by use case.\n\n"
         "## Wireless\n\n"
         "Battery matters.\n"
         "### Noise Control\n"
     )
+    assert document.text == expected_text
     assert document.metadata["title"] == "Audio Guide"
     assert document.metadata["source_hash"] == sha256(original).hexdigest()
     assert document.metadata["headings"] == [
-        {"level": 1, "title": "Audio Guide", "path": ["Audio Guide"]},
-        {"level": 2, "title": "Wireless", "path": ["Audio Guide", "Wireless"]},
+        {
+            "level": 1,
+            "title": "Audio Guide",
+            "path": ["Audio Guide"],
+            "text_offset": expected_text.index("# Audio Guide"),
+        },
+        {
+            "level": 2,
+            "title": "Wireless",
+            "path": ["Audio Guide", "Wireless"],
+            "text_offset": expected_text.index("## Wireless"),
+        },
         {
             "level": 3,
             "title": "Noise Control",
             "path": ["Audio Guide", "Wireless", "Noise Control"],
+            "text_offset": expected_text.index("### Noise Control"),
         },
     ]
     assert "images" not in document.metadata
@@ -281,7 +293,12 @@ def test_markdown_loader_ignores_heading_syntax_inside_fenced_code(
 
     assert document.metadata["title"] == "Real Heading"
     assert document.metadata["headings"] == [
-        {"level": 1, "title": "Real Heading", "path": ["Real Heading"]}
+        {
+            "level": 1,
+            "title": "Real Heading",
+            "path": ["Real Heading"],
+            "text_offset": document.text.index("# Real Heading"),
+        }
     ]
 
 
@@ -444,7 +461,12 @@ def test_pdf_loader_persists_images_and_injects_valid_metadata(
     assert document.metadata["source_type"] == "pdf"
     assert document.metadata["source_hash"] == sha256(source.read_bytes()).hexdigest()
     assert document.metadata["headings"] == [
-        {"level": 1, "title": "Shopping Guide", "path": ["Shopping Guide"]}
+        {
+            "level": 1,
+            "title": "Shopping Guide",
+            "path": ["Shopping Guide"],
+            "text_offset": 0,
+        }
     ]
     image_metadata = document.metadata["images"][0]
     placeholder = f"[[image:{image_metadata['id']}]]"

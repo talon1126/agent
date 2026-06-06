@@ -1959,16 +1959,15 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | --- | --- | --- | --- | --- |
 | C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 已实现流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-06 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；11 个新增单元测试及真实文本/图片 PDF 冒烟测试通过 |
-| C3 | 实现 DocumentChunker 业务适配与引用保留验证 | [ ] |  | chunk_id、metadata 继承、chunk_index、source_ref、标题层级和图片引用保留 |
+| C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-06 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；24 个相关单元测试、111 个全量测试通过 |
 | C4 | 实现 Transform 具体实现 | [ ] |  | settings.yaml 配置真实 Transform；覆盖 metadata 注入、rewrite、合并、去噪和典型噪声场景 |
 | C5 | 实现 ImageCaptioner | [ ] |  | 当启用 `vision_llm` 且 chunk 存在 `image_refs` 时，生成 caption 并写入 metadata |
-| C6 | 实现 chunk_id 生成工具并接入 DocumentChunker | [ ] |  | `hash(source_path + section_path + content_hash)`，由 DocumentChunker 调用 |
-| C7 | 实现 DenseEncoder | [ ] |  | 封装 `text-embedding-3-small`、content_hash 差量判断和 Dense 向量生成 |
-| C8 | 实现 BM25Indexer | [ ] |  | 生成 BM25 词项、词频和倒排索引数据 |
-| C9 | 实现 BatchProcessor 批处理优化 | [ ] |  | 放在 DenseEncoder 和 BM25Indexer 之后，统一处理批量、限流、重试和失败隔离 |
-| C10 | 实现 pgvector upsert | [ ] |  | 同一 chunk 两次 upsert 产生相同 id；内容变更 id 变更；支持批量 upsert 且保持顺序 |
-| C11 | 实现统一 Pipeline MVP 编排和集成测试 | [ ] |  | 串联摄取、ImageCaptioner、content_hash、Dense、BM25Indexer、batch、upsert，验证最小可运行索引链路 |
-| C12 | 新增 `ingest.py` 摄取脚本入口 | [ ] |  | 调用 pipeline，支持 `--collection`、`--path`、`--force` |
+| C6 | 实现 DenseEncoder | [ ] |  | 封装 `text-embedding-3-small`、content_hash 差量判断和 Dense 向量生成 |
+| C7 | 实现 BM25Indexer | [ ] |  | 生成 BM25 词项、词频和倒排索引数据 |
+| C8 | 实现 BatchProcessor 批处理优化 | [ ] |  | 放在 DenseEncoder 和 BM25Indexer 之后，统一处理批量、限流、重试和失败隔离 |
+| C9 | 实现 pgvector upsert | [ ] |  | 同一 chunk 两次 upsert 产生相同 id；内容变更 id 变更；支持批量 upsert 且保持顺序 |
+| C10 | 实现统一 Pipeline MVP 编排和集成测试 | [ ] |  | 串联摄取、ImageCaptioner、content_hash、Dense、BM25Indexer、batch、upsert，验证最小可运行索引链路 |
+| C11 | 新增 `ingest.py` 摄取脚本入口 | [ ] |  | 调用 pipeline，支持 `--collection`、`--path`、`--force` |
 
 #### 阶段 D：Retrieval
 
@@ -2042,13 +2041,13 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | --- | ---: | ---: | --- |
 | Phase A | 7 | 7 | 100% |
 | Phase B | 12 | 12 | 100% |
-| Phase C | 12 | 2 | 17% |
+| Phase C | 11 | 3 | 27% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **72** | **21** | **29%** |
+| **总计** | **71** | **22** | **31%** |
 
 ### 6.5 阶段实施明细
 
@@ -2486,21 +2485,22 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest -p no:cacheprovider services\ai-service\rag\tests\unit\test_loader.py -v`；单元测试通过注入 fake MarkItDown converter 和 fake PyMuPDF module 验证转换与图片提取契约，不依赖真实外部解析环境。
 
-##### C3：实现 DocumentChunker 业务适配与引用保留验证
+##### C3：实现 DocumentChunker、稳定 chunk_id 与引用保留验证
 
-目标：把 `libs.splitter` 输出的 `List[str]` 转换为符合 `core.types` 契约的 `List[Chunk]`，并验证标题层级、offset 和图片引用不会在业务适配中丢失。
+目标：把 `libs.splitter` 输出的 `List[str]` 转换为符合 `core.types` 契约的 `List[Chunk]`，使用独立且稳定的 chunk ID 规则，并验证标题层级、offset 和图片引用不会在业务适配中丢失。
 
-修改文件：`src/ingestion/chunk/document_chunker.py`、`src/ingestion/chunk/splitter_step.py`、`src/ingestion/chunk/chunk_id.py`、`tests/unit/test_splitter.py`
+修改文件：`src/libs/loader/markdown_loader.py`、`src/ingestion/chunk/document_chunker.py`、`src/ingestion/chunk/splitter_step.py`、`src/ingestion/chunk/chunk_id.py`、`tests/unit/test_loader.py`、`tests/unit/test_splitter.py`
 
 实现类/函数：
 
 - `DocumentChunker.chunk()`：将 Document 转换为带业务 metadata 的 Chunk 列表
-- `build_chunk_id()`：生成稳定 chunk 标识
+- `build_chunk_id()`：根据 `source_path + section_path + content_hash` 生成稳定 chunk 标识
 - `build_source_ref()`：建立 chunk 到来源文档的引用
-- `attach_section_path()`：将标题层级写入 chunk metadata
+- `extract_heading_hierarchy()`：为标题层级 metadata 补充源文本 `text_offset`
+- `attach_section_path()`：根据标题 offset 将当前标题层级写入 chunk metadata
 - `distribute_image_refs()`：根据图片占位符 offset 分发图片引用
 
-验收标准：每个 chunk 都包含稳定 `chunk_id`；`Document.metadata` 被复制到 `Chunk.metadata`；按顺序添加 `chunk_index`；根据文档来源建立 `source_ref`；chunk metadata 包含 `section_path` 和按需分发的 `image_refs`；没有图片的 chunk 不添加无效引用；完成 `List[str] -> List[Chunk]` 类型转换。
+验收标准：Loader 的每个 heading metadata 包含 canonical `Document.text` 中的起始 offset；同来源、同章节、同内容生成相同 `chunk_id`，来源、章节或内容变化时 ID 发生变化；每个 chunk 都通过独立 `build_chunk_id()` 规则生成 ID；`Document.metadata` 被复制到 `Chunk.metadata`；按顺序添加 `chunk_index`；根据文档来源建立 `source_ref`；chunk metadata 根据 heading offset 包含当前 chunk 对应的 `section_path` 和按需分发的 `image_refs`；没有图片的 chunk 不添加无效引用；完成 `List[str] -> List[Chunk]` 类型转换。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 
@@ -2540,21 +2540,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
 
-##### C6：生成稳定 chunk_id 并接入 DocumentChunker
-
-目标：为 DocumentChunker 生成业务 Chunk 时提供稳定可追踪的 ID 规则。
-
-修改文件：`src/ingestion/chunk/chunk_id.py`、`src/ingestion/chunk/document_chunker.py`、`tests/unit/test_splitter.py`
-
-实现类/函数：
-
-- `build_chunk_id()`：生成稳定 chunk 标识
-
-验收标准：同来源、章节、内容生成稳定 ID；DocumentChunker 创建的每个 Chunk 都调用该规则写入 `chunk.id`。
-
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
-
-##### C7：实现 DenseEncoder
+##### C6：实现 DenseEncoder
 
 目标：将默认 embedding 模型适配、chunk `content_hash` 差量判断和 Dense 向量生成统一收敛到 `DenseEncoder`。
 
@@ -2571,7 +2557,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_embedding.py -v`
 
-##### C8：实现 BM25Indexer
+##### C7：实现 BM25Indexer
 
 目标：为 Sparse Route 构建 BM25 词项、词频和倒排索引数据。
 
@@ -2586,7 +2572,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_bm25.py -v`
 
-##### C9：实现 BatchProcessor 批处理优化
+##### C8：实现 BatchProcessor 批处理优化
 
 目标：在 DenseEncoder 和 BM25Indexer 均完成后，提供统一批处理能力，处理批量输入、限流、重试和失败隔离。
 
@@ -2602,7 +2588,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_embedding.py services\ai-service\rag\tests\unit\test_bm25.py -v`
 
-##### C10：实现统一 upsert
+##### C9：实现统一 upsert
 
 目标：将文档、chunk、向量、BM25 和图片索引一致写入，并保证 upsert 幂等性和批量顺序。
 
@@ -2617,7 +2603,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 
-##### C11：实现统一 Pipeline MVP 编排和集成测试
+##### C10：实现统一 Pipeline MVP 编排和集成测试
 
 目标：在统一 `pipeline.py` 中把摄取结果、ImageCaptioner、DenseEncoder、BM25Indexer、BatchProcessor 和 upsert 串成最小可运行链路。
 
@@ -2633,7 +2619,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 
-##### C12：新增 ingest.py 摄取脚本入口
+##### C11：新增 ingest.py 摄取脚本入口
 
 目标：提供本地命令行入口，调用 Ingestion Pipeline 执行离线文档摄取。
 

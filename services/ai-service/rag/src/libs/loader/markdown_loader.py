@@ -52,8 +52,10 @@ def extract_heading_hierarchy(content: str) -> list[dict[str, Any]]:
         content: Canonical Markdown document.
 
     Returns:
-        Heading entries containing level, title, and the active hierarchical
-        path at that location.
+        Heading entries containing level, title, active hierarchical path, and
+        the start offset of the heading in canonical ``Document.text``. The
+        offset lets ``DocumentChunker`` assign each chunk to its active section
+        without parsing Markdown a second time.
     """
 
     hierarchy: list[dict[str, Any]] = []
@@ -73,6 +75,7 @@ def extract_heading_hierarchy(content: str) -> list[dict[str, Any]]:
                 "level": level,
                 "title": title,
                 "path": list(active_path),
+                "text_offset": match.start(),
             }
         )
     return hierarchy
