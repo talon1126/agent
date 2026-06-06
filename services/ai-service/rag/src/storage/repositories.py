@@ -1,19 +1,25 @@
-"""Persist and reconstruct the core Document and Chunk domain objects.
+"""Persist and reconstruct RAG documents, chunks, traces, and evaluations.
 
 This module is the relational repository boundary between ingestion/business
 code and the PostgreSQL schema. ``DocumentRepository`` owns collection-aware
 document persistence, while ``ChunkRepository`` owns ordered chunk persistence
-and content-hash calculation. Both repositories accept validated domain objects
-and return the same provider-independent contracts defined in ``core.types``.
+and content-hash calculation. ``TraceRepository`` stores the four structured
+Query/Ingestion Trace sections, and ``EvaluationRepository`` stores evaluation
+runs plus independently queryable metric rows.
 
 The repositories do not open database connections, initialize schema, create
-embeddings, or implement document lifecycle state transitions. Callers provide
-an open ``PostgresPool`` and coordinate higher-level pipeline transactions.
+embeddings, calculate evaluation metrics, or implement document lifecycle state
+transitions. Callers provide an open ``PostgresPool`` and coordinate
+higher-level pipeline operations.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from hashlib import sha256
+from types import MappingProxyType
 from typing import Any
 
 import psycopg
@@ -22,6 +28,75 @@ from psycopg.types.json import Jsonb
 from src.core.errors import DatabaseError
 from src.core.types import Chunk, Document
 from src.storage.postgres import PostgresPool
+
+
+def _freeze_json(value: Any) -> Any:
+    """Recursively convert JSON containers into immutable equivalents.
+
+    Args:
+        value: JSON-compatible scalar, mapping, list, or tuple.
+
+    Returns:
+        Scalars unchanged, mappings as ``MappingProxyType``, and sequences as
+        tuples. Nested containers are frozen recursively.
+    """
+
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Freeze a JSON object while retaining a precise mapping return type."""
+
+    frozen = _freeze_json(value)
+    if not isinstance(frozen, Mapping):
+        raise TypeError("Expected a JSON mapping")
+    return frozen
+
+
+def _freeze_stages(
+    stages: list[dict[str, Any]] | tuple[Mapping[str, Any], ...],
+) -> tuple[Mapping[str, Any], ...]:
+    """Freeze an ordered Trace stage list and every stage object."""
+
+    frozen = _freeze_json(stages)
+    if not isinstance(frozen, tuple) or not all(isinstance(stage, Mapping) for stage in frozen):
+        raise TypeError("Trace stages must contain JSON mappings")
+    return frozen
+
+
+def _json_compatible(value: Any) -> Any:
+    """Convert immutable JSON containers back to serializer-compatible values."""
+
+    if isinstance(value, Mapping):
+        return {key: _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_compatible(item) for item in value]
+    return value
+
+
+def _ensure_collection(connection: Any, collection_id: str) -> None:
+    """Create a minimal collection record inside the caller transaction.
+
+    Args:
+        connection: Active psycopg connection owned by ``PostgresPool``.
+        collection_id: Stable identifier also used as the initial display name.
+
+    Side Effects:
+        Inserts one ``rag_collections`` row when the collection is absent.
+    """
+
+    connection.execute(
+        """
+        INSERT INTO rag_collections (id, name)
+        VALUES (%s, %s)
+        ON CONFLICT (id) DO NOTHING
+        """,
+        (collection_id, collection_id),
+    )
 
 
 def _read_rows(
@@ -112,7 +187,7 @@ class DocumentRepository:
         """
 
         with self._pool.transaction() as connection:
-            self._ensure_collection(connection, collection_id)
+            _ensure_collection(connection, collection_id)
             # Document IDs may include source_hash, so changed source content can
             # legitimately produce a new ID while retaining the same logical
             # collection/source_path identity. Removing the superseded version
@@ -212,27 +287,6 @@ class DocumentRepository:
             many=True,
         )
         return [self._to_document(row) for row in rows if row is not None]
-
-    @staticmethod
-    def _ensure_collection(connection: Any, collection_id: str) -> None:
-        """Create a minimal collection record inside the caller transaction.
-
-        Args:
-            connection: Active psycopg connection owned by ``PostgresPool``.
-            collection_id: Stable identifier also used as the initial name.
-
-        Side Effects:
-            Inserts one ``rag_collections`` row when the collection is absent.
-        """
-
-        connection.execute(
-            """
-            INSERT INTO rag_collections (id, name)
-            VALUES (%s, %s)
-            ON CONFLICT (id) DO NOTHING
-            """,
-            (collection_id, collection_id),
-        )
 
     @staticmethod
     def _to_document(row: tuple[Any, ...] | None) -> Document | None:
@@ -458,3 +512,807 @@ class ChunkRepository:
             end_offset=end_offset,
             source_ref=source_ref,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class QueryTraceRecord:
+    """Represent one query trace stored for observability and evaluation.
+
+    Attributes mirror ``rag_query_traces``. JSON sections are recursively
+    frozen after construction so Dashboard services cannot accidentally alter
+    historical trace evidence in memory.
+
+    Attributes:
+        trace_id: Stable identifier shared by logs and PostgreSQL.
+        collection_id: Knowledge collection used by the query.
+        raw_query: Original user question before query processing.
+        request_source: Calling surface such as AImodel or MCP.
+        started_at: Time at which Query Pipeline processing began.
+        finished_at: Completion time, or ``None`` while running.
+        status: Schema-supported lifecycle state.
+        basic_info: Request identity and static context.
+        stages: Ordered Query Pipeline stage observations.
+        summary_metrics: End-to-end latency, result count, and error summary.
+        evaluation_metrics: Query/document relevance and related quality data.
+        error: Structured failure information when the query fails.
+        created_at: PostgreSQL insertion timestamp.
+    """
+
+    trace_id: str
+    collection_id: str
+    raw_query: str
+    request_source: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    status: str = "running"
+    basic_info: Mapping[str, Any] = field(default_factory=dict)
+    stages: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    summary_metrics: Mapping[str, Any] = field(default_factory=dict)
+    evaluation_metrics: Mapping[str, Any] = field(default_factory=dict)
+    error: Mapping[str, Any] | None = None
+    created_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        """Deep-freeze Trace JSON so repository records cannot be mutated."""
+
+        object.__setattr__(self, "basic_info", _freeze_mapping(self.basic_info))
+        object.__setattr__(self, "stages", _freeze_stages(self.stages))
+        object.__setattr__(
+            self,
+            "summary_metrics",
+            _freeze_mapping(self.summary_metrics),
+        )
+        object.__setattr__(
+            self,
+            "evaluation_metrics",
+            _freeze_mapping(self.evaluation_metrics),
+        )
+        if self.error is not None:
+            object.__setattr__(self, "error", _freeze_mapping(self.error))
+
+
+@dataclass(frozen=True, slots=True)
+class IngestionTraceRecord:
+    """Represent one ingestion trace and its four structured trace sections.
+
+    Attributes:
+        trace_id: Stable identifier shared by logs and PostgreSQL.
+        collection_id: Collection receiving the source document.
+        source_uri: Original file path or source URI.
+        source_hash: SHA256 digest used for ingestion deduplication.
+        started_at: Time at which ingestion processing began.
+        finished_at: Completion time, or ``None`` while running.
+        status: Running, success, skipped, or failed state.
+        basic_info: Source and request-level metadata.
+        stages: Ordered load/split/transform/embed/upsert observations.
+        summary_metrics: End-to-end duration and processing counts.
+        evaluation_metrics: Chunk or ingestion quality measurements.
+        error: Structured failure information when ingestion fails.
+        created_at: PostgreSQL insertion timestamp.
+    """
+
+    trace_id: str
+    collection_id: str
+    source_uri: str
+    source_hash: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    status: str = "running"
+    basic_info: Mapping[str, Any] = field(default_factory=dict)
+    stages: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    summary_metrics: Mapping[str, Any] = field(default_factory=dict)
+    evaluation_metrics: Mapping[str, Any] = field(default_factory=dict)
+    error: Mapping[str, Any] | None = None
+    created_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        """Deep-freeze ingestion JSON sections after construction."""
+
+        object.__setattr__(self, "basic_info", _freeze_mapping(self.basic_info))
+        object.__setattr__(self, "stages", _freeze_stages(self.stages))
+        object.__setattr__(
+            self,
+            "summary_metrics",
+            _freeze_mapping(self.summary_metrics),
+        )
+        object.__setattr__(
+            self,
+            "evaluation_metrics",
+            _freeze_mapping(self.evaluation_metrics),
+        )
+        if self.error is not None:
+            object.__setattr__(self, "error", _freeze_mapping(self.error))
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationRunRecord:
+    """Represent one evaluator execution and its reproducibility snapshot.
+
+    Attributes:
+        id: Stable Python-generated evaluation run ID.
+        collection_id: Collection evaluated by the run.
+        evaluator: Configured evaluator implementation name.
+        dataset_name: Golden dataset or benchmark identifier.
+        status: Pending/running/success/failed lifecycle state.
+        started_at: Evaluator execution start time.
+        finished_at: Completion time when the run has ended.
+        settings_snapshot: Retrieval, rerank, model, and dataset configuration.
+        summary: Aggregate run-level observations.
+        error: Structured failure information for unsuccessful runs.
+        created_at: Durable run creation timestamp.
+    """
+
+    id: str
+    collection_id: str
+    evaluator: str
+    dataset_name: str
+    status: str = "pending"
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    settings_snapshot: Mapping[str, Any] = field(default_factory=dict)
+    summary: Mapping[str, Any] = field(default_factory=dict)
+    error: Mapping[str, Any] | None = None
+    created_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        """Deep-freeze settings, summary, and optional error evidence."""
+
+        object.__setattr__(
+            self,
+            "settings_snapshot",
+            _freeze_mapping(self.settings_snapshot),
+        )
+        object.__setattr__(self, "summary", _freeze_mapping(self.summary))
+        if self.error is not None:
+            object.__setattr__(self, "error", _freeze_mapping(self.error))
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationResultRecord:
+    """Represent one named metric produced by an evaluation run.
+
+    Attributes:
+        id: Stable Python-generated metric result ID.
+        run_id: Parent evaluation run ID.
+        metric_name: Queryable metric key such as ``mrr``.
+        metric_value: Finite numeric score constrained by PostgreSQL.
+        details: Thresholds, sample counts, and per-metric evidence.
+        created_at: Original metric creation timestamp.
+    """
+
+    id: str
+    run_id: str
+    metric_name: str
+    metric_value: float
+    details: Mapping[str, Any] = field(default_factory=dict)
+    created_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        """Deep-freeze evaluator-specific metric evidence."""
+
+        object.__setattr__(self, "details", _freeze_mapping(self.details))
+
+
+class TraceRepository:
+    """Persist Query and Ingestion traces for Dashboard history views."""
+
+    def __init__(self, pool: PostgresPool) -> None:
+        """Bind trace persistence to an application-managed PostgreSQL pool.
+
+        Args:
+            pool: Open pool used for trace transactions and reads.
+        """
+
+        self._pool = pool
+
+    def upsert_query_trace(self, trace: QueryTraceRecord) -> QueryTraceRecord:
+        """Insert or update one Query Trace by its stable trace ID.
+
+        Args:
+            trace: Complete Query Trace snapshot produced by TraceContext.
+
+        Returns:
+            Persisted immutable record including database ``created_at``.
+
+        Side Effects:
+            Creates the collection when absent and writes one query-trace row.
+        """
+
+        with self._pool.transaction() as connection:
+            _ensure_collection(connection, trace.collection_id)
+            row = connection.execute(
+                """
+                INSERT INTO rag_query_traces (
+                    trace_id,
+                    collection_id,
+                    raw_query,
+                    request_source,
+                    started_at,
+                    finished_at,
+                    status,
+                    basic_info,
+                    stages,
+                    summary_metrics,
+                    evaluation_metrics,
+                    error
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (trace_id) DO UPDATE SET
+                    collection_id = EXCLUDED.collection_id,
+                    raw_query = EXCLUDED.raw_query,
+                    request_source = EXCLUDED.request_source,
+                    started_at = EXCLUDED.started_at,
+                    finished_at = EXCLUDED.finished_at,
+                    status = EXCLUDED.status,
+                    basic_info = EXCLUDED.basic_info,
+                    stages = EXCLUDED.stages,
+                    summary_metrics = EXCLUDED.summary_metrics,
+                    evaluation_metrics = EXCLUDED.evaluation_metrics,
+                    error = EXCLUDED.error
+                RETURNING
+                    trace_id,
+                    collection_id,
+                    raw_query,
+                    request_source,
+                    started_at,
+                    finished_at,
+                    status,
+                    basic_info,
+                    stages,
+                    summary_metrics,
+                    evaluation_metrics,
+                    error,
+                    created_at
+                """,
+                (
+                    trace.trace_id,
+                    trace.collection_id,
+                    trace.raw_query,
+                    trace.request_source,
+                    trace.started_at,
+                    trace.finished_at,
+                    trace.status,
+                    Jsonb(_json_compatible(trace.basic_info)),
+                    Jsonb(_json_compatible(trace.stages)),
+                    Jsonb(_json_compatible(trace.summary_metrics)),
+                    Jsonb(_json_compatible(trace.evaluation_metrics)),
+                    Jsonb(_json_compatible(trace.error)) if trace.error is not None else None,
+                ),
+            ).fetchone()
+        return self._require_query_trace(row)
+
+    def upsert_ingestion_trace(
+        self,
+        trace: IngestionTraceRecord,
+    ) -> IngestionTraceRecord:
+        """Insert or update one Ingestion Trace by its stable trace ID.
+
+        Args:
+            trace: Complete ingestion snapshot produced by TraceContext.
+
+        Returns:
+            Persisted immutable record including database ``created_at``.
+
+        Side Effects:
+            Creates the collection when absent and writes one ingestion row.
+        """
+
+        with self._pool.transaction() as connection:
+            _ensure_collection(connection, trace.collection_id)
+            row = connection.execute(
+                """
+                INSERT INTO rag_ingestion_traces (
+                    trace_id,
+                    collection_id,
+                    source_uri,
+                    source_hash,
+                    started_at,
+                    finished_at,
+                    status,
+                    basic_info,
+                    stages,
+                    summary_metrics,
+                    evaluation_metrics,
+                    error
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (trace_id) DO UPDATE SET
+                    collection_id = EXCLUDED.collection_id,
+                    source_uri = EXCLUDED.source_uri,
+                    source_hash = EXCLUDED.source_hash,
+                    started_at = EXCLUDED.started_at,
+                    finished_at = EXCLUDED.finished_at,
+                    status = EXCLUDED.status,
+                    basic_info = EXCLUDED.basic_info,
+                    stages = EXCLUDED.stages,
+                    summary_metrics = EXCLUDED.summary_metrics,
+                    evaluation_metrics = EXCLUDED.evaluation_metrics,
+                    error = EXCLUDED.error
+                RETURNING
+                    trace_id,
+                    collection_id,
+                    source_uri,
+                    source_hash,
+                    started_at,
+                    finished_at,
+                    status,
+                    basic_info,
+                    stages,
+                    summary_metrics,
+                    evaluation_metrics,
+                    error,
+                    created_at
+                """,
+                (
+                    trace.trace_id,
+                    trace.collection_id,
+                    trace.source_uri,
+                    trace.source_hash,
+                    trace.started_at,
+                    trace.finished_at,
+                    trace.status,
+                    Jsonb(_json_compatible(trace.basic_info)),
+                    Jsonb(_json_compatible(trace.stages)),
+                    Jsonb(_json_compatible(trace.summary_metrics)),
+                    Jsonb(_json_compatible(trace.evaluation_metrics)),
+                    Jsonb(_json_compatible(trace.error)) if trace.error is not None else None,
+                ),
+            ).fetchone()
+        return self._require_ingestion_trace(row)
+
+    def get_query_trace(self, trace_id: str) -> QueryTraceRecord | None:
+        """Load one Query Trace by stable trace ID.
+
+        Args:
+            trace_id: Identifier emitted by Query Pipeline TraceContext.
+
+        Returns:
+            Immutable Query Trace record, or ``None`` when absent.
+
+        Raises:
+            DatabaseError: If PostgreSQL connection or query execution fails.
+        """
+
+        row = _read_rows(
+            self._pool,
+            operation="query_trace_get",
+            query=f"""
+            SELECT {self._query_trace_columns()}
+            FROM rag_query_traces
+            WHERE trace_id = %s
+            """,
+            params=(trace_id,),
+            many=False,
+        )
+        return self._to_query_trace(row)
+
+    def get_ingestion_trace(self, trace_id: str) -> IngestionTraceRecord | None:
+        """Load one Ingestion Trace by stable trace ID.
+
+        Args:
+            trace_id: Identifier emitted by Ingestion Pipeline TraceContext.
+
+        Returns:
+            Immutable Ingestion Trace record, or ``None`` when absent.
+
+        Raises:
+            DatabaseError: If PostgreSQL connection or query execution fails.
+        """
+
+        row = _read_rows(
+            self._pool,
+            operation="ingestion_trace_get",
+            query=f"""
+            SELECT {self._ingestion_trace_columns()}
+            FROM rag_ingestion_traces
+            WHERE trace_id = %s
+            """,
+            params=(trace_id,),
+            many=False,
+        )
+        return self._to_ingestion_trace(row)
+
+    def list_query_traces(self, collection_id: str) -> list[QueryTraceRecord]:
+        """List Query Traces newest-first for one collection.
+
+        Args:
+            collection_id: Collection selected by the Dashboard history filter.
+
+        Returns:
+            Query Traces ordered by descending start time and stable trace ID.
+
+        Raises:
+            DatabaseError: If PostgreSQL connection or query execution fails.
+        """
+
+        rows = _read_rows(
+            self._pool,
+            operation="query_trace_list",
+            query=f"""
+            SELECT {self._query_trace_columns()}
+            FROM rag_query_traces
+            WHERE collection_id = %s
+            ORDER BY started_at DESC, trace_id ASC
+            """,
+            params=(collection_id,),
+            many=True,
+        )
+        return [self._require_query_trace(row) for row in rows]
+
+    def list_ingestion_traces(
+        self,
+        collection_id: str,
+    ) -> list[IngestionTraceRecord]:
+        """List Ingestion Traces newest-first for one collection.
+
+        Args:
+            collection_id: Collection selected by the Dashboard history filter.
+
+        Returns:
+            Ingestion Traces ordered by descending start time and trace ID.
+
+        Raises:
+            DatabaseError: If PostgreSQL connection or query execution fails.
+        """
+
+        rows = _read_rows(
+            self._pool,
+            operation="ingestion_trace_list",
+            query=f"""
+            SELECT {self._ingestion_trace_columns()}
+            FROM rag_ingestion_traces
+            WHERE collection_id = %s
+            ORDER BY started_at DESC, trace_id ASC
+            """,
+            params=(collection_id,),
+            many=True,
+        )
+        return [self._require_ingestion_trace(row) for row in rows]
+
+    @staticmethod
+    def _query_trace_columns() -> str:
+        """Return the canonical Query Trace projection in dataclass order."""
+
+        return """
+            trace_id,
+            collection_id,
+            raw_query,
+            request_source,
+            started_at,
+            finished_at,
+            status,
+            basic_info,
+            stages,
+            summary_metrics,
+            evaluation_metrics,
+            error,
+            created_at
+        """
+
+    @staticmethod
+    def _ingestion_trace_columns() -> str:
+        """Return the canonical Ingestion Trace projection in dataclass order."""
+
+        return """
+            trace_id,
+            collection_id,
+            source_uri,
+            source_hash,
+            started_at,
+            finished_at,
+            status,
+            basic_info,
+            stages,
+            summary_metrics,
+            evaluation_metrics,
+            error,
+            created_at
+        """
+
+    @staticmethod
+    def _to_query_trace(row: tuple[Any, ...] | None) -> QueryTraceRecord | None:
+        """Convert one PostgreSQL row to a Query Trace record."""
+
+        return QueryTraceRecord(*row) if row is not None else None
+
+    @staticmethod
+    def _require_query_trace(row: tuple[Any, ...] | None) -> QueryTraceRecord:
+        """Convert a mandatory upsert/list row to a Query Trace record."""
+
+        if row is None:
+            raise RuntimeError("Query Trace operation returned no row")
+        return QueryTraceRecord(*row)
+
+    @staticmethod
+    def _to_ingestion_trace(
+        row: tuple[Any, ...] | None,
+    ) -> IngestionTraceRecord | None:
+        """Convert one PostgreSQL row to an Ingestion Trace record."""
+
+        return IngestionTraceRecord(*row) if row is not None else None
+
+    @staticmethod
+    def _require_ingestion_trace(
+        row: tuple[Any, ...] | None,
+    ) -> IngestionTraceRecord:
+        """Convert a mandatory upsert/list row to an Ingestion Trace record."""
+
+        if row is None:
+            raise RuntimeError("Ingestion Trace operation returned no row")
+        return IngestionTraceRecord(*row)
+
+
+class EvaluationRepository:
+    """Persist evaluation runs and their independently queryable metrics."""
+
+    def __init__(self, pool: PostgresPool) -> None:
+        """Bind evaluation persistence to an application-managed pool.
+
+        Args:
+            pool: Open PostgreSQL pool used for all evaluation operations.
+        """
+
+        self._pool = pool
+
+    def upsert_run(self, run: EvaluationRunRecord) -> EvaluationRunRecord:
+        """Insert or update one evaluation run by stable Python ID.
+
+        Args:
+            run: Evaluator execution state and reproducibility metadata.
+
+        Returns:
+            Persisted run including its database creation timestamp.
+
+        Side Effects:
+            Creates the collection when absent and writes one evaluation run.
+        """
+
+        with self._pool.transaction() as connection:
+            _ensure_collection(connection, run.collection_id)
+            row = connection.execute(
+                """
+                INSERT INTO rag_evaluation_runs (
+                    id,
+                    collection_id,
+                    evaluator,
+                    dataset_name,
+                    status,
+                    started_at,
+                    finished_at,
+                    settings_snapshot,
+                    summary,
+                    error,
+                    created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    collection_id = EXCLUDED.collection_id,
+                    evaluator = EXCLUDED.evaluator,
+                    dataset_name = EXCLUDED.dataset_name,
+                    status = EXCLUDED.status,
+                    started_at = EXCLUDED.started_at,
+                    finished_at = EXCLUDED.finished_at,
+                    settings_snapshot = EXCLUDED.settings_snapshot,
+                    summary = EXCLUDED.summary,
+                    error = EXCLUDED.error
+                RETURNING
+                    id,
+                    collection_id,
+                    evaluator,
+                    dataset_name,
+                    status,
+                    started_at,
+                    finished_at,
+                    settings_snapshot,
+                    summary,
+                    error,
+                    created_at
+                """,
+                (
+                    run.id,
+                    run.collection_id,
+                    run.evaluator,
+                    run.dataset_name,
+                    run.status,
+                    run.started_at,
+                    run.finished_at,
+                    Jsonb(_json_compatible(run.settings_snapshot)),
+                    Jsonb(_json_compatible(run.summary)),
+                    Jsonb(_json_compatible(run.error)) if run.error is not None else None,
+                    run.created_at or run.started_at or datetime.now(UTC),
+                ),
+            ).fetchone()
+        return self._require_run(row)
+
+    def upsert_results(
+        self,
+        run_id: str,
+        results: list[EvaluationResultRecord],
+    ) -> list[EvaluationResultRecord]:
+        """Upsert a metric batch while preserving caller order.
+
+        Args:
+            run_id: Existing evaluation run receiving every result.
+            results: Metric records to insert or update.
+
+        Returns:
+            Persisted metric records in input order.
+
+        Raises:
+            ValueError: If any record references a different run, or duplicate
+                metric names/IDs appear in the same batch.
+        """
+
+        persisted = list(results)
+        if not persisted:
+            return persisted
+        if any(result.run_id != run_id for result in persisted):
+            raise ValueError("Evaluation result run_id does not match batch run_id")
+        result_ids = [result.id for result in persisted]
+        metric_names = [result.metric_name for result in persisted]
+        if len(set(result_ids)) != len(result_ids):
+            raise ValueError("Evaluation result batch contains duplicate IDs")
+        if len(set(metric_names)) != len(metric_names):
+            raise ValueError("Evaluation result batch contains duplicate metric names")
+
+        stored: list[EvaluationResultRecord] = []
+        with self._pool.transaction() as connection:
+            for result in persisted:
+                row = connection.execute(
+                    """
+                    INSERT INTO rag_evaluation_results (
+                        id,
+                        run_id,
+                        metric_name,
+                        metric_value,
+                        details
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id, metric_name) DO UPDATE SET
+                        id = EXCLUDED.id,
+                        metric_value = EXCLUDED.metric_value,
+                        details = EXCLUDED.details
+                    RETURNING
+                        id,
+                        run_id,
+                        metric_name,
+                        metric_value,
+                        details,
+                        created_at
+                    """,
+                    (
+                        result.id,
+                        run_id,
+                        result.metric_name,
+                        result.metric_value,
+                        Jsonb(_json_compatible(result.details)),
+                    ),
+                ).fetchone()
+                stored.append(self._require_result(row))
+        return stored
+
+    def get_run(self, run_id: str) -> EvaluationRunRecord | None:
+        """Load one evaluation run by stable ID.
+
+        Args:
+            run_id: Python-generated evaluation run identifier.
+
+        Returns:
+            Immutable evaluation run, or ``None`` when absent.
+
+        Raises:
+            DatabaseError: If PostgreSQL connection or query execution fails.
+        """
+
+        row = _read_rows(
+            self._pool,
+            operation="evaluation_run_get",
+            query=f"""
+            SELECT {self._run_columns()}
+            FROM rag_evaluation_runs
+            WHERE id = %s
+            """,
+            params=(run_id,),
+            many=False,
+        )
+        return self._to_run(row)
+
+    def list_runs(self, collection_id: str) -> list[EvaluationRunRecord]:
+        """List evaluation runs newest-first for one collection.
+
+        Args:
+            collection_id: Collection selected by the evaluation Dashboard.
+
+        Returns:
+            Runs ordered by descending creation time and stable run ID.
+
+        Raises:
+            DatabaseError: If PostgreSQL connection or query execution fails.
+        """
+
+        rows = _read_rows(
+            self._pool,
+            operation="evaluation_run_list",
+            query=f"""
+            SELECT {self._run_columns()}
+            FROM rag_evaluation_runs
+            WHERE collection_id = %s
+            ORDER BY created_at DESC, id ASC
+            """,
+            params=(collection_id,),
+            many=True,
+        )
+        return [self._require_run(row) for row in rows]
+
+    def list_results(self, run_id: str) -> list[EvaluationResultRecord]:
+        """List one run's metrics in stable metric-name order.
+
+        Args:
+            run_id: Parent evaluation run identifier.
+
+        Returns:
+            Metric records ordered by metric name and stable result ID.
+
+        Raises:
+            DatabaseError: If PostgreSQL connection or query execution fails.
+        """
+
+        rows = _read_rows(
+            self._pool,
+            operation="evaluation_result_list",
+            query="""
+            SELECT
+                id,
+                run_id,
+                metric_name,
+                metric_value,
+                details,
+                created_at
+            FROM rag_evaluation_results
+            WHERE run_id = %s
+            ORDER BY metric_name ASC, id ASC
+            """,
+            params=(run_id,),
+            many=True,
+        )
+        return [self._require_result(row) for row in rows]
+
+    @staticmethod
+    def _run_columns() -> str:
+        """Return the canonical evaluation-run projection in dataclass order."""
+
+        return """
+            id,
+            collection_id,
+            evaluator,
+            dataset_name,
+            status,
+            started_at,
+            finished_at,
+            settings_snapshot,
+            summary,
+            error,
+            created_at
+        """
+
+    @staticmethod
+    def _to_run(row: tuple[Any, ...] | None) -> EvaluationRunRecord | None:
+        """Convert one PostgreSQL row to an evaluation-run record."""
+
+        return EvaluationRunRecord(*row) if row is not None else None
+
+    @staticmethod
+    def _require_run(row: tuple[Any, ...] | None) -> EvaluationRunRecord:
+        """Convert a mandatory upsert/list row to an evaluation-run record."""
+
+        if row is None:
+            raise RuntimeError("Evaluation run operation returned no row")
+        return EvaluationRunRecord(*row)
+
+    @staticmethod
+    def _require_result(row: tuple[Any, ...] | None) -> EvaluationResultRecord:
+        """Convert a mandatory upsert/list row to an evaluation metric record."""
+
+        if row is None:
+            raise RuntimeError("Evaluation result operation returned no row")
+        return EvaluationResultRecord(*row)

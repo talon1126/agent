@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 import re
 import sys
+from dataclasses import FrozenInstanceError, replace
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -888,7 +890,12 @@ def test_repository_reads_wrap_psycopg_failures_with_operation_context() -> None
 
     from src.core.errors import DatabaseError
     from src.storage.image_storage import ImageStorage
-    from src.storage.repositories import ChunkRepository, DocumentRepository
+    from src.storage.repositories import (
+        ChunkRepository,
+        DocumentRepository,
+        EvaluationRepository,
+        TraceRepository,
+    )
 
     driver_error = psycopg.OperationalError("simulated read failure")
     connection = MagicMock()
@@ -908,6 +915,14 @@ def test_repository_reads_wrap_psycopg_failures_with_operation_context() -> None
             lambda: ImageStorage(pool).find_by_collection("guides"),
             "image_index_find_by_collection_id",
         ),
+        (
+            lambda: TraceRepository(pool).get_query_trace("trace-1"),
+            "query_trace_get",
+        ),
+        (
+            lambda: EvaluationRepository(pool).list_results("run-1"),
+            "evaluation_result_list",
+        ),
     ]
 
     for operation, expected_context in cases:
@@ -915,3 +930,212 @@ def test_repository_reads_wrap_psycopg_failures_with_operation_context() -> None
             operation()
         assert captured.value.context == {"operation": expected_context}
         assert captured.value.cause is driver_error
+
+
+@pytest.mark.integration
+def test_trace_repository_upserts_and_lists_query_and_ingestion_traces() -> None:
+    """Protect durable Trace updates and Dashboard-oriented history ordering.
+
+    Query and ingestion traces begin in ``running`` state and are later upserted
+    with completion metrics. Repository reads must reconstruct immutable records
+    and list newest traces first for one collection.
+    """
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for trace repository integration")
+
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import (
+        IngestionTraceRecord,
+        QueryTraceRecord,
+        TraceRepository,
+    )
+
+    collection_id = f"b5-traces-{uuid4().hex}"
+    query_trace_id = f"query-{uuid4().hex}"
+    ingestion_trace_id = f"ingestion-{uuid4().hex}"
+    started_at = datetime.now(UTC)
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=3),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        repository = TraceRepository(pool)
+        query_trace = QueryTraceRecord(
+            trace_id=query_trace_id,
+            collection_id=collection_id,
+            raw_query="How should I compare two headphones?",
+            request_source="aimodel",
+            started_at=started_at,
+            basic_info={"user_id": 1},
+            stages=[{"stage": "query_processing", "duration_ms": 4.2}],
+        )
+        ingestion_trace = IngestionTraceRecord(
+            trace_id=ingestion_trace_id,
+            collection_id=collection_id,
+            source_uri="fixtures/headphones.md",
+            source_hash=sha256(b"headphones-guide").hexdigest(),
+            started_at=started_at + timedelta(seconds=1),
+            basic_info={"force": False},
+            stages=[{"stage": "load", "duration_ms": 8.5}],
+        )
+
+        running_query = repository.upsert_query_trace(query_trace)
+        running_ingestion = repository.upsert_ingestion_trace(ingestion_trace)
+        assert running_query.created_at is not None
+        assert running_ingestion.created_at is not None
+        with pytest.raises(FrozenInstanceError):
+            running_query.status = "failed"
+        with pytest.raises(TypeError):
+            running_query.basic_info["user_id"] = 2
+        with pytest.raises(TypeError):
+            running_query.stages[0]["stage"] = "mutated"
+
+        completed_query = repository.upsert_query_trace(
+            replace(
+                query_trace,
+                finished_at=started_at + timedelta(seconds=2),
+                status="success",
+                summary_metrics={"duration_ms": 2000, "top_k_results": 5},
+                evaluation_metrics={"query_document_relevance": 0.91},
+            )
+        )
+        completed_ingestion = repository.upsert_ingestion_trace(
+            replace(
+                ingestion_trace,
+                finished_at=started_at + timedelta(seconds=3),
+                status="success",
+                summary_metrics={"duration_ms": 2000, "chunk_count": 12},
+                evaluation_metrics={"chunk_quality": 0.88},
+            )
+        )
+        newer_query = repository.upsert_query_trace(
+            replace(
+                query_trace,
+                trace_id=f"query-{uuid4().hex}",
+                raw_query="Which headphone has better battery life?",
+                started_at=started_at + timedelta(seconds=10),
+            )
+        )
+
+        assert repository.get_query_trace(query_trace_id) == completed_query
+        assert repository.get_ingestion_trace(ingestion_trace_id) == completed_ingestion
+        assert repository.list_query_traces(collection_id) == [
+            newer_query,
+            completed_query,
+        ]
+        assert repository.list_ingestion_traces(collection_id) == [completed_ingestion]
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+@pytest.mark.integration
+def test_evaluation_repository_upserts_runs_and_metric_results() -> None:
+    """Protect evaluation-run history and one-row-per-metric persistence.
+
+    Re-running the same metric for one evaluation run must update its score and
+    evidence rather than create a duplicate. Batch return order must match input
+    order while list queries use stable metric-name ordering.
+    """
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for evaluation repository integration")
+
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import (
+        EvaluationRepository,
+        EvaluationResultRecord,
+        EvaluationRunRecord,
+    )
+
+    collection_id = f"b5-evaluation-{uuid4().hex}"
+    run_id = f"run-{uuid4().hex}"
+    started_at = datetime.now(UTC)
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=3),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        repository = EvaluationRepository(pool)
+        running = EvaluationRunRecord(
+            id=run_id,
+            collection_id=collection_id,
+            evaluator="custom",
+            dataset_name="shopping_guides_golden_set",
+            status="running",
+            started_at=started_at,
+            settings_snapshot={"retrieval": "hybrid", "rerank": "cross_encoder"},
+        )
+        stored_running = repository.upsert_run(running)
+        assert stored_running.created_at is not None
+
+        initial_results = [
+            EvaluationResultRecord(
+                id=f"result-{uuid4().hex}",
+                run_id=run_id,
+                metric_name="hit_rate_at_10",
+                metric_value=0.92,
+                details={"sample_count": 50},
+            ),
+            EvaluationResultRecord(
+                id=f"result-{uuid4().hex}",
+                run_id=run_id,
+                metric_name="mrr",
+                metric_value=0.81,
+                details={"sample_count": 50},
+            ),
+        ]
+        stored_results = repository.upsert_results(run_id, initial_results)
+        updated_hit_rate = EvaluationResultRecord(
+            id=f"result-{uuid4().hex}",
+            run_id=run_id,
+            metric_name="hit_rate_at_10",
+            metric_value=0.94,
+            details={"sample_count": 60, "strategy": "hybrid_rerank"},
+        )
+        repository.upsert_results(run_id, [updated_hit_rate])
+        completed = repository.upsert_run(
+            replace(
+                running,
+                status="success",
+                finished_at=started_at + timedelta(seconds=4),
+                summary={"metric_count": 2},
+            )
+        )
+        newer_run = repository.upsert_run(
+            replace(
+                running,
+                id=f"run-{uuid4().hex}",
+                dataset_name="shopping_guides_regression_set",
+                started_at=started_at + timedelta(seconds=10),
+            )
+        )
+
+        assert [result.metric_name for result in stored_results] == [
+            "hit_rate_at_10",
+            "mrr",
+        ]
+        assert repository.get_run(run_id) == completed
+        assert repository.list_runs(collection_id) == [newer_run, completed]
+        assert repository.list_results(run_id) == [
+            replace(updated_hit_rate, created_at=stored_results[0].created_at),
+            stored_results[1],
+        ]
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()

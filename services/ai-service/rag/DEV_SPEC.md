@@ -1899,7 +1899,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | B2 | 编写 image/trace/evaluation schema | [✔] | 2026-06-06 | 已实现图片索引、四段式 Query/Ingestion Trace、评估任务和指标结果表；真实 PostgreSQL 幂等初始化通过，8 个集成测试通过 |
 | B3 | 实现数据库连接池和 schema 初始化 | [✔] | 2026-06-06 | 已实现配置驱动惰性连接池、生命周期、健康检查、事务回滚和幂等 schema 初始化；15 个集成测试通过 |
 | B4 | 实现 Document/Chunk/Image Repository | [✔] | 2026-06-06 | 已实现 collection 自动创建、文档版本替换、Chunk 批量 upsert、图片安全落盘和索引查询；19 个集成测试通过 |
-| B5 | 实现 Trace/Evaluation Repository | [ ] |  | Trace 索引和评估历史写入 PostgreSQL |
+| B5 | 实现 Trace/Evaluation Repository | [✔] | 2026-06-06 | 已实现 Query/Ingestion Trace 与评估任务/指标的不可变记录、幂等 upsert 和历史查询；21 个集成测试通过 |
 | B6 | 实现文档生命周期管理 | [ ] |  | `pending`、`processing`、`success`、`failed`、`deleted` |
 | B7 | 建立 libs 可插拔组件包结构 | [ ] |  | loader、llm、splitter、transform、embedding、vector_store、reranker、evaluator |
 | B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [ ] |  | `libs.splitter` 保持 `str -> List[str]`，`DocumentChunker` 负责 `Document -> List[Chunk]` |
@@ -1996,14 +1996,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 4 | 33% |
+| Phase B | 12 | 5 | 42% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **10** | **14%** |
+| **总计** | **71** | **11** | **15%** |
 
 ### 6.5 阶段实施明细
 
@@ -2219,10 +2219,27 @@ schema 可重复执行。
 
 实现类/函数：
 
-- `TraceRepository`：封装数据访问逻辑
-- `EvaluationRepository`：封装数据访问逻辑
+- `QueryTraceRecord`：以深层不可变结构表示 Query Trace 基础信息、阶段详情、汇总指标和评估指标
+- `IngestionTraceRecord`：以深层不可变结构表示 Ingestion Trace 四段式数据
+- `EvaluationRunRecord`：保存评估任务状态、配置快照、汇总和错误信息
+- `EvaluationResultRecord`：保存单项指标分数及其证据详情
+- `TraceRepository.upsert_query_trace()`：自动创建缺失 collection，并按 `trace_id` 幂等写入 Query Trace
+- `TraceRepository.upsert_ingestion_trace()`：按 `trace_id` 幂等写入 Ingestion Trace
+- `TraceRepository.get_query_trace()`：按 ID 查询 Query Trace
+- `TraceRepository.get_ingestion_trace()`：按 ID 查询 Ingestion Trace
+- `TraceRepository.list_query_traces()`：按 collection 和开始时间倒序查询 Query Trace 历史
+- `TraceRepository.list_ingestion_traces()`：按 collection 和开始时间倒序查询 Ingestion Trace 历史
+- `EvaluationRepository.upsert_run()`：自动创建缺失 collection，并按稳定 ID 更新评估任务生命周期
+- `EvaluationRepository.upsert_results()`：事务内批量写入指标，按 `run_id + metric_name` 幂等更新并保持输入顺序
+- `EvaluationRepository.get_run()`：按稳定 ID 查询评估任务
+- `EvaluationRepository.list_runs()`：按 collection 和创建时间倒序查询评估历史
+- `EvaluationRepository.list_results()`：按指标名称稳定排序查询任务结果
 
-验收标准：Trace 和评估结果可写入和查询。
+验收标准：Query/Ingestion Trace 可从 running 状态幂等更新为完成状态，四段式
+JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 查询；评估任务
+和多个指标结果可写入和查询；同一任务同名指标再次写入时更新稳定结果 ID、
+分数和详情，保留原始创建时间；批量结果返回顺序与输入一致；所有只读 SQL
+异常统一转换为带 operation context 和原始 cause 的 `DatabaseError`。
 
 测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
