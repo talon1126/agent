@@ -329,7 +329,7 @@ services/ai-service/rag/
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
 | `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | dedup -> load -> split -> transform -> image_caption -> content_hash -> Dense/BM25Indexer -> BatchProcessor -> upsert，接入 TraceContext，提供 MVP 集成测试入口 |
-| `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 文档哈希、ingestion_history 去重、Document 标准化 |
+| `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 去重通过后的 Loader 调用和 Document 标准化 |
 | `src/ingestion/pdf_to_markdown.py` | PDF 转 Markdown 辅助逻辑 | MarkItDown、页码、图片抽取 |
 | `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
 | `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、继承 metadata、添加 `chunk_index`、建立 `source_ref`、按需分发 `image_refs` |
@@ -355,7 +355,7 @@ services/ai-service/rag/
 | `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | 倒排索引、词项统计、chunk 词频 |
 | `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`，`image_index` 表记录 image_id、file_path、collection、doc_hash、page_num |
 | `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
-| `src/storage/repositories.py` | 管理通用 repository | documents、chunks、ingestion_history、evaluation_runs |
+| `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、traces、evaluation_runs |
 | `src/logs/app.log` | 保存应用运行日志 | 普通运行日志和错误排查 |
 | `src/logs/traces.jsonl` | 保存结构化 trace 日志 | ingestion/query trace JSON Lines |
 | `src/cache/embedding/` | 缓存 embedding 结果 | content_hash 差量计算和重复请求复用 |
@@ -410,8 +410,8 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
     v
 [2] 文档 SHA256 去重判断
     - 直接基于原始文件计算 SHA256
-    - 查询 ingestion_history / rag_documents
-    - 如果 hash 未变更：记录 skipped，流程结束
+    - 查询同一 collection + canonical source_path 的 rag_documents success 记录
+    - 如果 source_hash 未变更：写入 skipped ingestion trace，流程结束
     - 如果 hash 已变更：继续执行 Loader
     |
     v

@@ -223,7 +223,7 @@ Dedup -> Loader -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25I
 
 | 层级 | 职责 | 关键实现要素 |
 | --- | --- | --- |
-| `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹，若 `ingestion_history` 中存在相同哈希且状态为 `success`，则直接跳过，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
+| `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹；若 `rag_documents` 中同一 collection、canonical source_path 和 source_hash 的文档状态为 `success`，则写入 skipped ingestion trace 并直接结束，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
 | `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + metadata)` 对象 | 负责文件识别、PDF -> Markdown、编码处理、基础 metadata 抽取和图片提取；只处理去重判断后确认需要摄取的文档 |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
 | `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、继承 `document.metadata`、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并按图片占位符位置分发 `image_refs` |
@@ -679,9 +679,8 @@ PostgreSQL 是唯一持久化层，不使用 SQLite。
 | `rag_chunks` | chunk 文本、metadata、embedding vector |
 | `rag_bm25_terms` | BM25 词项统计 |
 | `image_index` | 图片文件路径和来源索引 |
-| `ingestion_history` | 摄取历史、SHA256 去重、历史结果摘要 |
 | `rag_query_traces` | Query Trace 索引 |
-| `rag_ingestion_traces` | Ingestion Trace 索引 |
+| `rag_ingestion_traces` | Ingestion Trace 索引、摄取历史和 skipped 结果摘要 |
 | `rag_evaluation_runs` | 评估任务 |
 | `rag_evaluation_results` | 评估结果 |
 
@@ -881,7 +880,7 @@ Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各�
 
 | 阶段 | 记录内容 |
 | --- | --- |
-| `dedup` | 原始文件 SHA256、`ingestion_history` 命中结果、是否跳过摄取、跳过原因、耗时、失败详情 |
+| `dedup` | 原始文件 SHA256、`rag_documents` success 文档命中结果、是否跳过摄取、跳过原因、耗时、失败详情 |
 | `load` | Loader 类型、原始文件类型、转换后的 `Document(id + text + metadata)` 摘要、图片提取数量、耗时、失败详情 |
 | `split` | Splitter 类型、粗切分 chunk 数量、标题层级识别结果、平均 chunk 长度、耗时、失败详情 |
 | `transform` | Transform 方法、LLM Provider、合并的 chunk 数量、去噪内容摘要、图片描述注入数量、上下文增强摘要、耗时、失败详情 |
@@ -1508,7 +1507,7 @@ services/ai-service/rag/
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
 | `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | dedup -> load -> split -> transform -> image_caption -> content_hash -> Dense/BM25Indexer -> BatchProcessor -> upsert，接入 TraceContext，提供 MVP 集成测试入口 |
-| `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 文档哈希、ingestion_history 去重、Document 标准化 |
+| `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 去重通过后的 Loader 调用和 Document 标准化 |
 | `src/ingestion/pdf_to_markdown.py` | PDF 转 Markdown 辅助逻辑 | MarkItDown、页码、图片抽取 |
 | `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
 | `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、继承 metadata、添加 `chunk_index`、建立 `source_ref`、按需分发 `image_refs` |
@@ -1534,7 +1533,7 @@ services/ai-service/rag/
 | `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | 倒排索引、词项统计、chunk 词频 |
 | `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`，`image_index` 表记录 image_id、file_path、collection、doc_hash、page_num |
 | `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
-| `src/storage/repositories.py` | 管理通用 repository | documents、chunks、ingestion_history、evaluation_runs |
+| `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、traces、evaluation_runs |
 | `src/logs/app.log` | 保存应用运行日志 | 普通运行日志和错误排查 |
 | `src/logs/traces.jsonl` | 保存结构化 trace 日志 | ingestion/query trace JSON Lines |
 | `src/cache/embedding/` | 缓存 embedding 结果 | content_hash 差量计算和重复请求复用 |
@@ -1589,8 +1588,8 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
     v
 [2] 文档 SHA256 去重判断
     - 直接基于原始文件计算 SHA256
-    - 查询 ingestion_history / rag_documents
-    - 如果 hash 未变更：记录 skipped，流程结束
+    - 查询同一 collection + canonical source_path 的 rag_documents success 记录
+    - 如果 source_hash 未变更：写入 skipped ingestion trace，流程结束
     - 如果 hash 已变更：继续执行 Loader
     |
     v
@@ -1809,7 +1808,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | --- | --- | --- | --- |
 | Phase A | 配置与项目骨架 | 独立模块基础文件、Docker 部署骨架、pytest 冒烟测试、`settings.yaml`、prompt 配置、核心类型和配置加载 | [✔] |
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
-| Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [ ] |
+| Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [~] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [ ] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [ ] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [ ] |
@@ -1952,7 +1951,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [ ] |  | 去重必须先于 Loader；hash 未变更时直接结束并写入 trace |
+| C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 已实现流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [ ] |  | PDF -> Markdown、metadata 提取；若存在图片则提取图片并写入占位符 |
 | C3 | 实现 DocumentChunker 业务适配与引用保留验证 | [ ] |  | chunk_id、metadata 继承、chunk_index、source_ref、标题层级和图片引用保留 |
 | C4 | 实现 Transform 具体实现 | [ ] |  | settings.yaml 配置真实 Transform；覆盖 metadata 注入、rewrite、合并、去噪和典型噪声场景 |
@@ -2037,13 +2036,13 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
 | Phase B | 12 | 12 | 100% |
-| Phase C | 12 | 0 | 0% |
+| Phase C | 12 | 1 | 8% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **18** | **25%** |
+| **总计** | **71** | **19** | **27%** |
 
 ### 6.5 阶段实施明细
 
@@ -2431,17 +2430,19 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：在进入 Loader 前判断文档是否变化，未变化直接走 skipped 快速结束，并记录 trace 摘要。
 
-修改文件：`src/ingestion/pipeline.py`、`src/storage/repositories.py`、`tests/unit/test_loader.py`
+修改文件：`src/ingestion/pipeline.py`、`src/ingestion/__init__.py`、`src/storage/repositories.py`、`tests/unit/test_loader.py`、`tests/integration/test_repositories.py`
 
 实现类/函数：
 
 - `calculate_sha256()`：计算文档稳定哈希标识
-- `should_skip_document()`：判断文档是否可以跳过处理
-- `IngestionPipeline.run()`：在 Loader 前执行去重判断并处理 skipped 分支
+- `DocumentRepository.has_successful_source_hash()`：规范化 SHA256 大小写，并按 collection、canonical source_path、source_hash 和 `success` 状态查询可跳过文档
+- `should_skip_document()`：根据 repository 命中结果和 force 参数判断文档是否可以跳过处理
+- `IngestionPipeline.run()`：在 Loader 前执行去重判断；skipped 时写入完成的 ingestion trace，未命中时才调用 Loader
+- `IngestionRunResult`：返回 source、source_hash、status、Document 和 trace 摘要
 
-验收标准：hash 未变更时不进入 Loader，不执行 PDF 转换、图片提取、Splitter 和 Transform；skipped 分支写入 trace 摘要。
+验收标准：去重范围固定为同一 collection 和 canonical source_path；source_hash 未变更且 lifecycle 为 `success` 时不进入 Loader，不执行 PDF 转换、图片提取、Splitter 和 Transform；`force=true` 时始终继续；skipped 分支写入 `rag_ingestion_traces`，结果包含跳过原因和耗时摘要。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_loader.py -v`
+测试方法：`python -m pytest services\ai-service\rag\tests\unit\test_loader.py -v`；`$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; python -m pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
 ##### C2：实现文档加载、Markdown 标准化与图片引用提取
 

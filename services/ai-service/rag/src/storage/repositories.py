@@ -318,6 +318,64 @@ class DocumentRepository:
         )
         return [self._to_document(row) for row in rows if row is not None]
 
+    def has_successful_source_hash(
+        self,
+        *,
+        collection_id: str,
+        source_path: str,
+        source_hash: str,
+    ) -> bool:
+        """Check whether one canonical source version is fully indexed.
+
+        Args:
+            collection_id: Collection that owns the source.
+            source_path: Canonical absolute source path stored during ingestion.
+            source_hash: SHA256 digest calculated from original source bytes
+                before Loader conversion.
+
+        Returns:
+            ``True`` only when the same collection, source path, and hash exist
+            with lifecycle status ``success``.
+
+        Raises:
+            ValueError: If an identity field is blank or ``source_hash`` is not
+                a lowercase/uppercase 64-character hexadecimal digest.
+            DatabaseError: If PostgreSQL lookup fails.
+
+        Notes:
+            Source path participates in the lookup so two independent files
+            containing identical bytes retain separate citations and lifecycle
+            records.
+        """
+
+        if not collection_id.strip():
+            raise ValueError("collection_id must not be blank")
+        if not source_path.strip():
+            raise ValueError("source_path must not be blank")
+        if len(source_hash) != 64 or any(
+            character not in "0123456789abcdefABCDEF" for character in source_hash
+        ):
+            raise ValueError("source_hash must be a SHA256 hexadecimal digest")
+        normalized_source_hash = source_hash.lower()
+
+        row = _read_rows(
+            self._pool,
+            operation="document_successful_source_hash_exists",
+            query="""
+            SELECT EXISTS (
+                SELECT 1
+                FROM rag_documents
+                WHERE collection_id = %s
+                  AND source_path = %s
+                  AND source_hash = %s
+                  AND lifecycle_status = 'success'
+            )
+            """,
+            params=(collection_id, source_path, normalized_source_hash),
+            many=False,
+        )
+        return bool(row[0]) if row is not None else False
+
     def get_lifecycle_status(self, document_id: str) -> str | None:
         """Read the current lifecycle status for one document.
 

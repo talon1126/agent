@@ -1353,3 +1353,88 @@ def test_pgvector_store_updates_searches_and_restores_chunk_order() -> None:
                 (collection_id,),
             )
         pool.close()
+
+
+@pytest.mark.integration
+def test_document_repository_deduplicates_only_successful_same_source() -> None:
+    """Protect C1 deduplication scope and lifecycle requirements in PostgreSQL."""
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for document dedup integration")
+
+    from src.core.types import Document
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import DocumentRepository
+
+    collection_id = f"c1-dedup-{uuid4().hex}"
+    document_id = f"doc-{uuid4().hex}"
+    source_path = str((RAG_ROOT / "data" / "raw" / collection_id / "guide.md").resolve())
+    source_hash = sha256(b"stable-source").hexdigest()
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=3),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        repository = DocumentRepository(pool)
+        repository.upsert(
+            Document(
+                id=document_id,
+                text="Stable source content.",
+                metadata={"source_path": source_path},
+            ),
+            collection_id=collection_id,
+            source_path=source_path,
+            source_hash=source_hash,
+        )
+
+        assert (
+            repository.has_successful_source_hash(
+                collection_id=collection_id,
+                source_path=source_path,
+                source_hash=source_hash,
+            )
+            is False
+        )
+        repository.mark_success(document_id)
+        assert (
+            repository.has_successful_source_hash(
+                collection_id=collection_id,
+                source_path=source_path,
+                source_hash=source_hash,
+            )
+            is True
+        )
+        assert (
+            repository.has_successful_source_hash(
+                collection_id=collection_id,
+                source_path=source_path,
+                source_hash=source_hash.upper(),
+            )
+            is True
+        )
+        assert (
+            repository.has_successful_source_hash(
+                collection_id=collection_id,
+                source_path=f"{source_path}.copy",
+                source_hash=source_hash,
+            )
+            is False
+        )
+        assert (
+            repository.has_successful_source_hash(
+                collection_id=collection_id,
+                source_path=source_path,
+                source_hash=sha256(b"changed-source").hexdigest(),
+            )
+            is False
+        )
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()

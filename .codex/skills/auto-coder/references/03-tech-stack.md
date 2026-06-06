@@ -46,7 +46,7 @@ Dedup -> Loader -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25I
 
 | 层级 | 职责 | 关键实现要素 |
 | --- | --- | --- |
-| `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹，若 `ingestion_history` 中存在相同哈希且状态为 `success`，则直接跳过，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
+| `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹；若 `rag_documents` 中同一 collection、canonical source_path 和 source_hash 的文档状态为 `success`，则写入 skipped ingestion trace 并直接结束，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
 | `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + metadata)` 对象 | 负责文件识别、PDF -> Markdown、编码处理、基础 metadata 抽取和图片提取；只处理去重判断后确认需要摄取的文档 |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
 | `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、继承 `document.metadata`、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并按图片占位符位置分发 `image_refs` |
@@ -502,9 +502,8 @@ PostgreSQL 是唯一持久化层，不使用 SQLite。
 | `rag_chunks` | chunk 文本、metadata、embedding vector |
 | `rag_bm25_terms` | BM25 词项统计 |
 | `image_index` | 图片文件路径和来源索引 |
-| `ingestion_history` | 摄取历史、SHA256 去重、历史结果摘要 |
 | `rag_query_traces` | Query Trace 索引 |
-| `rag_ingestion_traces` | Ingestion Trace 索引 |
+| `rag_ingestion_traces` | Ingestion Trace 索引、摄取历史和 skipped 结果摘要 |
 | `rag_evaluation_runs` | 评估任务 |
 | `rag_evaluation_results` | 评估结果 |
 
@@ -704,7 +703,7 @@ Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各�
 
 | 阶段 | 记录内容 |
 | --- | --- |
-| `dedup` | 原始文件 SHA256、`ingestion_history` 命中结果、是否跳过摄取、跳过原因、耗时、失败详情 |
+| `dedup` | 原始文件 SHA256、`rag_documents` success 文档命中结果、是否跳过摄取、跳过原因、耗时、失败详情 |
 | `load` | Loader 类型、原始文件类型、转换后的 `Document(id + text + metadata)` 摘要、图片提取数量、耗时、失败详情 |
 | `split` | Splitter 类型、粗切分 chunk 数量、标题层级识别结果、平均 chunk 长度、耗时、失败详情 |
 | `transform` | Transform 方法、LLM Provider、合并的 chunk 数量、去噪内容摘要、图片描述注入数量、上下文增强摘要、耗时、失败详情 |
