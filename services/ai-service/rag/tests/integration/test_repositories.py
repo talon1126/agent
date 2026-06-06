@@ -16,8 +16,10 @@ from __future__ import annotations
 import os
 import re
 import sys
+from hashlib import sha256
 from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -598,3 +600,323 @@ def test_core_schema_executes_twice_when_database_is_available() -> None:
     with psycopg.connect(database_url, autocommit=True) as connection:
         connection.execute(sql)
         connection.execute(sql)
+
+
+@pytest.mark.integration
+def test_document_and_chunk_repositories_round_trip_and_replace_content() -> None:
+    """Protect the complete document and chunk repository persistence contract.
+
+    The repository must create a missing collection, preserve domain metadata,
+    return deterministic chunk order, and replace a logical chunk when changed
+    content produces a new stable chunk ID for the same document position.
+    """
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for repository integration")
+
+    from src.core.types import Chunk, Document
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import ChunkRepository, DocumentRepository
+
+    collection_id = f"b4-{uuid4().hex}"
+    document_id = f"doc-{uuid4().hex}"
+    source_path = f"fixtures/{document_id}.md"
+    source_hash = sha256(b"document-v1").hexdigest()
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=3),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        documents = DocumentRepository(pool)
+        chunks = ChunkRepository(pool)
+        document = Document(
+            id=document_id,
+            text="Alpha section. Beta section.",
+            metadata={"doc_type": "shopping_guide", "language": "en"},
+        )
+
+        assert (
+            documents.upsert(
+                document,
+                collection_id=collection_id,
+                source_path=source_path,
+                source_hash=source_hash,
+                title="Repository fixture",
+            )
+            == document
+        )
+        assert documents.get_by_id(document_id) == document
+        assert documents.list_by_collection(collection_id) == [document]
+
+        initial_chunks = [
+            Chunk(
+                id=f"chunk-{uuid4().hex}",
+                text="Alpha section.",
+                metadata={"doc_type": "shopping_guide"},
+                chunk_index=0,
+                start_offset=0,
+                end_offset=14,
+                source_ref={"source_path": source_path, "section": "Alpha"},
+            ),
+            Chunk(
+                id=f"chunk-{uuid4().hex}",
+                text="Beta section.",
+                metadata={"doc_type": "shopping_guide"},
+                chunk_index=1,
+                start_offset=15,
+                end_offset=28,
+                source_ref={"source_path": source_path, "section": "Beta"},
+            ),
+        ]
+        assert (
+            chunks.upsert_many(
+                initial_chunks,
+                collection_id=collection_id,
+                document_id=document_id,
+            )
+            == initial_chunks
+        )
+        assert chunks.get_by_id(initial_chunks[0].id) == initial_chunks[0]
+        assert chunks.list_by_document(document_id) == initial_chunks
+
+        replacement = initial_chunks[0].model_copy(
+            update={
+                "id": f"chunk-{uuid4().hex}",
+                "text": "Alpha section with updated guidance.",
+            }
+        )
+        assert chunks.upsert_many(
+            [replacement],
+            collection_id=collection_id,
+            document_id=document_id,
+        ) == [replacement]
+        assert chunks.get_by_id(initial_chunks[0].id) is None
+        assert chunks.list_by_document(document_id) == [
+            replacement,
+            initial_chunks[1],
+        ]
+
+        reordered = [
+            initial_chunks[1].model_copy(
+                update={
+                    "chunk_index": 0,
+                    "start_offset": 0,
+                    "end_offset": 13,
+                }
+            ),
+            replacement.model_copy(
+                update={
+                    "chunk_index": 1,
+                    "start_offset": 14,
+                    "end_offset": 50,
+                }
+            ),
+        ]
+        assert (
+            chunks.upsert_many(
+                reordered,
+                collection_id=collection_id,
+                document_id=document_id,
+            )
+            == reordered
+        )
+        assert chunks.list_by_document(document_id) == reordered
+
+        replacement_document = Document(
+            id=f"doc-{uuid4().hex}",
+            text="A new source version with a different source hash.",
+            metadata={"doc_type": "shopping_guide", "language": "en"},
+        )
+        assert (
+            documents.upsert(
+                replacement_document,
+                collection_id=collection_id,
+                source_path=source_path,
+                source_hash=sha256(b"document-v2").hexdigest(),
+                title="Repository fixture v2",
+            )
+            == replacement_document
+        )
+        assert documents.get_by_id(document_id) is None
+        assert documents.get_by_id(replacement_document.id) == replacement_document
+        assert chunks.list_by_document(document_id) == []
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+@pytest.mark.integration
+def test_image_storage_saves_files_and_queries_upserted_indexes(
+    tmp_path: Path,
+) -> None:
+    """Protect filesystem and PostgreSQL behavior for extracted source images.
+
+    Images must be stored below the configured root, index upserts must remain
+    idempotent, and collection/doc-hash queries must return typed records
+    without requiring callers to write SQL.
+    """
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for image-storage integration")
+
+    from src.core.types import Document
+    from src.storage.image_storage import ImageStorage
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import DocumentRepository
+
+    collection_id = f"b4-images-{uuid4().hex}"
+    document_id = f"doc-{uuid4().hex}"
+    doc_hash = sha256(b"image-document").hexdigest()
+    image_id = f"image-{uuid4().hex}"
+    image_hash = sha256(b"png-fixture").hexdigest()
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=3),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        DocumentRepository(pool).upsert(
+            Document(
+                id=document_id,
+                text="Document containing an image placeholder.",
+                metadata={"doc_type": "shopping_guide"},
+            ),
+            collection_id=collection_id,
+            source_path=f"fixtures/{document_id}.md",
+            source_hash=doc_hash,
+        )
+        storage = ImageStorage(pool, root_dir=tmp_path / "data" / "images")
+
+        saved_path = storage.save_image(
+            collection_id,
+            image_id,
+            b"png-fixture",
+            suffix=".png",
+        )
+        assert (
+            saved_path
+            == (tmp_path / "data" / "images" / collection_id / f"{image_id}.png").resolve()
+        )
+        assert saved_path.read_bytes() == b"png-fixture"
+
+        first = storage.upsert_index(
+            image_id=image_id,
+            file_path=saved_path,
+            collection_id=collection_id,
+            document_id=document_id,
+            doc_hash=doc_hash,
+            page_num=2,
+            width=640,
+            height=480,
+            mime_type="image/png",
+            image_hash=image_hash,
+            quality_status="ok",
+            metadata={"caption": "Product comparison chart"},
+        )
+        updated = storage.upsert_index(
+            image_id=image_id,
+            file_path=saved_path,
+            collection_id=collection_id,
+            document_id=document_id,
+            doc_hash=doc_hash,
+            page_num=2,
+            width=640,
+            height=480,
+            mime_type="image/png",
+            image_hash=image_hash,
+            quality_status="low_quality",
+            metadata={"caption": "Low-confidence chart"},
+        )
+
+        assert first.image_id == image_id
+        assert updated.quality_status == "low_quality"
+        assert storage.find_by_collection(collection_id) == [updated]
+        assert storage.find_by_doc_hash(doc_hash) == [updated]
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+@pytest.mark.integration
+def test_image_storage_rejects_paths_outside_collection_directory(
+    tmp_path: Path,
+) -> None:
+    """Prevent collection names, image IDs, or suffixes from escaping storage.
+
+    Path validation must happen before any filesystem write so untrusted source
+    metadata cannot overwrite files outside ``data/images/{collection}/``.
+    """
+
+    from src.storage.image_storage import ImageStorage
+
+    storage = ImageStorage(MagicMock(), root_dir=tmp_path / "images")
+
+    with pytest.raises(ValueError, match="collection"):
+        storage.save_image("../outside", "image-1", b"data", suffix=".png")
+    with pytest.raises(ValueError, match="image_id"):
+        storage.save_image("guides", "../image-1", b"data", suffix=".png")
+    with pytest.raises(ValueError, match="suffix"):
+        storage.save_image("guides", "image-1", b"data", suffix="../file")
+
+    unicode_path = storage.save_image(
+        "选购指南",
+        "商品图-1",
+        b"valid-unicode-path",
+        suffix=".png",
+    )
+    assert unicode_path.read_bytes() == b"valid-unicode-path"
+
+
+@pytest.mark.integration
+def test_repository_reads_wrap_psycopg_failures_with_operation_context() -> None:
+    """Require read paths to preserve the shared storage exception contract.
+
+    ``PostgresPool.connection()`` intentionally preserves caller exceptions, so
+    each repository read boundary must translate psycopg failures into
+    ``DatabaseError`` with a trace-safe operation name and original cause.
+    """
+
+    import psycopg
+
+    from src.core.errors import DatabaseError
+    from src.storage.image_storage import ImageStorage
+    from src.storage.repositories import ChunkRepository, DocumentRepository
+
+    driver_error = psycopg.OperationalError("simulated read failure")
+    connection = MagicMock()
+    connection.execute.side_effect = driver_error
+    pool = MagicMock()
+    pool.connection.return_value.__enter__.return_value = connection
+    cases = [
+        (
+            lambda: DocumentRepository(pool).get_by_id("doc-1"),
+            "document_get",
+        ),
+        (
+            lambda: ChunkRepository(pool).list_by_document("doc-1"),
+            "chunk_list_by_document",
+        ),
+        (
+            lambda: ImageStorage(pool).find_by_collection("guides"),
+            "image_index_find_by_collection_id",
+        ),
+    ]
+
+    for operation, expected_context in cases:
+        with pytest.raises(DatabaseError) as captured:
+            operation()
+        assert captured.value.context == {"operation": expected_context}
+        assert captured.value.cause is driver_error

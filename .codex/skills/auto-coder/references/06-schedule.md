@@ -112,7 +112,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | B1 | 编写 collection/document/chunk schema | [✔] | 2026-06-06 | 已实现稳定字符串 ID、pgvector/HNSW、核心约束和索引；真实 PostgreSQL 连续初始化两次通过，5 个集成测试通过 |
 | B2 | 编写 image/trace/evaluation schema | [✔] | 2026-06-06 | 已实现图片索引、四段式 Query/Ingestion Trace、评估任务和指标结果表；真实 PostgreSQL 幂等初始化通过，8 个集成测试通过 |
 | B3 | 实现数据库连接池和 schema 初始化 | [✔] | 2026-06-06 | 已实现配置驱动惰性连接池、生命周期、健康检查、事务回滚和幂等 schema 初始化；15 个集成测试通过 |
-| B4 | 实现 Document/Chunk/Image Repository | [ ] |  | 文档、chunk、ImageStorage 图片落盘和 `image_index` 入库 |
+| B4 | 实现 Document/Chunk/Image Repository | [✔] | 2026-06-06 | 已实现 collection 自动创建、文档版本替换、Chunk 批量 upsert、图片安全落盘和索引查询；19 个集成测试通过 |
 | B5 | 实现 Trace/Evaluation Repository | [ ] |  | Trace 索引和评估历史写入 PostgreSQL |
 | B6 | 实现文档生命周期管理 | [ ] |  | `pending`、`processing`、`success`、`failed`、`deleted` |
 | B7 | 建立 libs 可插拔组件包结构 | [ ] |  | loader、llm、splitter、transform、embedding、vector_store、reranker、evaluator |
@@ -210,14 +210,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 3 | 25% |
+| Phase B | 12 | 4 | 33% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **9** | **13%** |
+| **总计** | **71** | **10** | **14%** |
 
 ### 6.5 阶段实施明细
 
@@ -404,12 +404,24 @@ schema 可重复执行。
 
 实现类/函数：
 
-- `DocumentRepository`：封装数据访问逻辑
-- `ChunkRepository`：封装数据访问逻辑
-- `ImageStorage.save_image()`：保存图片到 `data/images/{collection}/`
-- `ImageStorage.upsert_index()`：写入 `image_index` 图片索引
+- `DocumentRepository.upsert()`：自动创建缺失 collection，并按稳定 ID 写入文档；同一 `collection + source_path` 的 source_hash 变化产生新 ID 时替换旧版本并级联清理旧数据
+- `DocumentRepository.get_by_id()`：按 Python 文档 ID 重建 `Document`
+- `DocumentRepository.list_by_collection()`：按 collection 查询并稳定排序文档
+- `ChunkRepository.upsert_many()`：事务内批量写入 Chunk，计算 `content_hash`，处理稳定 ID 与 `chunk_index` 重排冲突并保持输入顺序
+- `ChunkRepository.get_by_id()`：按当前稳定 ID 重建 `Chunk`
+- `ChunkRepository.list_by_document()`：按 `chunk_index` 返回文档当前 Chunk
+- `ImageIndexRecord`：定义 Dashboard 和多模态响应使用的不可变图片索引记录
+- `ImageStorage.save_image()`：安全保存图片到 `data/images/{collection}/`，支持 Unicode collection/image ID 并阻止路径穿越
+- `ImageStorage.upsert_index()`：幂等写入 `image_index` 图片索引
+- `ImageStorage.find_by_collection()`：按 collection 查询图片索引
+- `ImageStorage.find_by_doc_hash()`：按源文档 SHA256 查询图片索引
 
-验收标准：文档、chunk 可写入和读取；图片文件保存到 `data/images/{collection}/`；`image_index` 可按 `collection` 和 `doc_hash` 查询。
+验收标准：文档、chunk 可写入和读取；缺失 collection 可由首次文档写入自动创建；
+同一来源内容变化时新文档 ID 替换旧版本并清理旧 Chunk；Chunk 稳定 ID 在重新
+切分后发生位置交换时仍可在单事务内完成 upsert；所有只读 SQL 异常统一转换为
+带 operation context 和原始 cause 的 `DatabaseError`；图片文件安全保存到
+`data/images/{collection}/`；`image_index` 可幂等写入并按 `collection`
+和 `doc_hash` 查询。
 
 测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
