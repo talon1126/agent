@@ -47,7 +47,7 @@ Dedup -> Loader -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25I
 | 层级 | 职责 | 关键实现要素 |
 | --- | --- | --- |
 | `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹；若 `rag_documents` 中同一 collection、canonical source_path 和 source_hash 的文档状态为 `success`，则写入 skipped ingestion trace 并直接结束，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
-| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + metadata)` 对象 | 负责文件识别、PDF -> Markdown、编码处理、基础 metadata 抽取和图片提取；只处理去重判断后确认需要摄取的文档 |
+| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；只处理去重判断后确认需要摄取的文档 |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
 | `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、继承 `document.metadata`、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并按图片占位符位置分发 `image_refs` |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
@@ -580,7 +580,7 @@ Loader 负责从 PDF、Markdown 或其他文档中抽取图片，并建立图片
 
 关键实现：
 
-- **提取策略**：按文档页码、段落位置或 Markdown 图片语法提取图片。
+- **提取策略**：PDF 文本由 MarkItDown 转换，PDF 图片由 PyMuPDF 按页码和物理位置提取；Markdown 图片按本地图片语法解析。
 - **图片 ID**：为每张图片生成稳定 `image_id`，建议基于 `source_doc + page + image_index + image_hash`。
 - **引用标记**：在文档文本中写入图片占位符，例如 `[[image:image_xxx]]`，确保后续 splitter 能保留图片与上下文的关系。
 - **原始图片存储**：原始图片保存到本地文件系统，数据库只保存索引和 metadata。

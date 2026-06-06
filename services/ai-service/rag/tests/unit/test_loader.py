@@ -12,6 +12,7 @@ import importlib
 import sys
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -22,12 +23,21 @@ sys.path.insert(0, str(RAG_ROOT))
 errors_module = importlib.import_module("src.core.errors")
 types_module = importlib.import_module("src.core.types")
 pipeline_module = importlib.import_module("src.ingestion.pipeline")
+pdf_conversion_module = importlib.import_module("src.ingestion.pdf_to_markdown")
+markdown_loader_module = importlib.import_module("src.libs.loader.markdown_loader")
+pdf_loader_module = importlib.import_module("src.libs.loader.pdf_loader")
 
 Document = types_module.Document
 IngestionError = errors_module.IngestionError
 IngestionPipeline = pipeline_module.IngestionPipeline
 calculate_sha256 = pipeline_module.calculate_sha256
 should_skip_document = pipeline_module.should_skip_document
+ExtractedImage = pdf_conversion_module.ExtractedImage
+MarkItDownConverter = pdf_conversion_module.MarkItDownConverter
+PdfConversionResult = pdf_conversion_module.PdfConversionResult
+extract_images = pdf_conversion_module.extract_images
+MarkdownLoader = markdown_loader_module.MarkdownLoader
+PdfLoader = pdf_loader_module.PdfLoader
 
 
 def test_calculate_sha256_hashes_original_file_bytes(tmp_path: Path) -> None:
@@ -162,3 +172,379 @@ def test_ingestion_pipeline_calls_loader_when_source_changed_or_forced(
     loader.load.assert_called_with(source.resolve())
     documents.has_successful_source_hash.assert_called_once()
     traces.upsert_ingestion_trace.assert_not_called()
+
+
+def test_markdown_loader_normalizes_text_and_extracts_heading_hierarchy(
+    tmp_path: Path,
+) -> None:
+    """Require canonical Markdown and ordered heading paths in loader metadata."""
+
+    source = tmp_path / "audio-guide.md"
+    original = (
+        b"\xef\xbb\xbf# Audio Guide  \r\n\r\n"
+        b"Choose by use case.   \r\n\r\n\r\n"
+        b"## Wireless\r\n\r\nBattery matters.\r\n"
+        b"### Noise Control\r\n"
+    )
+    source.write_bytes(original)
+
+    document = MarkdownLoader().load(source)
+
+    assert document.text == (
+        "# Audio Guide\n\n"
+        "Choose by use case.\n\n"
+        "## Wireless\n\n"
+        "Battery matters.\n"
+        "### Noise Control\n"
+    )
+    assert document.metadata["title"] == "Audio Guide"
+    assert document.metadata["source_hash"] == sha256(original).hexdigest()
+    assert document.metadata["headings"] == [
+        {"level": 1, "title": "Audio Guide", "path": ["Audio Guide"]},
+        {"level": 2, "title": "Wireless", "path": ["Audio Guide", "Wireless"]},
+        {
+            "level": 3,
+            "title": "Noise Control",
+            "path": ["Audio Guide", "Wireless", "Noise Control"],
+        },
+    ]
+    assert "images" not in document.metadata
+    assert MarkdownLoader().load(source).id == document.id
+
+
+def test_markdown_loader_replaces_local_images_with_stable_placeholders(
+    tmp_path: Path,
+) -> None:
+    """Require local Markdown image syntax to become offset-addressable metadata."""
+
+    image = tmp_path / "diagram.png"
+    image.write_bytes(b"fake-png-content")
+    source = tmp_path / "visual-guide.md"
+    source.write_text(
+        "# Visual Guide\n\nBefore.\n\n![Signal flow](diagram.png)\n\nAfter.\n",
+        encoding="utf-8",
+    )
+
+    document = MarkdownLoader().load(source)
+
+    images = document.metadata["images"]
+    assert len(images) == 1
+    image_metadata = images[0]
+    placeholder = f"[[image:{image_metadata['id']}]]"
+    assert placeholder in document.text
+    assert "![Signal flow](diagram.png)" not in document.text
+    assert image_metadata["path"] == str(image.resolve())
+    assert image_metadata["page"] is None
+    assert image_metadata["text_offset"] == document.text.index(placeholder)
+    assert image_metadata["text_length"] == len(placeholder)
+    assert image_metadata["position"] == {
+        "source_type": "markdown",
+        "line": 5,
+        "alt_text": "Signal flow",
+    }
+
+
+def test_markdown_loader_does_not_read_images_outside_source_directory(
+    tmp_path: Path,
+) -> None:
+    """Require Markdown image resolution to reject parent-directory traversal."""
+
+    source_directory = tmp_path / "documents"
+    source_directory.mkdir()
+    outside_image = tmp_path / "secret.png"
+    outside_image.write_bytes(b"sensitive-content")
+    source = source_directory / "unsafe.md"
+    original_image_syntax = "![Unsafe](../secret.png)"
+    source.write_text(
+        f"# Unsafe Guide\n\n{original_image_syntax}\n",
+        encoding="utf-8",
+    )
+
+    document = MarkdownLoader().load(source)
+
+    assert original_image_syntax in document.text
+    assert "images" not in document.metadata
+
+
+def test_markdown_loader_ignores_heading_syntax_inside_fenced_code(
+    tmp_path: Path,
+) -> None:
+    """Require heading metadata to represent document structure, not code text."""
+
+    source = tmp_path / "code-sample.md"
+    source.write_text(
+        "```markdown\n# Not A Document Heading\n```\n\n# Real Heading\n",
+        encoding="utf-8",
+    )
+
+    document = MarkdownLoader().load(source)
+
+    assert document.metadata["title"] == "Real Heading"
+    assert document.metadata["headings"] == [
+        {"level": 1, "title": "Real Heading", "path": ["Real Heading"]}
+    ]
+
+
+def test_markdown_loader_does_not_replace_image_examples_inside_fenced_code(
+    tmp_path: Path,
+) -> None:
+    """Require code examples containing Markdown image syntax to remain intact."""
+
+    image = tmp_path / "diagram.png"
+    image.write_bytes(b"real-image")
+    source = tmp_path / "image-example.md"
+    image_syntax = "![Example](diagram.png)"
+    source.write_text(
+        f"# Syntax Guide\n\n```markdown\n{image_syntax}\n```\n",
+        encoding="utf-8",
+    )
+
+    document = MarkdownLoader().load(source)
+
+    assert image_syntax in document.text
+    assert "images" not in document.metadata
+
+
+def test_markitdown_converter_normalizes_text_and_delegates_image_extraction(
+    tmp_path: Path,
+) -> None:
+    """Require PDF text and image parsing to remain separate injectable concerns."""
+
+    source = tmp_path / "guide.pdf"
+    source.write_bytes(b"%PDF-test")
+    markitdown = Mock()
+    markitdown.convert.return_value = SimpleNamespace(
+        text_content="\ufeff# PDF Guide  \r\n\r\nBody.\r\n"
+    )
+    extracted = (
+        ExtractedImage(
+            content=b"image-bytes",
+            suffix=".png",
+            page=2,
+            position={"x": 10.0, "y": 20.0, "width": 30.0, "height": 40.0},
+        ),
+    )
+    image_extractor = Mock(return_value=extracted)
+    converter = MarkItDownConverter(
+        converter=markitdown,
+        image_extractor=image_extractor,
+    )
+
+    result = converter.convert(source)
+
+    assert result.markdown == "# PDF Guide\n\nBody.\n"
+    assert result.images == extracted
+    markitdown.convert.assert_called_once_with(str(source.resolve()))
+    image_extractor.assert_called_once_with(source.resolve())
+
+
+def test_extract_images_reads_page_position_and_original_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require the PyMuPDF adapter to preserve image bytes and source geometry."""
+
+    source = tmp_path / "with-image.pdf"
+    source.write_bytes(b"%PDF-image")
+
+    class FakeRect:
+        """Expose the coordinate attributes returned by PyMuPDF rectangles."""
+
+        x0 = 1.0
+        y0 = 2.0
+        x1 = 21.0
+        y1 = 32.0
+
+    class FakePage:
+        """Return one embedded image and its first physical occurrence."""
+
+        def get_images(self, *, full: bool) -> list[tuple[int]]:
+            assert full is True
+            return [(7,), (7,)]
+
+        def get_image_rects(self, xref: int) -> list[FakeRect]:
+            assert xref == 7
+            return [FakeRect()]
+
+    class FakeDocument:
+        """Provide the subset of the PyMuPDF document API used by extraction."""
+
+        def __enter__(self) -> FakeDocument:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def __iter__(self) -> object:
+            return iter([FakePage()])
+
+        def extract_image(self, xref: int) -> dict[str, object]:
+            assert xref == 7
+            return {
+                "image": b"raw-image",
+                "ext": "jpeg",
+                "width": 20,
+                "height": 30,
+            }
+
+    fake_fitz = SimpleNamespace(open=lambda path: FakeDocument())
+    monkeypatch.setitem(sys.modules, "fitz", fake_fitz)
+
+    images = extract_images(source)
+
+    assert images == (
+        ExtractedImage(
+            content=b"raw-image",
+            suffix=".jpeg",
+            page=1,
+            position={
+                "x": 1.0,
+                "y": 2.0,
+                "width": 20.0,
+                "height": 30.0,
+                "bbox": [1.0, 2.0, 21.0, 32.0],
+                "pixel_width": 20,
+                "pixel_height": 30,
+                "sequence": 0,
+            },
+        ),
+    )
+
+
+def test_pdf_loader_persists_images_and_injects_valid_metadata(
+    tmp_path: Path,
+) -> None:
+    """Require PDF images to produce stable placeholders, files, and metadata."""
+
+    source = tmp_path / "shopping.pdf"
+    source.write_bytes(b"%PDF-shopping-guide")
+    conversion = PdfConversionResult(
+        markdown="# Shopping Guide\n\nCompare materials.\n",
+        images=(
+            ExtractedImage(
+                content=b"first-image",
+                suffix=".png",
+                page=1,
+                position={"x": 1.0, "y": 2.0, "width": 50.0, "height": 60.0},
+            ),
+        ),
+    )
+    converter = Mock()
+    converter.convert.return_value = conversion
+    loader = PdfLoader(
+        converter=converter,
+        image_output_dir=tmp_path / "images",
+    )
+
+    document = loader.load(source)
+    repeated = loader.load(source)
+
+    assert document.id == repeated.id
+    assert document.metadata["title"] == "Shopping Guide"
+    assert document.metadata["source_type"] == "pdf"
+    assert document.metadata["source_hash"] == sha256(source.read_bytes()).hexdigest()
+    assert document.metadata["headings"] == [
+        {"level": 1, "title": "Shopping Guide", "path": ["Shopping Guide"]}
+    ]
+    image_metadata = document.metadata["images"][0]
+    placeholder = f"[[image:{image_metadata['id']}]]"
+    assert placeholder in document.text
+    assert image_metadata["text_offset"] == document.text.index(placeholder)
+    assert image_metadata["text_length"] == len(placeholder)
+    assert Path(image_metadata["path"]).read_bytes() == b"first-image"
+    assert image_metadata["page"] == 1
+    assert image_metadata["position"]["width"] == 50.0
+
+
+def test_pdf_loader_omits_images_metadata_when_pdf_has_no_images(
+    tmp_path: Path,
+) -> None:
+    """Require text-only PDFs to avoid empty or misleading image metadata."""
+
+    source = tmp_path / "text-only.pdf"
+    source.write_bytes(b"%PDF-text-only")
+    converter = Mock()
+    converter.convert.return_value = PdfConversionResult(
+        markdown="# Text Only\n\nNo embedded images.\n",
+        images=(),
+    )
+
+    document = PdfLoader(
+        converter=converter,
+        image_output_dir=tmp_path / "images",
+    ).load(source)
+
+    assert document.text == "# Text Only\n\nNo embedded images.\n"
+    assert "images" not in document.metadata
+    assert not (tmp_path / "images").exists()
+
+
+def test_pdf_loader_removes_partial_image_files_when_persistence_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require a failed multi-image write to leave no orphaned source assets."""
+
+    source = tmp_path / "partial-write.pdf"
+    source.write_bytes(b"%PDF-partial-write")
+    conversion = PdfConversionResult(
+        markdown="# Partial Write\n",
+        images=(
+            ExtractedImage(
+                content=b"first-image",
+                suffix=".png",
+                page=1,
+                position={"width": 10, "height": 10},
+            ),
+            ExtractedImage(
+                content=b"second-image",
+                suffix=".png",
+                page=2,
+                position={"width": 20, "height": 20},
+            ),
+        ),
+    )
+    converter = Mock()
+    converter.convert.return_value = conversion
+    original_replace = Path.replace
+    replace_calls = 0
+
+    def fail_second_replace(path: Path, target: Path) -> Path:
+        """Raise on the second atomic rename after one image was persisted."""
+
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 2:
+            raise OSError("simulated image persistence failure")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_second_replace)
+    image_root = tmp_path / "images"
+
+    with pytest.raises(IngestionError):
+        PdfLoader(
+            converter=converter,
+            image_output_dir=image_root,
+        ).load(source)
+
+    assert not list(image_root.rglob("*.*"))
+
+
+def test_pdf_loader_wraps_conversion_failures_with_source_context(
+    tmp_path: Path,
+) -> None:
+    """Require converter failures to cross the loader boundary as IngestionError."""
+
+    source = tmp_path / "broken.pdf"
+    source.write_bytes(b"%PDF-broken")
+    converter = Mock()
+    converter.convert.side_effect = RuntimeError("parser failed")
+
+    with pytest.raises(IngestionError) as captured:
+        PdfLoader(converter=converter).load(source)
+
+    assert captured.value.context == {
+        "operation": "pdf_load",
+        "source": str(source.resolve()),
+    }
+    assert isinstance(captured.value.cause, RuntimeError)

@@ -224,7 +224,7 @@ Dedup -> Loader -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25I
 | 层级 | 职责 | 关键实现要素 |
 | --- | --- | --- |
 | `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹；若 `rag_documents` 中同一 collection、canonical source_path 和 source_hash 的文档状态为 `success`，则写入 skipped ingestion trace 并直接结束，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
-| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + metadata)` 对象 | 负责文件识别、PDF -> Markdown、编码处理、基础 metadata 抽取和图片提取；只处理去重判断后确认需要摄取的文档 |
+| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；只处理去重判断后确认需要摄取的文档 |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
 | `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、继承 `document.metadata`、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并按图片占位符位置分发 `image_refs` |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
@@ -757,7 +757,7 @@ Loader 负责从 PDF、Markdown 或其他文档中抽取图片，并建立图片
 
 关键实现：
 
-- **提取策略**：按文档页码、段落位置或 Markdown 图片语法提取图片。
+- **提取策略**：PDF 文本由 MarkItDown 转换，PDF 图片由 PyMuPDF 按页码和物理位置提取；Markdown 图片按本地图片语法解析。
 - **图片 ID**：为每张图片生成稳定 `image_id`，建议基于 `source_doc + page + image_index + image_hash`。
 - **引用标记**：在文档文本中写入图片占位符，例如 `[[image:image_xxx]]`，确保后续 splitter 能保留图片与上下文的关系。
 - **原始图片存储**：原始图片保存到本地文件系统，数据库只保存索引和 metadata。
@@ -1952,7 +1952,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 已实现流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
-| C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [ ] |  | PDF -> Markdown、metadata 提取；若存在图片则提取图片并写入占位符 |
+| C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-06 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；11 个新增单元测试及真实文本/图片 PDF 冒烟测试通过 |
 | C3 | 实现 DocumentChunker 业务适配与引用保留验证 | [ ] |  | chunk_id、metadata 继承、chunk_index、source_ref、标题层级和图片引用保留 |
 | C4 | 实现 Transform 具体实现 | [ ] |  | settings.yaml 配置真实 Transform；覆盖 metadata 注入、rewrite、合并、去噪和典型噪声场景 |
 | C5 | 实现 ImageCaptioner | [ ] |  | 当启用 `vision_llm` 且 chunk 存在 `image_refs` 时，生成 caption 并写入 metadata |
@@ -2036,13 +2036,13 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
 | Phase B | 12 | 12 | 100% |
-| Phase C | 12 | 1 | 8% |
+| Phase C | 12 | 2 | 17% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **19** | **27%** |
+| **总计** | **71** | **20** | **28%** |
 
 ### 6.5 阶段实施明细
 
@@ -2448,18 +2448,18 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：将输入文档转换为标准 `Document(id, text, metadata)`；完成 PDF -> Markdown、Markdown 标准化、标题层级 metadata 提取；若文档存在图片，则执行图片提取、生成 `image_id`、写入图片占位符，并填充 `metadata.images[]`。
 
-修改文件：`src/ingestion/pdf_to_markdown.py`、`src/libs/loader/markdown_loader.py`、`src/libs/loader/pdf_loader.py`、`tests/unit/test_loader.py`
+修改文件：`pyproject.toml`、`src/ingestion/pdf_to_markdown.py`、`src/libs/loader/markdown_loader.py`、`src/libs/loader/pdf_loader.py`、`tests/unit/test_loader.py`
 
 实现类/函数：
 
 - `MarkItDownConverter`：将 PDF 转换为 canonical Markdown
 - `MarkdownLoader.load()`：加载 Markdown 并提取标题层级与 metadata
 - `PdfLoader.load()`：加载 PDF 并输出标准 Document
-- `extract_images()`：仅在文档存在图片时抽取图片资源并生成图片引用
+- `extract_images()`：使用 PyMuPDF 仅在 PDF 存在图片时抽取图片字节、页码与物理位置信息
 
-验收标准：PDF 可转换为 canonical Markdown；Markdown 可输出标准 `Document(id + text + metadata)`；无图片文档不生成无效图片 metadata；有图片文档生成 `image_id`、图片占位符和 `metadata.images[]`。
+验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码和物理位置；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + metadata)` 并提取标题层级，fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_loader.py -v`
+测试方法：`python -m pytest -p no:cacheprovider services\ai-service\rag\tests\unit\test_loader.py -v`；单元测试通过注入 fake MarkItDown converter 和 fake PyMuPDF module 验证转换与图片提取契约，不依赖真实外部解析环境。
 
 ##### C3：实现 DocumentChunker 业务适配与引用保留验证
 
