@@ -255,6 +255,15 @@ embedding:
 rerank:
   provider: cross_encoder
   fallback: rrf
+
+transform:
+  steps:
+    - name: metadata_enrich
+    - name: rewrite_chunk
+      prompt_path: config/prompts/rewrite_chunk_prompt.yaml
+    - name: semantic_merge
+      prompt_path: config/prompts/semantic_merge_prompt.yaml
+    - name: denoise
 ```
 
 业务代码只调用：
@@ -273,6 +282,10 @@ Factory 注册表约束：
 - **可扩展注册**：仍保留 `register(provider, implementation_class)`，用于测试或后续扩展。
 - **接口校验**：注册时必须校验实现类继承对应 Base 接口。
 - **业务无感知**：Pipeline、Dashboard、MCP 等上层业务只传 settings/provider，不直接 import 具体实现类。
+
+Transform 不创建 Factory，也不作为 Provider 选项。Transform 由 ingestion pipeline 根据
+`settings.transform.steps` 按顺序串行执行，`src.libs.transform` 只保留
+`BaseTransform` 抽象契约，具体实现放在 `src/ingestion/transform/`。
 
 #### 3.4.3 Provider 选项
 
@@ -297,17 +310,20 @@ Factory 注册表约束：
 
 ### 3.5 配置管理
 
-配置文件：`services/ai-service/rag/config/settings.yaml`
+版本化配置模板：`services/ai-service/rag/config/settings.example.yaml`
+
+本地运行配置：`services/ai-service/rag/config/settings.yaml`
 
 配置设计目标：
 
-- **统一入口**：所有可插拔组件都从 `settings.yaml` 读取配置，不在业务代码中写死 Provider、模型名和参数。
+- **模板与运行配置分离**：仓库提交完整的 `settings.example.yaml`；开发者复制为本地 `settings.yaml` 后按环境修改，`settings.yaml` 必须被 Git 忽略。
+- **统一入口**：所有可插拔组件都从本地 `settings.yaml` 读取配置，不在业务代码中写死 Provider、模型名和参数。
 - **分层清晰**：按 `llm`、`embedding`、`splitter`、`vector_store`、`reranker`、`retrieval`、`ingestion`、`observability` 等模块组织。
 - **环境变量隔离敏感信息**：API Key、数据库连接串等敏感信息只写环境变量名，不直接写入配置文件。
 - **支持默认与降级**：每类组件都允许配置 fallback，便于组件不可用时回退到安全方案。
 - **适合 Dashboard 展示**：Dashboard 可以直接读取配置，展示当前启用的 LLM、Embedding、Splitter、Reranker、VectorStore 和 Evaluator。
 
-`settings.yaml` 示例：
+`settings.example.yaml` 示例：
 
 ```yaml
 project:
@@ -388,16 +404,17 @@ splitter:
         - " "
 
 transform:
-  rewrite_chunk:
-    enabled: true
-    prompt_path: config/prompts/rewrite_chunk_prompt.yaml
-  semantic_merge:
-    enabled: true
-  denoise:
-    enabled: true
-  image_to_text:
-    enabled: true
-    prompt_path: config/prompts/image_to_text_prompt.yaml
+  steps:
+    - name: metadata_enrich
+      enabled: true
+    - name: rewrite_chunk
+      enabled: true
+      prompt_path: config/prompts/rewrite_chunk_prompt.yaml
+    - name: semantic_merge
+      enabled: true
+      prompt_path: config/prompts/semantic_merge_prompt.yaml
+    - name: denoise
+      enabled: true
 
 retrieval:
   query_rewrite_enabled: true

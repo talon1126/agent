@@ -1,0 +1,234 @@
+"""Compose and execute ingestion transform steps in settings order.
+
+``TransformPipeline`` is intentionally not a generic factory. It is the
+ingestion-layer adapter that maps configured step names to project-owned
+transform implementations, injects prompts and LLM clients, and applies enabled
+steps serially to ordered ``Chunk`` objects.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+from src.core.config import RagSettings, TransformStepSettings, load_prompt
+from src.core.errors import ConfigurationError
+from src.core.types import Chunk
+from src.ingestion.transform.chunk_rewriter import ChunkRewriter
+from src.ingestion.transform.denoise_transform import DenoiseTransform
+from src.ingestion.transform.metadata_enricher import MetadataEnricher
+from src.ingestion.transform.semantic_merge_transform import SemanticMergeTransform
+from src.libs.llm import BaseLLM, LLMFactory
+from src.libs.transform.base_transform import BaseTransform
+
+
+class TransformPipeline:
+    """Run enabled transform implementations sequentially over chunk lists."""
+
+    _STEP_BUILDERS: dict[str, Callable[[TransformStepSettings, BaseLLM | None], BaseTransform]]
+
+    def __init__(self, transforms: list[BaseTransform]) -> None:
+        """Store the concrete transform chain in execution order.
+
+        Args:
+            transforms: Already constructed transform implementations. The
+                order of this list is the order used during ingestion.
+        """
+
+        self._transforms = list(transforms)
+
+    @property
+    def transforms(self) -> tuple[BaseTransform, ...]:
+        """Return the configured transform chain without exposing mutation.
+
+        Returns:
+            A tuple containing concrete transform objects in execution order.
+            The tuple wrapper lets tests, diagnostics, and future Dashboard
+            pages inspect the pipeline without mutating ingestion state.
+        """
+
+        return tuple(self._transforms)
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: RagSettings,
+        *,
+        llm: BaseLLM | None = None,
+    ) -> TransformPipeline:
+        """Build the transform chain from ``settings.transform.steps``.
+
+        Args:
+            settings: Validated runtime settings loaded from
+                ``config/settings.yaml`` or the versioned example.
+            llm: Optional injected chat client for unit tests and offline
+                execution. When omitted, model-backed steps use ``LLMFactory``.
+
+        Returns:
+            A pipeline containing all enabled steps in configuration order.
+
+        Raises:
+            ConfigurationError: If an enabled step name is unknown, if a model
+                step omits its prompt path, or if LLM construction fails.
+        """
+
+        shared_llm = llm
+        transforms: list[BaseTransform] = []
+        for step in settings.transform.steps:
+            if not step.enabled:
+                continue
+            builder = cls._step_builders().get(step.name)
+            if builder is None:
+                raise ConfigurationError(
+                    "Unknown transform step",
+                    context={
+                        "step_name": step.name,
+                        "available": sorted(cls._step_builders()),
+                    },
+                )
+            if step.name in {"rewrite_chunk", "semantic_merge"} and shared_llm is None:
+                shared_llm = LLMFactory.create(settings=settings)
+            transforms.append(builder(step, shared_llm))
+        return cls(transforms)
+
+    def run(
+        self,
+        chunks: list[Chunk],
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> list[Chunk]:
+        """Apply every configured transform in order.
+
+        Args:
+            chunks: Ordered chunks produced by ``DocumentChunker``.
+            context: Trace-safe runtime metadata passed unchanged to every
+                transform implementation.
+
+        Returns:
+            The final ordered chunk list after all enabled transforms complete.
+        """
+
+        output = [chunk.model_copy(deep=True) for chunk in chunks]
+        for transform in self.transforms:
+            output = transform.transform(output, context=context)
+        return output
+
+    @staticmethod
+    def _step_builders() -> dict[
+        str,
+        Callable[[TransformStepSettings, BaseLLM | None], BaseTransform],
+    ]:
+        """Return the fixed ingestion transform registry.
+
+        Returns:
+            A map from settings step names to concrete builders. This registry
+            is deliberately local to ingestion orchestration and is not exposed
+            as a provider factory.
+        """
+
+        return {
+            "metadata_enrich": _build_metadata_enricher,
+            "rewrite_chunk": _build_chunk_rewriter,
+            "semantic_merge": _build_semantic_merge,
+            "denoise": _build_denoise_transform,
+        }
+
+
+def _build_metadata_enricher(
+    step: TransformStepSettings,
+    llm: BaseLLM | None,
+) -> BaseTransform:
+    """Create the metadata enrichment step.
+
+    Args:
+        step: Enabled transform step settings. Extra fields are ignored by this
+            deterministic transform.
+        llm: Unused optional shared LLM argument accepted for a uniform builder
+            signature.
+
+    Returns:
+        A ``MetadataEnricher`` instance.
+    """
+
+    del step, llm
+    return MetadataEnricher()
+
+
+def _build_chunk_rewriter(
+    step: TransformStepSettings,
+    llm: BaseLLM | None,
+) -> BaseTransform:
+    """Create the LLM-backed chunk rewrite step.
+
+    Args:
+        step: Settings containing the required rewrite Prompt path.
+        llm: Shared chat client injected by the pipeline.
+
+    Returns:
+        A ``ChunkRewriter`` configured with the versioned rewrite Prompt.
+
+    Raises:
+        ConfigurationError: If the step has no Prompt path or no LLM client.
+    """
+
+    if step.prompt_path is None:
+        raise ConfigurationError(
+            "Transform step requires prompt_path",
+            context={"step_name": step.name},
+        )
+    if llm is None:
+        raise ConfigurationError(
+            "Transform step requires an LLM client",
+            context={"step_name": step.name},
+        )
+    return ChunkRewriter(llm=llm, prompt=load_prompt(step.prompt_path))
+
+
+def _build_semantic_merge(
+    step: TransformStepSettings,
+    llm: BaseLLM | None,
+) -> BaseTransform:
+    """Create the LLM-backed semantic merge step.
+
+    Args:
+        step: Settings containing the required semantic-merge Prompt path.
+        llm: Shared chat client injected by the pipeline.
+
+    Returns:
+        A ``SemanticMergeTransform`` configured with the merge Prompt.
+
+    Raises:
+        ConfigurationError: If the step has no Prompt path or no LLM client.
+    """
+
+    if step.prompt_path is None:
+        raise ConfigurationError(
+            "Transform step requires prompt_path",
+            context={"step_name": step.name},
+        )
+    if llm is None:
+        raise ConfigurationError(
+            "Transform step requires an LLM client",
+            context={"step_name": step.name},
+        )
+    return SemanticMergeTransform(llm=llm, prompt=load_prompt(step.prompt_path))
+
+
+def _build_denoise_transform(
+    step: TransformStepSettings,
+    llm: BaseLLM | None,
+) -> BaseTransform:
+    """Create the deterministic denoise step.
+
+    Args:
+        step: Enabled transform step settings. Extra fields are ignored by this
+            deterministic transform.
+        llm: Unused optional shared LLM argument accepted for a uniform builder
+            signature.
+
+    Returns:
+        A ``DenoiseTransform`` instance.
+    """
+
+    del step, llm
+    return DenoiseTransform()

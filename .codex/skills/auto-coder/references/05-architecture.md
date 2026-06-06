@@ -68,10 +68,12 @@ services/ai-service/rag/
 ├── .dockerignore                                  # Docker 构建上下文忽略规则
 ├── .gitignore                                     # RAG 模块本地缓存、日志和临时文件忽略规则
 ├── config/
-│   ├── settings.yaml                              # 统一运行配置，控制组件选择和参数
+│   ├── settings.example.yaml                      # 版本化完整配置模板，包含组件 Provider 选择
+│   ├── settings.yaml                              # 本地运行配置，由模板复制且不提交 Git
 │   └── prompts/
 │       ├── rerank_prompt.yaml                     # Rerank 阶段使用的提示词模板
 │       ├── rewrite_chunk_prompt.yaml              # chunk 语义改写与增强提示词模板
+│       ├── semantic_merge_prompt.yaml              # 相邻 chunk 语义合并判断提示词模板
 │       └── image_to_text_prompt.yaml              # 图片转文字描述提示词模板
 ├── data/
 │   ├── raw/                                       # 按 collection 分类存放原始测试文档和本地摄取文件
@@ -118,14 +120,7 @@ services/ai-service/rag/
 │   │   │   ├── splitter_factory.py                # 根据配置创建 Splitter
 │   │   │   └── recursive_character_splitter.py    # LangChain RecursiveCharacterTextSplitter 包装
 │   │   ├── transform/
-│   │   │   ├── base_transform.py                  # Transform 最小抽象接口
-│   │   │   ├── transform_factory.py               # 根据配置创建 Transform
-│   │   │   ├── metadata_enricher.py               # metadata 注入 Transform 实现
-│   │   │   ├── chunk_rewriter.py                  # LLM chunk rewrite Transform 实现
-│   │   │   ├── semantic_merge_transform.py        # 语义合并 Transform 实现
-│   │   │   ├── denoise_transform.py               # 去噪 Transform 实现
-│   │   │   ├── image_to_text_transform.py         # Vision LLM 图片 caption 适配实现
-│   │   │   └── fake_transform.py                  # 单元测试使用的假 Transform 实现
+│   │   │   └── base_transform.py                  # Transform 最小抽象接口
 │   │   ├── embedding/
 │   │   │   ├── base_embedding.py                  # EmbeddingClient 最小抽象接口
 │   │   │   ├── embedding_factory.py               # 根据配置创建 EmbeddingClient
@@ -152,10 +147,11 @@ services/ai-service/rag/
 │   │   │   ├── document_chunker.py                # 将 Document 适配为符合 core.types 契约的 Chunk
 │   │   │   └── chunk_id.py                        # 生成 hash(source_path + section_path + content_hash)
 │   │   ├── transform/
-│   │   │   ├── transformer.py                     # Transform 主编排
-│   │   │   ├── rewrite_chunk.py                   # 利用 LLM 对 chunk 进行语义改写
-│   │   │   ├── semantic_merge.py                  # 合并逻辑相关但被物理切割的 chunk
-│   │   │   ├── denoise.py                         # 去除页眉页脚、重复目录和解析噪声
+│   │   │   ├── transformer.py                     # Transform 串行主编排
+│   │   │   ├── metadata_enricher.py               # metadata 注入 Transform 实现
+│   │   │   ├── chunk_rewriter.py                  # 利用 LLM 对 chunk 进行语义改写
+│   │   │   ├── semantic_merge_transform.py        # 合并逻辑相关但被物理切割的 chunk
+│   │   │   ├── denoise_transform.py               # 去除页眉页脚、重复目录和解析噪声
 │   │   │   └── image_captioner.py                 # 根据 image_refs 生成 caption 并写入 metadata
 │   │   ├── embedding/
 │   │   │   ├── embedding_step.py                  # Embedding 阶段主编排
@@ -240,6 +236,7 @@ services/ai-service/rag/
     │   └── test_aimodel_rag_tool.py               # AImodel RAG 工具端到端测试
     └── fixtures/
         ├── shopping_guides/                       # 测试用购物指南文档
+        ├── noisy_documents/                       # 页眉页脚、目录、水印和解析断行等噪声样本
         ├── images/                                # 测试图片素材
         └── golden_set.json                        # 黄金测试集
 ```
@@ -256,10 +253,12 @@ services/ai-service/rag/
 | `main.py` | 提供独立运行入口 | 可启动 FastAPI/MCP 服务，也可分发到 ingestion、query、dashboard 调试命令 |
 | `Dockerfile` | 构建独立 RAG 服务镜像 | Python 3.12、固定版本 uv、`uv sync --frozen --no-dev`、非 root 运行、健康检查预留 |
 | `.dockerignore` | 控制 Docker 构建上下文 | 排除缓存、日志、测试数据和本地数据库文件 |
-| `.gitignore` | 控制 RAG 模块本地忽略文件 | 排除 `src/logs/*.log`、`src/cache/`、`data/db/`、临时图片和模型缓存 |
-| `config/settings.yaml` | 管理运行时配置和组件选择 | 配置驱动切换 LLM、Embedding、Splitter、VectorStore、Reranker、Evaluator |
+| `.gitignore` | 控制 RAG 模块本地忽略文件 | 排除本地 `config/settings.yaml`、`src/logs/*.log`、`src/cache/`、`data/db/`、临时图片和模型缓存 |
+| `config/settings.example.yaml` | 提供完整版本化配置模板 | 展示 LLM、Embedding、Splitter、Transform steps、VectorStore、Reranker、Evaluator 配置和参数 |
+| `config/settings.yaml` | 管理本地运行配置和组件选择 | 由示例模板复制，允许环境定制并被 Git 忽略 |
 | `config/prompts/rerank_prompt.yaml` | 保存 rerank 阶段提示词 | prompt 与代码分离，便于评估不同 rerank 策略 |
-| `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段做 chunk rewrite、语义合并和去噪 |
+| `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段做 chunk rewrite 并保持事实和图片引用 |
+| `config/prompts/semantic_merge_prompt.yaml` | 保存相邻 chunk 合并判断提示词 | 仅合并逻辑连续内容，要求结构化 merge 决策和合并文本 |
 | `config/prompts/image_to_text_prompt.yaml` | 保存图片转文字提示词 | 使用英文 Prompt 指令，按图片类型生成可检索的简体中文描述，并原样保留图片中的文字 |
 | `data/raw/shopping_guides/` | 存放 shopping_guides collection 原始文档 | 按 collection 分类，便于离线摄取和回归测试 |
 | `data/db/postgres/` | 存放 PostgreSQL 本地开发辅助数据 | 保存初始化辅助文件、dump 或本地持久化数据 |
@@ -302,14 +301,7 @@ services/ai-service/rag/
 | `src/libs/splitter/base_splitter.py` | 定义 Splitter 抽象接口 | 纯文本工具，接口固定为 `split(text: str) -> List[str]` |
 | `src/libs/splitter/splitter_factory.py` | 创建 Splitter | 根据配置选择 splitter 实现 |
 | `src/libs/splitter/recursive_character_splitter.py` | 包装 LangChain splitter | 只输出文本片段 `List[str]`，不创建业务 `Chunk`，不引入 LangChain RAG 链路 |
-| `src/libs/transform/base_transform.py` | 定义 Transform 抽象接口 | `transform(chunks, context) -> chunks` |
-| `src/libs/transform/transform_factory.py` | 创建 Transform 实现 | 根据 settings 和 transform 配置组装 metadata、rewrite、merge、denoise、image-to-text 适配能力 |
-| `src/libs/transform/metadata_enricher.py` | metadata 注入实现 | 标题路径、来源、文档主题、业务 metadata 注入 |
-| `src/libs/transform/chunk_rewriter.py` | LLM chunk rewrite 实现 | 调用 LLMClient 对粗切分 chunk 做语义改写 |
-| `src/libs/transform/semantic_merge_transform.py` | 语义合并实现 | 合并逻辑相关但被物理切开的 chunk |
-| `src/libs/transform/denoise_transform.py` | 去噪实现 | 删除页眉页脚、目录、解析残留 |
-| `src/libs/transform/image_to_text_transform.py` | Image-to-Text 适配 | 调用 Vision LLM 生成结构化 caption 结果，不直接负责 pipeline 编排 |
-| `src/libs/transform/fake_transform.py` | 测试 Transform 实现 | 单元测试中稳定返回增强 chunk，不访问外部模型 |
+| `src/libs/transform/base_transform.py` | 定义 Transform 抽象接口 | `transform(chunks, context) -> chunks`；具体执行顺序由 ingestion pipeline 负责 |
 | `src/libs/embedding/base_embedding.py` | 定义 EmbeddingClient 抽象接口 | `embed(text)`、`embed_batch(texts)` |
 | `src/libs/embedding/embedding_factory.py` | 创建 EmbeddingClient | 根据配置选择 OpenAI/fake embedding |
 | `src/libs/embedding/openai_embedding.py` | OpenAI embedding 实现 | `text-embedding-3-small`、批量调用 |
@@ -336,10 +328,11 @@ services/ai-service/rag/
 | `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
 | `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、继承 metadata、添加 `chunk_index`、建立 `source_ref`、按需分发 `image_refs` |
 | `src/ingestion/chunk/chunk_id.py` | 生成稳定 chunk_id | `hash(source_path + section_path + content_hash)` |
-| `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 串联 rewrite、semantic_merge、denoise，ImageCaptioner 作为图片 caption 专用步骤独立执行 |
-| `src/ingestion/transform/rewrite_chunk.py` | LLM 改写 chunk | 提升语义完整性和检索可读性 |
-| `src/ingestion/transform/semantic_merge.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk |
-| `src/ingestion/transform/denoise.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留 |
+| `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 从 `settings.transform.steps` 读取顺序，串行执行 metadata_enrich、rewrite_chunk、semantic_merge、denoise |
+| `src/ingestion/transform/metadata_enricher.py` | metadata 注入实现 | 标题路径、来源、文档主题、业务 metadata 注入 |
+| `src/ingestion/transform/chunk_rewriter.py` | LLM 改写 chunk | 提升语义完整性和检索可读性，Prompt 从配置读取 |
+| `src/ingestion/transform/semantic_merge_transform.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk，保留 source_ref 和 image_refs |
+| `src/ingestion/transform/denoise_transform.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留，保留图片占位符 |
 | `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、caption 写入 chunk metadata |
 | `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | DenseEncoder、BM25Indexer、BatchProcessor 和 upsert 前结果汇总 |
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | `text-embedding-3-small`、content_hash 差量判断、Dense 向量生成 |

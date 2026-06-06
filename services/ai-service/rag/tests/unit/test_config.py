@@ -22,7 +22,7 @@ import pytest
 import yaml
 
 RAG_ROOT = Path(__file__).resolve().parents[2]
-SETTINGS_PATH = RAG_ROOT / "config" / "settings.yaml"
+SETTINGS_PATH = RAG_ROOT / "config" / "settings.example.yaml"
 PROMPTS_DIR = RAG_ROOT / "config" / "prompts"
 
 # The RAG subsystem is independently installable, but repository-level pytest
@@ -42,8 +42,8 @@ def load_settings_document() -> dict[str, Any]:
 
     Returns:
         The top-level settings mapping exactly as represented in
-        ``config/settings.yaml``. Environment-variable names remain strings;
-        no secrets are resolved and no defaults are injected.
+        ``config/settings.example.yaml``. Environment-variable names remain
+        strings; no secrets are resolved and no defaults are injected.
 
     Raises:
         OSError: If the settings file cannot be read.
@@ -110,6 +110,21 @@ def test_settings_contains_required_sections() -> None:
         "evaluation",
         "mcp",
     } <= settings.keys()
+
+
+def test_runtime_settings_is_ignored_and_versioned_example_exists() -> None:
+    """Protect separation between local runtime values and reviewed defaults.
+
+    ``settings.yaml`` may contain machine-specific provider selections and must
+    never be committed. The complete example remains versioned so clean
+    checkouts, CI, and new developers retain an executable configuration
+    contract.
+    """
+
+    gitignore = (RAG_ROOT / ".gitignore").read_text(encoding="utf-8")
+
+    assert "config/settings.yaml" in gitignore.splitlines()
+    assert SETTINGS_PATH.is_file()
 
 
 def test_default_component_selection_matches_the_spec() -> None:
@@ -182,10 +197,15 @@ def test_retrieval_and_transform_defaults_are_complete() -> None:
     assert settings["retrieval"]["dense_top_k"] >= settings["retrieval"]["final_top_k"]
     assert settings["retrieval"]["sparse_top_k"] >= settings["retrieval"]["final_top_k"]
     assert settings["retrieval"]["filters"]["default_collection"] == "shopping_guides"
-    assert all(
-        settings["transform"][name]["enabled"]
-        for name in ("rewrite_chunk", "semantic_merge", "denoise", "image_to_text")
-    )
+    transform_steps = settings["transform"]["steps"]
+    assert [step["name"] for step in transform_steps] == [
+        "metadata_enrich",
+        "rewrite_chunk",
+        "semantic_merge",
+        "denoise",
+    ]
+    assert all(step["enabled"] for step in transform_steps)
+    assert all("provider" not in step for step in transform_steps)
 
 
 def test_prompt_definitions_share_a_stable_contract() -> None:
@@ -199,6 +219,7 @@ def test_prompt_definitions_share_a_stable_contract() -> None:
     prompt_files = (
         "rerank_prompt.yaml",
         "rewrite_chunk_prompt.yaml",
+        "semantic_merge_prompt.yaml",
         "image_to_text_prompt.yaml",
     )
 
@@ -236,6 +257,7 @@ def test_prompt_instruction_content_is_written_in_english() -> None:
     prompt_files = (
         "rerank_prompt.yaml",
         "rewrite_chunk_prompt.yaml",
+        "semantic_merge_prompt.yaml",
         "image_to_text_prompt.yaml",
     )
     cjk_pattern = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]")

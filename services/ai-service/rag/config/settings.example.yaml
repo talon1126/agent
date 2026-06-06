@@ -82,18 +82,19 @@ splitter:
         - "。"
         - " "
 
-# Transform steps are independently configurable and keep prompts outside business code.
+# Transform steps run serially inside the ingestion pipeline and keep prompts outside business code.
 transform:
-  rewrite_chunk:
-    enabled: true
-    prompt_path: config/prompts/rewrite_chunk_prompt.yaml
-  semantic_merge:
-    enabled: true
-  denoise:
-    enabled: true
-  image_to_text:
-    enabled: true
-    prompt_path: config/prompts/image_to_text_prompt.yaml
+  steps:
+    - name: metadata_enrich
+      enabled: true
+    - name: rewrite_chunk
+      enabled: true
+      prompt_path: config/prompts/rewrite_chunk_prompt.yaml
+    - name: semantic_merge
+      enabled: true
+      prompt_path: config/prompts/semantic_merge_prompt.yaml
+    - name: denoise
+      enabled: true
 
 # Hybrid retrieval keeps route limits separate from the final response limit.
 retrieval:

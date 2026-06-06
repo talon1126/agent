@@ -17,6 +17,7 @@ from unittest.mock import Mock
 import pytest
 
 RAG_ROOT = Path(__file__).resolve().parents[2]
+SETTINGS_PATH = RAG_ROOT / "config" / "settings.example.yaml"
 
 # Repository-level pytest runs the independently installable RAG module directly
 # from source. Adding this root mirrors editable-install imports while keeping
@@ -30,7 +31,6 @@ loader_module = importlib.import_module("src.libs.loader")
 splitter_module = importlib.import_module("src.libs.splitter")
 llm_module = importlib.import_module("src.libs.llm")
 embedding_module = importlib.import_module("src.libs.embedding")
-transform_module = importlib.import_module("src.libs.transform")
 vector_store_module = importlib.import_module("src.libs.vector_store")
 reranker_module = importlib.import_module("src.libs.reranker")
 evaluator_module = importlib.import_module("src.libs.evaluator")
@@ -44,7 +44,6 @@ FakeLoader = loader_module.FakeLoader
 FakeEmbedding = embedding_module.FakeEmbedding
 FakeLLM = llm_module.FakeLLM
 FakeSplitter = splitter_module.FakeSplitter
-FakeTransform = transform_module.FakeTransform
 FakeVectorStore = vector_store_module.FakeVectorStore
 FakeReranker = reranker_module.FakeReranker
 NoOpReranker = reranker_module.NoOpReranker
@@ -58,7 +57,6 @@ MarkdownLoader = loader_module.MarkdownLoader
 PdfLoader = loader_module.PdfLoader
 RecursiveCharacterSplitter = splitter_module.RecursiveCharacterSplitter
 SplitterFactory = splitter_module.SplitterFactory
-TransformFactory = transform_module.TransformFactory
 VectorStoreFactory = vector_store_module.VectorStoreFactory
 RerankerFactory = reranker_module.RerankerFactory
 EvaluatorFactory = evaluator_module.EvaluatorFactory
@@ -92,8 +90,10 @@ def test_libs_exports_stable_component_package_names() -> None:
 def test_pluggable_component_packages_are_importable() -> None:
     """Require each component package namespace to be importable.
 
-    B8-B11 will add base interfaces, factories, and concrete implementations
-    under these packages. This test fails early if a package is renamed,
+    B8-B11 add base interfaces, factories, and concrete implementations under
+    these packages. Transform intentionally remains interface-only because
+    concrete transform execution belongs to ingestion. This test fails early if
+    a package is renamed,
     removed, or never created.
     """
 
@@ -156,7 +156,7 @@ def test_splitter_factory_creates_fake_and_configured_recursive_splitters() -> N
     hardcoding chunk parameters in orchestration code.
     """
 
-    settings = load_settings(validate_environment=False)
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
 
     fake_splitter = SplitterFactory.create(provider="fake", chunks=["first", "second"])
     recursive_splitter = SplitterFactory.create(settings=settings)
@@ -195,7 +195,6 @@ def test_factories_register_builtin_providers_through_explicit_method() -> None:
     SplitterFactory.register_builtin_providers()
     LLMFactory.register_builtin_providers()
     EmbeddingFactory.register_builtin_providers()
-    TransformFactory.register_builtin_providers()
     VectorStoreFactory.register_builtin_providers()
     RerankerFactory.register_builtin_providers()
     EvaluatorFactory.register_builtin_providers()
@@ -204,7 +203,6 @@ def test_factories_register_builtin_providers_through_explicit_method() -> None:
     assert {"fake", "recursive_character"}.issubset(SplitterFactory.list_providers())
     assert {"deepseek", "fake"}.issubset(LLMFactory.list_providers())
     assert {"fake", "openai"}.issubset(EmbeddingFactory.list_providers())
-    assert "fake" in TransformFactory.list_providers()
     assert {"fake", "pgvector"}.issubset(VectorStoreFactory.list_providers())
     assert {"fake", "none", "rrf", "fallback"}.issubset(
         RerankerFactory.list_providers()
@@ -262,7 +260,7 @@ def test_embedding_factory_creates_fake_embedding_with_batch_interface() -> None
 def test_model_factories_fail_fast_when_required_environment_is_missing() -> None:
     """Require real providers to reject missing credentials before SDK calls."""
 
-    settings = load_settings(validate_environment=False)
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
 
     with pytest.raises(ConfigurationError) as llm_error:
         LLMFactory.create(settings=settings, environ={})
@@ -271,47 +269,6 @@ def test_model_factories_fail_fast_when_required_environment_is_missing() -> Non
 
     assert llm_error.value.context["environment_variable"] == "DASHSCOPE_API_KEY"
     assert embedding_error.value.context["environment_variable"] == "OPENAI_API_KEY"
-
-
-def test_transform_factory_creates_fake_transform_with_unified_interface() -> None:
-    """Require TransformFactory to build a transform with a stable chunk contract.
-
-    Transform stages should accept business ``Chunk`` objects and return a new
-    list of ``Chunk`` objects. The fake implementation proves factory wiring and
-    metadata mutation behavior without calling LLMs or image-caption providers.
-    """
-
-    transform = TransformFactory.create(
-        provider="fake",
-        metadata_updates={"transform_status": "ok"},
-    )
-    chunk = Chunk(
-        id="chunk-1",
-        text="Original chunk text.",
-        metadata={"source_path": "shopping_guides/example.md"},
-        chunk_index=0,
-        start_offset=0,
-        end_offset=20,
-        source_ref={"document_id": "doc-1"},
-    )
-
-    transformed = transform.transform([chunk], context={"trace_id": "trace-1"})
-
-    assert isinstance(transform, FakeTransform)
-    assert transformed != [chunk]
-    assert transformed[0].metadata["source_path"] == "shopping_guides/example.md"
-    assert transformed[0].metadata["transform_status"] == "ok"
-    assert "transform_status" not in chunk.metadata
-
-
-def test_transform_factory_raises_configuration_error_for_unknown_provider() -> None:
-    """Require TransformFactory to fail fast for misspelled provider names."""
-
-    with pytest.raises(ConfigurationError) as transform_error:
-        TransformFactory.create(provider="missing")
-
-    assert transform_error.value.context["provider"] == "missing"
-    assert "fake" in transform_error.value.context["available"]
 
 
 def test_vector_store_factory_creates_order_preserving_fake_store() -> None:
@@ -383,7 +340,7 @@ def test_reranker_factory_uses_configured_rrf_fallback_when_default_is_unavailab
     already fused candidate order instead of failing the query.
     """
 
-    settings = load_settings(validate_environment=False)
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
     reranker = RerankerFactory.create(settings=settings)
     candidates = [
         types_module.RetrievalResult(
@@ -568,7 +525,7 @@ def test_openai_embedding_batches_once_and_restores_input_order() -> None:
 def test_real_provider_factories_read_checked_in_settings_with_injected_clients() -> None:
     """Require B12 implementations to use settings without performing network I/O."""
 
-    settings = load_settings(validate_environment=False)
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
     sdk_client = Mock()
     pool = Mock()
 

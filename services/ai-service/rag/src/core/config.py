@@ -188,11 +188,41 @@ class SplitterSettings(ConfigSection):
         return self
 
 
-class TransformSettings(ConfigSection):
-    """Describe one independently configurable ingestion transform."""
+class TransformStepSettings(ConfigSection):
+    """Describe one ordered transform step in the ingestion pipeline.
 
+    Transform stages are not provider-selected factories. The ingestion layer
+    owns the concrete step registry and executes every enabled step in this
+    order so semantic rewrite, merge, denoise, and later image captioning remain
+    a pipeline concern instead of a generic pluggable provider boundary.
+    """
+
+    name: str = Field(min_length=1)
     enabled: bool = True
     prompt_path: str | None = None
+
+
+class TransformPipelineSettings(ConfigSection):
+    """Describe the ordered transform chain applied during ingestion."""
+
+    steps: list[TransformStepSettings] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_step_names(self) -> Self:
+        """Ensure transform orchestration cannot execute ambiguous steps.
+
+        Returns:
+            The validated transform pipeline settings.
+
+        Raises:
+            ValueError: If the same step name appears more than once.
+        """
+
+        names = [step.name for step in self.steps]
+        duplicate_names = sorted({name for name in names if names.count(name) > 1})
+        if duplicate_names:
+            raise ValueError(f"Duplicate transform steps are not allowed: {duplicate_names}")
+        return self
 
 
 class RetrievalFiltersSettings(ConfigSection):
@@ -338,7 +368,7 @@ class RagSettings(BaseModel):
     embedding: EmbeddingSettings
     vector_store: VectorStoreSettings
     splitter: SplitterSettings
-    transform: dict[str, TransformSettings]
+    transform: TransformPipelineSettings
     retrieval: RetrievalSettings
     rerank: RerankSettings
     ingestion: IngestionSettings

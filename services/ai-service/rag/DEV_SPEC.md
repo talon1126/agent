@@ -432,6 +432,15 @@ embedding:
 rerank:
   provider: cross_encoder
   fallback: rrf
+
+transform:
+  steps:
+    - name: metadata_enrich
+    - name: rewrite_chunk
+      prompt_path: config/prompts/rewrite_chunk_prompt.yaml
+    - name: semantic_merge
+      prompt_path: config/prompts/semantic_merge_prompt.yaml
+    - name: denoise
 ```
 
 业务代码只调用：
@@ -450,6 +459,10 @@ Factory 注册表约束：
 - **可扩展注册**：仍保留 `register(provider, implementation_class)`，用于测试或后续扩展。
 - **接口校验**：注册时必须校验实现类继承对应 Base 接口。
 - **业务无感知**：Pipeline、Dashboard、MCP 等上层业务只传 settings/provider，不直接 import 具体实现类。
+
+Transform 不创建 Factory，也不作为 Provider 选项。Transform 由 ingestion pipeline 根据
+`settings.transform.steps` 按顺序串行执行，`src.libs.transform` 只保留
+`BaseTransform` 抽象契约，具体实现放在 `src/ingestion/transform/`。
 
 #### 3.4.3 Provider 选项
 
@@ -474,17 +487,20 @@ Factory 注册表约束：
 
 ### 3.5 配置管理
 
-配置文件：`services/ai-service/rag/config/settings.yaml`
+版本化配置模板：`services/ai-service/rag/config/settings.example.yaml`
+
+本地运行配置：`services/ai-service/rag/config/settings.yaml`
 
 配置设计目标：
 
-- **统一入口**：所有可插拔组件都从 `settings.yaml` 读取配置，不在业务代码中写死 Provider、模型名和参数。
+- **模板与运行配置分离**：仓库提交完整的 `settings.example.yaml`；开发者复制为本地 `settings.yaml` 后按环境修改，`settings.yaml` 必须被 Git 忽略。
+- **统一入口**：所有可插拔组件都从本地 `settings.yaml` 读取配置，不在业务代码中写死 Provider、模型名和参数。
 - **分层清晰**：按 `llm`、`embedding`、`splitter`、`vector_store`、`reranker`、`retrieval`、`ingestion`、`observability` 等模块组织。
 - **环境变量隔离敏感信息**：API Key、数据库连接串等敏感信息只写环境变量名，不直接写入配置文件。
 - **支持默认与降级**：每类组件都允许配置 fallback，便于组件不可用时回退到安全方案。
 - **适合 Dashboard 展示**：Dashboard 可以直接读取配置，展示当前启用的 LLM、Embedding、Splitter、Reranker、VectorStore 和 Evaluator。
 
-`settings.yaml` 示例：
+`settings.example.yaml` 示例：
 
 ```yaml
 project:
@@ -565,16 +581,17 @@ splitter:
         - " "
 
 transform:
-  rewrite_chunk:
-    enabled: true
-    prompt_path: config/prompts/rewrite_chunk_prompt.yaml
-  semantic_merge:
-    enabled: true
-  denoise:
-    enabled: true
-  image_to_text:
-    enabled: true
-    prompt_path: config/prompts/image_to_text_prompt.yaml
+  steps:
+    - name: metadata_enrich
+      enabled: true
+    - name: rewrite_chunk
+      enabled: true
+      prompt_path: config/prompts/rewrite_chunk_prompt.yaml
+    - name: semantic_merge
+      enabled: true
+      prompt_path: config/prompts/semantic_merge_prompt.yaml
+    - name: denoise
+      enabled: true
 
 retrieval:
   query_rewrite_enabled: true
@@ -1247,10 +1264,12 @@ services/ai-service/rag/
 ├── .dockerignore                                  # Docker 构建上下文忽略规则
 ├── .gitignore                                     # RAG 模块本地缓存、日志和临时文件忽略规则
 ├── config/
-│   ├── settings.yaml                              # 统一运行配置，控制组件选择和参数
+│   ├── settings.example.yaml                      # 版本化完整配置模板，包含组件 Provider 选择
+│   ├── settings.yaml                              # 本地运行配置，由模板复制且不提交 Git
 │   └── prompts/
 │       ├── rerank_prompt.yaml                     # Rerank 阶段使用的提示词模板
 │       ├── rewrite_chunk_prompt.yaml              # chunk 语义改写与增强提示词模板
+│       ├── semantic_merge_prompt.yaml              # 相邻 chunk 语义合并判断提示词模板
 │       └── image_to_text_prompt.yaml              # 图片转文字描述提示词模板
 ├── data/
 │   ├── raw/                                       # 按 collection 分类存放原始测试文档和本地摄取文件
@@ -1297,14 +1316,7 @@ services/ai-service/rag/
 │   │   │   ├── splitter_factory.py                # 根据配置创建 Splitter
 │   │   │   └── recursive_character_splitter.py    # LangChain RecursiveCharacterTextSplitter 包装
 │   │   ├── transform/
-│   │   │   ├── base_transform.py                  # Transform 最小抽象接口
-│   │   │   ├── transform_factory.py               # 根据配置创建 Transform
-│   │   │   ├── metadata_enricher.py               # metadata 注入 Transform 实现
-│   │   │   ├── chunk_rewriter.py                  # LLM chunk rewrite Transform 实现
-│   │   │   ├── semantic_merge_transform.py        # 语义合并 Transform 实现
-│   │   │   ├── denoise_transform.py               # 去噪 Transform 实现
-│   │   │   ├── image_to_text_transform.py         # Vision LLM 图片 caption 适配实现
-│   │   │   └── fake_transform.py                  # 单元测试使用的假 Transform 实现
+│   │   │   └── base_transform.py                  # Transform 最小抽象接口
 │   │   ├── embedding/
 │   │   │   ├── base_embedding.py                  # EmbeddingClient 最小抽象接口
 │   │   │   ├── embedding_factory.py               # 根据配置创建 EmbeddingClient
@@ -1331,10 +1343,11 @@ services/ai-service/rag/
 │   │   │   ├── document_chunker.py                # 将 Document 适配为符合 core.types 契约的 Chunk
 │   │   │   └── chunk_id.py                        # 生成 hash(source_path + section_path + content_hash)
 │   │   ├── transform/
-│   │   │   ├── transformer.py                     # Transform 主编排
-│   │   │   ├── rewrite_chunk.py                   # 利用 LLM 对 chunk 进行语义改写
-│   │   │   ├── semantic_merge.py                  # 合并逻辑相关但被物理切割的 chunk
-│   │   │   ├── denoise.py                         # 去除页眉页脚、重复目录和解析噪声
+│   │   │   ├── transformer.py                     # Transform 串行主编排
+│   │   │   ├── metadata_enricher.py               # metadata 注入 Transform 实现
+│   │   │   ├── chunk_rewriter.py                  # 利用 LLM 对 chunk 进行语义改写
+│   │   │   ├── semantic_merge_transform.py        # 合并逻辑相关但被物理切割的 chunk
+│   │   │   ├── denoise_transform.py               # 去除页眉页脚、重复目录和解析噪声
 │   │   │   └── image_captioner.py                 # 根据 image_refs 生成 caption 并写入 metadata
 │   │   ├── embedding/
 │   │   │   ├── embedding_step.py                  # Embedding 阶段主编排
@@ -1419,6 +1432,7 @@ services/ai-service/rag/
     │   └── test_aimodel_rag_tool.py               # AImodel RAG 工具端到端测试
     └── fixtures/
         ├── shopping_guides/                       # 测试用购物指南文档
+        ├── noisy_documents/                       # 页眉页脚、目录、水印和解析断行等噪声样本
         ├── images/                                # 测试图片素材
         └── golden_set.json                        # 黄金测试集
 ```
@@ -1435,10 +1449,12 @@ services/ai-service/rag/
 | `main.py` | 提供独立运行入口 | 可启动 FastAPI/MCP 服务，也可分发到 ingestion、query、dashboard 调试命令 |
 | `Dockerfile` | 构建独立 RAG 服务镜像 | Python 3.12、固定版本 uv、`uv sync --frozen --no-dev`、非 root 运行、健康检查预留 |
 | `.dockerignore` | 控制 Docker 构建上下文 | 排除缓存、日志、测试数据和本地数据库文件 |
-| `.gitignore` | 控制 RAG 模块本地忽略文件 | 排除 `src/logs/*.log`、`src/cache/`、`data/db/`、临时图片和模型缓存 |
-| `config/settings.yaml` | 管理运行时配置和组件选择 | 配置驱动切换 LLM、Embedding、Splitter、VectorStore、Reranker、Evaluator |
+| `.gitignore` | 控制 RAG 模块本地忽略文件 | 排除本地 `config/settings.yaml`、`src/logs/*.log`、`src/cache/`、`data/db/`、临时图片和模型缓存 |
+| `config/settings.example.yaml` | 提供完整版本化配置模板 | 展示 LLM、Embedding、Splitter、Transform steps、VectorStore、Reranker、Evaluator 配置和参数 |
+| `config/settings.yaml` | 管理本地运行配置和组件选择 | 由示例模板复制，允许环境定制并被 Git 忽略 |
 | `config/prompts/rerank_prompt.yaml` | 保存 rerank 阶段提示词 | prompt 与代码分离，便于评估不同 rerank 策略 |
-| `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段做 chunk rewrite、语义合并和去噪 |
+| `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段做 chunk rewrite 并保持事实和图片引用 |
+| `config/prompts/semantic_merge_prompt.yaml` | 保存相邻 chunk 合并判断提示词 | 仅合并逻辑连续内容，要求结构化 merge 决策和合并文本 |
 | `config/prompts/image_to_text_prompt.yaml` | 保存图片转文字提示词 | 使用英文 Prompt 指令，按图片类型生成可检索的简体中文描述，并原样保留图片中的文字 |
 | `data/raw/shopping_guides/` | 存放 shopping_guides collection 原始文档 | 按 collection 分类，便于离线摄取和回归测试 |
 | `data/db/postgres/` | 存放 PostgreSQL 本地开发辅助数据 | 保存初始化辅助文件、dump 或本地持久化数据 |
@@ -1481,14 +1497,7 @@ services/ai-service/rag/
 | `src/libs/splitter/base_splitter.py` | 定义 Splitter 抽象接口 | 纯文本工具，接口固定为 `split(text: str) -> List[str]` |
 | `src/libs/splitter/splitter_factory.py` | 创建 Splitter | 根据配置选择 splitter 实现 |
 | `src/libs/splitter/recursive_character_splitter.py` | 包装 LangChain splitter | 只输出文本片段 `List[str]`，不创建业务 `Chunk`，不引入 LangChain RAG 链路 |
-| `src/libs/transform/base_transform.py` | 定义 Transform 抽象接口 | `transform(chunks, context) -> chunks` |
-| `src/libs/transform/transform_factory.py` | 创建 Transform 实现 | 根据 settings 和 transform 配置组装 metadata、rewrite、merge、denoise、image-to-text 适配能力 |
-| `src/libs/transform/metadata_enricher.py` | metadata 注入实现 | 标题路径、来源、文档主题、业务 metadata 注入 |
-| `src/libs/transform/chunk_rewriter.py` | LLM chunk rewrite 实现 | 调用 LLMClient 对粗切分 chunk 做语义改写 |
-| `src/libs/transform/semantic_merge_transform.py` | 语义合并实现 | 合并逻辑相关但被物理切开的 chunk |
-| `src/libs/transform/denoise_transform.py` | 去噪实现 | 删除页眉页脚、目录、解析残留 |
-| `src/libs/transform/image_to_text_transform.py` | Image-to-Text 适配 | 调用 Vision LLM 生成结构化 caption 结果，不直接负责 pipeline 编排 |
-| `src/libs/transform/fake_transform.py` | 测试 Transform 实现 | 单元测试中稳定返回增强 chunk，不访问外部模型 |
+| `src/libs/transform/base_transform.py` | 定义 Transform 抽象接口 | `transform(chunks, context) -> chunks`；具体执行顺序由 ingestion pipeline 负责 |
 | `src/libs/embedding/base_embedding.py` | 定义 EmbeddingClient 抽象接口 | `embed(text)`、`embed_batch(texts)` |
 | `src/libs/embedding/embedding_factory.py` | 创建 EmbeddingClient | 根据配置选择 OpenAI/fake embedding |
 | `src/libs/embedding/openai_embedding.py` | OpenAI embedding 实现 | `text-embedding-3-small`、批量调用 |
@@ -1515,10 +1524,11 @@ services/ai-service/rag/
 | `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
 | `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、继承 metadata、添加 `chunk_index`、建立 `source_ref`、按需分发 `image_refs` |
 | `src/ingestion/chunk/chunk_id.py` | 生成稳定 chunk_id | `hash(source_path + section_path + content_hash)` |
-| `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 串联 rewrite、semantic_merge、denoise，ImageCaptioner 作为图片 caption 专用步骤独立执行 |
-| `src/ingestion/transform/rewrite_chunk.py` | LLM 改写 chunk | 提升语义完整性和检索可读性 |
-| `src/ingestion/transform/semantic_merge.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk |
-| `src/ingestion/transform/denoise.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留 |
+| `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 从 `settings.transform.steps` 读取顺序，串行执行 metadata_enrich、rewrite_chunk、semantic_merge、denoise |
+| `src/ingestion/transform/metadata_enricher.py` | metadata 注入实现 | 标题路径、来源、文档主题、业务 metadata 注入 |
+| `src/ingestion/transform/chunk_rewriter.py` | LLM 改写 chunk | 提升语义完整性和检索可读性，Prompt 从配置读取 |
+| `src/ingestion/transform/semantic_merge_transform.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk，保留 source_ref 和 image_refs |
+| `src/ingestion/transform/denoise_transform.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留，保留图片占位符 |
 | `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、caption 写入 chunk metadata |
 | `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | DenseEncoder、BM25Indexer、BatchProcessor 和 upsert 前结果汇总 |
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | `text-embedding-3-small`、content_hash 差量判断、Dense 向量生成 |
@@ -1809,7 +1819,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 | 阶段 | 阶段标题 | 目标 | 状态 |
 | --- | --- | --- | --- |
-| Phase A | 配置与项目骨架 | 独立模块基础文件、uv 依赖锁定、Docker 部署骨架、pytest 冒烟测试、`settings.yaml`、prompt 配置、核心类型和配置加载 | [✔] |
+| Phase A | 配置与项目骨架 | 独立模块基础文件、uv 依赖锁定、Docker 部署骨架、pytest 冒烟测试、配置模板、prompt 配置、核心类型和配置加载 | [✔] |
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [~] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [ ] |
@@ -1854,7 +1864,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | 阶段 | 阶段标题 | 项目当前位置 | 可用功能 | 验证方式 | 完成日期 |
 | --- | --- | --- | --- | --- | --- |
 | Phase A | 配置与项目骨架 | 独立 RAG 模块骨架、uv 锁定环境、运行配置、Prompt 和共享数据契约已就绪，可进入持久化与可插拔组件开发 | `uv.lock`、项目 `.venv`、独立 CLI、frozen Docker 构建、类型化配置加载、活动环境变量校验、英文 Prompt、核心领域类型和统一异常 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q` | 2026-06-06 |
-| Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Factory、DeepSeek、OpenAI Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q` | 2026-06-06 |
+| Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Loader/Splitter/LLM/Embedding/VectorStore/Reranker/Evaluator Factory、BaseTransform、DeepSeek、OpenAI Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q` | 2026-06-06 |
 | Phase C | Ingestion & Indexing Pipeline | 未完成 | 暂无 | 暂无 |  |
 | Phase D | Retrieval | 未完成 | 暂无 | 暂无 |  |
 | Phase E | MCP 工具服务 | 未完成 | 暂无 | 暂无 |  |
@@ -1901,7 +1911,8 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 - 初始化 PostgreSQL/pgvector schema，并通过连接池执行事务和健康检查。
 - 持久化 collection、document、chunk、image、trace 和 evaluation 数据。
 - 管理文档生命周期，删除文档时同步清理关联 chunks 和 images。
-- 通过空注册表、`register_builtin_providers()` 和 Factory 创建 Loader、Splitter、LLM、Embedding、Transform、VectorStore、Reranker、Evaluator。
+- 通过空注册表、`register_builtin_providers()` 和 Factory 创建 Loader、Splitter、LLM、Embedding、VectorStore、Reranker、Evaluator。
+- 保留 `BaseTransform` 抽象接口，具体 Transform 在阶段 C 的 ingestion pipeline 中串行实现。
 - 通过百炼 OpenAI-compatible endpoint 调用 `deepseek-v4-flash`。
 - 批量调用 `text-embedding-3-small` 并保持输入输出顺序。
 - 为已持久化 chunk 写入 pgvector，执行 cosine search、metadata filter 和按 chunk_id 顺序回表。
@@ -1914,7 +1925,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 下一阶段入口：
 
-阶段 C 复用 `DocumentRepository`、`ChunkRepository`、`ImageStorage`、`LoaderFactory`、`SplitterFactory`、`TransformFactory`、`EmbeddingFactory` 和 `VectorStoreFactory`，实现 dedup -> load -> split -> transform -> encode -> upsert 的完整 Ingestion Pipeline。
+阶段 C 复用 `DocumentRepository`、`ChunkRepository`、`ImageStorage`、`LoaderFactory`、`SplitterFactory`、`BaseTransform`、`EmbeddingFactory` 和 `VectorStoreFactory`，实现 dedup -> load -> split -> transform -> encode -> upsert 的完整 Ingestion Pipeline。Transform 由 `src/ingestion/transform/TransformPipeline` 串行编排，不创建独立工厂。
 
 ### 6.3 阶段任务跟踪表
 
@@ -1930,7 +1941,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | --- | --- | --- | --- | --- |
 | A1 | 创建独立模块基础文件 | [✔] | 2026-06-06 | 已创建独立模块说明、项目元数据、依赖声明、pytest 配置、忽略规则和基础包入口 |
 | A2 | 创建独立运行入口、Docker 骨架和 pytest 冒烟测试 | [✔] | 2026-06-06 | 已创建最小运行入口、健康状态、Docker 骨架、六个关键包入口，4 个冒烟测试通过 |
-| A3 | 创建 `config/settings.yaml` 示例配置 | [✔] | 2026-06-06 | 已覆盖全部可插拔组件、流水线、存储、可观测、Dashboard、评估和 MCP 配置，5 个单元测试通过 |
+| A3 | 创建 `config/settings.example.yaml` 示例配置 | [✔] | 2026-06-06 | 已覆盖全部可插拔组件、流水线、存储、可观测、Dashboard、评估和 MCP 配置，5 个单元测试通过；C4 将运行时 settings 与版本化模板分离 |
 | A4 | 创建 prompt 配置目录 | [✔] | 2026-06-06 | 已创建统一英文 Prompt YAML 契约，覆盖 rerank、chunk rewrite、六类图片理解策略和中文 caption 输出，10 个配置测试通过 |
 | A5 | 实现配置读取和校验 | [✔] | 2026-06-06 | 已实现完整 `RagSettings`、Provider/model selector、活动环境变量、Embedding/pgvector 维度、检索参数和 Prompt 占位符校验，18 个配置测试通过 |
 | A6 | 定义核心类型和统一异常 | [✔] | 2026-06-06 | 已实现 Document、ImageMetadata、Chunk、RetrievalResult 及六类 RagError 子类，覆盖必填位置、非空文本、来源区间和异常链校验，16 个类型测试通过 |
@@ -1949,9 +1960,8 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | B7 | 建立 libs 可插拔组件包结构 | [✔] | 2026-06-06 | 已创建八个 libs 可插拔组件包和稳定导入契约；2 个单元测试通过 |
 | B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [✔] | 2026-06-06 | 已实现 loader/splitter 基类、注册表工厂、fake/markdown/pdf loader、fake/recursive splitter 和 DocumentChunker 契约；9 个指定单元测试通过 |
 | B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现 BaseLLM/LLMFactory/FakeLLM 与 BaseEmbedding/EmbeddingFactory/FakeEmbedding，统一 `chat()`、`embed()`、`embed_batch()`；10 个指定单元测试通过 |
-| B10 | 实现 Transform libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现 BaseTransform、TransformFactory 和 FakeTransform，统一 `transform(chunks, context)` 契约与内置 provider 注入；12 个指定单元测试通过 |
-| B11 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现三类最小接口、注册表工厂、固定维度 fake vector store、确定性 fake 和 RRF 顺序回退；17 个指定单元测试通过 |
-| B12 | 实现首批真实组件最小适配 | [✔] | 2026-06-06 | 已实现百炼 DeepSeek、OpenAI text-embedding-3-small 和 PgVectorStore；22 个 factory 单元测试、1 个 pgvector 集成测试通过，2 个 external smoke test 默认跳过 |
+| B10 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现三类最小接口、注册表工厂、固定维度 fake vector store、确定性 fake 和 RRF 顺序回退；17 个指定单元测试通过 |
+| B11 | 实现首批真实组件最小适配 | [✔] | 2026-06-06 | 已实现百炼 DeepSeek、OpenAI text-embedding-3-small 和 PgVectorStore；22 个 factory 单元测试、1 个 pgvector 集成测试通过，2 个 external smoke test 默认跳过 |
 
 #### 阶段 C：Ingestion & Indexing Pipeline
 
@@ -1960,7 +1970,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 已实现流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-06 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；11 个新增单元测试及真实文本/图片 PDF 冒烟测试通过 |
 | C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-06 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；24 个相关单元测试、111 个全量测试通过 |
-| C4 | 实现 Transform 具体实现 | [ ] |  | settings.yaml 配置真实 Transform；覆盖 metadata 注入、rewrite、合并、去噪和典型噪声场景 |
+| C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-06 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；49 个相关测试、120 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C5 | 实现 ImageCaptioner | [ ] |  | 当启用 `vision_llm` 且 chunk 存在 `image_refs` 时，生成 caption 并写入 metadata |
 | C6 | 实现 DenseEncoder | [ ] |  | 封装 `text-embedding-3-small`、content_hash 差量判断和 Dense 向量生成 |
 | C7 | 实现 BM25Indexer | [ ] |  | 生成 BM25 词项、词频和倒排索引数据 |
@@ -2040,14 +2050,14 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 7 | 7 | 100% |
-| Phase B | 12 | 12 | 100% |
-| Phase C | 11 | 3 | 27% |
+| Phase B | 11 | 11 | 100% |
+| Phase C | 11 | 4 | 36% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **22** | **31%** |
+| **总计** | **70** | **22** | **31%** |
 
 ### 6.5 阶段实施明细
 
@@ -2093,9 +2103,9 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 ##### A3：创建统一配置示例
 
-目标：提供首版 `settings.yaml` 示例，作为配置驱动开发的入口。
+目标：提供首版 `settings.example.yaml` 示例，作为配置驱动开发的入口；本地运行时复制为被 Git 忽略的 `settings.yaml`。
 
-修改文件：`config/settings.yaml`
+修改文件：`config/settings.example.yaml`
 
 实现类/函数：
 
@@ -2372,34 +2382,17 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 实现类/函数：
 
 - `BaseLLM`：定义最小抽象接口
-- `LLMFactory.register_builtin_providers()`：一次性注入 fake 内置实现，真实 provider 在 B12 注册
+- `LLMFactory.register_builtin_providers()`：一次性注入 fake 内置实现，真实 provider 在 B11 注册
 - `LLMFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
 - `BaseEmbedding`：定义最小抽象接口
-- `EmbeddingFactory.register_builtin_providers()`：一次性注入 fake 内置实现，真实 provider 在 B12 注册
+- `EmbeddingFactory.register_builtin_providers()`：一次性注入 fake 内置实现，真实 provider 在 B11 注册
 - `EmbeddingFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
 
 验收标准：`chat()`、`embed()`、`embed_batch()` 接口统一。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py -v`
 
-##### B10：实现 Transform 抽象和工厂
-
-目标：补齐 Transform 可插拔基类、工厂和 fake 实现。
-
-修改文件：`src/libs/transform/base_transform.py`、`src/libs/transform/transform_factory.py`、`src/libs/transform/fake_transform.py`、`tests/unit/test_factories.py`
-
-实现类/函数：
-
-- `BaseTransform`：定义最小抽象接口
-- `TransformFactory.register_builtin_providers()`：一次性注入 fake 和内置 Transform 实现
-- `TransformFactory.create()`：根据 provider 创建实现，内部自动确保内置实现已注册
-- `FakeTransform`：返回新的 Chunk 副本并合并测试 metadata，用于验证 Transform 链路不会原地修改输入
-
-验收标准：Transform 可按 provider 创建，fake transform 可用于单元测试。
-
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py -v`
-
-##### B11：实现 VectorStore/Reranker/Evaluator 抽象和工厂
+##### B10：实现 VectorStore/Reranker/Evaluator 抽象和工厂
 
 目标：统一向量存储、重排和评估组件的可插拔接口。
 
@@ -2416,7 +2409,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `NoOpReranker`：保持过滤后的 RRF 候选顺序，用于 none 和 rerank fallback
 - `BaseEvaluator.evaluate()`：统一黄金数据集与预测结果的批量评估入口
 - `FakeEvaluator`：校验数据集与预测数量一致后返回配置的确定性指标
-- `VectorStoreFactory.register_builtin_providers()`：一次性注入 fake 内置实现；pgvector 在 B12 注册
+- `VectorStoreFactory.register_builtin_providers()`：一次性注入 fake 内置实现；pgvector 在 B11 注册
 - `RerankerFactory.register_builtin_providers()`：一次性注入 fake、none 和 RRF fallback 内置实现
 - `EvaluatorFactory.register_builtin_providers()`：一次性注入 fake 内置实现；custom/Ragas 在阶段 G 注册
 
@@ -2424,7 +2417,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py -v`
 
-##### B12：实现首批真实组件最小适配
+##### B11：实现首批真实组件最小适配
 
 目标：接入首批真实 provider 的最小可用实现，并保留 fake 默认测试路径。
 
@@ -2504,22 +2497,25 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 
-##### C4：实现 Transform 具体实现
+##### C4：实现 Transform 抽象基类与具体实现
 
-目标：集中实现 Transform 阶段的具体能力，包括 metadata 注入、LLM chunk rewrite、智能合并和去噪。
+目标：集中实现 Transform 阶段的抽象契约、具体能力和 ingestion 串行编排，包括 metadata 注入、LLM chunk rewrite、智能合并和去噪；Transform 不使用 factory/provider 模式，摄取流水线必须根据 `settings.transform.steps` 按顺序执行 enabled step。
 
-修改文件：`config/settings.yaml`、`src/libs/transform/metadata_enricher.py`、`src/libs/transform/chunk_rewriter.py`、`src/libs/transform/semantic_merge_transform.py`、`src/libs/transform/denoise_transform.py`、`tests/fixtures/noisy_documents/`、`tests/unit/test_transformer.py`
+修改文件：`.gitignore`、`README.md`、`config/settings.example.yaml`、`src/core/config.py`、`src/libs/transform/base_transform.py`、`src/ingestion/transform/transformer.py`、`src/ingestion/transform/metadata_enricher.py`、`src/ingestion/transform/chunk_rewriter.py`、`src/ingestion/transform/semantic_merge_transform.py`、`src/ingestion/transform/denoise_transform.py`、`tests/fixtures/noisy_documents/`、`tests/unit/test_config.py`、`tests/unit/test_transformer.py`
 
 实现类/函数：
 
+- `BaseTransform.transform()`：定义 Transform 最小抽象契约
+- `TransformPipeline.from_settings()`：从 `settings.transform.steps` 构建 enabled step 链路
+- `TransformPipeline.run()`：按配置顺序串行执行 Transform
 - `MetadataEnricher.transform()`：注入标题路径、来源、文档主题等上下文 metadata
 - `ChunkRewriter.transform()`：利用 LLM 重写 chunk，使片段语义更完整
 - `SemanticMergeTransform.transform()`：合并逻辑相关但被物理切开的相邻 chunk
 - `DenoiseTransform.transform()`：清理空白、页眉页脚、目录和解析残留噪声
 
-验收标准：chunk 包含标题、来源、主题上下文；fake LLM 下可 rewrite；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
+验收标准：运行时 `config/settings.yaml` 被 Git 忽略，仓库提交 `config/settings.example.yaml` 作为完整模板；`settings.transform.steps` 只描述步骤顺序、启用状态和 prompt_path，不包含 provider；`src.libs.transform` 只暴露 `BaseTransform`；具体 Transform 位于 `src/ingestion/transform/`；chunk 包含标题、来源、主题上下文；fake LLM 下可 rewrite；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
 
-补充要求：执行该任务时必须在 `settings.yaml` 中配置真实启用的 Transform 链路，测试不能只依赖 fake transform；需要创建典型噪声场景 fixture，例如连续空白、页眉页脚、重复目录、页码水印、PDF 解析断行、无意义符号残留和图片占位符附近噪声。
+补充要求：执行该任务时必须在 `settings.example.yaml` 和本地 `settings.yaml` 中配置真实启用的 Transform steps 链路，测试不能只依赖 fake transform；需要创建典型噪声场景 fixture，例如连续空白、页眉页脚、重复目录、页码水印、PDF 解析断行、无意义符号残留和图片占位符附近噪声。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
 
@@ -2527,7 +2523,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：当 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时，为关联图片生成 caption，并将 caption 写入 chunk metadata；未启用 Vision LLM 或没有 `image_refs` 时必须安全跳过。
 
-修改文件：`src/ingestion/transform/image_captioner.py`、`src/libs/transform/image_to_text_transform.py`、`config/settings.yaml`、`tests/unit/test_transformer.py`
+修改文件：`src/ingestion/transform/image_captioner.py`、`src/ingestion/transform/image_to_text_transform.py`、`config/settings.example.yaml`、`tests/unit/test_transformer.py`
 
 实现类/函数：
 
