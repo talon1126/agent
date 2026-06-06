@@ -469,6 +469,18 @@ mcp:
 
 PostgreSQL 是唯一持久化层，不使用 SQLite。
 
+核心文档对象统一使用 Python 业务层生成的稳定字符串 ID。数据库不得为
+`rag_collections`、`rag_documents` 或 `rag_chunks` 另行生成自增主键：
+
+- `rag_collections.id` 直接保存 collection 的稳定字符串 ID。
+- `rag_documents.id` 直接保存 `core.types.Document.id`。
+- `rag_chunks.id` 直接保存 `core.types.Chunk.id`。
+- `rag_documents.collection_id` 和 `rag_chunks.document_id` 使用 `TEXT`，
+  与被引用对象的稳定字符串 ID 保持同一类型。
+
+该约束确保 Loader、Ingestion、Storage、Retrieval 和 Trace 使用同一标识，
+避免在 Repository 层维护数据库 ID 与 Python 领域 ID 的额外映射。
+
 建议表：
 
 | 表名 | 用途 |
@@ -490,17 +502,22 @@ PostgreSQL 是唯一持久化层，不使用 SQLite。
 CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS rag_chunks (
-    id BIGSERIAL PRIMARY KEY,
-    collection TEXT NOT NULL,
-    document_id BIGINT NOT NULL,
+    id TEXT PRIMARY KEY,
+    collection_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
     content_hash TEXT NOT NULL,
+    start_offset INTEGER NOT NULL,
+    end_offset INTEGER NOT NULL,
+    source_ref JSONB,
     heading_path JSONB NOT NULL DEFAULT '[]'::jsonb,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding vector(1536),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_rag_chunks_offsets
+        CHECK (start_offset >= 0 AND end_offset > start_offset)
 );
 ```
 

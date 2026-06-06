@@ -10,7 +10,7 @@
 | 阶段 | 阶段标题 | 目标 | 状态 |
 | --- | --- | --- | --- |
 | Phase A | 配置与项目骨架 | 独立模块基础文件、Docker 部署骨架、pytest 冒烟测试、`settings.yaml`、prompt 配置、核心类型和配置加载 | [✔] |
-| Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [ ] |
+| Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [~] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [ ] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [ ] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [ ] |
@@ -109,7 +109,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| B1 | 编写 collection/document/chunk schema | [ ] |  | PostgreSQL + pgvector，含单元或集成测试 |
+| B1 | 编写 collection/document/chunk schema | [✔] | 2026-06-06 | 已实现稳定字符串 ID、pgvector/HNSW、核心约束和索引；真实 PostgreSQL 连续初始化两次通过，5 个集成测试通过 |
 | B2 | 编写 image/trace/evaluation schema | [ ] |  | `image_index`、Trace 索引、评估历史 |
 | B3 | 实现数据库连接池和 schema 初始化 | [ ] |  | `PostgresPool`、`init_schema()` |
 | B4 | 实现 Document/Chunk/Image Repository | [ ] |  | 文档、chunk、ImageStorage 图片落盘和 `image_index` 入库 |
@@ -210,14 +210,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 0 | 0% |
+| Phase B | 12 | 1 | 8% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **6** | **8%** |
+| **总计** | **71** | **7** | **10%** |
 
 ### 6.5 阶段实施明细
 
@@ -328,16 +328,24 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 ##### B1：建立核心文档 schema
 
 目标：创建 collection、document、chunk 的 PostgreSQL/pgvector 基础表。
+三个核心表直接使用 Python 业务层生成的稳定字符串 ID，不增加数据库自增
+主键或额外业务 ID 映射列。
 
-修改文件：`src/storage/schema.sql`、`tests/integration/test_repositories.py`
+修改文件：`src/storage/schema.sql`、`tests/integration/test_repositories.py`、
+`services/postgres/Dockerfile`、`services/postgres/initdb/002-create-vector.sql`
 
 实现类/函数：
 
 - `rag_collections`：定义数据库表结构
 - `rag_documents`：定义数据库表结构
 - `rag_chunks`：定义数据库表结构
+- `services/postgres/Dockerfile`：为共享 PostgreSQL 18 镜像安装 pgvector
+- `002-create-vector.sql`：为新建数据库卷启用 `vector` extension
 
-验收标准：pgvector extension 和核心表可初始化。
+验收标准：pgvector extension 和核心表可初始化；`rag_collections.id`、
+`rag_documents.id`、`rag_chunks.id` 均为 `TEXT PRIMARY KEY`；
+`rag_documents.collection_id` 和 `rag_chunks.document_id` 使用 `TEXT`
+关联稳定 Python ID；schema 支持重复执行。
 
 测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
