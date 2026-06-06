@@ -123,3 +123,239 @@ CREATE INDEX IF NOT EXISTS idx_rag_chunks_metadata
 CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding
     ON rag_chunks
     USING hnsw (embedding vector_cosine_ops);
+
+-- Index extracted image files stored under data/images/{collection}/. The
+-- relational keys keep image metadata aligned with its source document while
+-- physical dimensions and quality state support caption processing, Dashboard
+-- inspection, and multimodal response assembly.
+CREATE TABLE IF NOT EXISTS image_index (
+    image_id TEXT PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    collection_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    doc_hash TEXT NOT NULL,
+    page_num INTEGER,
+    width INTEGER,
+    height INTEGER,
+    mime_type TEXT,
+    image_hash TEXT NOT NULL,
+    quality_status TEXT NOT NULL DEFAULT 'pending',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_image_index_document_collection
+        FOREIGN KEY (document_id, collection_id)
+        REFERENCES rag_documents(id, collection_id)
+        ON DELETE CASCADE,
+    CONSTRAINT chk_image_index_id_not_blank
+        CHECK (length(btrim(image_id)) > 0),
+    CONSTRAINT chk_image_index_file_path_not_blank
+        CHECK (length(btrim(file_path)) > 0),
+    CONSTRAINT chk_image_index_doc_hash_sha256
+        CHECK (doc_hash ~ '^[0-9a-fA-F]{64}$'),
+    CONSTRAINT chk_image_index_page_num
+        CHECK (page_num IS NULL OR page_num >= 0),
+    CONSTRAINT chk_image_index_dimensions
+        CHECK (
+            (width IS NULL OR width > 0)
+            AND (height IS NULL OR height > 0)
+        ),
+    CONSTRAINT chk_image_index_image_hash_sha256
+        CHECK (image_hash ~ '^[0-9a-fA-F]{64}$'),
+    CONSTRAINT chk_image_index_quality_status
+        CHECK (quality_status IN ('pending', 'ok', 'low_quality', 'skipped', 'failed')),
+    CONSTRAINT chk_image_index_metadata_object
+        CHECK (jsonb_typeof(metadata) = 'object')
+);
+
+-- Preserve the historical index names required by the image-storage contract.
+CREATE INDEX IF NOT EXISTS idx_collection ON image_index (collection_id);
+CREATE INDEX IF NOT EXISTS idx_doc_hash ON image_index (doc_hash);
+CREATE INDEX IF NOT EXISTS idx_image_index_document_id
+    ON image_index (document_id);
+CREATE INDEX IF NOT EXISTS idx_image_index_image_hash
+    ON image_index (image_hash);
+
+-- Store query traces as four independent JSONB sections. Commonly filtered
+-- values remain first-class columns so Dashboard list views do not need to
+-- scan nested JSON for collection, status, time range, or request source.
+CREATE TABLE IF NOT EXISTS rag_query_traces (
+    trace_id TEXT PRIMARY KEY,
+    collection_id TEXT NOT NULL,
+    raw_query TEXT NOT NULL,
+    request_source TEXT NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL,
+    finished_at TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'running',
+    basic_info JSONB NOT NULL DEFAULT '{}'::jsonb,
+    stages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    summary_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    evaluation_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_rag_query_traces_collection
+        FOREIGN KEY (collection_id)
+        REFERENCES rag_collections(id)
+        ON DELETE CASCADE,
+    CONSTRAINT chk_rag_query_traces_id_not_blank
+        CHECK (length(btrim(trace_id)) > 0),
+    CONSTRAINT chk_rag_query_traces_query_not_blank
+        CHECK (length(btrim(raw_query)) > 0),
+    CONSTRAINT chk_rag_query_traces_request_source_not_blank
+        CHECK (length(btrim(request_source)) > 0),
+    CONSTRAINT chk_rag_query_traces_finished_at
+        CHECK (finished_at IS NULL OR finished_at >= started_at),
+    CONSTRAINT chk_rag_query_traces_status
+        CHECK (status IN ('running', 'success', 'failed')),
+    CONSTRAINT chk_rag_query_traces_basic_info_object
+        CHECK (jsonb_typeof(basic_info) = 'object'),
+    CONSTRAINT chk_rag_query_traces_stages_array
+        CHECK (jsonb_typeof(stages) = 'array'),
+    CONSTRAINT chk_rag_query_traces_summary_metrics_object
+        CHECK (jsonb_typeof(summary_metrics) = 'object'),
+    CONSTRAINT chk_rag_query_traces_evaluation_metrics_object
+        CHECK (jsonb_typeof(evaluation_metrics) = 'object'),
+    CONSTRAINT chk_rag_query_traces_error_object
+        CHECK (error IS NULL OR jsonb_typeof(error) = 'object')
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_query_traces_collection_started_at
+    ON rag_query_traces (collection_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rag_query_traces_status_started_at
+    ON rag_query_traces (status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rag_query_traces_request_source
+    ON rag_query_traces (request_source);
+
+-- Store ingestion traces using the same four-section contract. Source columns
+-- support document-oriented history views and SHA256-based trace lookup.
+CREATE TABLE IF NOT EXISTS rag_ingestion_traces (
+    trace_id TEXT PRIMARY KEY,
+    collection_id TEXT NOT NULL,
+    source_uri TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL,
+    finished_at TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'running',
+    basic_info JSONB NOT NULL DEFAULT '{}'::jsonb,
+    stages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    summary_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    evaluation_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_rag_ingestion_traces_collection
+        FOREIGN KEY (collection_id)
+        REFERENCES rag_collections(id)
+        ON DELETE CASCADE,
+    CONSTRAINT chk_rag_ingestion_traces_id_not_blank
+        CHECK (length(btrim(trace_id)) > 0),
+    CONSTRAINT chk_rag_ingestion_traces_source_uri_not_blank
+        CHECK (length(btrim(source_uri)) > 0),
+    CONSTRAINT chk_rag_ingestion_traces_source_hash_sha256
+        CHECK (source_hash ~ '^[0-9a-fA-F]{64}$'),
+    CONSTRAINT chk_rag_ingestion_traces_finished_at
+        CHECK (finished_at IS NULL OR finished_at >= started_at),
+    CONSTRAINT chk_rag_ingestion_traces_status
+        CHECK (status IN ('running', 'success', 'skipped', 'failed')),
+    CONSTRAINT chk_rag_ingestion_traces_basic_info_object
+        CHECK (jsonb_typeof(basic_info) = 'object'),
+    CONSTRAINT chk_rag_ingestion_traces_stages_array
+        CHECK (jsonb_typeof(stages) = 'array'),
+    CONSTRAINT chk_rag_ingestion_traces_summary_metrics_object
+        CHECK (jsonb_typeof(summary_metrics) = 'object'),
+    CONSTRAINT chk_rag_ingestion_traces_evaluation_metrics_object
+        CHECK (jsonb_typeof(evaluation_metrics) = 'object'),
+    CONSTRAINT chk_rag_ingestion_traces_error_object
+        CHECK (error IS NULL OR jsonb_typeof(error) = 'object')
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_ingestion_traces_collection_started_at
+    ON rag_ingestion_traces (collection_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rag_ingestion_traces_status_started_at
+    ON rag_ingestion_traces (status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rag_ingestion_traces_source_hash
+    ON rag_ingestion_traces (source_hash);
+
+-- Represent one execution of an evaluation backend. The settings snapshot
+-- records the exact retrieval, rerank, model, and dataset configuration needed
+-- to compare historical runs and diagnose quality regressions.
+CREATE TABLE IF NOT EXISTS rag_evaluation_runs (
+    id TEXT PRIMARY KEY,
+    collection_id TEXT NOT NULL,
+    evaluator TEXT NOT NULL,
+    dataset_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    settings_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+    summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_rag_evaluation_runs_collection
+        FOREIGN KEY (collection_id)
+        REFERENCES rag_collections(id)
+        ON DELETE CASCADE,
+    CONSTRAINT chk_rag_evaluation_runs_id_not_blank
+        CHECK (length(btrim(id)) > 0),
+    CONSTRAINT chk_rag_evaluation_runs_evaluator_not_blank
+        CHECK (length(btrim(evaluator)) > 0),
+    CONSTRAINT chk_rag_evaluation_runs_dataset_not_blank
+        CHECK (length(btrim(dataset_name)) > 0),
+    CONSTRAINT chk_rag_evaluation_runs_status
+        CHECK (status IN ('pending', 'running', 'success', 'failed')),
+    CONSTRAINT chk_rag_evaluation_runs_times
+        CHECK (
+            (started_at IS NULL OR started_at >= created_at)
+            AND (finished_at IS NULL OR started_at IS NOT NULL)
+            AND (finished_at IS NULL OR finished_at >= started_at)
+        ),
+    CONSTRAINT chk_rag_evaluation_runs_settings_object
+        CHECK (jsonb_typeof(settings_snapshot) = 'object'),
+    CONSTRAINT chk_rag_evaluation_runs_summary_object
+        CHECK (jsonb_typeof(summary) = 'object'),
+    CONSTRAINT chk_rag_evaluation_runs_error_object
+        CHECK (error IS NULL OR jsonb_typeof(error) = 'object')
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_evaluation_runs_collection_created_at
+    ON rag_evaluation_runs (collection_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rag_evaluation_runs_status_created_at
+    ON rag_evaluation_runs (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rag_evaluation_runs_evaluator
+    ON rag_evaluation_runs (evaluator);
+
+-- Store one metric per row so Dashboard can compare trends without extracting
+-- dynamic metric names from JSON. Details retain evaluator-specific evidence,
+-- thresholds, sample counts, and per-question observations.
+CREATE TABLE IF NOT EXISTS rag_evaluation_results (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    metric_value DOUBLE PRECISION NOT NULL,
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_rag_evaluation_results_run
+        FOREIGN KEY (run_id)
+        REFERENCES rag_evaluation_runs(id)
+        ON DELETE CASCADE,
+    CONSTRAINT uq_rag_evaluation_results_run_metric
+        UNIQUE (run_id, metric_name),
+    CONSTRAINT chk_rag_evaluation_results_id_not_blank
+        CHECK (length(btrim(id)) > 0),
+    CONSTRAINT chk_rag_evaluation_results_metric_not_blank
+        CHECK (length(btrim(metric_name)) > 0),
+    CONSTRAINT chk_rag_evaluation_results_metric_finite
+        CHECK (
+            metric_value NOT IN (
+                'NaN'::DOUBLE PRECISION,
+                'Infinity'::DOUBLE PRECISION,
+                '-Infinity'::DOUBLE PRECISION
+            )
+        ),
+    CONSTRAINT chk_rag_evaluation_results_details_object
+        CHECK (jsonb_typeof(details) = 'object')
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_evaluation_results_run_id
+    ON rag_evaluation_results (run_id);
+CREATE INDEX IF NOT EXISTS idx_rag_evaluation_results_metric_created_at
+    ON rag_evaluation_results (metric_name, created_at DESC);

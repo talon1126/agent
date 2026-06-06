@@ -1896,7 +1896,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | B1 | 编写 collection/document/chunk schema | [✔] | 2026-06-06 | 已实现稳定字符串 ID、pgvector/HNSW、核心约束和索引；真实 PostgreSQL 连续初始化两次通过，5 个集成测试通过 |
-| B2 | 编写 image/trace/evaluation schema | [ ] |  | `image_index`、Trace 索引、评估历史 |
+| B2 | 编写 image/trace/evaluation schema | [✔] | 2026-06-06 | 已实现图片索引、四段式 Query/Ingestion Trace、评估任务和指标结果表；真实 PostgreSQL 幂等初始化通过，8 个集成测试通过 |
 | B3 | 实现数据库连接池和 schema 初始化 | [ ] |  | `PostgresPool`、`init_schema()` |
 | B4 | 实现 Document/Chunk/Image Repository | [ ] |  | 文档、chunk、ImageStorage 图片落盘和 `image_index` 入库 |
 | B5 | 实现 Trace/Evaluation Repository | [ ] |  | Trace 索引和评估历史写入 PostgreSQL |
@@ -1996,14 +1996,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 1 | 8% |
+| Phase B | 12 | 2 | 17% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **7** | **10%** |
+| **总计** | **71** | **8** | **11%** |
 
 ### 6.5 阶段实施明细
 
@@ -2138,6 +2138,8 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 ##### B2：建立图片、Trace、评估 schema
 
 目标：补齐 `image_index` 图片索引、Trace 索引和评估历史相关表。
+评估历史必须拆分为 `rag_evaluation_runs` 任务表和
+`rag_evaluation_results` 指标结果表，支持一个评估任务保存多项指标结果。
 
 修改文件：`src/storage/schema.sql`、`tests/integration/test_repositories.py`
 
@@ -2147,8 +2149,12 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 - `rag_query_traces`：定义数据库表结构
 - `rag_ingestion_traces`：定义数据库表结构
 - `rag_evaluation_runs`：定义数据库表结构
+- `rag_evaluation_results`：按 `run_id` 保存单项评估指标和结果详情
 
-验收标准：`image_index`、Trace 和评估表可初始化；`idx_collection`、`idx_doc_hash` 索引存在；schema 可重复执行。
+验收标准：`image_index`、Trace 和两张评估表可初始化；
+`idx_collection`、`idx_doc_hash` 索引存在；Trace 表分别保存基础信息、
+阶段详情、汇总指标和评估指标；评估结果通过外键归属评估任务；
+schema 可重复执行。
 
 测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 

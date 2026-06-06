@@ -1,6 +1,6 @@
 """Verify the PostgreSQL schema contract for durable RAG document storage.
 
-These tests protect the first storage milestone without coupling later
+These tests protect the storage schema milestones without coupling later
 repository implementations to a specific SQL client. Static contract tests run
 in every development environment. The opt-in database test executes the same
 schema against PostgreSQL when ``DATABASE_URL`` is available, allowing local
@@ -30,7 +30,8 @@ def _schema_sql() -> str:
         The complete schema text encoded as UTF-8.
 
     Raises:
-        FileNotFoundError: If B1 has not provided the canonical schema file.
+        FileNotFoundError: If the storage milestones have not provided the
+            canonical schema file.
     """
 
     return SCHEMA_PATH.read_text(encoding="utf-8")
@@ -50,7 +51,7 @@ def _table_definition(sql: str, table_name: str) -> str:
         AssertionError: If the requested table is absent from the schema.
 
     Notes:
-        The B1 schema uses constraints without nested SQL expressions that
+        The schema uses constraints without nested SQL expressions that
         require a full PostgreSQL parser. Database syntax is separately covered
         by the opt-in execution test.
     """
@@ -135,14 +136,157 @@ def test_core_schema_declares_idempotent_tables_and_indexes() -> None:
 
     sql = _schema_sql()
 
+    required_tables = (
+        "rag_collections",
+        "rag_documents",
+        "rag_chunks",
+        "image_index",
+        "rag_query_traces",
+        "rag_ingestion_traces",
+        "rag_evaluation_runs",
+        "rag_evaluation_results",
+    )
+    for table_name in required_tables:
+        _table_definition(sql, table_name)
+
     assert len(
         re.findall(r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS", sql, re.IGNORECASE)
-    ) == 3
+    ) == len(required_tables)
     assert "CREATE INDEX IF NOT EXISTS idx_rag_documents_collection_id" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_rag_documents_source_hash" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_rag_chunks_document_id" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_rag_chunks_content_hash" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding" in sql
+
+
+@pytest.mark.integration
+def test_image_index_preserves_source_and_quality_metadata() -> None:
+    """Require durable image locations and multimodal processing metadata.
+
+    Image files live outside PostgreSQL, so the database index must retain the
+    stable image ID, source document relationship, collection, page, physical
+    dimensions, MIME type, content hash, and caption quality status required by
+    ImageStorage, Dashboard inspection, and multimodal response assembly.
+    """
+
+    sql = _schema_sql()
+    images = _table_definition(sql, "image_index")
+
+    for field_contract in (
+        r"\bimage_id\s+TEXT\s+PRIMARY\s+KEY\b",
+        r"\bfile_path\s+TEXT\s+NOT\s+NULL\b",
+        r"\bcollection_id\s+TEXT\s+NOT\s+NULL\b",
+        r"\bdocument_id\s+TEXT\s+NOT\s+NULL\b",
+        r"\bdoc_hash\s+TEXT\s+NOT\s+NULL\b",
+        r"\bpage_num\s+INTEGER\b",
+        r"\bwidth\s+INTEGER\b",
+        r"\bheight\s+INTEGER\b",
+        r"\bmime_type\s+TEXT\b",
+        r"\bimage_hash\s+TEXT\s+NOT\s+NULL\b",
+        r"\bquality_status\s+TEXT\s+NOT\s+NULL\b",
+    ):
+        assert re.search(field_contract, images, re.IGNORECASE)
+
+    assert "CREATE INDEX IF NOT EXISTS idx_collection ON image_index" in sql
+    assert "CREATE INDEX IF NOT EXISTS idx_doc_hash ON image_index" in sql
+
+
+@pytest.mark.integration
+def test_trace_tables_store_four_part_trace_contracts() -> None:
+    """Require query and ingestion traces to persist the documented sections.
+
+    TraceContext emits basic information, stage details, summary metrics, and
+    evaluation metrics. Storing these sections independently lets Dashboard
+    filter common columns without losing provider-specific structured details.
+    """
+
+    sql = _schema_sql()
+    for table_name in ("rag_query_traces", "rag_ingestion_traces"):
+        trace = _table_definition(sql, table_name)
+        for field_contract in (
+            r"\btrace_id\s+TEXT\s+PRIMARY\s+KEY\b",
+            r"\bcollection_id\s+TEXT\s+NOT\s+NULL\b",
+            r"\bstarted_at\s+TIMESTAMPTZ\s+NOT\s+NULL\b",
+            r"\bfinished_at\s+TIMESTAMPTZ\b",
+            r"\bstatus\s+TEXT\s+NOT\s+NULL\b",
+            r"\bbasic_info\s+JSONB\s+NOT\s+NULL\b",
+            r"\bstages\s+JSONB\s+NOT\s+NULL\b",
+            r"\bsummary_metrics\s+JSONB\s+NOT\s+NULL\b",
+            r"\bevaluation_metrics\s+JSONB\s+NOT\s+NULL\b",
+            r"\berror\s+JSONB\b",
+        ):
+            assert re.search(field_contract, trace, re.IGNORECASE)
+
+    query_trace = _table_definition(sql, "rag_query_traces")
+    ingestion_trace = _table_definition(sql, "rag_ingestion_traces")
+    assert re.search(r"\braw_query\s+TEXT\s+NOT\s+NULL\b", query_trace, re.IGNORECASE)
+    assert re.search(
+        r"\brequest_source\s+TEXT\s+NOT\s+NULL\b",
+        query_trace,
+        re.IGNORECASE,
+    )
+    assert re.search(
+        r"\bsource_uri\s+TEXT\s+NOT\s+NULL\b",
+        ingestion_trace,
+        re.IGNORECASE,
+    )
+    assert re.search(
+        r"\bsource_hash\s+TEXT\s+NOT\s+NULL\b",
+        ingestion_trace,
+        re.IGNORECASE,
+    )
+
+
+@pytest.mark.integration
+def test_evaluation_results_belong_to_runs() -> None:
+    """Require evaluation tasks and metric results to use a one-to-many model.
+
+    One run may report retrieval and generation metrics. A separate result row
+    per metric supports historical comparisons without rewriting a JSON blob,
+    while the foreign key prevents orphaned evaluation observations.
+    """
+
+    sql = _schema_sql()
+    runs = _table_definition(sql, "rag_evaluation_runs")
+    results = _table_definition(sql, "rag_evaluation_results")
+
+    for field_contract in (
+        r"\bid\s+TEXT\s+PRIMARY\s+KEY\b",
+        r"\bcollection_id\s+TEXT\s+NOT\s+NULL\b",
+        r"\bevaluator\s+TEXT\s+NOT\s+NULL\b",
+        r"\bstatus\s+TEXT\s+NOT\s+NULL\b",
+        r"\bsettings_snapshot\s+JSONB\s+NOT\s+NULL\b",
+    ):
+        assert re.search(field_contract, runs, re.IGNORECASE)
+
+    for field_contract in (
+        r"\bid\s+TEXT\s+PRIMARY\s+KEY\b",
+        r"\brun_id\s+TEXT\s+NOT\s+NULL\b",
+        r"\bmetric_name\s+TEXT\s+NOT\s+NULL\b",
+        r"\bmetric_value\s+DOUBLE\s+PRECISION\s+NOT\s+NULL\b",
+        r"\bdetails\s+JSONB\s+NOT\s+NULL\b",
+    ):
+        assert re.search(field_contract, results, re.IGNORECASE)
+
+    assert re.search(
+        r"FOREIGN\s+KEY\s*\(\s*run_id\s*\)\s*"
+        r"REFERENCES\s+rag_evaluation_runs\s*\(\s*id\s*\)",
+        results,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert re.search(
+        r"UNIQUE\s*\(\s*run_id\s*,\s*metric_name\s*\)",
+        results,
+        re.IGNORECASE,
+    )
+    assert re.search(
+        r"metric_value\s+NOT\s+IN\s*\(\s*"
+        r"'NaN'::DOUBLE\s+PRECISION\s*,\s*"
+        r"'Infinity'::DOUBLE\s+PRECISION\s*,\s*"
+        r"'-Infinity'::DOUBLE\s+PRECISION\s*\)",
+        results,
+        re.IGNORECASE | re.DOTALL,
+    )
 
 
 @pytest.mark.integration
@@ -185,7 +329,7 @@ def test_core_schema_executes_twice_when_database_is_available() -> None:
         psycopg.Error: If PostgreSQL rejects the schema or pgvector is missing.
 
     Side Effects:
-        Creates the B1 extension, tables, and indexes in the configured
+        Creates the storage extensions, tables, and indexes in the configured
         PostgreSQL database. Re-execution verifies DDL idempotency.
     """
 
