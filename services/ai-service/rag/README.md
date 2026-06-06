@@ -16,9 +16,47 @@
 
 项目按照 [DEV_SPEC.md](DEV_SPEC.md) 中的阶段任务进行开发。当前阶段仅建立独立 Python 模块的基础文件，运行入口、配置、测试和业务实现将在后续任务中逐步补充。
 
+## 环境与依赖
+
+项目统一使用 [uv](https://docs.astral.sh/uv/) 管理 Python 3.12、`.venv`、依赖解析和 `uv.lock`。所有命令均在本目录执行：
+
+```powershell
+uv sync --extra dev --frozen
+```
+
+依赖声明变更后先更新锁文件，再同步环境：
+
+```powershell
+uv lock
+uv sync --extra dev
+```
+
+不要使用系统 Python 或手工 `pip install` 修改项目环境。CI 和 Docker 使用 `--frozen`，确保依赖声明与锁文件不一致时直接失败。
+
+## 常用命令
+
+```powershell
+# Run the standalone health entry point.
+uv run python main.py
+
+# Run all tests.
+uv run pytest
+
+# Run static analysis.
+uv run ruff check src tests
+```
+
+需要本地 PostgreSQL 的集成测试：
+
+```powershell
+$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'
+uv run pytest tests -q
+```
+
 ## 开发约束
 
 - Python 版本为 3.12。
+- 使用 uv 管理依赖和执行项目命令，提交 `uv.lock`。
 - 使用 pytest 执行单元、集成和端到端测试。
 - 不使用 LlamaIndex 或 LangChain RAG 框架，仅允许使用 `langchain-text-splitters`。
 - 外部服务在单元测试中必须使用 Fake 或 Mock 隔离。

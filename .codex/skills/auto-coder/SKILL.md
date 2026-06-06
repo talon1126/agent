@@ -21,7 +21,10 @@ Run this workflow when the user wants one-shot automation from specification to 
 ## Non-Negotiable Rules
 
 - Treat `DEV_SPEC.md` as the single source of truth.
-- Before any `python` or `pytest` command, activate `.venv` if it exists. Re-run activation freely because it is idempotent.
+- Use uv as the only project environment and command runner. Do not activate
+  `.venv` manually or invoke the system Python for project commands.
+- Before implementation or verification, run
+  `uv sync --project services/ai-service/rag --extra dev --frozen`.
 - Before editing code, update or create a short task plan.
 - Match existing code style and architecture patterns.
 - Use values from `config/settings.yaml`; do not hardcode project configuration.
@@ -37,8 +40,8 @@ Run this workflow when the user wants one-shot automation from specification to 
 Run:
 
 ```powershell
-if (Test-Path .venv\Scripts\Activate.ps1) { . .\.venv\Scripts\Activate.ps1 }
-python .codex\skills\auto-coder\scripts\sync_spec.py
+uv sync --project services/ai-service/rag --extra dev --frozen
+uv run --project services/ai-service/rag python .codex\skills\auto-coder\scripts\sync_spec.py
 ```
 
 Then read:
@@ -94,7 +97,15 @@ Before running tests, self-check:
 
 ### 5. Test and Auto-Repair
 
-Run the task-specific pytest command from `06-schedule.md`.
+Run the task-specific pytest command from `06-schedule.md` through
+`uv run --project services/ai-service/rag`.
+
+Standard command forms:
+
+```powershell
+uv run --project services/ai-service/rag pytest <test-path> -v
+uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests
+```
 
 Repair loop:
 
@@ -119,8 +130,7 @@ When tests pass:
 3. Re-sync references:
 
 ```powershell
-if (Test-Path .venv\Scripts\Activate.ps1) { . .\.venv\Scripts\Activate.ps1 }
-python .codex\skills\auto-coder\scripts\sync_spec.py --force
+uv run --project services/ai-service/rag python .codex\skills\auto-coder\scripts\sync_spec.py --force
 ```
 
 4. Review all staged, unstaged, and untracked changes belonging to the current

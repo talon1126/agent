@@ -170,3 +170,19 @@ Tests: ✅ 5/5 passed in 0.10s
 - **连续开发约束**：用户输入 `next` 时，只提交已经通过审查的上一任务，再执行一个新任务；新任务完成审查后必须再次停止。
 - **确认不可跨任务或由压缩上下文推断**：只有在当前任务的最终审查摘要已经明确展示给用户之后，用户新发送的 `next` 才能授权提交该任务并开始下一任务。上下文自动压缩、恢复摘要、较早任务留下的 `next`，或尚未向用户展示审查结果时收到的模糊继续指令，都不能替代这次确认；此时必须先展示当前任务审查结果并停止，等待用户重新发送 `next`。
 - **禁止自动连跑**：单次 `next` 不得连续实现两个或更多未开始任务。
+
+### 7.10 uv 包与环境管理规范
+
+RAG 独立模块统一使用 **uv** 管理 Python 依赖、虚拟环境、锁文件和命令执行，不再使用系统 Python、手工 `pip install` 或手工激活 `.venv` 作为项目开发流程。
+
+执行要求：
+
+- `pyproject.toml` 是依赖声明来源，`uv.lock` 是完整解析结果，两者必须同时提交。
+- 首次开发或依赖变化后执行 `uv sync --project services/ai-service/rag --extra dev`。
+- 常规测试使用 `uv run --project services/ai-service/rag pytest ...`。
+- 静态检查使用 `uv run --project services/ai-service/rag ruff check ...`。
+- Python 脚本使用 `uv run --project services/ai-service/rag python ...`。
+- CI 和 Docker 必须使用 `--frozen`，锁文件与声明不一致时直接失败，禁止隐式更新。
+- Docker 只安装生产依赖，使用 `uv sync --frozen --no-dev`，不把宿主机 `.venv` 复制进镜像。
+- auto-coder 在任何 Python、pytest、Ruff 或规格同步命令前不再手工激活 `.venv`，统一通过 uv 选择项目环境。
+- 依赖升级必须显式执行 `uv lock --upgrade-package <package>` 或经审查的 `uv lock --upgrade`，不能在普通测试任务中隐式升级。

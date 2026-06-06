@@ -9,7 +9,7 @@
 
 | 阶段 | 阶段标题 | 目标 | 状态 |
 | --- | --- | --- | --- |
-| Phase A | 配置与项目骨架 | 独立模块基础文件、Docker 部署骨架、pytest 冒烟测试、`settings.yaml`、prompt 配置、核心类型和配置加载 | [✔] |
+| Phase A | 配置与项目骨架 | 独立模块基础文件、uv 依赖锁定、Docker 部署骨架、pytest 冒烟测试、`settings.yaml`、prompt 配置、核心类型和配置加载 | [✔] |
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [~] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [ ] |
@@ -44,7 +44,7 @@
     
     验证方式：
     
-    - `pytest ...`
+    - `uv run --project services/ai-service/rag pytest ...`
     - Dashboard 页面入口：
     
     下一阶段入口：
@@ -53,8 +53,8 @@
 
 | 阶段 | 阶段标题 | 项目当前位置 | 可用功能 | 验证方式 | 完成日期 |
 | --- | --- | --- | --- | --- | --- |
-| Phase A | 配置与项目骨架 | 独立 RAG 模块骨架、运行配置、Prompt 和共享数据契约已就绪，可进入持久化与可插拔组件开发 | 独立 CLI/Docker 入口、类型化配置加载、活动环境变量校验、英文 Prompt、核心领域类型和统一异常 | `pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q` | 2026-06-06 |
-| Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Factory、DeepSeek、OpenAI Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; python -m pytest services/ai-service/rag/tests -q` | 2026-06-06 |
+| Phase A | 配置与项目骨架 | 独立 RAG 模块骨架、uv 锁定环境、运行配置、Prompt 和共享数据契约已就绪，可进入持久化与可插拔组件开发 | `uv.lock`、项目 `.venv`、独立 CLI、frozen Docker 构建、类型化配置加载、活动环境变量校验、英文 Prompt、核心领域类型和统一异常 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q` | 2026-06-06 |
+| Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Factory、DeepSeek、OpenAI Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q` | 2026-06-06 |
 | Phase C | Ingestion & Indexing Pipeline | 未完成 | 暂无 | 暂无 |  |
 | Phase D | Retrieval | 未完成 | 暂无 | 暂无 |  |
 | Phase E | MCP 工具服务 | 未完成 | 暂无 | 暂无 |  |
@@ -68,11 +68,13 @@
 
 项目当前位置：
 
-RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块。统一配置、Prompt、核心数据对象和异常边界已经稳定，后续阶段可以直接围绕这些契约实现 PostgreSQL 持久化、Provider Factory 和业务 Pipeline。
+RAG 已形成使用 uv 锁定依赖、可独立安装、测试和构建 Docker 镜像的 Python 子模块。统一配置、Prompt、核心数据对象和异常边界已经稳定，后续阶段可以直接围绕这些契约实现 PostgreSQL 持久化、Provider Factory 和业务 Pipeline。
 
 可用功能：
 
 - 通过 `main.py` 输出无外部依赖的健康状态。
+- 通过 `uv.lock`、项目 `.venv` 和 `uv run` 复现本地、auto-coder 与 Docker 依赖环境。
+- 通过固定版本 uv 和 `uv sync --frozen --no-dev` 构建非 root Docker 镜像。
 - 从 `settings.yaml` 加载类型化配置，并在启动前校验 Provider、模型、活动环境变量、检索参数和 Embedding 维度。
 - 加载并校验 rerank、chunk rewrite 和 image-to-text Prompt。
 - 创建并序列化 `Document`、`ImageMetadata`、`Chunk` 和 `RetrievalResult`。
@@ -80,7 +82,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 
 验证方式：
 
-- `pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q`
+- `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q`
 
 下一阶段入口：
 
@@ -107,8 +109,8 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 验证方式：
 
-- `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; python -m pytest services/ai-service/rag/tests -q`
-- `$env:RUN_RAG_EXTERNAL_TESTS='1'; python -m pytest services/ai-service/rag/tests/external/test_model_providers.py -v`
+- `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`
+- `$env:RUN_RAG_EXTERNAL_TESTS='1'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/external/test_model_providers.py -v`
 
 下一阶段入口：
 
@@ -132,6 +134,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | A4 | 创建 prompt 配置目录 | [✔] | 2026-06-06 | 已创建统一英文 Prompt YAML 契约，覆盖 rerank、chunk rewrite、六类图片理解策略和中文 caption 输出，10 个配置测试通过 |
 | A5 | 实现配置读取和校验 | [✔] | 2026-06-06 | 已实现完整 `RagSettings`、Provider/model selector、活动环境变量、Embedding/pgvector 维度、检索参数和 Prompt 占位符校验，18 个配置测试通过 |
 | A6 | 定义核心类型和统一异常 | [✔] | 2026-06-06 | 已实现 Document、ImageMetadata、Chunk、RetrievalResult 及六类 RagError 子类，覆盖必填位置、非空文本、来源区间和异常链校验，16 个类型测试通过 |
+| A7 | 迁移至 uv 包管理与锁定环境 | [✔] | 2026-06-06 | 已生成 183 包锁文件，创建 111 包开发环境，统一 README/auto-coder/DEV_SPEC 命令，Docker frozen build 与运行通过；6 个冒烟测试、106 个全量测试通过 |
 
 #### 阶段 B：数据持久化与可插拔组件
 
@@ -237,7 +240,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
-| Phase A | 6 | 6 | 100% |
+| Phase A | 7 | 7 | 100% |
 | Phase B | 12 | 12 | 100% |
 | Phase C | 12 | 2 | 17% |
 | Phase D | 14 | 0 | 0% |
@@ -245,7 +248,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **20** | **28%** |
+| **总计** | **72** | **21** | **29%** |
 
 ### 6.5 阶段实施明细
 
@@ -269,7 +272,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 验收标准：`pyproject.toml` 可被 Python 工具识别，README 说明独立模块定位，目录可被 Python 导入。
 
-测试方法：使用 `python -c` 验证 `pyproject.toml` 可被 `tomllib` 解析，并验证 `src` 包可导入。
+测试方法：使用 `uv run --project services/ai-service/rag python -c` 验证 `pyproject.toml` 可被 `tomllib` 解析，并验证 `src` 包可导入。
 
 ##### A2：创建独立运行入口、Docker 骨架和 pytest 冒烟测试
 
@@ -287,7 +290,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 验收标准：`main.py` 可导入；Dockerfile 明确 Python 版本、依赖安装和启动命令；构建上下文不会包含日志、缓存和本地数据库数据；pytest 可运行；关键包 import 校验通过。
 
-测试方法：`pytest services\ai-service\rag\tests\test_smoke.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py -v`
 
 ##### A3：创建统一配置示例
 
@@ -301,7 +304,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 验收标准：LLM、Embedding、Transform、Retrieval、Dashboard 配置齐全。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_config.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_config.py -v`
 
 ##### A4：创建 prompt 配置目录
 
@@ -315,7 +318,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 验收标准：三类 prompt 可被读取；Prompt 的 system instruction、user template、description 和策略说明统一使用英文；Image-to-Text Prompt 必须通过英文指令要求 `description` 和 `key_facts` 使用简体中文，并让 `extracted_text` 原样保留图片文字；英文检查只禁止 CJK 指令，不得错误拒绝 `°C`、`≥` 等合法技术符号。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_config.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_config.py -v`
 
 ##### A5：实现配置读取和校验
 
@@ -331,7 +334,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 验收标准：缺配置时抛可读异常，环境变量引用可校验。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_config.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_config.py -v`
 
 ##### A6：定义核心类型和异常
 
@@ -349,7 +352,26 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 验收标准：`Document.metadata.images[]` 支持 `id/path/page/text_offset/text_length/position`；`Chunk` 支持 `start_offset`、`end_offset` 和可选 `source_ref`；类型可被 Ingestion、Retrieval、Trace 复用。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_types.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_types.py -v`
+
+##### A7：迁移至 uv 包管理与锁定环境
+
+目标：使用 uv 统一 RAG 独立模块的依赖解析、虚拟环境创建、锁文件、测试命令和 Docker 安装流程，消除系统 Python 与项目依赖状态不一致的问题。
+
+修改文件：`pyproject.toml`、`uv.lock`、`Dockerfile`、`.dockerignore`、`.gitignore`、`README.md`、`tests/test_smoke.py`、`.codex/skills/auto-coder/SKILL.md`、`DEV_SPEC.md`
+
+实现类/函数：
+
+- `uv.lock`：锁定生产依赖和可选开发依赖的完整版本与来源
+- `Dockerfile`：使用固定版本 uv 和 `uv sync --frozen --no-dev` 构建独立运行环境
+- `README.md`：记录 `uv sync --extra dev`、`uv run pytest`、`uv run ruff` 和本地运行命令
+- `test_uv_project_contract()`：验证锁文件、Python 版本、开发 extra 和 uv 项目配置
+- `test_docker_skeleton_uses_uv()`：验证 Docker 不再使用 pip，并通过 frozen lock 安装生产依赖
+- `auto-coder/SKILL.md`：所有 Python、pytest、Ruff 和规格同步命令通过 `uv run --project services/ai-service/rag` 执行，不再手工激活 `.venv`
+
+验收标准：`uv lock --check` 通过；`uv sync --extra dev --frozen` 创建项目 `.venv`；所有测试和 Ruff 通过 `uv run` 执行；Dockerfile 复制 `pyproject.toml` 与 `uv.lock` 并使用固定版本 uv frozen sync；README 和 auto-coder 不再要求手工激活虚拟环境或使用 pip 安装项目依赖；`AGENTS.md` 等无关 dirty 文件不纳入任务。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py -v`；`$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests -q`；`uv run --project services/ai-service/rag ruff check services\ai-service\rag\src services\ai-service\rag\tests`
 
 #### 阶段 B：数据持久化与可插拔组件
 
@@ -375,7 +397,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 `rag_documents.collection_id` 和 `rag_chunks.document_id` 使用 `TEXT`
 关联稳定 Python ID；schema 支持重复执行。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
 ##### B2：建立图片、Trace、评估 schema
 
@@ -398,7 +420,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 阶段详情、汇总指标和评估指标；评估结果通过外键归属评估任务；
 schema 可重复执行。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
 ##### B3：实现数据库连接和 schema 初始化
 
@@ -422,7 +444,7 @@ schema 可重复执行。
 执行失败时抛出带安全上下文和原始 cause 的 `DatabaseError` 或
 `ConfigurationError`。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
 ##### B4：实现文档、chunk、图片仓储
 
@@ -451,7 +473,7 @@ schema 可重复执行。
 `data/images/{collection}/`；`image_index` 可幂等写入并按 `collection`
 和 `doc_hash` 查询。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
 ##### B5：实现 Trace 和评估仓储
 
@@ -483,7 +505,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 分数和详情，保留原始创建时间；批量结果返回顺序与输入一致；所有只读 SQL
 异常统一转换为带 operation context 和原始 cause 的 `DatabaseError`。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
 ##### B6：实现文档生命周期管理
 
@@ -506,7 +528,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 不物理删除文档记录，但必须删除该文档下的 chunks 和图片索引；deleted/failed
 文档不进入后续检索可见数据。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
 ##### B7：创建 libs 可插拔包结构
 
@@ -520,7 +542,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：loader、llm、splitter、transform、embedding、vector_store、reranker、evaluator 包存在。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py -v`
 
 ##### B8：实现 Loader/Splitter 抽象和工厂
 
@@ -540,7 +562,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：可创建 fake/markdown/pdf loader 和 splitter；`libs.splitter` 只接收文本并返回 `List[str]`；`DocumentChunker` 契约测试覆盖 `chunk_id`、metadata 继承、`chunk_index`、`source_ref`、图片引用分发，以及 `List[str] -> List[Chunk]` 类型转换。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py services\ai-service\rag\tests\unit\test_splitter.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py services\ai-service\rag\tests\unit\test_splitter.py -v`
 
 ##### B9：实现 LLM/Embedding 抽象和工厂
 
@@ -559,7 +581,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：`chat()`、`embed()`、`embed_batch()` 接口统一。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py -v`
 
 ##### B10：实现 Transform 抽象和工厂
 
@@ -576,7 +598,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：Transform 可按 provider 创建，fake transform 可用于单元测试。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py -v`
 
 ##### B11：实现 VectorStore/Reranker/Evaluator 抽象和工厂
 
@@ -601,7 +623,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：未知 provider 抛可读错误；Reranker 可根据 `settings.rerank.fallback` 回退到保持候选顺序的安全实现；未实现的真实 provider 不得静默映射到 fake。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_factories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py -v`
 
 ##### B12：实现首批真实组件最小适配
 
@@ -625,7 +647,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：单元测试通过注入 SDK client 验证真实 Provider 协议但不访问网络；真实 DeepSeek/OpenAI 调用必须同时带 `external` marker 且仅在 `RUN_RAG_EXTERNAL_TESTS=1` 时运行；PgVectorStore 在真实 PostgreSQL 中通过重复 upsert、cosine search、metadata filter 和顺序回表测试；fake provider 保持默认可测。
 
-测试方法：`python -m pytest services\ai-service\rag\tests\unit\test_factories.py -v`；`$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; python -m pytest services\ai-service\rag\tests\integration\test_repositories.py -v`；`$env:RUN_RAG_EXTERNAL_TESTS='1'; python -m pytest services\ai-service\rag\tests\external\test_model_providers.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py -v`；`$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`；`$env:RUN_RAG_EXTERNAL_TESTS='1'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\external\test_model_providers.py -v`
 
 #### 阶段 C：Ingestion & Indexing Pipeline
 
@@ -645,7 +667,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：去重范围固定为同一 collection 和 canonical source_path；source_hash 未变更且 lifecycle 为 `success` 时不进入 Loader，不执行 PDF 转换、图片提取、Splitter 和 Transform；`force=true` 时始终继续；skipped 分支写入 `rag_ingestion_traces`，结果包含跳过原因和耗时摘要。
 
-测试方法：`python -m pytest services\ai-service\rag\tests\unit\test_loader.py -v`；`$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; python -m pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_loader.py -v`；`$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
 ##### C2：实现文档加载、Markdown 标准化与图片引用提取
 
@@ -662,7 +684,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码和物理位置；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + metadata)` 并提取标题层级，fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
 
-测试方法：`python -m pytest -p no:cacheprovider services\ai-service\rag\tests\unit\test_loader.py -v`；单元测试通过注入 fake MarkItDown converter 和 fake PyMuPDF module 验证转换与图片提取契约，不依赖真实外部解析环境。
+测试方法：`uv run --project services/ai-service/rag pytest -p no:cacheprovider services\ai-service\rag\tests\unit\test_loader.py -v`；单元测试通过注入 fake MarkItDown converter 和 fake PyMuPDF module 验证转换与图片提取契约，不依赖真实外部解析环境。
 
 ##### C3：实现 DocumentChunker 业务适配与引用保留验证
 
@@ -680,7 +702,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：每个 chunk 都包含稳定 `chunk_id`；`Document.metadata` 被复制到 `Chunk.metadata`；按顺序添加 `chunk_index`；根据文档来源建立 `source_ref`；chunk metadata 包含 `section_path` 和按需分发的 `image_refs`；没有图片的 chunk 不添加无效引用；完成 `List[str] -> List[Chunk]` 类型转换。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 
 ##### C4：实现 Transform 具体实现
 
@@ -699,7 +721,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 补充要求：执行该任务时必须在 `settings.yaml` 中配置真实启用的 Transform 链路，测试不能只依赖 fake transform；需要创建典型噪声场景 fixture，例如连续空白、页眉页脚、重复目录、页码水印、PDF 解析断行、无意义符号残留和图片占位符附近噪声。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
 
 ##### C5：实现 ImageCaptioner
 
@@ -716,7 +738,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：启用 `vision_llm` 且存在 `image_refs` 时会生成 caption 并写入 chunk metadata；未启用 `vision_llm` 时不调用 Vision LLM，并写入 skipped 状态；没有 `image_refs` 的 chunk 不生成 caption；Vision LLM 失败时写入 failed/low_quality 状态并保留原 chunk；caption 可被后续 DenseEncoder 和 BM25Indexer 使用。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
 
 ##### C6：生成稳定 chunk_id 并接入 DocumentChunker
 
@@ -730,7 +752,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：同来源、章节、内容生成稳定 ID；DocumentChunker 创建的每个 Chunk 都调用该规则写入 `chunk.id`。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 
 ##### C7：实现 DenseEncoder
 
@@ -747,7 +769,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：fake 默认可测，真实调用 marker 隔离；已存在 content_hash 不重复调用模型；新 chunk 可以生成 Dense 向量；DenseEncoder 不承担批处理职责。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_embedding.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_embedding.py -v`
 
 ##### C8：实现 BM25Indexer
 
@@ -762,7 +784,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：可为 chunk 构建 BM25 索引；可按关键词召回候选 chunk；索引结果可被 Sparse Route 复用。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_bm25.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_bm25.py -v`
 
 ##### C9：实现 BatchProcessor 批处理优化
 
@@ -778,7 +800,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：批处理大小受配置控制；Dense 和 BM25 两路都能复用 BatchProcessor；部分失败不影响其他 chunk；重试次数和失败记录可测试。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_embedding.py services\ai-service\rag\tests\unit\test_bm25.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_embedding.py services\ai-service\rag\tests\unit\test_bm25.py -v`
 
 ##### C10：实现统一 upsert
 
@@ -793,7 +815,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：同一 chunk 两次 upsert 产生相同 id；chunk 内容变更时 id 随 `content_hash` 变更；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 记录一致写入。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 
 ##### C11：实现统一 Pipeline MVP 编排和集成测试
 
@@ -809,7 +831,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：给定原始文档路径，可以完成去重、Loader、Splitter、Transform、ImageCaptioner 条件 caption、DenseEncoder 差量编码、BM25Indexer 索引、BatchProcessor 批处理和 upsert；重复执行时具备幂等性。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 
 ##### C12：新增 ingest.py 摄取脚本入口
 
@@ -824,7 +846,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：支持 `--collection` 指定 collection；支持 `--path` 指定待摄取文件或目录；支持 `--force` 强制重新摄取并绕过 SHA256 skipped 快速结束；参数缺失时返回可读错误。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_loader.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_loader.py -v`
 #### 阶段 D：Retrieval
 
 ##### D1：实现 query 预处理
@@ -839,7 +861,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：支持 normalize、意图识别、可选 rewrite。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
 ##### D2：实现 Dense Route 向量检索
 
@@ -853,7 +875,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：调用 `EmbeddingClient.embed(processed_query.normalized_query)`；调用 vector store 完成 Top-k 向量检索；返回结果字段统一为 `chunk_id`、`text`、`score`、`metadata`；空 query、embedding 失败、空结果都有可测试分支；trace details 记录 route、top_k、候选数量和耗时。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
 ##### D3：实现 Sparse Route BM25 回表检索
 
@@ -869,7 +891,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：流程固定为 `keywords -> bm25_indexer.query(keywords, top_k) -> [{chunk_id, score}] -> vector_store.get_by_ids(chunk_ids) -> [{id, text, metadata}] -> List[RetrievalResult]`；keywords 为空时返回空结果并记录 skipped 原因；BM25 返回的 chunk_id 顺序应被保留；缺失 chunk_id 应被跳过并写入 trace details。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
 ##### D4：实现 RRF Fusion
 
@@ -883,7 +905,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：基于排名倒数融合，不比较分数。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
 ##### D5：实现 HybridSearch 编排
 
@@ -898,7 +920,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：前置依赖为 D1、D2、D3、D4；输入 `ProcessedQuery`；分别执行 Dense/BM25 两路检索；按 `chunk_id` 去重并保留 `dense_rank`、`sparse_rank`、`dense_score`、`sparse_score`；调用 RRF Fusion 生成融合排序；单路失败时允许降级为另一条路线并写入 trace details。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
 ##### D6：实现 Rerank 前候选过滤
 
@@ -913,7 +935,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：支持 `collection`、`doc_type`、来源类型、文档状态、权限、生命周期状态等参数；过滤发生在 RRF Fusion 之后、Rerank 之前；`--collection` 等脚本参数复用同一过滤逻辑；过滤结果数量和过滤原因写入 trace details。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
 ##### D7：实现 Cross-Encoder Reranker
 
@@ -927,7 +949,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：只接收过滤后的候选；可按 query-doc pair 重新排序。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 
 ##### D8：实现 LLM Rerank
 
@@ -941,7 +963,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：只接收过滤后的候选；fake LLM 下可稳定排序。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 
 ##### D9：实现 rerank fallback
 
@@ -955,7 +977,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：超时、异常、不可用时回退过滤后的 RRF 排序；不会重新引入已被过滤的候选。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 
 ##### D10：实现引用构造
 
@@ -969,7 +991,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：输出来源标题、章节、路径、trace_id。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
 
 ##### D11：实现多模态响应组装
 
@@ -984,7 +1006,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：可组装图片信息，不泄漏内部 JSON。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
 
 ##### D12：新增 query.py 脚本入口
 
@@ -1000,7 +1022,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：支持 `--query "问题"` 必填参数；支持 `--top-k 10` 默认返回 10 条；支持 `--collection xxx` 限定检索集合，并在 rerank 前过滤候选；支持 `--verbose` 展示 QueryProcessor、Dense、Sparse、Fusion、Filter、Rerank 等中间结果；支持 `--no-rerank` 跳过 Reranker 阶段。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
 ##### D13：建立 Retrieval 单元测试矩阵
 
@@ -1014,7 +1036,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：Query、Dense、Sparse、RRF、HybridSearch、Rerank 前过滤、Rerank、Response、query.py 参数解析均覆盖。
 
-测试方法：`pytest services\ai-service\rag\tests\unit -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit -v`
 
 ##### D14：实现 Retrieval 集成测试
 
@@ -1028,7 +1050,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：覆盖 Dense/BM25/Hybrid/Filter/Rerank/fallback。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
 #### 阶段 E：MCP 工具服务
 
 ##### E1：搭建 MCP Server
@@ -1043,7 +1065,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：server 可启动并注册 tools。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 
 ##### E2：暴露知识库查询工具
 
@@ -1057,7 +1079,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：返回 content、citations、trace_id。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 
 ##### E3：暴露 collection 和 summary 工具
 
@@ -1072,7 +1094,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：空集合返回可读错误。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 
 ##### E4：完成 MCP schema 测试
 
@@ -1086,7 +1108,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：tools schema 与文档一致，不泄漏内部 JSON。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 
 #### 阶段 F：可观测与管理平台
 
@@ -1103,7 +1125,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：可记录阶段耗时和输入输出摘要。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
 ##### F2：实现 ingestion trace 结构
 
@@ -1117,7 +1139,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：包含基础信息、阶段详情、汇总指标、评估指标。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
 ##### F3：实现 query trace 结构
 
@@ -1131,7 +1153,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：包含 Dense/BM25、fusion、rerank 变化。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
 ##### F4：实现 JSON Lines 日志
 
@@ -1145,7 +1167,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：每行合法 JSON，可追加写入。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
 ##### F5：将 Trace 打点注入 ingestion 和 query 链路
 
@@ -1162,7 +1184,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常结束和异常 fallback 都会 flush trace。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
 
 ##### F6：实现配置读取和数据浏览服务
 
@@ -1177,7 +1199,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：可读取 settings 和文档/chunk 数据。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
 
 ##### F7：实现 Trace 读取和评估服务
 
@@ -1192,7 +1214,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：可读取 trace 历史和评估趋势。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
 
 ##### F8：实现总览和摄取管理页面
 
@@ -1206,7 +1228,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：总览和摄取管理页面可启动。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
 
 ##### F9：实现数据浏览和 Query Trace 页面
 
@@ -1220,7 +1242,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：可展示文档、chunk、召回对比、rerank 变化。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
 
 ##### F10：实现 Ingestion Trace 和评估页面
 
@@ -1234,7 +1256,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：可展示阶段耗时和评估趋势。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
 
 ##### F11：实现 Dashboard 启动脚本
 
@@ -1248,7 +1270,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：脚本可加载 app，不要求真实启动浏览器。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
 
 ##### F12：完成 Dashboard 六大页面测试
 
@@ -1262,7 +1284,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板都可以读取测试配置、测试数据库记录和测试 trace，并完成页面渲染入口调用。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py -v`
 
 #### 阶段 G：质量评估体系
 
@@ -1278,7 +1300,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：问题、答案、来源文档字段完整。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
 
 ##### G2：实现自定义检索指标
 
@@ -1294,7 +1316,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：指标计算无需真实 LLM。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
 
 ##### G3：接入 Ragas 指标
 
@@ -1308,7 +1330,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：Ragas 测试使用 marker 隔离。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
 
 ##### G4：实现策略对比评估
 
@@ -1322,7 +1344,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：可对比 Hybrid、Dense-only、Sparse-only、Rerank。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
 
 ##### G5：实现评估趋势输出
 
@@ -1336,7 +1358,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：评估结果可写入 PostgreSQL 并供 Dashboard 展示。
 
-测试方法：`pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
 
 #### 阶段 H：AImodel 联调集成
 
@@ -1353,7 +1375,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：Dashboard 六大页面测试通过；全链路 E2E 覆盖离线摄取、Indexing Pipeline、Hybrid Query、Trace 写入、Dashboard 可读和引用结果构造。
 
-测试方法：`pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`
 
 ##### H2：实现 AImodel RAG 工具适配
 
@@ -1367,7 +1389,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：工具返回格式化内容和引用。
 
-测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
 
 ##### H3：接入 Agent 工具列表
 
@@ -1381,7 +1403,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：Agent 可调用 RAG 工具。
 
-测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
 
 ##### H4：验证商品 API 与 RAG 边界
 
@@ -1395,7 +1417,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：商品事实走 API，知识补充走 RAG。
 
-测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
 
 ##### H5：验证简单询问和链接场景
 
@@ -1409,7 +1431,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：推荐、对比、选购指南、政策 FAQ 都有覆盖。
 
-测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
 
 ##### H6：完成端到端联调测试
 
@@ -1423,4 +1445,4 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 验收标准：前端/Agent 响应不暴露 tool result 或 chunk id。
 
-测试方法：`pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`

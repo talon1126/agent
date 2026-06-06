@@ -62,6 +62,7 @@ services/ai-service/rag/
 ├── DEV_SPEC.md                                    # RAG 子系统开发规范文档
 ├── README.md                                      # 独立 RAG 模块说明、启动方式和开发命令
 ├── pyproject.toml                                 # Python 包配置、依赖、pytest 和 lint 配置
+├── uv.lock                                        # uv 生成的依赖锁文件，保证本地、CI 和 Docker 可复现
 ├── main.py                                        # 独立部署入口，启动 FastAPI/MCP 或本地调试命令
 ├── Dockerfile                                     # 独立 Docker 镜像构建文件
 ├── .dockerignore                                  # Docker 构建上下文忽略规则
@@ -251,8 +252,9 @@ services/ai-service/rag/
 | --- | --- | --- |
 | `README.md` | 说明 RAG 独立模块的定位、启动方式和常用命令 | 面向开发者和部署人员，包含 Docker、pytest、Dashboard、MCP 入口 |
 | `pyproject.toml` | 管理 Python 项目元数据、依赖和测试配置 | PEP 621、pytest markers、可选 extras、统一工具配置 |
+| `uv.lock` | 锁定完整 Python 依赖图 | 由 `uv lock` 生成并提交；本地、CI 和 Docker 使用 `--frozen` 校验，不手工编辑 |
 | `main.py` | 提供独立运行入口 | 可启动 FastAPI/MCP 服务，也可分发到 ingestion、query、dashboard 调试命令 |
-| `Dockerfile` | 构建独立 RAG 服务镜像 | Python 3.12、依赖安装、非 root 运行、健康检查预留 |
+| `Dockerfile` | 构建独立 RAG 服务镜像 | Python 3.12、固定版本 uv、`uv sync --frozen --no-dev`、非 root 运行、健康检查预留 |
 | `.dockerignore` | 控制 Docker 构建上下文 | 排除缓存、日志、测试数据和本地数据库文件 |
 | `.gitignore` | 控制 RAG 模块本地忽略文件 | 排除 `src/logs/*.log`、`src/cache/`、`data/db/`、临时图片和模型缓存 |
 | `config/settings.yaml` | 管理运行时配置和组件选择 | 配置驱动切换 LLM、Embedding、Splitter、VectorStore、Reranker、Evaluator |

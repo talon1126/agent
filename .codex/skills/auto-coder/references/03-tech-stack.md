@@ -8,6 +8,7 @@
 | 类别 | 首版选择 | 说明 |
 | --- | --- | --- |
 | 语言 | Python 3.12 | 与现有 `ai-service` 保持一致 |
+| 包与环境管理 | uv | 统一依赖解析、`uv.lock` 锁定、`.venv` 创建、测试执行和 Docker 安装 |
 | Web 服务 | FastAPI | AImodel 已使用 FastAPI |
 | 数据库 | PostgreSQL | 唯一持久化层 |
 | 向量库 | pgvector | 首版唯一实现 |

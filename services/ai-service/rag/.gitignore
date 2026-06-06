@@ -17,6 +17,7 @@ dist/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+.uv-cache/
 
 # IDE and operating-system files
 .idea/

@@ -44,6 +44,10 @@ rerank = [
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
 
+[tool.uv]
+package = true
+link-mode = "copy"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
