@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS rag_documents (
     source_hash TEXT NOT NULL,
     title TEXT,
     content TEXT NOT NULL,
+    lifecycle_status TEXT NOT NULL DEFAULT 'pending',
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -58,9 +59,47 @@ CREATE TABLE IF NOT EXISTS rag_documents (
         CHECK (source_hash ~ '^[0-9a-fA-F]{64}$'),
     CONSTRAINT chk_rag_documents_content_not_blank
         CHECK (length(btrim(content)) > 0),
+    CONSTRAINT chk_rag_documents_lifecycle_status
+        CHECK (
+            lifecycle_status IN (
+                'pending',
+                'processing',
+                'success',
+                'failed',
+                'deleted'
+            )
+        ),
     CONSTRAINT chk_rag_documents_metadata_object
         CHECK (jsonb_typeof(metadata) = 'object')
 );
+
+-- Upgrade existing local development databases created before B6. PostgreSQL
+-- supports IF NOT EXISTS for columns and indexes, so this remains safe when
+-- init_schema() is executed repeatedly.
+ALTER TABLE rag_documents
+    ADD COLUMN IF NOT EXISTS lifecycle_status TEXT NOT NULL DEFAULT 'pending';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'chk_rag_documents_lifecycle_status'
+          AND conrelid = 'rag_documents'::regclass
+    ) THEN
+        ALTER TABLE rag_documents
+            ADD CONSTRAINT chk_rag_documents_lifecycle_status
+            CHECK (
+                lifecycle_status IN (
+                    'pending',
+                    'processing',
+                    'success',
+                    'failed',
+                    'deleted'
+                )
+            );
+    END IF;
+END $$;
 
 -- Persist retrievable Chunk objects and their dense vectors. Source offsets
 -- use the same start-inclusive/end-exclusive contract as core.types.Chunk.
@@ -108,6 +147,9 @@ CREATE INDEX IF NOT EXISTS idx_rag_documents_collection_id
 
 CREATE INDEX IF NOT EXISTS idx_rag_documents_source_hash
     ON rag_documents (source_hash);
+
+CREATE INDEX IF NOT EXISTS idx_rag_documents_lifecycle_status
+    ON rag_documents (collection_id, lifecycle_status);
 
 CREATE INDEX IF NOT EXISTS idx_rag_chunks_document_id
     ON rag_chunks (document_id, chunk_index);

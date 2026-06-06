@@ -288,6 +288,242 @@ class DocumentRepository:
         )
         return [self._to_document(row) for row in rows if row is not None]
 
+    def list_retrievable_by_collection(self, collection_id: str) -> list[Document]:
+        """List documents visible to retrieval for one collection.
+
+        Args:
+            collection_id: Collection used by retrieval and Dashboard filters.
+
+        Returns:
+            Documents whose lifecycle status is ``success`` only. Pending,
+            processing, failed, and deleted records are intentionally hidden
+            from retrieval-visible data.
+
+        Raises:
+            DatabaseError: If connection acquisition or query execution fails.
+        """
+
+        rows = _read_rows(
+            self._pool,
+            operation="document_list_retrievable_by_collection",
+            query="""
+            SELECT id, content, metadata
+            FROM rag_documents
+            WHERE collection_id = %s
+              AND lifecycle_status = 'success'
+            ORDER BY source_path ASC, id ASC
+            """,
+            params=(collection_id,),
+            many=True,
+        )
+        return [self._to_document(row) for row in rows if row is not None]
+
+    def get_lifecycle_status(self, document_id: str) -> str | None:
+        """Read the current lifecycle status for one document.
+
+        Args:
+            document_id: Stable Python document identifier.
+
+        Returns:
+            Lifecycle status string, or ``None`` when the document is absent.
+
+        Raises:
+            DatabaseError: If connection acquisition or query execution fails.
+        """
+
+        row = _read_rows(
+            self._pool,
+            operation="document_lifecycle_get",
+            query="""
+            SELECT lifecycle_status
+            FROM rag_documents
+            WHERE id = %s
+            """,
+            params=(document_id,),
+            many=False,
+        )
+        return row[0] if row is not None else None
+
+    def mark_processing(self, document_id: str) -> str:
+        """Mark a document as actively being ingested or re-indexed.
+
+        Args:
+            document_id: Stable Python document identifier generated before the
+                ingestion pipeline writes chunks or image references.
+
+        Returns:
+            The persisted ``processing`` lifecycle status returned by
+            PostgreSQL.
+
+        Raises:
+            DatabaseError: If the document row does not exist or the database
+                update fails.
+        """
+
+        return self._mark_lifecycle(document_id, "processing")
+
+    def mark_success(self, document_id: str) -> str:
+        """Mark a document as successfully indexed and retrieval-visible.
+
+        Args:
+            document_id: Stable Python document identifier whose chunks,
+                embeddings, and image indexes have already been written.
+
+        Returns:
+            The persisted ``success`` lifecycle status returned by PostgreSQL.
+
+        Raises:
+            DatabaseError: If the document row does not exist or the database
+                update fails.
+        """
+
+        return self._mark_lifecycle(document_id, "success")
+
+    def mark_failed(self, document_id: str) -> str:
+        """Mark a document as failed so retrieval filters exclude it.
+
+        Args:
+            document_id: Stable Python document identifier for the failed
+                ingestion attempt.
+
+        Returns:
+            The persisted ``failed`` lifecycle status returned by PostgreSQL.
+
+        Raises:
+            DatabaseError: If the document row does not exist or the database
+                update fails.
+
+        Notes:
+            Failed documents intentionally keep their document, chunk, and image
+            index data so a later retry or debugging session can inspect the
+            partial ingestion output. Retrieval uses
+            ``list_retrievable_by_collection()`` and therefore ignores them.
+        """
+
+        return self._mark_lifecycle(document_id, "failed")
+
+    def mark_deleted(self, document_id: str) -> str:
+        """Mark a document deleted and remove its retrieval-visible children.
+
+        Args:
+            document_id: Stable Python document identifier.
+
+        Returns:
+            The persisted ``deleted`` lifecycle status.
+
+        Raises:
+            DatabaseError: If the document is absent or cleanup fails.
+
+        Side Effects:
+            Deletes child chunk rows and image-index rows in the same
+            transaction, then keeps the document metadata row as deleted.
+        """
+
+        with self._pool.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT collection_id
+                FROM rag_documents
+                WHERE id = %s
+                """,
+                (document_id,),
+            ).fetchone()
+            if row is None:
+                raise DatabaseError(
+                    "Document does not exist",
+                    context={
+                        "operation": "document_mark_deleted",
+                        "document_id": document_id,
+                    },
+                )
+            collection_id = row[0]
+            connection.execute(
+                """
+                DELETE FROM image_index
+                WHERE document_id = %s
+                  AND collection_id = %s
+                """,
+                (document_id, collection_id),
+            )
+            connection.execute(
+                """
+                DELETE FROM rag_chunks
+                WHERE document_id = %s
+                  AND collection_id = %s
+                """,
+                (document_id, collection_id),
+            )
+            status = self._update_lifecycle_in_transaction(
+                connection,
+                document_id,
+                "deleted",
+            )
+        return status
+
+    def _mark_lifecycle(self, document_id: str, status: str) -> str:
+        """Update one document lifecycle status in a transaction.
+
+        Args:
+            document_id: Stable Python document identifier.
+            status: One schema-supported lifecycle value. Public methods keep
+                callers away from raw status strings; this helper centralizes
+                the common transaction wrapper.
+
+        Returns:
+            The lifecycle status stored by PostgreSQL.
+
+        Raises:
+            DatabaseError: If the document does not exist or the update fails.
+        """
+
+        with self._pool.transaction() as connection:
+            return self._update_lifecycle_in_transaction(
+                connection,
+                document_id,
+                status,
+            )
+
+    @staticmethod
+    def _update_lifecycle_in_transaction(
+        connection: Any,
+        document_id: str,
+        status: str,
+    ) -> str:
+        """Execute the lifecycle update and return the stored status.
+
+        Args:
+            connection: Active psycopg connection owned by ``PostgresPool``.
+            document_id: Stable Python document identifier.
+            status: Target schema-supported lifecycle state.
+
+        Returns:
+            The lifecycle status returned by PostgreSQL.
+
+        Raises:
+            DatabaseError: If no document row exists for ``document_id``.
+        """
+
+        row = connection.execute(
+            """
+            UPDATE rag_documents
+            SET lifecycle_status = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            RETURNING lifecycle_status
+            """,
+            (status, document_id),
+        ).fetchone()
+        if row is None:
+            raise DatabaseError(
+                "Document does not exist",
+                context={
+                    "operation": "document_lifecycle_update",
+                    "document_id": document_id,
+                    "lifecycle_status": status,
+                },
+            )
+        return row[0]
+
     @staticmethod
     def _to_document(row: tuple[Any, ...] | None) -> Document | None:
         """Convert one positional psycopg row into the shared domain contract.

@@ -380,6 +380,32 @@ def test_core_schema_enables_pgvector_and_preserves_domain_fields() -> None:
 
 
 @pytest.mark.integration
+def test_document_schema_exposes_lifecycle_status_for_filtering() -> None:
+    """Require a first-class lifecycle field for retrieval-visible filtering.
+
+    Lifecycle state must not live only inside JSON metadata because retrieval,
+    Dashboard list views, and cleanup logic need indexed access to
+    ``success``, ``failed``, and ``deleted`` states.
+    """
+
+    sql = _schema_sql()
+    documents = _table_definition(sql, "rag_documents")
+
+    assert re.search(
+        r"\blifecycle_status\s+TEXT\s+NOT\s+NULL\s+DEFAULT\s+'pending'",
+        documents,
+        re.IGNORECASE,
+    )
+    assert re.search(
+        r"CHECK\s*\(\s*lifecycle_status\s+IN\s*\(\s*'pending'\s*,\s*"
+        r"'processing'\s*,\s*'success'\s*,\s*'failed'\s*,\s*'deleted'\s*\)\s*\)",
+        documents,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert "CREATE INDEX IF NOT EXISTS idx_rag_documents_lifecycle_status" in sql
+
+
+@pytest.mark.integration
 def test_core_schema_declares_idempotent_tables_and_indexes() -> None:
     """Require repeatable DDL and lookup indexes used by later repositories.
 
@@ -838,6 +864,103 @@ def test_image_storage_saves_files_and_queries_upserted_indexes(
         assert updated.quality_status == "low_quality"
         assert storage.find_by_collection(collection_id) == [updated]
         assert storage.find_by_doc_hash(doc_hash) == [updated]
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+@pytest.mark.integration
+def test_document_repository_manages_lifecycle_and_deleted_cleanup(
+    tmp_path: Path,
+) -> None:
+    """Protect document state transitions and cleanup of retrieval-visible data.
+
+    Deleted documents remain as metadata records, but their chunks and image
+    index rows must be removed so retrieval and multimodal responses cannot use
+    stale content.
+    """
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for lifecycle repository integration")
+
+    from src.core.types import Chunk, Document
+    from src.storage.image_storage import ImageStorage
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import ChunkRepository, DocumentRepository
+
+    collection_id = f"b6-lifecycle-{uuid4().hex}"
+    document_id = f"doc-{uuid4().hex}"
+    source_hash = sha256(b"lifecycle-document").hexdigest()
+    image_id = f"image-{uuid4().hex}"
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=3),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        documents = DocumentRepository(pool)
+        chunks = ChunkRepository(pool)
+        images = ImageStorage(pool, root_dir=tmp_path / "data" / "images")
+        document = Document(
+            id=document_id,
+            text="Lifecycle test document.",
+            metadata={"doc_type": "shopping_guide"},
+        )
+        documents.upsert(
+            document,
+            collection_id=collection_id,
+            source_path=f"fixtures/{document_id}.md",
+            source_hash=source_hash,
+        )
+        chunks.upsert_many(
+            [
+                Chunk(
+                    id=f"chunk-{uuid4().hex}",
+                    text="Lifecycle test document.",
+                    metadata={"doc_type": "shopping_guide"},
+                    chunk_index=0,
+                    start_offset=0,
+                    end_offset=24,
+                    source_ref={"document_id": document_id},
+                )
+            ],
+            collection_id=collection_id,
+            document_id=document_id,
+        )
+        saved_path = images.save_image(
+            collection_id,
+            image_id,
+            b"image-bytes",
+            suffix=".png",
+        )
+        images.upsert_index(
+            image_id=image_id,
+            file_path=saved_path,
+            collection_id=collection_id,
+            document_id=document_id,
+            doc_hash=source_hash,
+            image_hash=sha256(b"image-bytes").hexdigest(),
+        )
+
+        assert documents.mark_processing(document_id) == "processing"
+        assert documents.mark_success(document_id) == "success"
+        assert documents.list_retrievable_by_collection(collection_id) == [document]
+        assert documents.mark_failed(document_id) == "failed"
+        assert documents.list_retrievable_by_collection(collection_id) == []
+        assert documents.mark_success(document_id) == "success"
+        assert documents.mark_deleted(document_id) == "deleted"
+
+        assert documents.get_by_id(document_id) == document
+        assert documents.get_lifecycle_status(document_id) == "deleted"
+        assert documents.list_retrievable_by_collection(collection_id) == []
+        assert chunks.list_by_document(document_id) == []
+        assert images.find_by_collection(collection_id) == []
     finally:
         with pool.transaction() as connection:
             connection.execute(

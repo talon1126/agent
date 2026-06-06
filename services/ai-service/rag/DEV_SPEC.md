@@ -1900,7 +1900,7 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | B3 | 实现数据库连接池和 schema 初始化 | [✔] | 2026-06-06 | 已实现配置驱动惰性连接池、生命周期、健康检查、事务回滚和幂等 schema 初始化；15 个集成测试通过 |
 | B4 | 实现 Document/Chunk/Image Repository | [✔] | 2026-06-06 | 已实现 collection 自动创建、文档版本替换、Chunk 批量 upsert、图片安全落盘和索引查询；19 个集成测试通过 |
 | B5 | 实现 Trace/Evaluation Repository | [✔] | 2026-06-06 | 已实现 Query/Ingestion Trace 与评估任务/指标的不可变记录、幂等 upsert 和历史查询；21 个集成测试通过 |
-| B6 | 实现文档生命周期管理 | [ ] |  | `pending`、`processing`、`success`、`failed`、`deleted` |
+| B6 | 实现文档生命周期管理 | [✔] | 2026-06-06 | 已实现 `lifecycle_status` schema、状态流转、retrievable 查询过滤和 deleted 清理 chunks/images；23 个集成测试通过 |
 | B7 | 建立 libs 可插拔组件包结构 | [ ] |  | loader、llm、splitter、transform、embedding、vector_store、reranker、evaluator |
 | B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [ ] |  | `libs.splitter` 保持 `str -> List[str]`，`DocumentChunker` 负责 `Document -> List[Chunk]` |
 | B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [ ] |  | 统一 `chat()`、`embed()`、`embed_batch()` |
@@ -1996,14 +1996,14 @@ RAG 已形成可独立安装、测试和构建 Docker 镜像的 Python 子模块
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | Phase A | 6 | 6 | 100% |
-| Phase B | 12 | 5 | 42% |
+| Phase B | 12 | 6 | 50% |
 | Phase C | 12 | 0 | 0% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **71** | **11** | **15%** |
+| **总计** | **71** | **12** | **17%** |
 
 ### 6.5 阶段实施明细
 
@@ -2215,7 +2215,7 @@ schema 可重复执行。
 
 目标：支持 Trace 索引和评估结果写入 PostgreSQL。
 
-修改文件：`src/storage/repositories.py`、`tests/integration/test_repositories.py`
+修改文件：`src/storage/schema.sql`、`src/storage/repositories.py`、`tests/integration/test_repositories.py`
 
 实现类/函数：
 
@@ -2251,11 +2251,18 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 实现类/函数：
 
-- `mark_processing()`：更新生命周期状态
-- `mark_success()`：更新生命周期状态
-- `mark_deleted()`：更新生命周期状态
+- `rag_documents.lifecycle_status`：保存文档生命周期状态
+- `mark_processing()`：更新生命周期状态为 `processing`
+- `mark_success()`：更新生命周期状态为 `success`
+- `mark_failed()`：更新生命周期状态为 `failed`，保留数据用于失败排查和重试
+- `mark_deleted()`：更新生命周期状态为 `deleted`，并同步删除该文档下的 chunks 和 `image_index` 记录
+- `get_lifecycle_status()`：查询文档当前生命周期状态
+- `list_retrievable_by_collection()`：仅返回 `success` 状态文档，供检索可见数据使用
 
-验收标准：文档状态按生命周期流转，deleted 不进入检索。
+验收标准：`rag_documents` 具备一等生命周期字段和查询索引；文档状态按
+`pending -> processing -> success/failed/deleted` 流转；`mark_deleted()`
+不物理删除文档记录，但必须删除该文档下的 chunks 和图片索引；deleted/failed
+文档不进入后续检索可见数据。
 
 测试方法：`pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
