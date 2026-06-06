@@ -415,6 +415,9 @@ transform:
       prompt_path: config/prompts/semantic_merge_prompt.yaml
     - name: denoise
       enabled: true
+    - name: image_to_text
+      enabled: true
+      prompt_path: config/prompts/image_to_text_prompt.yaml
 
 retrieval:
   query_rewrite_enabled: true
@@ -687,7 +690,7 @@ Storage 负责同时保存增强后的 chunk 和原始图片索引。
 
 - **描述质量检测**：如果生成描述过短、内容为空、Vision LLM 明确表示无法识别，图片应标记为 `low_quality`。
 - **图片压缩**：大尺寸图片在调用 Vision LLM 前应提前压缩，降低请求成本和超时概率。
-- **Vision LLM 降级**：如果 Vision LLM 不可用，图片保留占位符，但不生成描述、不参与检索，并在 chunk metadata 中标记 `image_description_status=skipped`。
+- **Vision LLM 降级**：如果 Vision LLM 不可用，图片保留占位符，但不生成描述、不参与检索，并在 chunk metadata 中标记 `image_caption_status=skipped`。
 - **批量处理优化**：图片描述应支持批处理、并发限流和失败重试，避免大量图片摄取时阻塞整个 Ingestion Pipeline。
 
 ### 3.8 可观测性与可视化管理平台设计

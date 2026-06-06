@@ -16,6 +16,8 @@ from src.core.errors import ConfigurationError
 from src.core.types import Chunk
 from src.ingestion.transform.chunk_rewriter import ChunkRewriter
 from src.ingestion.transform.denoise_transform import DenoiseTransform
+from src.ingestion.transform.image_captioner import ImageCaptioner
+from src.ingestion.transform.image_to_text_transform import ImageToTextTransform
 from src.ingestion.transform.metadata_enricher import MetadataEnricher
 from src.ingestion.transform.semantic_merge_transform import SemanticMergeTransform
 from src.libs.llm import BaseLLM, LLMFactory
@@ -25,7 +27,10 @@ from src.libs.transform.base_transform import BaseTransform
 class TransformPipeline:
     """Run enabled transform implementations sequentially over chunk lists."""
 
-    _STEP_BUILDERS: dict[str, Callable[[TransformStepSettings, BaseLLM | None], BaseTransform]]
+    _STEP_BUILDERS: dict[
+        str,
+        Callable[[TransformStepSettings, BaseLLM | None, BaseLLM | None], BaseTransform],
+    ]
 
     def __init__(self, transforms: list[BaseTransform]) -> None:
         """Store the concrete transform chain in execution order.
@@ -55,6 +60,7 @@ class TransformPipeline:
         settings: RagSettings,
         *,
         llm: BaseLLM | None = None,
+        vision_llm: BaseLLM | None = None,
     ) -> TransformPipeline:
         """Build the transform chain from ``settings.transform.steps``.
 
@@ -63,6 +69,9 @@ class TransformPipeline:
                 ``config/settings.yaml`` or the versioned example.
             llm: Optional injected chat client for unit tests and offline
                 execution. When omitted, model-backed steps use ``LLMFactory``.
+            vision_llm: Optional injected Vision LLM used by the image-to-text
+                step. It is separate from the text LLM because image captioning
+                is optional and may later use a provider with a multimodal SDK.
 
         Returns:
             A pipeline containing all enabled steps in configuration order.
@@ -88,7 +97,8 @@ class TransformPipeline:
                 )
             if step.name in {"rewrite_chunk", "semantic_merge"} and shared_llm is None:
                 shared_llm = LLMFactory.create(settings=settings)
-            transforms.append(builder(step, shared_llm))
+            active_vision_llm = vision_llm if settings.vision_llm.enabled else None
+            transforms.append(builder(step, shared_llm, active_vision_llm))
         return cls(transforms)
 
     def run(
@@ -116,7 +126,7 @@ class TransformPipeline:
     @staticmethod
     def _step_builders() -> dict[
         str,
-        Callable[[TransformStepSettings, BaseLLM | None], BaseTransform],
+        Callable[[TransformStepSettings, BaseLLM | None, BaseLLM | None], BaseTransform],
     ]:
         """Return the fixed ingestion transform registry.
 
@@ -131,12 +141,14 @@ class TransformPipeline:
             "rewrite_chunk": _build_chunk_rewriter,
             "semantic_merge": _build_semantic_merge,
             "denoise": _build_denoise_transform,
+            "image_to_text": _build_image_captioner,
         }
 
 
 def _build_metadata_enricher(
     step: TransformStepSettings,
     llm: BaseLLM | None,
+    vision_llm: BaseLLM | None,
 ) -> BaseTransform:
     """Create the metadata enrichment step.
 
@@ -150,13 +162,14 @@ def _build_metadata_enricher(
         A ``MetadataEnricher`` instance.
     """
 
-    del step, llm
+    del step, llm, vision_llm
     return MetadataEnricher()
 
 
 def _build_chunk_rewriter(
     step: TransformStepSettings,
     llm: BaseLLM | None,
+    vision_llm: BaseLLM | None,
 ) -> BaseTransform:
     """Create the LLM-backed chunk rewrite step.
 
@@ -171,6 +184,7 @@ def _build_chunk_rewriter(
         ConfigurationError: If the step has no Prompt path or no LLM client.
     """
 
+    del vision_llm
     if step.prompt_path is None:
         raise ConfigurationError(
             "Transform step requires prompt_path",
@@ -187,6 +201,7 @@ def _build_chunk_rewriter(
 def _build_semantic_merge(
     step: TransformStepSettings,
     llm: BaseLLM | None,
+    vision_llm: BaseLLM | None,
 ) -> BaseTransform:
     """Create the LLM-backed semantic merge step.
 
@@ -201,6 +216,7 @@ def _build_semantic_merge(
         ConfigurationError: If the step has no Prompt path or no LLM client.
     """
 
+    del vision_llm
     if step.prompt_path is None:
         raise ConfigurationError(
             "Transform step requires prompt_path",
@@ -217,6 +233,7 @@ def _build_semantic_merge(
 def _build_denoise_transform(
     step: TransformStepSettings,
     llm: BaseLLM | None,
+    vision_llm: BaseLLM | None,
 ) -> BaseTransform:
     """Create the deterministic denoise step.
 
@@ -230,5 +247,46 @@ def _build_denoise_transform(
         A ``DenoiseTransform`` instance.
     """
 
-    del step, llm
+    del step, llm, vision_llm
     return DenoiseTransform()
+
+
+def _build_image_captioner(
+    step: TransformStepSettings,
+    llm: BaseLLM | None,
+    vision_llm: BaseLLM | None,
+) -> BaseTransform:
+    """Create the optional image captioning step.
+
+    Args:
+        step: Settings containing the required image-to-text Prompt path.
+        llm: Unused text LLM accepted for a uniform builder signature.
+        vision_llm: Optional multimodal client. When absent, the captioner is
+            disabled so text-only ingestion and local tests remain usable.
+
+    Returns:
+        An ``ImageCaptioner`` that either generates captions or records skipped
+        status for chunks containing image references.
+
+    Raises:
+        ConfigurationError: If the step is enabled but omits its Prompt path.
+    """
+
+    del llm
+    if step.prompt_path is None:
+        raise ConfigurationError(
+            "Transform step requires prompt_path",
+            context={"step_name": step.name},
+        )
+    image_transform = (
+        ImageToTextTransform(
+            vision_llm=vision_llm,
+            prompt=load_prompt(step.prompt_path),
+        )
+        if vision_llm is not None
+        else None
+    )
+    return ImageCaptioner(
+        image_transform=image_transform,
+        enabled=vision_llm is not None,
+    )

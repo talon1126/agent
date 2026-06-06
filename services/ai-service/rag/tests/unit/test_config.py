@@ -203,9 +203,11 @@ def test_retrieval_and_transform_defaults_are_complete() -> None:
         "rewrite_chunk",
         "semantic_merge",
         "denoise",
+        "image_to_text",
     ]
     assert all(step["enabled"] for step in transform_steps)
     assert all("provider" not in step for step in transform_steps)
+    assert transform_steps[-1]["prompt_path"] == "config/prompts/image_to_text_prompt.yaml"
 
 
 def test_prompt_definitions_share_a_stable_contract() -> None:

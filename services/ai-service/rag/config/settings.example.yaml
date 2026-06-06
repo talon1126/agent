@@ -95,6 +95,9 @@ transform:
       prompt_path: config/prompts/semantic_merge_prompt.yaml
     - name: denoise
       enabled: true
+    - name: image_to_text
+      enabled: true
+      prompt_path: config/prompts/image_to_text_prompt.yaml
 
 # Hybrid retrieval keeps route limits separate from the final response limit.
 retrieval:

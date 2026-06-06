@@ -161,7 +161,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-06 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；11 个新增单元测试及真实文本/图片 PDF 冒烟测试通过 |
 | C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-06 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；24 个相关单元测试、111 个全量测试通过 |
 | C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-06 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；49 个相关测试、120 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C5 | 实现 ImageCaptioner | [ ] |  | 当启用 `vision_llm` 且 chunk 存在 `image_refs` 时，生成 caption 并写入 metadata |
+| C5 | 实现 ImageCaptioner | [✔] | 2026-06-06 | 已实现 ImageCaptioner、ImageToTextTransform、image_to_text transform step、skipped/failed/low_quality 状态和 caption metadata；34 个相关测试、125 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C6 | 实现 DenseEncoder | [ ] |  | 封装 `text-embedding-3-small`、content_hash 差量判断和 Dense 向量生成 |
 | C7 | 实现 BM25Indexer | [ ] |  | 生成 BM25 词项、词频和倒排索引数据 |
 | C8 | 实现 BatchProcessor 批处理优化 | [ ] |  | 放在 DenseEncoder 和 BM25Indexer 之后，统一处理批量、限流、重试和失败隔离 |
@@ -241,13 +241,13 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | --- | ---: | ---: | --- |
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
-| Phase C | 11 | 4 | 36% |
+| Phase C | 11 | 5 | 45% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **22** | **31%** |
+| **总计** | **70** | **23** | **33%** |
 
 ### 6.5 阶段实施明细
 
@@ -719,7 +719,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 - `ImageCaptioner.caption()`：读取 chunk 的 `image_refs` 并生成图片描述
 - `ImageCaptioner.should_caption()`：判断是否满足 `vision_llm.enabled=true` 且存在 `image_refs`
-- `ImageCaptioner.write_metadata()`：将 caption、caption_provider、caption_status 写入 chunk metadata
+- `ImageCaptioner.write_metadata()`：将 `image_caption_status` 和 `image_captions` 写入 chunk metadata
 - `ImageToTextTransform.transform()`：调用 Vision LLM 生成图片描述并返回结构化 caption 结果
 
 验收标准：启用 `vision_llm` 且存在 `image_refs` 时会生成 caption 并写入 chunk metadata；未启用 `vision_llm` 时不调用 Vision LLM，并写入 skipped 状态；没有 `image_refs` 的 chunk 不生成 caption；Vision LLM 失败时写入 failed/low_quality 状态并保留原 chunk；caption 可被后续 DenseEncoder 和 BM25Indexer 使用。

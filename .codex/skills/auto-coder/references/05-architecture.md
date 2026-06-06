@@ -152,6 +152,7 @@ services/ai-service/rag/
 │   │   │   ├── chunk_rewriter.py                  # 利用 LLM 对 chunk 进行语义改写
 │   │   │   ├── semantic_merge_transform.py        # 合并逻辑相关但被物理切割的 chunk
 │   │   │   ├── denoise_transform.py               # 去除页眉页脚、重复目录和解析噪声
+│   │   │   ├── image_to_text_transform.py         # 调用 Vision LLM 生成结构化图片 caption
 │   │   │   └── image_captioner.py                 # 根据 image_refs 生成 caption 并写入 metadata
 │   │   ├── embedding/
 │   │   │   ├── embedding_step.py                  # Embedding 阶段主编排
@@ -328,11 +329,12 @@ services/ai-service/rag/
 | `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
 | `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、继承 metadata、添加 `chunk_index`、建立 `source_ref`、按需分发 `image_refs` |
 | `src/ingestion/chunk/chunk_id.py` | 生成稳定 chunk_id | `hash(source_path + section_path + content_hash)` |
-| `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 从 `settings.transform.steps` 读取顺序，串行执行 metadata_enrich、rewrite_chunk、semantic_merge、denoise |
+| `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 从 `settings.transform.steps` 读取顺序，串行执行 metadata_enrich、rewrite_chunk、semantic_merge、denoise、image_to_text |
 | `src/ingestion/transform/metadata_enricher.py` | metadata 注入实现 | 标题路径、来源、文档主题、业务 metadata 注入 |
 | `src/ingestion/transform/chunk_rewriter.py` | LLM 改写 chunk | 提升语义完整性和检索可读性，Prompt 从配置读取 |
 | `src/ingestion/transform/semantic_merge_transform.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk，保留 source_ref 和 image_refs |
 | `src/ingestion/transform/denoise_transform.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留，保留图片占位符 |
+| `src/ingestion/transform/image_to_text_transform.py` | 图片理解适配 | 调用注入的 Vision LLM，解析 status、description、extracted_text、key_facts 和 reason |
 | `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、caption 写入 chunk metadata |
 | `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | DenseEncoder、BM25Indexer、BatchProcessor 和 upsert 前结果汇总 |
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | `text-embedding-3-small`、content_hash 差量判断、Dense 向量生成 |

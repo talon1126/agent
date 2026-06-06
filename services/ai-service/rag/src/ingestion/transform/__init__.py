@@ -8,6 +8,8 @@ this package only when it is explicitly building the ingestion pipeline.
 
 from src.ingestion.transform.chunk_rewriter import ChunkRewriter
 from src.ingestion.transform.denoise_transform import DenoiseTransform
+from src.ingestion.transform.image_captioner import ImageCaptioner
+from src.ingestion.transform.image_to_text_transform import ImageToTextTransform
 from src.ingestion.transform.metadata_enricher import MetadataEnricher
 from src.ingestion.transform.semantic_merge_transform import SemanticMergeTransform
 from src.ingestion.transform.transformer import TransformPipeline
@@ -15,6 +17,8 @@ from src.ingestion.transform.transformer import TransformPipeline
 __all__ = (
     "ChunkRewriter",
     "DenoiseTransform",
+    "ImageCaptioner",
+    "ImageToTextTransform",
     "MetadataEnricher",
     "SemanticMergeTransform",
     "TransformPipeline",

@@ -35,6 +35,8 @@ LLMResponse = llm_module.LLMResponse
 BaseTransform = transform_contract_module.BaseTransform
 ChunkRewriter = transform_module.ChunkRewriter
 DenoiseTransform = transform_module.DenoiseTransform
+ImageCaptioner = transform_module.ImageCaptioner
+ImageToTextTransform = transform_module.ImageToTextTransform
 MetadataEnricher = transform_module.MetadataEnricher
 SemanticMergeTransform = transform_module.SemanticMergeTransform
 TransformPipeline = transform_module.TransformPipeline
@@ -104,6 +106,7 @@ def test_transform_pipeline_builds_enabled_steps_from_settings_order() -> None:
         "ChunkRewriter",
         "SemanticMergeTransform",
         "DenoiseTransform",
+        "ImageCaptioner",
     ]
     assert all(isinstance(transform, BaseTransform) for transform in pipeline.transforms)
 
@@ -329,3 +332,223 @@ def test_denoise_preserves_repeated_content_outside_document_boundaries() -> Non
 
     assert cleaned[0].text.count("Check the material label.") == 2
     assert "2026" in cleaned[0].text
+
+
+def test_image_captioner_generates_metadata_for_referenced_images() -> None:
+    """Require enabled image captioning to enrich chunks with structured metadata.
+
+    The ingestion pipeline keeps image captions in metadata so later Dense and
+    BM25 steps can decide how to compose searchable text without coupling the
+    captioner to indexing internals. A failure here means image references are
+    no longer converted into retrievable caption data.
+    """
+
+    source = make_chunk(
+        text="[[image:image-stress-ball]]\nSoft silicone models are quiet.",
+        metadata={
+            "image_refs": ["image-stress-ball"],
+            "images": [
+                {
+                    "id": "image-stress-ball",
+                    "path": "data/images/shopping_guides/image-stress-ball.png",
+                    "page": 1,
+                    "text_offset": 0,
+                    "text_length": len("[[image:image-stress-ball]]"),
+                    "position": {"width": 640, "height": 480},
+                }
+            ],
+        },
+    )
+    vision_llm = Mock()
+    vision_llm.chat.return_value = LLMResponse(
+        content=json.dumps(
+            {
+                "status": "success",
+                "description": "图片展示一个蓝色硅胶解压球，表面为磨砂材质。",
+                "extracted_text": "",
+                "key_facts": ["蓝色硅胶", "磨砂材质"],
+                "reason": "",
+            },
+            ensure_ascii=False,
+        ),
+        provider="fake-vision",
+        model="fake-vl",
+    )
+    prompt = config_module.load_prompt("config/prompts/image_to_text_prompt.yaml")
+
+    captioner = ImageCaptioner(
+        image_transform=ImageToTextTransform(vision_llm=vision_llm, prompt=prompt),
+        enabled=True,
+    )
+    captioned = captioner.caption([source], context={"document_context": "stress toy guide"})
+
+    assert captioned[0] is not source
+    assert captioned[0].text == source.text
+    assert captioned[0].metadata["image_caption_status"] == "success"
+    assert captioned[0].metadata["image_captions"] == [
+        {
+            "image_id": "image-stress-ball",
+            "status": "success",
+            "description": "图片展示一个蓝色硅胶解压球，表面为磨砂材质。",
+            "extracted_text": "",
+            "key_facts": ["蓝色硅胶", "磨砂材质"],
+            "reason": "",
+            "provider": "fake-vision",
+            "model": "fake-vl",
+        }
+    ]
+    vision_llm.chat.assert_called_once()
+
+
+def test_image_captioner_skips_when_disabled_without_calling_vision_llm() -> None:
+    """Require disabled vision captioning to be visible and side-effect free."""
+
+    source = make_chunk(metadata={"image_refs": ["image-1"], "images": []})
+    image_transform = Mock()
+    captioner = ImageCaptioner(image_transform=image_transform, enabled=False)
+
+    captioned = captioner.caption([source])
+
+    assert captioner.should_caption(source) is False
+    assert captioned[0].metadata["image_caption_status"] == "skipped"
+    image_transform.transform.assert_not_called()
+
+
+def test_image_captioner_ignores_chunks_without_image_refs() -> None:
+    """Require text-only chunks to avoid noisy caption metadata."""
+
+    source = make_chunk(metadata={"image_refs": []})
+    image_transform = Mock()
+
+    captioned = ImageCaptioner(image_transform=image_transform, enabled=True).caption(
+        [source]
+    )
+
+    assert "image_caption_status" not in captioned[0].metadata
+    assert "image_captions" not in captioned[0].metadata
+    image_transform.transform.assert_not_called()
+
+
+def test_transform_pipeline_respects_disabled_vision_settings() -> None:
+    """Require settings.vision_llm.enabled to gate image caption execution."""
+
+    settings = load_settings(
+        SETTINGS_PATH,
+        environ={},
+        validate_environment=False,
+    )
+    settings.vision_llm.enabled = False
+    text_llm = Mock()
+    text_llm.chat.side_effect = [
+        LLMResponse(
+            content="Soft silicone models are quiet.",
+            provider="fake",
+            model="fake-rewriter",
+        ),
+        LLMResponse(
+            content=json.dumps({"merge": False}),
+            provider="fake",
+            model="fake-merge",
+        ),
+    ]
+    vision_llm = Mock()
+    vision_llm.chat.return_value = LLMResponse(
+        content=json.dumps(
+            {
+                "status": "success",
+                "description": "图片展示一个蓝色硅胶解压球。",
+                "extracted_text": "",
+                "key_facts": [],
+                "reason": "",
+            },
+            ensure_ascii=False,
+        ),
+        provider="fake-vision",
+        model="fake-vl",
+    )
+    source = make_chunk(
+        text="[[image:image-1]]\nSoft silicone models are quiet.",
+        metadata={
+            "image_refs": ["image-1"],
+            "images": [
+                {
+                    "id": "image-1",
+                    "path": "data/images/shopping_guides/image-1.png",
+                    "page": 1,
+                    "text_offset": 0,
+                    "text_length": len("[[image:image-1]]"),
+                    "position": {"width": 640, "height": 480},
+                }
+            ],
+        },
+    )
+
+    pipeline = TransformPipeline.from_settings(
+        settings=settings,
+        llm=text_llm,
+        vision_llm=vision_llm,
+    )
+    transformed = pipeline.run([source])
+
+    assert transformed[0].metadata["image_caption_status"] == "skipped"
+    vision_llm.chat.assert_not_called()
+
+
+def test_image_captioner_records_failed_and_low_quality_results() -> None:
+    """Require failed or unusable image understanding to preserve the chunk."""
+
+    failed_chunk = make_chunk(
+        chunk_id="chunk-failed",
+        metadata={
+            "image_refs": ["image-1"],
+            "images": [
+                {
+                    "id": "image-1",
+                    "path": "data/images/shopping_guides/image-1.png",
+                    "page": 1,
+                    "text_offset": 0,
+                    "text_length": 17,
+                    "position": {"width": 640, "height": 480},
+                }
+            ],
+        },
+    )
+    low_quality_chunk = make_chunk(
+        chunk_id="chunk-low-quality",
+        metadata={
+            "image_refs": ["image-2"],
+            "images": [
+                {
+                    "id": "image-2",
+                    "path": "data/images/shopping_guides/image-2.png",
+                    "page": 2,
+                    "text_offset": 0,
+                    "text_length": 17,
+                    "position": {"width": 20, "height": 20},
+                }
+            ],
+        },
+    )
+    image_transform = Mock()
+    image_transform.transform.side_effect = [
+        RuntimeError("vision unavailable"),
+        {
+            "status": "success",
+            "description": "太短",
+            "extracted_text": "",
+            "key_facts": [],
+            "reason": "",
+            "provider": "fake-vision",
+            "model": "fake-vl",
+        },
+    ]
+
+    captioned = ImageCaptioner(image_transform=image_transform, enabled=True).caption(
+        [failed_chunk, low_quality_chunk]
+    )
+
+    assert captioned[0].metadata["image_caption_status"] == "failed"
+    assert captioned[0].metadata["image_captions"][0]["status"] == "failed"
+    assert captioned[0].text == failed_chunk.text
+    assert captioned[1].metadata["image_caption_status"] == "low_quality"
+    assert captioned[1].metadata["image_captions"][0]["status"] == "low_quality"
