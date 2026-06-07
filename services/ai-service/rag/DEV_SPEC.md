@@ -2034,7 +2034,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | --- | --- | --- | --- | --- |
 | D1 | 实现 Query Processor | [✔] | 2026-06-07 | 已实现不可变 ProcessedQuery 和 keywords 快照、Unicode/空白标准化、关键词提取、collection/top_k 类型校验与默认覆盖、四类购物意图、商品工具协同判断、可注入 QueryRewriter 和异常/空结果 fallback；15 个 D1 单元测试通过 |
 | D2 | 实现 Dense Route 向量检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、Query Embedding、配置驱动 dense_top_k、VectorStore 语义召回、RetrievalResult 校验、embedding/vector search 错误边界和低侵入 Trace；8 个 D2 单元测试通过 |
-| D3 | 实现 Sparse Route BM25 回表检索 | [ ] |  | `ProcessedQuery.keywords -> bm25_indexer.query -> chunk_ids -> vector_store.get_by_ids` |
+| D3 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D3 单元测试通过 |
 | D4 | 实现 RRF Fusion | [ ] |  | 基于排名倒数融合，不比较两路分数 |
 | D5 | 实现 HybridSearch 编排 | [ ] |  | 依赖 D1/D2/D3/D4，集成候选去重、双路召回、融合和降级 |
 | D6 | 实现 Rerank 前候选过滤 | [ ] |  | 在进入 Reranker 前按 `collection`、`doc_type` 等参数过滤候选 |
@@ -2101,12 +2101,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 2 | 14% |
+| Phase D | 14 | 3 | 21% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **31** | **44%** |
+| **总计** | **70** | **32** | **46%** |
 
 ### 6.5 阶段实施明细
 
@@ -2729,15 +2729,18 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：使用 `QueryProcessor.process()` 生成的 `ProcessedQuery.keywords` 进行 BM25 检索，再通过 chunk_id 回表读取 chunk 正文和 metadata。
 
-修改文件：`src/core/query_engine/sparse_route.py`、`tests/unit/test_retrieval.py`
+修改文件：`src/core/query_engine/__init__.py`、`src/core/query_engine/sparse_route.py`、`tests/unit/test_retrieval.py`
 
 实现类/函数：
 
-- `SparseRoute.search()`：执行 BM25 关键词召回并按 chunk_id 回表
+- `BM25CandidateLike`：定义 Sparse Route 消费的 BM25 候选最小协议
+- `BM25IndexerLike.query()`：定义 Sparse Route 依赖的 BM25 查询协议
+- `SparseTraceContext.record_stage()`：定义 Sparse Route 使用的最小 Trace 注入接口
+- `SparseRoute.search()`：处理 raw query 或 ProcessedQuery，执行 BM25 关键词召回并按 chunk_id 回表
 - `BM25Indexer.query()`：执行索引查询
 - `VectorStore.get_by_ids()`：按 ID 回表读取数据
 
-验收标准：流程固定为 `keywords -> bm25_indexer.query(keywords, top_k) -> [{chunk_id, score}] -> vector_store.get_by_ids(chunk_ids) -> [{id, text, metadata}] -> List[RetrievalResult]`；keywords 为空时返回空结果并记录 skipped 原因；BM25 返回的 chunk_id 顺序应被保留；缺失 chunk_id 应被跳过并写入 trace details。
+验收标准：流程固定为 `keywords -> bm25_indexer.query(keywords, top_k) -> [{chunk_id, score}] -> vector_store.get_by_ids(chunk_ids) -> [{id, text, metadata}] -> List[RetrievalResult]`；raw query 必须先通过 QueryProcessor，ProcessedQuery 可直接复用；默认使用 `retrieval.sparse_top_k` 并允许调用方显式覆盖；keywords 为空时返回空结果并记录 skipped 原因；BM25 返回的 chunk_id 顺序和 BM25 原始分数应被保留；BM25 无候选时不执行回表；缺失 chunk_id 应被跳过并写入 trace details；可选 Trace 记录 `route=sparse`、`method=bm25`、top_k、keyword_count、候选数量、缺失 chunk_id、状态和耗时；Trace sink 异常不得覆盖检索结果或原始 RetrievalError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 

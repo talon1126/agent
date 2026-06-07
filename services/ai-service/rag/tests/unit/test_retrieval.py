@@ -21,6 +21,8 @@ from src.core.query_engine.query_processor import (
     QueryIntent,
     QueryProcessor,
 )
+from src.core.query_engine.sparse_route import SparseRoute
+from src.core.types import Chunk
 
 
 def _settings(*, rewrite_enabled: bool = True) -> SimpleNamespace:
@@ -30,9 +32,29 @@ def _settings(*, rewrite_enabled: bool = True) -> SimpleNamespace:
         retrieval=SimpleNamespace(
             query_rewrite_enabled=rewrite_enabled,
             dense_top_k=30,
+            sparse_top_k=25,
             final_top_k=5,
             filters=SimpleNamespace(default_collection="shopping_guides"),
         )
+    )
+
+
+def _chunk(
+    chunk_id: str,
+    text: str,
+    *,
+    metadata: dict[str, object] | None = None,
+) -> Chunk:
+    """Build a valid chunk fixture for retrieval route hydration tests."""
+
+    return Chunk(
+        id=chunk_id,
+        text=text,
+        metadata=dict(metadata or {}),
+        chunk_index=0,
+        start_offset=0,
+        end_offset=max(len(text), 1),
+        source_ref={"document_id": "doc-1"},
     )
 
 
@@ -408,3 +430,262 @@ def test_dense_route_trace_failure_does_not_break_successful_retrieval() -> None
     results = route.search("无线耳机", trace_context=trace)
 
     assert [result.chunk_id for result in results] == ["chunk-1"]
+
+
+def test_sparse_route_queries_bm25_and_hydrates_chunks_in_candidate_order() -> None:
+    """Require Sparse Route to preserve BM25 ranking while hydrating chunk data."""
+
+    settings = _settings(rewrite_enabled=False)
+    processor = QueryProcessor(settings=settings)
+    processed = processor.process("高性价比 无线耳机 推荐")
+    bm25_indexer = Mock()
+    bm25_indexer.query.return_value = [
+        SimpleNamespace(chunk_id="chunk-b", score=2.4),
+        SimpleNamespace(chunk_id="chunk-a", score=1.7),
+    ]
+    vector_store = Mock()
+    vector_store.get_by_ids.return_value = [
+        _chunk("chunk-b", "预算有限时关注蓝牙稳定性。", metadata={"collection": "shopping_guides"}),
+        _chunk("chunk-a", "主动降噪适合通勤场景。", metadata={"collection": "shopping_guides"}),
+    ]
+    route = SparseRoute(
+        settings=settings,
+        query_processor=processor,
+        bm25_indexer=bm25_indexer,
+        vector_store=vector_store,
+    )
+
+    results = route.search(processed)
+
+    bm25_indexer.query.assert_called_once_with(list(processed.keywords), top_k=25)
+    vector_store.get_by_ids.assert_called_once_with(["chunk-b", "chunk-a"])
+    assert [result.chunk_id for result in results] == ["chunk-b", "chunk-a"]
+    assert [result.score for result in results] == [2.4, 1.7]
+    assert results[0].text == "预算有限时关注蓝牙稳定性。"
+    assert results[0].metadata == {"collection": "shopping_guides"}
+
+
+def test_sparse_route_processes_raw_query_and_allows_top_k_override() -> None:
+    """Require raw strings to pass through QueryProcessor before BM25 retrieval."""
+
+    settings = _settings(rewrite_enabled=False)
+    processor = Mock()
+    processor.process.return_value = ProcessedQuery(
+        raw_query="耳机推荐",
+        normalized_query="耳机推荐",
+        keywords=("耳机", "推荐"),
+        intent=QueryIntent.RECOMMENDATION,
+        collection="shopping_guides",
+        top_k=5,
+        requires_product_tool=True,
+    )
+    bm25_indexer = Mock()
+    bm25_indexer.query.return_value = []
+    vector_store = Mock()
+    route = SparseRoute(
+        settings=settings,
+        query_processor=processor,
+        bm25_indexer=bm25_indexer,
+        vector_store=vector_store,
+    )
+
+    assert route.search("耳机推荐", top_k=7) == []
+
+    processor.process.assert_called_once_with("耳机推荐")
+    bm25_indexer.query.assert_called_once_with(["耳机", "推荐"], top_k=7)
+    vector_store.get_by_ids.assert_not_called()
+
+
+def test_sparse_route_skips_empty_keywords_before_provider_calls() -> None:
+    """Require empty keyword snapshots to return no Sparse candidates."""
+
+    settings = _settings(rewrite_enabled=False)
+    processed = ProcessedQuery(
+        raw_query="?",
+        normalized_query="?",
+        keywords=(),
+        intent=QueryIntent.KNOWLEDGE_QUERY,
+        collection="shopping_guides",
+        top_k=5,
+        requires_product_tool=False,
+    )
+    bm25_indexer = Mock()
+    vector_store = Mock()
+    trace = Mock()
+    route = SparseRoute(
+        settings=settings,
+        query_processor=QueryProcessor(settings=settings),
+        bm25_indexer=bm25_indexer,
+        vector_store=vector_store,
+    )
+
+    assert route.search(processed, trace_context=trace) == []
+
+    bm25_indexer.query.assert_not_called()
+    vector_store.get_by_ids.assert_not_called()
+    trace.record_stage.assert_called_once()
+    assert trace.record_stage.call_args.kwargs["status"] == "skipped"
+    assert trace.record_stage.call_args.kwargs["details"]["reason"] == "empty_keywords"
+
+
+def test_sparse_route_rejects_invalid_candidate_limit_before_provider_calls() -> None:
+    """Require invalid Sparse limits to fail without BM25 or storage access."""
+
+    settings = _settings(rewrite_enabled=False)
+    bm25_indexer = Mock()
+    vector_store = Mock()
+    route = SparseRoute(
+        settings=settings,
+        query_processor=QueryProcessor(settings=settings),
+        bm25_indexer=bm25_indexer,
+        vector_store=vector_store,
+    )
+
+    with pytest.raises(RetrievalError, match="Sparse top_k must be greater than zero"):
+        route.search("无线耳机", top_k=0)
+
+    bm25_indexer.query.assert_not_called()
+    vector_store.get_by_ids.assert_not_called()
+
+
+def test_sparse_route_skips_missing_hydrated_chunks_and_records_trace_details() -> None:
+    """Require stale BM25 IDs to be omitted while remaining observable."""
+
+    settings = _settings(rewrite_enabled=False)
+    processed = ProcessedQuery(
+        raw_query="耳机",
+        normalized_query="耳机",
+        keywords=("耳机",),
+        intent=QueryIntent.RECOMMENDATION,
+        collection="shopping_guides",
+        top_k=5,
+        requires_product_tool=True,
+    )
+    bm25_indexer = Mock()
+    bm25_indexer.query.return_value = [
+        SimpleNamespace(chunk_id="chunk-a", score=3.0),
+        SimpleNamespace(chunk_id="missing", score=2.0),
+        SimpleNamespace(chunk_id="chunk-b", score=1.0),
+    ]
+    vector_store = Mock()
+    vector_store.get_by_ids.return_value = [
+        _chunk("chunk-a", "耳机 A"),
+        _chunk("chunk-b", "耳机 B"),
+    ]
+    trace = Mock()
+    route = SparseRoute(
+        settings=settings,
+        query_processor=QueryProcessor(settings=settings),
+        bm25_indexer=bm25_indexer,
+        vector_store=vector_store,
+    )
+
+    results = route.search(processed, trace_context=trace)
+
+    assert [result.chunk_id for result in results] == ["chunk-a", "chunk-b"]
+    assert trace.record_stage.call_args.kwargs["details"]["missing_chunk_ids"] == [
+        "missing"
+    ]
+
+
+def test_sparse_route_wraps_bm25_query_failure_with_stage_context() -> None:
+    """Require BM25 failures to cross the route boundary as RetrievalError."""
+
+    settings = _settings(rewrite_enabled=False)
+    bm25_indexer = Mock()
+    bm25_indexer.query.side_effect = RuntimeError("bm25 unavailable")
+    vector_store = Mock()
+    route = SparseRoute(
+        settings=settings,
+        query_processor=QueryProcessor(settings=settings),
+        bm25_indexer=bm25_indexer,
+        vector_store=vector_store,
+    )
+
+    with pytest.raises(RetrievalError, match="Sparse BM25 query failed") as captured:
+        route.search("无线耳机")
+
+    assert captured.value.context == {
+        "stage": "sparse",
+        "operation": "bm25_query",
+        "top_k": 25,
+    }
+    assert isinstance(captured.value.cause, RuntimeError)
+    vector_store.get_by_ids.assert_not_called()
+
+
+def test_sparse_route_wraps_invalid_bm25_candidate_shape() -> None:
+    """Require malformed BM25 provider results to stay inside Sparse boundaries."""
+
+    settings = _settings(rewrite_enabled=False)
+    bm25_indexer = Mock()
+    bm25_indexer.query.return_value = [SimpleNamespace(id="chunk-a", score=1.0)]
+    vector_store = Mock()
+    trace = Mock()
+    route = SparseRoute(
+        settings=settings,
+        query_processor=QueryProcessor(settings=settings),
+        bm25_indexer=bm25_indexer,
+        vector_store=vector_store,
+    )
+
+    with pytest.raises(RetrievalError, match="Sparse BM25 query failed") as captured:
+        route.search("无线耳机", trace_context=trace)
+
+    assert captured.value.context == {
+        "stage": "sparse",
+        "operation": "bm25_query",
+        "top_k": 25,
+    }
+    assert isinstance(captured.value.cause, AttributeError)
+    vector_store.get_by_ids.assert_not_called()
+    assert trace.record_stage.call_args.kwargs["status"] == "failed"
+    assert trace.record_stage.call_args.kwargs["details"]["operation"] == "bm25_query"
+
+
+def test_sparse_route_wraps_chunk_hydration_failure_with_stage_context() -> None:
+    """Require chunk hydration failures to use the retrieval error boundary."""
+
+    settings = _settings(rewrite_enabled=False)
+    bm25_indexer = Mock()
+    bm25_indexer.query.return_value = [SimpleNamespace(chunk_id="chunk-a", score=1.2)]
+    vector_store = Mock()
+    vector_store.get_by_ids.side_effect = RuntimeError("database unavailable")
+    route = SparseRoute(
+        settings=settings,
+        query_processor=QueryProcessor(settings=settings),
+        bm25_indexer=bm25_indexer,
+        vector_store=vector_store,
+    )
+
+    with pytest.raises(RetrievalError, match="Sparse chunk hydration failed") as captured:
+        route.search("无线耳机")
+
+    assert captured.value.context == {
+        "stage": "sparse",
+        "operation": "chunk_hydration",
+        "candidate_count": 1,
+    }
+    assert isinstance(captured.value.cause, RuntimeError)
+
+
+def test_sparse_route_trace_failure_does_not_break_successful_retrieval() -> None:
+    """Require optional observability failure to remain isolated from Sparse search."""
+
+    settings = _settings(rewrite_enabled=False)
+    bm25_indexer = Mock()
+    bm25_indexer.query.return_value = [SimpleNamespace(chunk_id="chunk-a", score=1.2)]
+    vector_store = Mock()
+    vector_store.get_by_ids.return_value = [_chunk("chunk-a", "耳机选购指南")]
+    trace = Mock()
+    trace.record_stage.side_effect = RuntimeError("trace sink unavailable")
+    route = SparseRoute(
+        settings=settings,
+        query_processor=QueryProcessor(settings=settings),
+        bm25_indexer=bm25_indexer,
+        vector_store=vector_store,
+    )
+
+    results = route.search("无线耳机", trace_context=trace)
+
+    assert [result.chunk_id for result in results] == ["chunk-a"]

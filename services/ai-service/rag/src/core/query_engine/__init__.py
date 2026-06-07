@@ -13,6 +13,7 @@ from src.core.query_engine.query_processor import (
     QueryProcessor,
     QueryRewriter,
 )
+from src.core.query_engine.sparse_route import SparseRoute, SparseTraceContext
 
 __all__ = (
     "DenseRoute",
@@ -21,4 +22,6 @@ __all__ = (
     "QueryIntent",
     "QueryProcessor",
     "QueryRewriter",
+    "SparseRoute",
+    "SparseTraceContext",
 )
