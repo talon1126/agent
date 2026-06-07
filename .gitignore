@@ -3,6 +3,7 @@
 .env
 .env.*
 !.env.example
+AGENTS.md
 *.egg-info/
 .pytest_cache/
 __pycache__/
