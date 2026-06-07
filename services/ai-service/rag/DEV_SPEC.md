@@ -2033,7 +2033,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | D1 | 实现 Query Processor | [✔] | 2026-06-07 | 已实现不可变 ProcessedQuery 和 keywords 快照、Unicode/空白标准化、关键词提取、collection/top_k 类型校验与默认覆盖、四类购物意图、商品工具协同判断、可注入 QueryRewriter 和异常/空结果 fallback；15 个 D1 单元测试通过 |
-| D2 | 实现 Dense Route 向量检索 | [ ] |  | 输入 query/ProcessedQuery，完成 Query Embedding、pgvector 检索并返回 `RetrievalResult` |
+| D2 | 实现 Dense Route 向量检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、Query Embedding、配置驱动 dense_top_k、VectorStore 语义召回、RetrievalResult 校验、embedding/vector search 错误边界和低侵入 Trace；8 个 D2 单元测试通过 |
 | D3 | 实现 Sparse Route BM25 回表检索 | [ ] |  | `ProcessedQuery.keywords -> bm25_indexer.query -> chunk_ids -> vector_store.get_by_ids` |
 | D4 | 实现 RRF Fusion | [ ] |  | 基于排名倒数融合，不比较两路分数 |
 | D5 | 实现 HybridSearch 编排 | [ ] |  | 依赖 D1/D2/D3/D4，集成候选去重、双路召回、融合和降级 |
@@ -2101,12 +2101,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 1 | 7% |
+| Phase D | 14 | 2 | 14% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **30** | **43%** |
+| **总计** | **70** | **31** | **44%** |
 
 ### 6.5 阶段实施明细
 
@@ -2714,13 +2714,14 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：输入用户 query 或 `ProcessedQuery`，完成 Query Embedding、pgvector 向量检索，并返回统一的 `RetrievalResult(chunk_id,text,score,metadata)`。
 
-修改文件：`src/core/query_engine/dense_route.py`、`tests/unit/test_retrieval.py`
+修改文件：`src/core/query_engine/__init__.py`、`src/core/query_engine/dense_route.py`、`tests/unit/test_retrieval.py`
 
 实现类/函数：
 
-- `DenseRoute.search()`：执行 Query Embedding 和 pgvector 语义召回
+- `DenseTraceContext.record_stage()`：定义 Dense Route 使用的最小 Trace 注入接口
+- `DenseRoute.search()`：处理 raw query 或 ProcessedQuery，执行 Query Embedding 和 VectorStore 语义召回
 
-验收标准：调用 `EmbeddingClient.embed(processed_query.normalized_query)`；调用 vector store 完成 Top-k 向量检索；返回结果字段统一为 `chunk_id`、`text`、`score`、`metadata`；空 query、embedding 失败、空结果都有可测试分支；trace details 记录 route、top_k、候选数量和耗时。
+验收标准：raw query 必须先通过 QueryProcessor，ProcessedQuery 可直接复用；调用 `EmbeddingClient.embed(processed_query.normalized_query)`；默认使用 `retrieval.dense_top_k` 作为 Dense 粗召回数量，并允许调用方显式覆盖；调用 VectorStore 完成 Top-k 向量检索，但不在 D2 提前执行 D6 的 metadata 过滤；所有候选统一校验为 `RetrievalResult(chunk_id,text,score,metadata)`；空 query、非法 top_k、embedding 失败、vector search 失败和空结果都有可测试分支；可选 Trace 记录 `route=dense`、provider-independent `method=vector_search`、top_k、候选数量、状态和耗时；Trace sink 异常不得覆盖检索结果或原始 RetrievalError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
