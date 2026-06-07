@@ -13,6 +13,7 @@ from typing import Any
 from src.core.config import RagSettings
 from src.core.errors import ConfigurationError
 from src.libs.reranker.base_reranker import BaseReranker
+from src.libs.reranker.cross_encoder_reranker import CrossEncoderReranker
 from src.libs.reranker.fake_reranker import FakeReranker
 from src.libs.reranker.no_op_reranker import NoOpReranker
 
@@ -34,6 +35,7 @@ class RerankerFactory:
 
         if cls._builtins_registered:
             return
+        cls.register("cross_encoder", CrossEncoderReranker)
         cls.register("fake", FakeReranker)
         cls.register("none", NoOpReranker)
         cls.register("rrf", NoOpReranker)

@@ -7,12 +7,14 @@ and later reranker tasks.
 """
 
 from src.libs.reranker.base_reranker import BaseReranker
+from src.libs.reranker.cross_encoder_reranker import CrossEncoderReranker
 from src.libs.reranker.fake_reranker import FakeReranker
 from src.libs.reranker.no_op_reranker import NoOpReranker
 from src.libs.reranker.reranker_factory import RerankerFactory
 
 __all__ = (
     "BaseReranker",
+    "CrossEncoderReranker",
     "FakeReranker",
     "NoOpReranker",
     "RerankerFactory",

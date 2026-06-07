@@ -2038,7 +2038,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D4 | 实现 RRF Fusion | [✔] | 2026-06-07 | 已实现 Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D4 单元测试通过 |
 | D5 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | 已实现 ProcessedQuery 输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D5 单元测试通过 |
 | D6 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | 已实现 CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D6 单元测试通过 |
-| D7 | 实现 Cross-Encoder Reranker 适配 | [ ] |  |  |
+| D7 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | 已实现 CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D7 单元测试通过 |
 | D8 | 实现 LLM Rerank 适配 | [ ] |  |  |
 | D9 | 实现 rerank fallback | [ ] |  | 不可用、超时、异常时回退过滤后的 RRF 结果 |
 | D10 | 实现引用构造 | [ ] |  | 来源标题、章节、路径、trace_id |
@@ -2101,12 +2101,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 6 | 43% |
+| Phase D | 14 | 7 | 50% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **35** | **50%** |
+| **总计** | **70** | **36** | **51%** |
 
 ### 6.5 阶段实施明细
 
@@ -2803,13 +2803,18 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：支持 Cross-Encoder 对过滤后的候选进行精排。
 
-修改文件：`src/libs/reranker/cross_encoder_reranker.py`、`tests/unit/test_reranker.py`
+修改文件：`src/libs/reranker/__init__.py`、`src/libs/reranker/cross_encoder_reranker.py`、`src/libs/reranker/reranker_factory.py`、`tests/unit/test_reranker.py`
 
 实现类/函数：
 
+- `CrossEncoderScorer.predict()`：定义 Cross-Encoder scorer 最小协议，便于测试注入和真实模型适配
 - `CrossEncoderReranker.rerank()`：执行候选重排
+- `CrossEncoderReranker._get_scorer()`：惰性加载 `sentence_transformers.CrossEncoder`
+- `CrossEncoderReranker._validate_scores()`：校验模型分数数量和有限性
+- `CrossEncoderReranker._with_rerank_score()`：复制候选并写入 rerank 分数和 metadata 诊断
+- `RerankerFactory.register_builtin_providers()`：注册 `cross_encoder` provider
 
-验收标准：只接收过滤后的候选；可按 query-doc pair 重新排序。
+验收标准：只接收过滤后的候选；按 `(query, candidate.text)` 组成 query-doc pair 调用 Cross-Encoder scorer；按模型分数降序重排，分数相同保持过滤后的原始顺序；支持 `top_k` 截断；返回新的 `RetrievalResult` 副本，不修改输入候选；输出 `RetrievalResult.score` 为 Cross-Encoder 分数，metadata 写入 `rerank.provider`、`rerank.model` 和 `rerank.original_score`；空候选直接返回空列表且不加载模型；query 为空、top_k 非法、模型输出数量不一致、分数非有限或 scorer 运行失败均有可测试分支；真实模型通过 `sentence_transformers.CrossEncoder` 惰性加载，单元测试必须通过注入 scorer 避免网络或模型下载。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 
