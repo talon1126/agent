@@ -24,6 +24,7 @@ embedding_module = importlib.import_module("src.ingestion.embedding")
 Chunk = types_module.Chunk
 BM25Candidate = embedding_module.BM25Candidate
 BM25Indexer = embedding_module.BM25Indexer
+BatchProcessor = embedding_module.BatchProcessor
 
 
 def make_chunk(
@@ -182,3 +183,22 @@ def test_bm25_query_rejects_invalid_top_k() -> None:
 
     with pytest.raises(ValueError, match="top_k"):
         indexer.query(["wireless"], top_k=0)
+
+
+def test_batch_processor_can_wrap_bm25_indexing_as_sparse_batch() -> None:
+    """Require sparse indexing work to reuse the shared C8 batch boundary."""
+
+    chunks = [
+        make_chunk(chunk_id="chunk-1", text="Wireless headphones guide."),
+        make_chunk(chunk_id="chunk-2", text="Quiet stress toy guide."),
+    ]
+    indexer = BM25Indexer()
+    processor = BatchProcessor(batch_size=1, max_retries=0)
+
+    result = processor.run([chunks], process_batch=lambda batch: [indexer.index(batch[0])])
+
+    bm25_index = result.successful_values()[0]
+    assert bm25_index.chunk_count == 2
+    assert bm25_index.term_document_frequency["guide"] == 2
+    assert result.failures == []
+    assert result.batches_processed == 1

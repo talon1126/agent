@@ -30,6 +30,8 @@ FakeEmbedding = embedding_module.FakeEmbedding
 IngestionError = errors_module.IngestionError
 DenseEncoder = ingestion_embedding_module.DenseEncoder
 DenseEncodingResult = ingestion_embedding_module.DenseEncodingResult
+BatchFailure = ingestion_embedding_module.BatchFailure
+BatchProcessor = ingestion_embedding_module.BatchProcessor
 EmbeddingStep = ingestion_embedding_module.EmbeddingStep
 
 
@@ -107,6 +109,42 @@ def test_dense_encoder_embeds_one_chunk_without_batching() -> None:
     assert result.metadata == {"chunk_index": 0}
     embedding.embed.assert_called_once_with(chunk.text)
     assert not embedding.embed_batch.called
+
+
+def test_dense_encoder_embeds_chunk_batches_with_provider_batch_api() -> None:
+    """Require C8 Dense batching to call ``embed_batch`` once per chunk batch."""
+
+    first = make_chunk(chunk_id="chunk-1", text="Wireless headphones.")
+    second = make_chunk(chunk_id="chunk-2", text="Office stress toy.")
+    embedding = Mock()
+    embedding.embed_batch.return_value = [[0.1, 0.2], [0.3, 0.4]]
+    encoder = DenseEncoder(embedding=embedding)
+
+    results = encoder.encode_batch([first, second])
+
+    assert [result.chunk_id for result in results] == ["chunk-1", "chunk-2"]
+    assert [result.vector for result in results] == [[0.1, 0.2], [0.3, 0.4]]
+    assert [result.content_hash for result in results] == [
+        content_hash(first.text),
+        content_hash(second.text),
+    ]
+    embedding.embed_batch.assert_called_once_with([first.text, second.text])
+    assert not embedding.embed.called
+
+
+def test_dense_encoder_wraps_batch_vector_count_mismatch() -> None:
+    """Require invalid provider batch cardinality to fail before upsert."""
+
+    chunks = [
+        make_chunk(chunk_id="chunk-1", text="Wireless headphones."),
+        make_chunk(chunk_id="chunk-2", text="Office stress toy."),
+    ]
+    embedding = Mock()
+    embedding.embed_batch.return_value = [[0.1, 0.2]]
+    encoder = DenseEncoder(embedding=embedding)
+
+    with pytest.raises(IngestionError, match="Unable to encode dense vector batch"):
+        encoder.encode_batch(chunks)
 
 
 def test_dense_encoder_wraps_provider_failures_as_ingestion_errors() -> None:
@@ -194,3 +232,138 @@ def test_embedding_step_deduplicates_current_run_without_mutating_input_set() ->
     assert [result.chunk_id for result in results] == ["chunk-1"]
     assert existing_hashes == {"0" * 64}
     embedding.embed.assert_called_once_with(first.text)
+
+
+def test_batch_processor_splits_items_by_configured_size_and_preserves_order() -> None:
+    """Require generic batch execution to honor configured batch size.
+
+    C8 introduces BatchProcessor as the shared batching boundary for indexing
+    work. The processor must split input deterministically and return successful
+    values in original item order so later storage can preserve chunk ordering.
+    """
+
+    processor = BatchProcessor(batch_size=2, max_retries=0)
+    observed_batches: list[list[int]] = []
+
+    def process_batch(batch: list[int]) -> list[str]:
+        """Record the batch and return one output per input item."""
+
+        observed_batches.append(batch)
+        return [f"encoded-{item}" for item in batch]
+
+    result = processor.run([1, 2, 3, 4, 5], process_batch=process_batch)
+
+    assert observed_batches == [[1, 2], [3, 4], [5]]
+    assert result.successful_values() == [
+        "encoded-1",
+        "encoded-2",
+        "encoded-3",
+        "encoded-4",
+        "encoded-5",
+    ]
+    assert result.failures == []
+
+
+def test_batch_processor_isolates_failed_items_and_retries_successfully() -> None:
+    """Require one failed item not to discard healthy items in the same batch."""
+
+    processor = BatchProcessor(batch_size=2, max_retries=1)
+    attempts: dict[str, int] = {"bad": 0}
+
+    def process_batch(batch: list[str]) -> list[str]:
+        """Fail mixed batches and make the bad item recover on retry."""
+
+        if "bad" in batch and len(batch) > 1:
+            raise RuntimeError("mixed batch failed")
+        if batch == ["bad"]:
+            attempts["bad"] += 1
+            if attempts["bad"] == 1:
+                raise RuntimeError("temporary item failure")
+        return [f"ok-{item}" for item in batch]
+
+    result = processor.run(["good", "bad", "tail"], process_batch=process_batch)
+
+    assert result.successful_values() == ["ok-good", "ok-bad", "ok-tail"]
+    assert result.failures == []
+    assert attempts["bad"] == 2
+
+
+def test_batch_processor_records_non_retryable_failures_without_blocking() -> None:
+    """Require permanent failures to be reported while other items continue."""
+
+    processor = BatchProcessor(batch_size=2, max_retries=1)
+
+    def process_batch(batch: list[str]) -> list[str]:
+        """Always fail the bad item and succeed healthy single-item retries."""
+
+        if "bad" in batch:
+            raise RuntimeError("permanent item failure")
+        return [f"ok-{item}" for item in batch]
+
+    result = processor.run(["good", "bad", "tail"], process_batch=process_batch)
+
+    assert result.successful_values() == ["ok-good", "ok-tail"]
+    assert len(result.failures) == 1
+    assert isinstance(result.failures[0], BatchFailure)
+    assert result.failures[0].item_index == 1
+    assert result.failures[0].attempts == 2
+    assert result.failures[0].error_message == "permanent item failure"
+
+
+def test_batch_processor_throttles_between_top_level_batches() -> None:
+    """Require optional throttling to run between configured top-level batches."""
+
+    sleep_calls: list[float] = []
+    processor = BatchProcessor(
+        batch_size=2,
+        max_retries=0,
+        throttle_seconds=0.25,
+        sleeper=sleep_calls.append,
+    )
+
+    result = processor.run(
+        [1, 2, 3, 4, 5],
+        process_batch=lambda batch: [f"ok-{item}" for item in batch],
+    )
+
+    assert result.successful_values() == ["ok-1", "ok-2", "ok-3", "ok-4", "ok-5"]
+    assert sleep_calls == [0.25, 0.25]
+
+
+def test_embedding_step_run_batch_orchestrates_dense_and_bm25() -> None:
+    """Require C8 orchestration to batch Dense work and build one BM25 index."""
+
+    chunks = [
+        make_chunk(chunk_id="chunk-1", text="Wireless headphones buying guide."),
+        make_chunk(chunk_id="chunk-2", text="Noise cancellation and battery life."),
+        make_chunk(chunk_id="chunk-3", text="Office stress toy material guide."),
+    ]
+    embedding = Mock()
+    embedding.embed_batch.side_effect = [
+        [[1.0, 0.0], [0.5, 0.5]],
+        [[0.0, 1.0]],
+    ]
+    step = EmbeddingStep(
+        dense_encoder=DenseEncoder(embedding=embedding),
+        batch_processor=BatchProcessor(batch_size=2, max_retries=0),
+    )
+
+    result = step.run_batch(chunks)
+
+    assert [dense.chunk_id for dense in result.dense_results] == [
+        "chunk-1",
+        "chunk-2",
+        "chunk-3",
+    ]
+    assert result.bm25_index.chunk_count == 3
+    assert result.bm25_index.term_document_frequency["wireless"] == 1
+    assert result.dense_failures == []
+    assert result.bm25_failures == []
+    assert result.dense_batches_processed == 2
+    assert result.bm25_batches_processed == 1
+    assert embedding.embed_batch.call_args_list[0].args[0] == [
+        chunks[0].text,
+        chunks[1].text,
+    ]
+    assert embedding.embed_batch.call_args_list[1].args[0] == [chunks[2].text]
+    assert not embedding.embed.called

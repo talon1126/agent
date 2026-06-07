@@ -336,10 +336,10 @@ services/ai-service/rag/
 | `src/ingestion/transform/denoise_transform.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留，保留图片占位符 |
 | `src/ingestion/transform/image_to_text_transform.py` | 图片理解适配 | 调用注入的 Vision LLM，解析 status、description、extracted_text、key_facts 和 reason |
 | `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、caption 写入 chunk metadata |
-| `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | C6 已实现 `run_dense()`，按 content_hash 跳过已索引 chunk 并保持输出顺序；BM25、BatchProcessor 和 upsert 在后续任务接入 |
-| `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | 单 chunk content_hash 计算、差量判断、调用 EmbeddingClient 生成 Dense 向量，不承担批处理职责 |
+| `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | C8 已实现 `run_dense()` 和 `run_batch()`；按 content_hash 跳过已索引 chunk，使用 BatchProcessor 批量执行 Dense 编码，并通过同一批处理边界编排 BM25Indexer |
+| `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | content_hash 计算、差量判断、单 chunk `embed()` 编码和 C8 批量 `embed_batch()` 编码；不承担 retry、upsert 或 BM25 职责 |
 | `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | C7 已实现 in-memory BM25 分词、词频、倒排索引构建和关键词候选查询，为后续 Sparse Route 和 BM25 持久化提供可复用统计结果 |
-| `src/ingestion/embedding/batch_processor.py` | 批处理优化 | 在 DenseEncoder 和 BM25Indexer 之后统一处理批量、限流、重试、失败隔离 |
+| `src/ingestion/embedding/batch_processor.py` | 批处理优化 | C8 已实现按 batch_size 拆分、可配置 throttle_seconds 节流、失败批次按 item 隔离、有限 retry、失败记录和有序成功结果返回 |
 | `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | chunk、向量、BM25、images、trace 统一 upsert |
 
 #### 5.3.5 Storage 与本地运行层

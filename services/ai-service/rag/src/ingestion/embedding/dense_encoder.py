@@ -1,11 +1,11 @@
 """Generate dense vectors for chunks that need semantic indexing.
 
-``DenseEncoder`` is the C6 boundary between transformed chunks and the dense
+``DenseEncoder`` is the boundary between transformed chunks and the dense
 embedding provider. It computes a SHA256 hash from the current chunk text,
-decides whether storage already contains that exact content, and embeds one
-chunk at a time through the provider-independent ``BaseEmbedding`` contract.
-It deliberately does not batch requests, retry failures, write pgvector rows,
-or build sparse indexes.
+decides whether storage already contains that exact content, embeds one chunk
+for the C6 path, and embeds a bounded ordered batch for the C8 path through the
+provider-independent ``BaseEmbedding`` contract. It deliberately does not retry
+failures, write pgvector rows, or build sparse indexes.
 """
 
 from __future__ import annotations
@@ -128,6 +128,57 @@ class DenseEncoder:
                     "operation": "dense_encode",
                     "chunk_id": chunk.id,
                     "content_hash": content_hash,
+                },
+                cause=error,
+            ) from error
+
+    def encode_batch(self, chunks: list[Chunk]) -> list[DenseEncodingResult]:
+        """Embed an ordered chunk batch with one provider batch request.
+
+        Args:
+            chunks: Non-empty ordered chunks whose text should be embedded.
+
+        Returns:
+            One ``DenseEncodingResult`` per chunk in the same input order.
+
+        Raises:
+            IngestionError: If the provider batch call fails, returns a vector
+                count different from the chunk count, or any vector fails
+                validation.
+        """
+
+        if not chunks:
+            return []
+
+        content_hashes = [self.content_hash(chunk) for chunk in chunks]
+        try:
+            vectors = self._embedding.embed_batch([chunk.text for chunk in chunks])
+            if len(vectors) != len(chunks):
+                raise ValueError(
+                    "Embedding provider returned an unexpected vector count; "
+                    f"chunks={len(chunks)}, vectors={len(vectors)}"
+                )
+            return [
+                DenseEncodingResult(
+                    chunk_id=chunk.id,
+                    content_hash=content_hash,
+                    vector=vector,
+                    metadata={"chunk_index": chunk.chunk_index},
+                )
+                for chunk, content_hash, vector in zip(
+                    chunks,
+                    content_hashes,
+                    vectors,
+                    strict=True,
+                )
+            ]
+        except Exception as error:
+            raise IngestionError(
+                "Unable to encode dense vector batch",
+                context={
+                    "operation": "dense_encode_batch",
+                    "chunk_ids": [chunk.id for chunk in chunks],
+                    "content_hashes": content_hashes,
                 },
                 cause=error,
             ) from error

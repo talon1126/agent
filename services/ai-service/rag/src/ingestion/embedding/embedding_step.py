@@ -1,30 +1,62 @@
-"""Coordinate dense embedding work across ordered chunks.
+"""Coordinate dense and sparse indexing work across ordered chunks.
 
-``EmbeddingStep`` is the first orchestration layer for indexing output. In C6
-it only delegates to ``DenseEncoder`` and preserves output order for chunks
-whose content hashes are not already indexed. It does not batch, retry, write
-storage, or build BM25 indexes; those concerns are explicitly owned by later
-pipeline tasks.
+``EmbeddingStep`` is the indexing orchestration layer used by ingestion before
+storage upsert. ``run_dense()`` preserves the narrow C6 one-at-a-time behavior
+for callers that only need dense vectors. ``run_batch()`` is the C8 path: it
+uses ``BatchProcessor`` for bounded Dense execution and wraps BM25 indexing in
+the same batch boundary while leaving PostgreSQL writes to later tasks.
 """
 
 from __future__ import annotations
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from src.core.types import Chunk
+from src.ingestion.embedding.batch_processor import BatchFailure, BatchProcessor
+from src.ingestion.embedding.bm25_indexer import BM25Indexer, BM25IndexResult
 from src.ingestion.embedding.dense_encoder import DenseEncoder, DenseEncodingResult
 
 
-class EmbeddingStep:
-    """Run dense encoding for chunks that need semantic vectors."""
+class EmbeddingBatchResult(BaseModel):
+    """Carry C8 Dense and BM25 batch outputs to later upsert orchestration."""
 
-    def __init__(self, *, dense_encoder: DenseEncoder) -> None:
-        """Configure the dense encoder dependency.
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    dense_results: list[DenseEncodingResult] = Field(default_factory=list)
+    bm25_index: BM25IndexResult
+    dense_failures: list[BatchFailure] = Field(default_factory=list)
+    bm25_failures: list[BatchFailure] = Field(default_factory=list)
+    dense_batches_processed: int = Field(ge=0)
+    bm25_batches_processed: int = Field(ge=0)
+
+
+class EmbeddingStep:
+    """Run Dense and BM25 indexing steps for transformed chunks."""
+
+    def __init__(
+        self,
+        *,
+        dense_encoder: DenseEncoder,
+        bm25_indexer: BM25Indexer | None = None,
+        batch_processor: BatchProcessor | None = None,
+    ) -> None:
+        """Configure indexing dependencies.
 
         Args:
             dense_encoder: Chunk-level encoder used for content hashing and
                 single-vector generation.
+            bm25_indexer: Sparse indexer used by ``run_batch``. ``None`` uses
+                the default BM25 implementation.
+            batch_processor: Shared batch executor. ``None`` uses a conservative
+                one-item batch with no retries for backwards-compatible tests.
         """
 
         self._dense_encoder = dense_encoder
+        self._bm25_indexer = bm25_indexer or BM25Indexer()
+        self._batch_processor = batch_processor or BatchProcessor(
+            batch_size=1,
+            max_retries=0,
+        )
 
     def run_dense(
         self,
@@ -56,3 +88,79 @@ class EmbeddingStep:
             results.append(result)
             existing.add(result.content_hash)
         return results
+
+    def run_batch(
+        self,
+        chunks: list[Chunk],
+        *,
+        existing_content_hashes: set[str] | None = None,
+    ) -> EmbeddingBatchResult:
+        """Run Dense batch encoding and BM25 indexing for ordered chunks.
+
+        Args:
+            chunks: Ordered chunks produced by transform and image captioning.
+            existing_content_hashes: Hashes already indexed for this ingestion
+                scope. Hashes generated during this run are tracked internally
+                so duplicate chunk text is encoded once.
+
+        Returns:
+            ``EmbeddingBatchResult`` containing ordered Dense successes, Dense
+            failures, one BM25 index result, BM25 failures, and batch counters.
+        """
+
+        dense_candidates = self._select_dense_candidates(
+            chunks,
+            existing_content_hashes=existing_content_hashes,
+        )
+        dense_run = self._batch_processor.run(
+            dense_candidates,
+            process_batch=self._dense_encoder.encode_batch,
+        )
+        bm25_run = self._batch_processor.run(
+            [chunks],
+            process_batch=lambda batch: [self._bm25_indexer.index(batch[0])],
+        )
+        bm25_values = bm25_run.successful_values()
+        bm25_index = (
+            bm25_values[0]
+            if bm25_values
+            else BM25IndexResult(chunk_count=0, average_document_length=0.0)
+        )
+
+        return EmbeddingBatchResult(
+            dense_results=dense_run.successful_values(),
+            bm25_index=bm25_index,
+            dense_failures=dense_run.failures,
+            bm25_failures=bm25_run.failures,
+            dense_batches_processed=dense_run.batches_processed,
+            bm25_batches_processed=bm25_run.batches_processed,
+        )
+
+    def _select_dense_candidates(
+        self,
+        chunks: list[Chunk],
+        *,
+        existing_content_hashes: set[str] | None,
+    ) -> list[Chunk]:
+        """Select chunks that need Dense encoding without mutating caller state.
+
+        Args:
+            chunks: Ordered candidate chunks.
+            existing_content_hashes: Durable hashes already known to storage.
+
+        Returns:
+            Ordered chunks whose current content hash has not been seen in
+            durable storage or earlier in this run.
+        """
+
+        existing = set(existing_content_hashes or set())
+        candidates: list[Chunk] = []
+        for chunk in chunks:
+            if not self._dense_encoder.should_encode(
+                chunk,
+                existing_content_hashes=existing,
+            ):
+                continue
+            candidates.append(chunk)
+            existing.add(self._dense_encoder.content_hash(chunk))
+        return candidates
