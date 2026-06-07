@@ -361,7 +361,7 @@ services/ai-service/rag/
 | `src/scripts/run_dashboard.py` | 启动 Dashboard | 本地 Streamlit 启动脚本 |
 | `src/scripts/run_evaluation.py` | 运行评估任务 | 读取 golden_set.json，输出指标并写库 |
 | `src/scripts/query.py` | 本地查询调试 | 调用完整 `hybridsearch + rerank`，支持 `--query`、`--top-k`、`--collection`、`--verbose`、`--no-rerank` |
-| `src/scripts/ingest.py` | 本地离线摄取 CLI | 递归发现 Markdown/PDF、读取默认 collection、配置驱动组装完整 Pipeline、转发 force、输出 JSON 结果并管理 PostgreSQL pool 生命周期 |
+| `src/scripts/ingest.py` | 本地离线摄取 CLI | 自动发现父目录 `.env` 且不覆盖系统注入变量；递归发现 Markdown/PDF；将运行时相对路径固定解析到 RAG 根目录；读取默认 collection；配置驱动组装完整 Pipeline；转发 force；输出 JSON 结果并管理 PostgreSQL pool 生命周期 |
 
 #### 5.3.6 Observability 层
 

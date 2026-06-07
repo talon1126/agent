@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from hashlib import sha256
 from pathlib import Path
@@ -239,6 +240,130 @@ def test_run_ingest_cli_closes_pool_and_reports_pipeline_failure(
     assert exit_code == 1
     assert errors == ["Ingestion failed: embedding provider unavailable"]
     pool.close.assert_called_once_with()
+
+
+def test_run_ingest_cli_loads_environment_from_nearest_parent_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require local CLI runs to discover a parent .env before settings validation."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    project_root = tmp_path / "project"
+    working_directory = project_root / "services" / "rag"
+    working_directory.mkdir(parents=True)
+    source = working_directory / "guide.md"
+    source.write_text("# Guide", encoding="utf-8")
+    (project_root / ".env").write_text(
+        "DATABASE_URL=postgresql://local:test@localhost:5432/rag\n"
+        "DASHSCOPE_API_KEY=local-test-key\n"
+        "DASHSCOPE_BASE_URL=https://dashscope.example.test/v1\n",
+        encoding="utf-8",
+    )
+    for variable in ("DATABASE_URL", "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.chdir(working_directory)
+    observed_environment: dict[str, str | None] = {}
+    settings = SimpleNamespace(
+        project=SimpleNamespace(default_collection="shopping_guides"),
+        database=SimpleNamespace(),
+    )
+    pool = Mock()
+    pipeline = Mock()
+    pipeline.run.return_value = SimpleNamespace(
+        trace_id="trace-dotenv",
+        status="indexed",
+        source_uri=str(source.resolve()),
+        source_hash="c" * 64,
+        trace_summary={},
+    )
+
+    def load_settings_after_dotenv() -> object:
+        """Capture the process environment visible to settings validation."""
+
+        for variable in ("DATABASE_URL", "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL"):
+            observed_environment[variable] = os.getenv(variable)
+        return settings
+
+    exit_code = ingest_module.run_ingest_cli(
+        ["--path", str(source)],
+        settings_loader=load_settings_after_dotenv,
+        pool_factory=lambda _: pool,
+        schema_initializer=lambda active_pool: active_pool,
+        pipeline_builder=lambda _source, _settings, _pool: pipeline,
+        output=Mock(),
+        error_output=Mock(),
+    )
+
+    assert exit_code == 0
+    assert observed_environment == {
+        "DATABASE_URL": "postgresql://local:test@localhost:5432/rag",
+        "DASHSCOPE_API_KEY": "local-test-key",
+        "DASHSCOPE_BASE_URL": "https://dashscope.example.test/v1",
+    }
+
+
+def test_run_ingest_cli_does_not_override_injected_environment_with_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require container or shell environment values to override local .env defaults."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    source = tmp_path / "guide.md"
+    source.write_text("# Guide", encoding="utf-8")
+    (tmp_path / ".env").write_text("DATABASE_URL=postgresql://dotenv/value\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://injected/value")
+    settings = SimpleNamespace(
+        project=SimpleNamespace(default_collection="shopping_guides"),
+        database=SimpleNamespace(),
+    )
+    observed_database_url: list[str | None] = []
+    pool = Mock()
+    pipeline = Mock()
+    pipeline.run.return_value = SimpleNamespace(
+        trace_id="trace-injected-env",
+        status="indexed",
+        source_uri=str(source.resolve()),
+        source_hash="d" * 64,
+        trace_summary={},
+    )
+
+    def load_settings_after_dotenv() -> object:
+        """Capture the effective database URL without exposing it in CLI output."""
+
+        observed_database_url.append(os.getenv("DATABASE_URL"))
+        return settings
+
+    exit_code = ingest_module.run_ingest_cli(
+        ["--path", str(source)],
+        settings_loader=load_settings_after_dotenv,
+        pool_factory=lambda _: pool,
+        schema_initializer=lambda active_pool: active_pool,
+        pipeline_builder=lambda _source, _settings, _pool: pipeline,
+        output=Mock(),
+        error_output=Mock(),
+    )
+
+    assert exit_code == 0
+    assert observed_database_url == ["postgresql://injected/value"]
+
+
+def test_ingest_runtime_paths_resolve_relative_to_rag_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require configured data paths to remain stable across CLI working directories."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    monkeypatch.chdir(tmp_path)
+    absolute_path = tmp_path / "absolute-images"
+
+    assert ingest_module._resolve_runtime_path("data/images") == (
+        RAG_ROOT / "data" / "images"
+    ).resolve()
+    assert ingest_module._resolve_runtime_path(absolute_path) == absolute_path.resolve()
 
 
 def test_calculate_sha256_hashes_original_file_bytes(tmp_path: Path) -> None:

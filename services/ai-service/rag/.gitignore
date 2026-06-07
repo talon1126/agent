@@ -28,6 +28,7 @@ Thumbs.db
 
 # RAG runtime data
 data/db/
+data/images/
 data/markdown/
 src/cache/
 src/logs/*.log

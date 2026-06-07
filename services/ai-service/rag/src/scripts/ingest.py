@@ -20,7 +20,9 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from src.core.config import DatabaseSettings, RagSettings, load_settings
+from dotenv import find_dotenv, load_dotenv
+
+from src.core.config import RAG_ROOT, DatabaseSettings, RagSettings, load_settings
 from src.ingestion import IngestionPipeline
 from src.ingestion.chunk import DocumentChunker, SplitterStep
 from src.ingestion.embedding import (
@@ -135,6 +137,7 @@ def run_ingest_cli(
     active_pipeline_builder = pipeline_builder or _build_pipeline
     pool: PostgresPool | None = None
     try:
+        _load_local_environment()
         settings = settings_loader()
         collection = args.collection or settings.project.default_collection
         pool = active_pool_factory(settings.database)
@@ -247,8 +250,9 @@ def _build_pipeline(
     """
 
     loader_options: dict[str, Any] = {}
+    image_output_dir = _resolve_runtime_path(settings.ingestion.image_dir)
     if source.suffix.lower() == ".pdf":
-        loader_options["image_output_dir"] = settings.ingestion.image_dir
+        loader_options["image_output_dir"] = image_output_dir
     loader = LoaderFactory.for_source(source, **loader_options)
     documents = DocumentRepository(pool)
     chunks = ChunkRepository(pool)
@@ -277,7 +281,7 @@ def _build_pipeline(
             bm25_storage=BM25Storage(pool),
             image_storage=ImageStorage(
                 pool,
-                root_dir=settings.ingestion.image_dir,
+                root_dir=image_output_dir,
             ),
         ),
     )
@@ -287,6 +291,42 @@ def _create_pool(settings: DatabaseSettings) -> PostgresPool:
     """Create the configured PostgreSQL pool without opening it."""
 
     return PostgresPool.from_settings(settings)
+
+
+def _load_local_environment() -> None:
+    """Load the nearest parent ``.env`` file for local command-line execution.
+
+    The search starts at the current working directory and walks through parent
+    directories, allowing commands launched from either the repository root or
+    the nested RAG project to reuse the repository-level ``.env`` file.
+    Existing process variables are never overwritten, so shell, CI, and Docker
+    environment injection remains authoritative.
+
+    Side Effects:
+        Adds values from the discovered ``.env`` file to ``os.environ`` only
+        when the corresponding process variable is currently absent.
+    """
+
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
+
+def _resolve_runtime_path(path: str | Path) -> Path:
+    """Resolve configured runtime storage paths against the RAG module root.
+
+    Args:
+        path: Absolute path or RAG-relative path from ``settings.yaml``.
+
+    Returns:
+        A normalized absolute path. Relative values remain independent of the
+        shell working directory used to launch the ingestion command.
+    """
+
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (RAG_ROOT / candidate).resolve()
 
 
 def _non_blank_collection(value: str) -> str:

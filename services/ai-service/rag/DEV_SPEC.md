@@ -1561,7 +1561,7 @@ services/ai-service/rag/
 | `src/scripts/run_dashboard.py` | 启动 Dashboard | 本地 Streamlit 启动脚本 |
 | `src/scripts/run_evaluation.py` | 运行评估任务 | 读取 golden_set.json，输出指标并写库 |
 | `src/scripts/query.py` | 本地查询调试 | 调用完整 `hybridsearch + rerank`，支持 `--query`、`--top-k`、`--collection`、`--verbose`、`--no-rerank` |
-| `src/scripts/ingest.py` | 本地离线摄取 CLI | 递归发现 Markdown/PDF、读取默认 collection、配置驱动组装完整 Pipeline、转发 force、输出 JSON 结果并管理 PostgreSQL pool 生命周期 |
+| `src/scripts/ingest.py` | 本地离线摄取 CLI | 自动发现父目录 `.env` 且不覆盖系统注入变量；递归发现 Markdown/PDF；将运行时相对路径固定解析到 RAG 根目录；读取默认 collection；配置驱动组装完整 Pipeline；转发 force；输出 JSON 结果并管理 PostgreSQL pool 生命周期 |
 
 #### 5.3.6 Observability 层
 
@@ -2010,7 +2010,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | C8 | 实现 BatchProcessor 批处理优化 | [✔] | 2026-06-07 | 已实现 BatchProcessor、BatchRunResult、BatchSuccess、BatchFailure、DenseEncoder.encode_batch、batch_size 拆分、throttle_seconds 节流、有限 retry、失败隔离、EmbeddingStep.run_batch、Dense/BM25 批处理编排；20 个相关测试、145 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C9 | 实现统一 upsert | [✔] | 2026-06-07 | 已实现 rag_bm25_terms schema、BM25Storage、UpsertStep 单事务完整快照写入、pgvector/image/repository 调用方事务接口、图片文件失败恢复、重复 upsert 幂等和内容变更旧 chunk 清理；2 个 C9 PostgreSQL 集成测试、148 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C10 | 实现统一 Pipeline MVP 编排和集成测试 | [✔] | 2026-06-07 | 已实现 IngestionPipelineResult、完整依赖校验、run_indexing、Markdown 图片摄取、Splitter、Transform/ImageCaptioner、成功文档 content_hash 向量复用、重复内容单次编码、Dense/BM25 batch、统一 upsert、lifecycle success 和重复文件 dedup skip；6 个 ingestion integration 测试、14 个 embedding 单元测试、153 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C11 | 新增 `ingest.py` 摄取脚本入口 | [✔] | 2026-06-07 | 已实现必填 `--path`、可选 `--collection`、`--force`、递归 Markdown/PDF 发现、配置驱动 Pipeline 组装、JSON 结果、错误码和连接池释放；22 个 Loader/CLI 测试、160 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C11 | 新增 `ingest.py` 摄取脚本入口 | [✔] | 2026-06-07 | 已实现必填 `--path`、可选 `--collection`、`--force`、父目录 `.env` 自动加载、系统环境优先、RAG 根目录运行时路径解析、递归 Markdown/PDF 发现、配置驱动 Pipeline 组装、JSON 结果、错误码和连接池释放；真实购物指南 PDF 完成 4 个 chunk、4 个 Dense 向量、4 份 BM25 数据和 3 张图片摄取；25 个 Loader/CLI 测试、163 个全量测试通过，2 个 external smoke test 默认跳过 |
 
 #### 阶段 D：Retrieval
 
@@ -2660,7 +2660,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：提供本地命令行入口，调用 Ingestion Pipeline 执行离线文档摄取。
 
-修改文件：`src/scripts/__init__.py`、`src/scripts/ingest.py`、`tests/unit/test_loader.py`
+修改文件：`src/scripts/__init__.py`、`src/scripts/ingest.py`、`tests/unit/test_loader.py`、`pyproject.toml`、`uv.lock`、`.gitignore`
 
 实现类/函数：
 
@@ -2668,9 +2668,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `run_ingest_cli()`：执行本地摄取流程
 - `_discover_sources()`：递归发现并按路径排序 Markdown/PDF 文件
 - `_build_pipeline()`：通过配置、Factory、Repository 和 Storage 组装完整 Pipeline
+- `_load_local_environment()`：从当前工作目录向上发现 `.env`，仅补充未由 Shell、CI 或 Docker 注入的环境变量
+- `_resolve_runtime_path()`：将配置中的相对运行时路径稳定解析到 RAG 模块根目录
 - `main()`：提供 `python -m src.scripts.ingest` 模块入口
 
-验收标准：`--path` 必填并支持单个 `.md`、`.markdown`、`.pdf` 文件或递归目录；`--collection` 可覆盖 collection，未提供时读取 `project.default_collection`；`--force` 原样传入 Pipeline 并绕过 SHA256 skipped 快速结束；目录只处理支持的文档类型并按绝对路径稳定排序；无支持文件时返回退出码 2 和可读错误；运行失败时返回退出码 1 并始终关闭 PostgreSQL pool；全部成功时输出包含 collection、force、processed 和逐文件状态的 JSON。
+验收标准：`--path` 必填并支持单个 `.md`、`.markdown`、`.pdf` 文件或递归目录；`--collection` 可覆盖 collection，未提供时读取 `project.default_collection`；`--force` 原样传入 Pipeline 并绕过 SHA256 skipped 快速结束；本地执行时从当前目录向上发现最近的 `.env`，但不得覆盖 Shell、CI 或 Docker 已注入的变量；`settings.yaml` 中的运行时相对路径必须基于 RAG 模块根目录解析，不得受启动目录影响；目录只处理支持的文档类型并按绝对路径稳定排序；无支持文件时返回退出码 2 和可读错误；运行失败时返回退出码 1 并始终关闭 PostgreSQL pool；全部成功时输出包含 collection、force、processed 和逐文件状态的 JSON。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_loader.py -v`
 #### 阶段 D：Retrieval
