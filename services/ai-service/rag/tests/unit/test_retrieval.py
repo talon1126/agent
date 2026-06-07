@@ -16,13 +16,14 @@ from pydantic import ValidationError
 
 from src.core.errors import RetrievalError
 from src.core.query_engine.dense_route import DenseRoute
+from src.core.query_engine.fusion import reciprocal_rank_fusion
 from src.core.query_engine.query_processor import (
     ProcessedQuery,
     QueryIntent,
     QueryProcessor,
 )
 from src.core.query_engine.sparse_route import SparseRoute
-from src.core.types import Chunk
+from src.core.types import Chunk, RetrievalResult
 
 
 def _settings(*, rewrite_enabled: bool = True) -> SimpleNamespace:
@@ -55,6 +56,23 @@ def _chunk(
         start_offset=0,
         end_offset=max(len(text), 1),
         source_ref={"document_id": "doc-1"},
+    )
+
+
+def _result(
+    chunk_id: str,
+    *,
+    score: float,
+    text: str | None = None,
+    metadata: dict[str, object] | None = None,
+) -> RetrievalResult:
+    """Build a valid retrieval result fixture for route and fusion tests."""
+
+    return RetrievalResult(
+        chunk_id=chunk_id,
+        text=text or f"{chunk_id} text",
+        score=score,
+        metadata=dict(metadata or {}),
     )
 
 
@@ -689,3 +707,95 @@ def test_sparse_route_trace_failure_does_not_break_successful_retrieval() -> Non
     results = route.search("无线耳机", trace_context=trace)
 
     assert [result.chunk_id for result in results] == ["chunk-a"]
+
+
+def test_rrf_fusion_ranks_by_reciprocal_rank_instead_of_native_scores() -> None:
+    """Require RRF to ignore incomparable Dense and BM25 native score scales."""
+
+    dense = [
+        _result("dense-top", score=0.01, metadata={"route": "dense"}),
+        _result("shared", score=0.02),
+    ]
+    sparse = [
+        _result("sparse-top", score=999.0, metadata={"route": "sparse"}),
+        _result("shared", score=500.0),
+    ]
+
+    fused = reciprocal_rank_fusion(dense, sparse, top_k=3, rrf_k=60)
+
+    assert [result.chunk_id for result in fused] == ["shared", "dense-top", "sparse-top"]
+    assert fused[0].score == pytest.approx((1 / 62) + (1 / 62))
+    assert fused[1].score == pytest.approx(1 / 61)
+    assert fused[2].score == pytest.approx(1 / 61)
+    assert fused[0].metadata["fusion"] == {
+        "dense_rank": 2,
+        "sparse_rank": 2,
+        "dense_score": 0.02,
+        "sparse_score": 500.0,
+        "sources": ["dense", "sparse"],
+    }
+
+
+def test_rrf_fusion_limits_results_and_preserves_source_payload_deterministically() -> None:
+    """Require fused results to expose a stable payload and metadata contract."""
+
+    dense = [
+        _result("shared", score=0.8, text="Dense payload", metadata={"collection": "dense"}),
+        _result("dense-only", score=0.7),
+    ]
+    sparse = [
+        _result("shared", score=4.0, text="Sparse payload", metadata={"collection": "sparse"}),
+        _result("sparse-only", score=3.0),
+    ]
+
+    fused = reciprocal_rank_fusion(dense, sparse, top_k=1, rrf_k=60)
+
+    assert [result.chunk_id for result in fused] == ["shared"]
+    assert fused[0].text == "Dense payload"
+    assert fused[0].metadata["collection"] == "dense"
+    assert fused[0].metadata["fusion"]["dense_rank"] == 1
+    assert fused[0].metadata["fusion"]["sparse_rank"] == 1
+
+
+def test_rrf_fusion_deduplicates_repeated_chunk_ids_within_each_route() -> None:
+    """Require duplicate provider results to contribute only their first rank."""
+
+    dense = [
+        _result("dup", score=0.1),
+        _result("dup", score=0.9),
+        _result("later", score=0.8),
+    ]
+    sparse = [_result("later", score=10.0)]
+
+    fused = reciprocal_rank_fusion(dense, sparse, top_k=10, rrf_k=10)
+
+    assert [result.chunk_id for result in fused] == ["later", "dup"]
+    assert fused[0].score == pytest.approx((1 / 13) + (1 / 11))
+    assert fused[1].score == pytest.approx(1 / 11)
+    assert fused[1].metadata["fusion"]["dense_rank"] == 1
+
+
+def test_rrf_fusion_returns_empty_list_for_empty_routes() -> None:
+    """Require empty Dense and Sparse candidate pools to remain a valid result."""
+
+    assert reciprocal_rank_fusion([], [], top_k=5, rrf_k=60) == []
+
+
+@pytest.mark.parametrize(
+    ("top_k", "rrf_k", "message"),
+    [
+        (0, 60, "Fusion top_k must be greater than zero"),
+        (3, 0, "RRF k must be greater than zero"),
+        (True, 60, "Fusion top_k must be an integer"),
+        (3, True, "RRF k must be an integer"),
+    ],
+)
+def test_rrf_fusion_rejects_invalid_limits(
+    top_k: int,
+    rrf_k: int,
+    message: str,
+) -> None:
+    """Require invalid fusion parameters to fail before ranking work."""
+
+    with pytest.raises(RetrievalError, match=message):
+        reciprocal_rank_fusion([], [], top_k=top_k, rrf_k=rrf_k)

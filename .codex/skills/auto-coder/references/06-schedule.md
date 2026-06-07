@@ -203,7 +203,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D1 | 实现 Query Processor | [✔] | 2026-06-07 | 已实现不可变 ProcessedQuery 和 keywords 快照、Unicode/空白标准化、关键词提取、collection/top_k 类型校验与默认覆盖、四类购物意图、商品工具协同判断、可注入 QueryRewriter 和异常/空结果 fallback；15 个 D1 单元测试通过 |
 | D2 | 实现 Dense Route 向量检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、Query Embedding、配置驱动 dense_top_k、VectorStore 语义召回、RetrievalResult 校验、embedding/vector search 错误边界和低侵入 Trace；8 个 D2 单元测试通过 |
 | D3 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D3 单元测试通过 |
-| D4 | 实现 RRF Fusion | [ ] |  | 基于排名倒数融合，不比较两路分数 |
+| D4 | 实现 RRF Fusion | [✔] | 2026-06-07 | 已实现 Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D4 单元测试通过 |
 | D5 | 实现 HybridSearch 编排 | [ ] |  | 依赖 D1/D2/D3/D4，集成候选去重、双路召回、融合和降级 |
 | D6 | 实现 Rerank 前候选过滤 | [ ] |  | 在进入 Reranker 前按 `collection`、`doc_type` 等参数过滤候选 |
 | D7 | 实现 Cross-Encoder Reranker 适配 | [ ] |  |  |
@@ -269,12 +269,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 3 | 21% |
+| Phase D | 14 | 4 | 29% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **32** | **46%** |
+| **总计** | **70** | **33** | **47%** |
 
 ### 6.5 阶段实施明细
 
@@ -916,13 +916,17 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：融合 Dense/BM25 两路候选，避免直接比较不同分数。
 
-修改文件：`src/core/query_engine/fusion.py`、`tests/unit/test_retrieval.py`
+修改文件：`src/core/query_engine/__init__.py`、`src/core/query_engine/fusion.py`、`tests/unit/test_retrieval.py`
 
 实现类/函数：
 
+- `_FusionCandidate`：累计同一 chunk 在 Dense/Sparse 两路中的排名、原始分数和输出 payload
 - `reciprocal_rank_fusion()`：按排名倒数融合 Dense/BM25 候选
+- `_validate_positive_integer()`：校验 top_k 和 rrf_k 参数
+- `_add_route_contributions()`：将单一路线的首个 chunk 命中贡献写入 RRF 累计器
+- `_to_retrieval_result()`：将融合状态转换为 `RetrievalResult`
 
-验收标准：基于排名倒数融合，不比较分数。
+验收标准：基于排名倒数融合，不比较 Dense/BM25 原始分数；同一路线内重复 chunk 只使用首次出现的排名贡献；跨路线相同 chunk 合并为一个结果；输出 `RetrievalResult.score` 为 RRF 分数；输出 metadata 中包含 `fusion.dense_rank`、`fusion.sparse_rank`、`fusion.dense_score`、`fusion.sparse_score` 和 `fusion.sources`，供 HybridSearch、Trace 和 Dashboard 使用；支持 top_k 截断；空输入返回空列表；非法 top_k 或 rrf_k 抛出 `RetrievalError`。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 

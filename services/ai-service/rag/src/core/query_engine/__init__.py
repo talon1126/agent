@@ -7,6 +7,7 @@ not depend on concrete LLM or storage implementations.
 """
 
 from src.core.query_engine.dense_route import DenseRoute, DenseTraceContext
+from src.core.query_engine.fusion import reciprocal_rank_fusion
 from src.core.query_engine.query_processor import (
     ProcessedQuery,
     QueryIntent,
@@ -22,6 +23,7 @@ __all__ = (
     "QueryIntent",
     "QueryProcessor",
     "QueryRewriter",
+    "reciprocal_rank_fusion",
     "SparseRoute",
     "SparseTraceContext",
 )
