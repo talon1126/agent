@@ -1,9 +1,9 @@
 """Verify concrete reranker adapters without external model calls.
 
-D7 introduces the Cross-Encoder adapter. These tests inject a deterministic
-scorer so the adapter's query-document pair contract, ranking behavior, error
-boundaries, and factory registration can be validated without downloading or
-loading real model weights.
+These tests inject deterministic Cross-Encoder scorers and fake LLM clients so
+reranker contracts, ranking behavior, error boundaries, and factory
+registration can be validated without downloading model weights or calling an
+external chat provider.
 """
 
 from __future__ import annotations
@@ -14,7 +14,8 @@ import pytest
 
 from src.core.errors import ProviderError
 from src.core.types import RetrievalResult
-from src.libs.reranker import CrossEncoderReranker, RerankerFactory
+from src.libs.llm.base_llm import BaseLLM, ChatMessage, LLMResponse
+from src.libs.reranker import CrossEncoderReranker, LLMReranker, RerankerFactory
 
 
 def _candidate(
@@ -48,6 +49,40 @@ class RecordingScorer:
 
         self.pairs = pairs
         return self.scores
+
+
+class RecordingLLM(BaseLLM):
+    """Fake chat client that records rerank prompts and returns JSON content."""
+
+    def __init__(self, content: str) -> None:
+        """Configure the response body returned by one or more chat calls.
+
+        Args:
+            content: Provider-independent LLM response text. Tests use JSON
+                arrays matching ``config/prompts/rerank_prompt.yaml``.
+        """
+
+        self.content = content
+        self.messages: list[ChatMessage] | None = None
+        self.call_count = 0
+
+    def chat(self, messages: list[ChatMessage]) -> LLMResponse:
+        """Record the prompt and return the configured fake response.
+
+        Args:
+            messages: Normalized rerank system and user messages.
+
+        Returns:
+            A deterministic response object using trace-safe fake metadata.
+        """
+
+        self.messages = list(messages)
+        self.call_count += 1
+        return LLMResponse(
+            content=self.content,
+            provider="fake",
+            model="fake-reranker",
+        )
 
 
 def test_cross_encoder_reranker_scores_query_document_pairs_and_sorts_descending() -> None:
@@ -167,3 +202,112 @@ def test_reranker_factory_creates_cross_encoder_with_injected_scorer() -> None:
 
     assert isinstance(reranker, CrossEncoderReranker)
     assert [result.chunk_id for result in results] == ["chunk-a"]
+
+
+def test_llm_reranker_parses_structured_ranking_and_preserves_missing_candidates() -> None:
+    """Require LLMReranker to apply returned IDs and append unmentioned results."""
+
+    llm = RecordingLLM(
+        """
+        [
+          {"candidate_id": "chunk-b", "score": 0.91, "reason": "Direct match"},
+          {"candidate_id": "chunk-a", "score": 0.73, "reason": "Partial match"}
+        ]
+        """
+    )
+    reranker = LLMReranker(llm_client=llm, model="fake-reranker")
+    candidates = [
+        _candidate("chunk-a", "Fidget cube buying guide.", score=0.4),
+        _candidate("chunk-b", "Quiet decompression toy comparison.", score=0.6),
+        _candidate("chunk-c", "Desk organizer article.", score=0.3),
+    ]
+
+    results = reranker.rerank("quiet decompression toy", candidates)
+
+    assert [result.chunk_id for result in results] == ["chunk-b", "chunk-a", "chunk-c"]
+    assert [message.role for message in llm.messages or []] == ["system", "user"]
+    assert "chunk-b" in (llm.messages or [])[1].content
+    assert results[0].score == 0.91
+    assert results[0].metadata["rerank"] == {
+        "provider": "llm",
+        "model": "fake-reranker",
+        "llm_provider": "fake",
+        "original_score": 0.6,
+        "reason": "Direct match",
+    }
+    assert results[2].score == 0.3
+    assert "rerank" not in candidates[1].metadata
+
+
+def test_llm_reranker_supports_top_k_and_empty_candidates_without_llm_call() -> None:
+    """Require top_k truncation and empty input short-circuiting."""
+
+    llm = RecordingLLM('[{"candidate_id": "chunk-b", "score": 0.8}]')
+    reranker = LLMReranker(llm_client=llm, model="fake-reranker")
+
+    assert reranker.rerank("query", [], top_k=2) == []
+    results = reranker.rerank(
+        "query",
+        [_candidate("chunk-a", "A"), _candidate("chunk-b", "B")],
+        top_k=1,
+    )
+
+    assert [result.chunk_id for result in results] == ["chunk-b"]
+    assert llm.call_count == 1
+
+
+def test_llm_reranker_validates_inputs_before_calling_provider() -> None:
+    """Require invalid rerank inputs to fail before prompt construction."""
+
+    llm = RecordingLLM("[]")
+    reranker = LLMReranker(llm_client=llm, model="fake-reranker")
+
+    with pytest.raises(ValueError, match="Rerank query must not be blank"):
+        reranker.rerank(" ", [_candidate("chunk-a", "A")])
+    with pytest.raises(ValueError, match="top_k must be greater than zero"):
+        reranker.rerank("query", [_candidate("chunk-a", "A")], top_k=0)
+
+    assert llm.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "content,match",
+    [
+        ("not json", "LLM rerank failed"),
+        ('[{"candidate_id": "missing", "score": 0.8}]', "LLM rerank failed"),
+        (
+            '[{"candidate_id": "chunk-a", "score": 0.8}, '
+            '{"candidate_id": "chunk-a", "score": 0.7}]',
+            "LLM rerank failed",
+        ),
+    ],
+)
+def test_llm_reranker_wraps_invalid_provider_output(
+    content: str,
+    match: str,
+) -> None:
+    """Require malformed LLM rankings to cross the ProviderError boundary."""
+
+    reranker = LLMReranker(
+        llm_client=RecordingLLM(content),
+        model="fake-reranker",
+    )
+
+    with pytest.raises(ProviderError, match=match):
+        reranker.rerank("query", [_candidate("chunk-a", "A")])
+
+
+def test_reranker_factory_creates_llm_reranker_with_injected_client() -> None:
+    """Require the reranker factory to expose the LLM provider explicitly."""
+
+    llm = RecordingLLM('[{"candidate_id": "chunk-a", "score": 0.88}]')
+
+    reranker = RerankerFactory.create(
+        provider="llm",
+        llm_client=llm,
+        model="fake-reranker",
+    )
+    results = reranker.rerank("query", [_candidate("chunk-a", "A")])
+
+    assert isinstance(reranker, LLMReranker)
+    assert results[0].score == 0.88

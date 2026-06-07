@@ -2039,7 +2039,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D5 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | 已实现 ProcessedQuery 输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D5 单元测试通过 |
 | D6 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | 已实现 CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D6 单元测试通过 |
 | D7 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | 已实现 CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D7 单元测试通过 |
-| D8 | 实现 LLM Rerank 适配 | [ ] |  |  |
+| D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-07 | 已实现 LLMReranker、PromptTemplate 加载、BaseLLM 注入、结构化 JSON 排名解析、未知/重复/非法 score 错误边界、未返回候选按过滤后顺序追加、rerank metadata 诊断、RerankerFactory llm 注册和 settings-only 无客户端时 fallback 到 RRF；15 个 Reranker 单元测试、22 个 Factory 单元测试通过 |
 | D9 | 实现 rerank fallback | [ ] |  | 不可用、超时、异常时回退过滤后的 RRF 结果 |
 | D10 | 实现引用构造 | [ ] |  | 来源标题、章节、路径、trace_id |
 | D11 | 实现多模态 Response Builder | [ ] |  | 组装 chunk 关联图片，隐藏内部工具 JSON |
@@ -2101,12 +2101,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 7 | 50% |
+| Phase D | 14 | 8 | 57% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **36** | **51%** |
+| **总计** | **70** | **37** | **53%** |
 
 ### 6.5 阶段实施明细
 
@@ -2822,13 +2822,17 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：支持 LLM 对过滤后的候选进行重排。
 
-修改文件：`src/libs/reranker/llm_reranker.py`、`tests/unit/test_reranker.py`
+修改文件：`src/libs/reranker/llm_reranker.py`、`src/libs/reranker/reranker_factory.py`、`src/libs/reranker/__init__.py`、`tests/unit/test_reranker.py`、`tests/unit/test_factories.py`
 
 实现类/函数：
 
-- `LLMReranker.rerank()`：执行候选重排
+- `LLMReranker.rerank()`：调用注入的 `BaseLLM` 对过滤后的候选执行 Prompt 驱动重排
+- `LLMReranker._build_messages()`：渲染英文 rerank Prompt，并以稳定 `candidate_id` 序列化候选
+- `LLMReranker._parse_ranking()`：解析并校验 LLM JSON array 输出，拒绝未知 ID、重复 ID 和非法 score
+- `LLMReranker._apply_ranking()`：按 LLM 排序返回 `RetrievalResult` 副本，未返回候选按过滤后原顺序追加
+- `RerankerFactory.register_builtin_providers()`：注册 `llm` provider
 
-验收标准：只接收过滤后的候选；fake LLM 下可稳定排序。
+验收标准：只接收过滤后的候选；通过 `BaseLLM` 注入 fake LLM，不访问外部 API；可按 LLM 返回的 `candidate_id` 稳定排序并支持 `top_k`；返回新的 `RetrievalResult` 副本，不修改输入候选；LLM 返回 score 时写入 `RetrievalResult.score`，metadata 写入 `rerank.provider`、`rerank.model`、`rerank.llm_provider`、`rerank.original_score` 和可选 reason；LLM 未返回的候选按过滤后的原始顺序追加；空候选直接返回空列表且不调用 LLM；query 为空、top_k 非法、JSON 非法、未知候选 ID、重复候选 ID、非法 score 均有可测试分支；`RerankerFactory.create(provider="llm", llm_client=fake)` 可显式创建 LLM reranker；settings 默认 `llm` 但未注入 `llm_client` 时按 `settings.rerank.fallback` 回退到 RRF，避免 settings-only 本地启动阶段直接失败。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 

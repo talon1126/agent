@@ -46,6 +46,7 @@ FakeLLM = llm_module.FakeLLM
 FakeSplitter = splitter_module.FakeSplitter
 FakeVectorStore = vector_store_module.FakeVectorStore
 FakeReranker = reranker_module.FakeReranker
+CrossEncoderReranker = reranker_module.CrossEncoderReranker
 NoOpReranker = reranker_module.NoOpReranker
 FakeEvaluator = evaluator_module.FakeEvaluator
 DeepSeekClient = llm_module.DeepSeekClient
@@ -351,11 +352,12 @@ def test_fake_vector_store_rejects_dimension_changes_across_upserts() -> None:
 
 
 def test_reranker_factory_uses_configured_rrf_fallback_when_default_is_unavailable() -> None:
-    """Require unavailable configured rerankers to degrade to stable RRF order.
+    """Require settings-only LLM rerank creation to degrade to stable RRF order.
 
-    B11 does not implement the configured LLM reranker yet. Factory creation
-    should therefore select ``settings.rerank.fallback`` and preserve the
-    already fused candidate order instead of failing the query.
+    Settings select the LLM reranker, but settings do not contain a live
+    ``BaseLLM`` dependency. Factory creation should therefore select
+    ``settings.rerank.fallback`` and preserve the already fused candidate order
+    until orchestration injects an actual chat client.
     """
 
     settings = load_settings(SETTINGS_PATH, validate_environment=False)
@@ -379,6 +381,36 @@ def test_reranker_factory_uses_configured_rrf_fallback_when_default_is_unavailab
 
     assert isinstance(reranker, NoOpReranker)
     assert [result.chunk_id for result in reranked] == ["chunk-2"]
+
+
+def test_reranker_factory_preserves_configured_options_for_non_default_fallback() -> None:
+    """Require settings-selected fallback providers to receive their own config.
+
+    The configured default can be ``llm`` while orchestration has not injected a
+    live ``BaseLLM`` yet. If the fallback is changed from ``rrf`` to another
+    concrete provider, the factory must reload that fallback provider's options
+    instead of reusing the unavailable LLM provider options.
+    """
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    settings.rerank.fallback = "cross_encoder"
+    scorer = SimpleNamespace(predict=lambda pairs: [0.42])
+
+    reranker = RerankerFactory.create(settings=settings, scorer=scorer)
+
+    assert isinstance(reranker, CrossEncoderReranker)
+    result = reranker.rerank(
+        "query",
+        [
+            types_module.RetrievalResult(
+                chunk_id="chunk-1",
+                text="Candidate.",
+                score=0.1,
+                metadata={},
+            )
+        ],
+    )
+    assert result[0].metadata["rerank"]["model"] == "BAAI/bge-reranker-base"
 
 
 def test_fake_reranker_and_evaluator_expose_provider_independent_contracts() -> None:

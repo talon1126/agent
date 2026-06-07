@@ -2,8 +2,9 @@
 
 The factory selects configured rerankers without exposing provider branches to
 query orchestration. When a settings-selected implementation is not registered,
-it may use ``settings.rerank.fallback``. Explicit unknown provider overrides
-still fail fast unless the caller explicitly supplies a fallback provider.
+or when a settings-selected LLM reranker has no injected chat client, it may use
+``settings.rerank.fallback``. Explicit unknown provider overrides still fail
+fast unless the caller explicitly supplies a fallback provider.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from src.core.errors import ConfigurationError
 from src.libs.reranker.base_reranker import BaseReranker
 from src.libs.reranker.cross_encoder_reranker import CrossEncoderReranker
 from src.libs.reranker.fake_reranker import FakeReranker
+from src.libs.reranker.llm_reranker import LLMReranker
 from src.libs.reranker.no_op_reranker import NoOpReranker
 
 
@@ -26,16 +28,18 @@ class RerankerFactory:
 
     @classmethod
     def register_builtin_providers(cls) -> None:
-        """Register deterministic and safe fallback implementations once.
+        """Register project-owned reranker implementations once per process.
 
         Side Effects:
-            Registers ``fake`` for tests and aliases ``none``, ``rrf``, and
-            ``fallback`` to the order-preserving no-op implementation.
+            Populates the registry with Cross-Encoder, LLM, deterministic fake,
+            and order-preserving fallback implementations. Business code only
+            sees provider names and never imports concrete classes directly.
         """
 
         if cls._builtins_registered:
             return
         cls.register("cross_encoder", CrossEncoderReranker)
+        cls.register("llm", LLMReranker)
         cls.register("fake", FakeReranker)
         cls.register("none", NoOpReranker)
         cls.register("rrf", NoOpReranker)
@@ -90,10 +94,14 @@ class RerankerFactory:
             fallback_provider: Optional explicit fallback used only when the
                 selected provider is unavailable.
             **override_options: Constructor options passed to the selected
-                implementation.
+                implementation. Runtime orchestration supplies injected clients,
+                such as ``llm_client``, through these options.
 
         Returns:
             A concrete reranker or order-preserving fallback implementation.
+            Settings-selected LLM rerankers without an injected client degrade
+            to the configured fallback because settings only describe provider
+            selection and cannot carry a live chat-model dependency.
 
         Raises:
             ConfigurationError: If no provider is selected, neither selected
@@ -136,12 +144,22 @@ class RerankerFactory:
                 },
             )
 
-        options: dict[str, Any] = {}
-        if settings is not None and selected_name in settings.rerank.providers:
-            options.update(
-                settings.rerank.providers[selected_name].model_dump(exclude_none=True)
-            )
+        options = cls._provider_options(settings=settings, provider=selected_name)
         options.update(override_options)
+
+        if (
+            selected_name == "llm"
+            and not explicit_provider
+            and options.get("llm_client") is None
+            and configured_fallback
+        ):
+            fallback_name = configured_fallback.strip().lower()
+            fallback_class = cls._REGISTRY.get(fallback_name)
+            if fallback_class is not None:
+                selected_name = fallback_name
+                reranker_class = fallback_class
+                options = cls._provider_options(settings=settings, provider=selected_name)
+                options.update(override_options)
 
         try:
             return reranker_class(**options)
@@ -158,3 +176,31 @@ class RerankerFactory:
 
         cls.register_builtin_providers()
         return sorted(cls._REGISTRY)
+
+    @staticmethod
+    def _provider_options(
+        *,
+        settings: RagSettings | None,
+        provider: str,
+    ) -> dict[str, Any]:
+        """Return constructor options for one configured reranker provider.
+
+        Args:
+            settings: Optional validated runtime settings.
+            provider: Selected provider name after default or fallback
+                resolution.
+
+        Returns:
+            Provider-specific constructor options copied from settings. LLM
+            rerankers also receive the top-level rerank Prompt path because the
+            Prompt is shared across LLM provider choices.
+        """
+
+        options: dict[str, Any] = {}
+        if settings is not None and provider in settings.rerank.providers:
+            options.update(
+                settings.rerank.providers[provider].model_dump(exclude_none=True)
+            )
+        if settings is not None and provider == "llm":
+            options.setdefault("prompt_path", settings.rerank.prompt_path)
+        return options
