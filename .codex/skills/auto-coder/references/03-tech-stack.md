@@ -113,7 +113,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 - 字段命名统一使用 `start_offset`，不使用 `start_offest`。
 - `text_offset` 和 `text_length` 基于完整 `Document.text` 计算，Splitter 根据 offset 交集为 chunk 生成 `image_refs`。
 - `source_ref` 是可选字段，但首版建议保留，方便 Dashboard 展示引用来源、原文位置和关联图片。
-- `DocumentChunker` 必须把 `Document.metadata` 复制到 `Chunk.metadata`，再追加 `chunk_index`、`image_refs`、`source_ref` 等 chunk 级字段，避免丢失文档来源信息。
+- `DocumentChunker` 必须把 `Document.metadata` 复制到 `Chunk.metadata`，再追加 `chunk_index`、`image_refs` 等 chunk 级 metadata；来源引用保存在独立 `Chunk.source_ref` 字段，Dense/Sparse Retrieval 构造 `RetrievalResult` 时再将其深拷贝到 result metadata，避免持久化职责混淆或丢失文档来源信息。
 
 `RetrievalResult` 字段：
 

@@ -348,3 +348,56 @@ class RetrievalResult(DomainModel):
         if not isinstance(value, dict):
             raise ValueError("RetrievalResult metadata must be a mapping")
         return dict(value)
+
+
+class Citation(BaseModel):
+    """Represent one immutable source reference for a retrieved chunk.
+
+    Citations are shared by response builders, MCP tools, AImodel adapters,
+    Dashboard views, and quality evaluation. Every citation remains linked to
+    the query trace that selected its chunk.
+
+    Attributes:
+        document_id: Stable source document identifier.
+        chunk_id: Stable retrieved chunk identifier.
+        title: Human-readable source title from metadata or the source filename.
+        section_path: Ordered logical heading hierarchy for the chunk.
+        source_uri: Canonical source path or external URI.
+        score: Final retrieval or rerank relevance score.
+        trace_id: Query trace that produced this citation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_id: str = Field(min_length=1)
+    chunk_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    section_path: tuple[str, ...] = ()
+    source_uri: str = Field(min_length=1)
+    score: float = Field(allow_inf_nan=False)
+    trace_id: str = Field(min_length=1)
+
+    @field_validator(
+        "document_id",
+        "chunk_id",
+        "title",
+        "source_uri",
+        "trace_id",
+    )
+    @classmethod
+    def reject_blank_strings(cls, value: str) -> str:
+        """Reject whitespace-only identifiers and display fields.
+
+        Args:
+            value: Candidate citation field.
+
+        Returns:
+            The original non-blank string.
+
+        Raises:
+            ValueError: If the field contains only whitespace.
+        """
+
+        if not value.strip():
+            raise ValueError("Citation string fields must not be blank")
+        return value

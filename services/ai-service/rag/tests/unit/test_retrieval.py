@@ -503,7 +503,10 @@ def test_sparse_route_queries_bm25_and_hydrates_chunks_in_candidate_order() -> N
     assert [result.chunk_id for result in results] == ["chunk-b", "chunk-a"]
     assert [result.score for result in results] == [2.4, 1.7]
     assert results[0].text == "预算有限时关注蓝牙稳定性。"
-    assert results[0].metadata == {"collection": "shopping_guides"}
+    assert results[0].metadata == {
+        "collection": "shopping_guides",
+        "source_ref": {"document_id": "doc-1"},
+    }
 
 
 def test_sparse_route_processes_raw_query_and_allows_top_k_override() -> None:

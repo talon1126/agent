@@ -13,6 +13,7 @@ business responsibility is turning sparse keyword candidates into validated
 
 from __future__ import annotations
 
+from copy import deepcopy
 from time import perf_counter
 from typing import Any, Protocol
 
@@ -276,19 +277,23 @@ class SparseRoute:
             score_by_chunk_id: BM25 native score lookup keyed by chunk ID.
 
         Returns:
-            Retrieval results with BM25 scores and copied chunk metadata.
+            Retrieval results with BM25 scores, copied chunk metadata, and the
+            canonical ``source_ref`` needed by citation construction.
         """
 
         results: list[RetrievalResult] = []
         for chunk in chunks:
             if chunk.id not in score_by_chunk_id:
                 continue
+            metadata = deepcopy(chunk.metadata)
+            if chunk.source_ref is not None:
+                metadata["source_ref"] = deepcopy(chunk.source_ref)
             results.append(
                 RetrievalResult(
                     chunk_id=chunk.id,
                     text=chunk.text,
                     score=score_by_chunk_id[chunk.id],
-                    metadata=dict(chunk.metadata),
+                    metadata=metadata,
                 )
             )
         return results

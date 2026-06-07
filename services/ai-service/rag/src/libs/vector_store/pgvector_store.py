@@ -10,6 +10,7 @@ keeping SQL and PostgreSQL-specific vector syntax outside the query engine.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from math import isfinite
 from typing import Any
 
@@ -214,7 +215,8 @@ class PgVectorStore(BaseVectorStore):
                 id,
                 content,
                 1 - (embedding <=> %s::vector) AS score,
-                metadata
+                metadata,
+                source_ref
             FROM {chunk_table}
             WHERE {where_clause}
             ORDER BY embedding <=> %s::vector, id ASC
@@ -237,15 +239,20 @@ class PgVectorStore(BaseVectorStore):
                 cause=error,
             ) from error
 
-        return [
-            RetrievalResult(
-                chunk_id=chunk_id,
-                text=content,
-                score=float(score),
-                metadata=metadata,
+        results: list[RetrievalResult] = []
+        for chunk_id, content, score, metadata, source_ref in rows:
+            result_metadata = deepcopy(metadata)
+            if source_ref is not None:
+                result_metadata["source_ref"] = deepcopy(source_ref)
+            results.append(
+                RetrievalResult(
+                    chunk_id=chunk_id,
+                    text=content,
+                    score=float(score),
+                    metadata=result_metadata,
+                )
             )
-            for chunk_id, content, score, metadata in rows
-        ]
+        return results
 
     def get_by_ids(self, chunk_ids: Sequence[str]) -> list[Chunk]:
         """Load existing chunks in caller-provided order.

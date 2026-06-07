@@ -306,6 +306,10 @@ def test_vector_store_factory_creates_order_preserving_fake_store() -> None:
         chunk_index=0,
         start_offset=0,
         end_offset=27,
+        source_ref={
+            "document_id": "doc-stress",
+            "source_path": "shopping_guides/stress-balls.md",
+        },
     )
     second = Chunk(
         id="chunk-2",
@@ -330,6 +334,7 @@ def test_vector_store_factory_creates_order_preserving_fake_store() -> None:
     assert isinstance(store, FakeVectorStore)
     assert upserted_ids == ["chunk-1", "chunk-2"]
     assert [result.chunk_id for result in results] == ["chunk-1"]
+    assert results[0].metadata["source_ref"] == first.source_ref
     assert [chunk.id for chunk in fetched] == ["chunk-2", "chunk-1"]
 
 

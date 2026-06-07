@@ -209,7 +209,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D7 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | 已实现 CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D7 单元测试通过 |
 | D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-07 | 已实现 LLMReranker、PromptTemplate 加载、BaseLLM 注入、结构化 JSON 排名解析、未知/重复/非法 score 错误边界、未返回候选按过滤后顺序追加、rerank metadata 诊断、RerankerFactory llm 注册和 settings-only 无客户端时 fallback 到 RRF；15 个 Reranker 单元测试、22 个 Factory 单元测试通过 |
 | D9 | 实现 rerank fallback | [✔] | 2026-06-07 | 已实现 RerankController、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、低侵入 rerank trace 和 trace sink 失败隔离；26 个 Reranker 单元测试通过 |
-| D10 | 实现引用构造 | [ ] |  | 来源标题、章节、路径、trace_id |
+| D10 | 实现引用构造 | [✔] | 2026-06-07 | 已实现共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 source_ref 传播、source_ref 优先和顶层 metadata 兼容、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；11 个 Citation 单元测试、16 个核心类型回归测试、2 个 source_ref 单元测试和 1 个 pgvector 集成测试通过 |
 | D11 | 实现多模态 Response Builder | [ ] |  | 组装 chunk 关联图片，隐藏内部工具 JSON |
 | D12 | 新增 `query.py` 脚本入口 | [ ] |  | 调用完整 `hybridsearch + filter + rerank`，支持 query/top-k/collection/verbose/no-rerank |
 | D13 | 实现 Retrieval 单元测试矩阵 | [ ] |  | Query Processor、Dense、Sparse、RRF、HybridSearch、Filter、Rerank、Response、query.py |
@@ -269,12 +269,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 9 | 64% |
+| Phase D | 14 | 10 | 71% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **38** | **54%** |
+| **总计** | **70** | **39** | **56%** |
 
 ### 6.5 阶段实施明细
 
@@ -1027,13 +1027,21 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：为最终上下文构建可展示的引用来源。
 
-修改文件：`src/core/response/citation_builder.py`、`tests/unit/test_response_builder.py`
+修改文件：`src/core/types.py`、`src/core/response/__init__.py`、`src/core/response/citation_builder.py`、`src/core/query_engine/sparse_route.py`、`src/libs/vector_store/fake_vector_store.py`、`src/libs/vector_store/pgvector_store.py`、`tests/unit/test_response_builder.py`、`tests/unit/test_retrieval.py`、`tests/unit/test_factories.py`、`tests/integration/test_repositories.py`
 
 实现类/函数：
 
-- `CitationBuilder.build()`：构建输出对象
+- `Citation`：定义 document_id、chunk_id、title、section_path、source_uri、score、trace_id 的不可变共享契约
+- `CitationBuilder.build()`：按最终候选排序批量构建 citation
+- `CitationBuilder._build_one()`：从单个 `RetrievalResult` 的 source_ref 或顶层 metadata 构建来源
+- `CitationBuilder._first_present()`：按 source_ref 优先级读取已持久化来源字段
+- `CitationBuilder._title_from_source_uri()`：仅基于真实 source_uri 文件名生成缺省展示标题
+- `CitationBuilder._normalize_section_path()`：将字符串或有序字符串列表归一化为不可变章节路径
+- `SparseRoute._to_retrieval_results()`：将回表 Chunk 的 source_ref 深拷贝到 Sparse RetrievalResult metadata
+- `FakeVectorStore.search()`：在测试 Dense 结果中传播 source_ref，保持与生产实现一致
+- `PgVectorStore.search()`：读取 PostgreSQL 独立 source_ref 列并注入 Dense RetrievalResult metadata
 
-验收标准：输出来源标题、章节、路径、trace_id。
+验收标准：输入最终排序后的 `Sequence[RetrievalResult]` 和非空 query trace_id，输出顺序一致的 `List[Citation]`；每条 citation 包含 document_id、chunk_id、来源标题、section_path、source_uri、最终 score 和 trace_id，并可通过 `model_dump(mode="json")` 直接得到 JSON array 形式的 section_path；Dense pgvector/Fake search 和 Sparse 回表都必须把独立 `Chunk.source_ref` 深拷贝到 RetrievalResult metadata，确保真实检索链路不丢失精确来源；来源字段优先读取 `metadata.source_ref`，并兼容旧数据使用的顶层 metadata；标题缺失时只允许从已验证 source_uri 文件名生成展示标题，对 URL 百分号编码执行解码，禁止从 chunk 正文猜测；document_id、title、source_uri 必须是真实非空字符串，缺少来源、脏结构化类型、章节结构非法或 trace_id 为空时 fail fast，避免生成不可验证 citation；构造过程不修改 retrieval metadata；空结果返回空列表。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
 

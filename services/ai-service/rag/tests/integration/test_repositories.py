@@ -1375,6 +1375,7 @@ def test_pgvector_store_updates_searches_and_restores_chunk_order() -> None:
         assert repeated == upserted
         assert [result.chunk_id for result in results] == [chunks[0].id]
         assert results[0].score == pytest.approx(1.0)
+        assert results[0].metadata["source_ref"] == chunks[0].source_ref
         assert [chunk.id for chunk in restored] == [chunks[1].id, chunks[0].id]
     finally:
         with pool.transaction() as connection:

@@ -10,6 +10,7 @@ fake for the production ``pgvector`` provider.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from math import sqrt
 from typing import Any
 
@@ -91,7 +92,9 @@ class FakeVectorStore(BaseVectorStore):
 
         Returns:
             Filtered results ordered by descending cosine similarity and then
-            stable chunk ID for deterministic ties.
+            stable chunk ID for deterministic ties. Each result carries a
+            defensive copy of ``Chunk.source_ref`` inside metadata so the fake
+            matches the production citation contract.
 
         Raises:
             ValueError: If ``top_k`` is not positive, the query vector is empty,
@@ -110,12 +113,15 @@ class FakeVectorStore(BaseVectorStore):
             if any(chunk.metadata.get(key) != value for key, value in required_metadata.items()):
                 continue
             score = self._cosine_similarity(query_vector, stored_vector)
+            metadata = deepcopy(chunk.metadata)
+            if chunk.source_ref is not None:
+                metadata["source_ref"] = deepcopy(chunk.source_ref)
             results.append(
                 RetrievalResult(
                     chunk_id=chunk.id,
                     text=chunk.text,
                     score=score,
-                    metadata=dict(chunk.metadata),
+                    metadata=metadata,
                 )
             )
 
