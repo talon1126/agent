@@ -2037,7 +2037,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D3 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D3 单元测试通过 |
 | D4 | 实现 RRF Fusion | [✔] | 2026-06-07 | 已实现 Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D4 单元测试通过 |
 | D5 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | 已实现 ProcessedQuery 输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D5 单元测试通过 |
-| D6 | 实现 Rerank 前候选过滤 | [ ] |  | 在进入 Reranker 前按 `collection`、`doc_type` 等参数过滤候选 |
+| D6 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | 已实现 CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D6 单元测试通过 |
 | D7 | 实现 Cross-Encoder Reranker 适配 | [ ] |  |  |
 | D8 | 实现 LLM Rerank 适配 | [ ] |  |  |
 | D9 | 实现 rerank fallback | [ ] |  | 不可用、超时、异常时回退过滤后的 RRF 结果 |
@@ -2101,12 +2101,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 5 | 36% |
+| Phase D | 14 | 6 | 43% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **34** | **49%** |
+| **总计** | **70** | **35** | **50%** |
 
 ### 6.5 阶段实施明细
 
@@ -2783,14 +2783,19 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：在 RRF Fusion 之后、Reranker 之前，根据调用参数过滤候选，避免把不符合限定条件的 chunk 送入重排阶段。
 
-修改文件：`src/core/query_engine/hybrid_engine.py`、`tests/unit/test_retrieval.py`
+修改文件：`src/core/query_engine/__init__.py`、`src/core/query_engine/hybrid_engine.py`、`tests/unit/test_retrieval.py`
 
 实现类/函数：
 
+- `CandidateFilterReport`：记录过滤后结果、过滤前后数量、过滤原因统计和被过滤 chunk_id
 - `CandidateFilter.apply()`：按参数过滤候选结果
+- `CandidateFilter._first_rejection_reason()`：返回候选被过滤的首个原因
 - `HybridSearch.apply_metadata_filter()`：在进入 rerank 前执行 metadata 过滤
+- `HybridSearch._record_filter_trace()`：记录 filter 阶段过滤参数、数量变化和过滤原因
+- `_matches_filter()`：执行 metadata 精确匹配或多值匹配
+- `_has_permission()` / `_has_all_permissions()`：执行权限过滤
 
-验收标准：支持 `collection`、`doc_type`、来源类型、文档状态、权限、生命周期状态等参数；过滤发生在 RRF Fusion 之后、Rerank 之前；`--collection` 等脚本参数复用同一过滤逻辑；过滤结果数量和过滤原因写入 trace details。
+验收标准：支持 `collection`、`doc_type`、`source_type`、`document_status`、`lifecycle_status`、`permission`、`permissions`、`include_deleted` 参数；默认排除 `lifecycle_status=deleted` 的候选，除非显式设置布尔值 `include_deleted=true`；`include_deleted` 必须是 boolean，不能用字符串隐式转换；过滤发生在 RRF Fusion 之后、Rerank 之前；`HybridSearch.search(filters=...)` 和 `HybridSearch.apply_metadata_filter()` 复用同一过滤逻辑，供后续 `--collection` 等脚本参数调用；过滤后保持原有候选顺序；过滤结果数量和过滤原因写入 trace details；未知过滤键必须抛出 `RetrievalError`，避免静默忽略调用方输入；Trace sink 异常不得覆盖过滤结果或原始 RetrievalError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 

@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from src.core.errors import RetrievalError
 from src.core.query_engine.dense_route import DenseRoute
 from src.core.query_engine.fusion import reciprocal_rank_fusion
-from src.core.query_engine.hybrid_engine import HybridSearch
+from src.core.query_engine.hybrid_engine import CandidateFilter, HybridSearch
 from src.core.query_engine.query_processor import (
     ProcessedQuery,
     QueryIntent,
@@ -73,7 +73,15 @@ def _result(
         chunk_id=chunk_id,
         text=text or f"{chunk_id} text",
         score=score,
-        metadata=dict(metadata or {}),
+        metadata={
+            "collection": "shopping_guides",
+            "doc_type": "guide",
+            "source_type": "markdown",
+            "document_status": "published",
+            "lifecycle_status": "success",
+            "permissions": ["public"],
+            **dict(metadata or {}),
+        },
     )
 
 
@@ -967,3 +975,170 @@ def test_hybrid_search_trace_failure_does_not_break_successful_retrieval() -> No
     result = search.search(_processed_query(), trace_context=trace)
 
     assert [candidate.chunk_id for candidate in result.results] == ["dense-only"]
+
+
+def test_candidate_filter_applies_supported_metadata_filters_and_preserves_order() -> None:
+    """Require CandidateFilter to keep only candidates matching all filter fields."""
+
+    candidates = [
+        _result("keep-a", score=0.9, metadata={"collection": "shopping_guides"}),
+        _result("wrong-collection", score=0.8, metadata={"collection": "policy_faq"}),
+        _result("keep-b", score=0.7, metadata={"collection": "shopping_guides"}),
+    ]
+
+    report = CandidateFilter().apply(candidates, {"collection": "shopping_guides"})
+
+    assert [result.chunk_id for result in report.results] == ["keep-a", "keep-b"]
+    assert report.before_count == 3
+    assert report.after_count == 2
+    assert report.rejected_counts == {"collection": 1}
+    assert report.rejected_chunk_ids == {"collection": ["wrong-collection"]}
+
+
+def test_candidate_filter_supports_type_status_permission_and_lifecycle_filters() -> None:
+    """Require rerank candidates to honor document and permission constraints."""
+
+    candidates = [
+        _result("keep", score=0.9, metadata={"permissions": ["public", "vip"]}),
+        _result("wrong-doc-type", score=0.8, metadata={"doc_type": "faq"}),
+        _result("wrong-source", score=0.7, metadata={"source_type": "pdf"}),
+        _result("draft", score=0.6, metadata={"document_status": "draft"}),
+        _result("deleted", score=0.5, metadata={"lifecycle_status": "deleted"}),
+        _result("private", score=0.4, metadata={"permissions": ["admin"]}),
+    ]
+
+    report = CandidateFilter().apply(
+        candidates,
+        {
+            "doc_type": "guide",
+            "source_type": "markdown",
+            "document_status": "published",
+            "lifecycle_status": "success",
+            "permission": "vip",
+        },
+    )
+
+    assert [result.chunk_id for result in report.results] == ["keep"]
+    assert report.rejected_counts == {
+        "doc_type": 1,
+        "source_type": 1,
+        "document_status": 1,
+        "lifecycle_status": 1,
+        "permission": 1,
+    }
+
+
+def test_candidate_filter_excludes_deleted_lifecycle_by_default() -> None:
+    """Require deleted documents to stay out of rerank unless explicitly allowed."""
+
+    candidates = [
+        _result("active", score=0.9),
+        _result("deleted", score=0.8, metadata={"lifecycle_status": "deleted"}),
+    ]
+
+    default_report = CandidateFilter().apply(candidates, {})
+    include_deleted_report = CandidateFilter().apply(candidates, {"include_deleted": True})
+
+    assert [result.chunk_id for result in default_report.results] == ["active"]
+    assert default_report.rejected_counts == {"lifecycle_status": 1}
+    assert [result.chunk_id for result in include_deleted_report.results] == [
+        "active",
+        "deleted",
+    ]
+
+
+def test_candidate_filter_rejects_unknown_filter_keys() -> None:
+    """Require unsupported filter parameters to fail before silently changing recall."""
+
+    with pytest.raises(RetrievalError, match="Unsupported metadata filter"):
+        CandidateFilter().apply([], {"unknown": "value"})
+
+
+def test_candidate_filter_rejects_non_boolean_include_deleted() -> None:
+    """Require lifecycle visibility flags to reject ambiguous string values."""
+
+    with pytest.raises(RetrievalError, match="include_deleted must be a boolean"):
+        CandidateFilter().apply([], {"include_deleted": "false"})
+
+
+def test_hybrid_search_applies_metadata_filter_after_fusion_and_records_trace() -> None:
+    """Require HybridSearch filtering to happen after RRF and before rerank."""
+
+    settings = _settings(rewrite_enabled=False)
+    settings.retrieval.fusion_top_k = 3
+    settings.retrieval.rrf_k = 10
+    dense_route = Mock()
+    dense_route.search.return_value = [
+        _result("keep", score=0.9, metadata={"collection": "shopping_guides"}),
+        _result("drop", score=0.8, metadata={"collection": "policy_faq"}),
+    ]
+    sparse_route = Mock()
+    sparse_route.search.return_value = []
+    trace = Mock()
+    search = HybridSearch(
+        settings=settings,
+        dense_route=dense_route,
+        sparse_route=sparse_route,
+    )
+
+    result = search.search(
+        _processed_query(),
+        filters={"collection": "shopping_guides"},
+        trace_context=trace,
+    )
+
+    assert [candidate.chunk_id for candidate in result.results] == ["keep"]
+    assert result.filter_report is not None
+    assert result.filter_report.before_count == 2
+    assert result.filter_report.after_count == 1
+    filter_call = next(
+        call for call in trace.record_stage.call_args_list
+        if call.kwargs["stage"] == "filter"
+    )
+    assert filter_call.kwargs["stage"] == "filter"
+    assert filter_call.kwargs["details"]["rejected_counts"] == {"collection": 1}
+
+
+def test_hybrid_search_apply_metadata_filter_is_reusable_for_cli_parameters() -> None:
+    """Require CLI/query adapters to reuse the same metadata filter method."""
+
+    settings = _settings(rewrite_enabled=False)
+    search = HybridSearch(
+        settings=settings,
+        dense_route=Mock(),
+        sparse_route=Mock(),
+    )
+    trace = Mock()
+
+    report = search.apply_metadata_filter(
+        [
+            _result("keep", score=0.9, metadata={"doc_type": "guide"}),
+            _result("drop", score=0.8, metadata={"doc_type": "faq"}),
+        ],
+        filters={"doc_type": "guide"},
+        trace_context=trace,
+    )
+
+    assert [candidate.chunk_id for candidate in report.results] == ["keep"]
+    assert trace.record_stage.call_args.kwargs["stage"] == "filter"
+
+
+def test_hybrid_search_filter_trace_failure_does_not_break_results() -> None:
+    """Require optional filter trace failures to remain isolated from results."""
+
+    settings = _settings(rewrite_enabled=False)
+    search = HybridSearch(
+        settings=settings,
+        dense_route=Mock(),
+        sparse_route=Mock(),
+    )
+    trace = Mock()
+    trace.record_stage.side_effect = RuntimeError("trace sink unavailable")
+
+    report = search.apply_metadata_filter(
+        [_result("keep", score=0.9)],
+        filters={"collection": "shopping_guides"},
+        trace_context=trace,
+    )
+
+    assert [candidate.chunk_id for candidate in report.results] == ["keep"]
