@@ -8,14 +8,28 @@ external chat provider.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
+from src.core.config import load_settings
 from src.core.errors import ProviderError
+from src.core.query_engine import RerankController
 from src.core.types import RetrievalResult
 from src.libs.llm.base_llm import BaseLLM, ChatMessage, LLMResponse
-from src.libs.reranker import CrossEncoderReranker, LLMReranker, RerankerFactory
+from src.libs.reranker import (
+    BaseReranker,
+    CrossEncoderReranker,
+    FakeReranker,
+    LLMReranker,
+    RerankerFactory,
+)
+
+RAG_ROOT = Path(__file__).resolve().parents[2]
+SETTINGS_PATH = RAG_ROOT / "config" / "settings.example.yaml"
 
 
 def _candidate(
@@ -83,6 +97,67 @@ class RecordingLLM(BaseLLM):
             provider="fake",
             model="fake-reranker",
         )
+
+
+class RaisingReranker(BaseReranker):
+    """Test reranker that can mutate its input before raising one error."""
+
+    def __init__(self, error: Exception, *, mutate_input: bool = False) -> None:
+        """Configure the provider failure exposed to RerankController.
+
+        Args:
+            error: Exception raised when reranking starts.
+            mutate_input: Whether to corrupt the first candidate before raising,
+                simulating an unsafe third-party adapter.
+        """
+
+        self.error = error
+        self.mutate_input = mutate_input
+        self.received_chunk_ids: list[str] = []
+
+    def rerank(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalResult],
+        *,
+        top_k: int | None = None,
+    ) -> list[RetrievalResult]:
+        """Record candidate IDs, optionally mutate input, and raise the error."""
+
+        self.received_chunk_ids = [candidate.chunk_id for candidate in candidates]
+        if self.mutate_input and candidates:
+            candidates[0].metadata["corrupted"] = True
+        raise self.error
+
+
+class ForeignCandidateReranker(BaseReranker):
+    """Return a candidate that was not present in the filtered input."""
+
+    def rerank(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalResult],
+        *,
+        top_k: int | None = None,
+    ) -> list[RetrievalResult]:
+        """Simulate an invalid provider that reintroduces a filtered candidate."""
+
+        return [_candidate("filtered-out", "Must not be reintroduced.", score=1.0)]
+
+
+class EmptyResultReranker(BaseReranker):
+    """Return no candidates even though filtered input is available."""
+
+    def rerank(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalResult],
+        *,
+        top_k: int | None = None,
+    ) -> list[RetrievalResult]:
+        """Simulate a provider that accidentally drops the candidate set."""
+
+        return []
 
 
 def test_cross_encoder_reranker_scores_query_document_pairs_and_sorts_descending() -> None:
@@ -311,3 +386,226 @@ def test_reranker_factory_creates_llm_reranker_with_injected_client() -> None:
 
     assert isinstance(reranker, LLMReranker)
     assert results[0].score == 0.88
+
+
+def test_rerank_controller_returns_provider_order_and_records_success() -> None:
+    """Require successful reranking to preserve provider order and diagnostics."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    trace = Mock()
+    controller = RerankController(
+        settings=settings,
+        reranker=FakeReranker(ordered_chunk_ids=["chunk-b", "chunk-a"]),
+    )
+    candidates = [
+        _candidate("chunk-a", "A", metadata={"rank": 1}),
+        _candidate("chunk-b", "B", metadata={"rank": 2}),
+        _candidate("chunk-c", "C", metadata={"rank": 3}),
+    ]
+
+    results = controller.rerank_or_fallback(
+        "query",
+        candidates,
+        top_k=2,
+        trace_context=trace,
+    )
+
+    assert [result.chunk_id for result in results] == ["chunk-b", "chunk-a"]
+    assert results[0] is not candidates[1]
+    assert trace.record_stage.call_args.kwargs["stage"] == "rerank"
+    assert trace.record_stage.call_args.kwargs["status"] == "success"
+    assert trace.record_stage.call_args.kwargs["details"]["before_order"] == [
+        "chunk-a",
+        "chunk-b",
+        "chunk-c",
+    ]
+    assert trace.record_stage.call_args.kwargs["details"]["after_order"] == [
+        "chunk-b",
+        "chunk-a",
+    ]
+
+
+def test_rerank_controller_falls_back_when_reranker_is_unavailable() -> None:
+    """Require a missing reranker to preserve filtered RRF order and top_k."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    trace = Mock()
+    controller = RerankController(settings=settings, reranker=None)
+    candidates = [
+        _candidate("chunk-b", "B", score=0.8),
+        _candidate("chunk-a", "A", score=0.7),
+    ]
+
+    results = controller.rerank_or_fallback(
+        "query",
+        candidates,
+        top_k=1,
+        trace_context=trace,
+    )
+
+    assert [result.chunk_id for result in results] == ["chunk-b"]
+    assert results[0] is not candidates[0]
+    assert trace.record_stage.call_args.kwargs["status"] == "degraded"
+    assert (
+        trace.record_stage.call_args.kwargs["details"]["fallback_reason"]
+        == "reranker_unavailable"
+    )
+
+
+def test_rerank_controller_uses_configured_top_k_when_override_is_absent() -> None:
+    """Require the controller to apply settings.rerank.top_k by default."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    controller = RerankController(
+        settings=settings,
+        reranker=FakeReranker(),
+    )
+    candidates = [
+        _candidate(f"chunk-{index}", f"Candidate {index}")
+        for index in range(settings.rerank.top_k + 2)
+    ]
+
+    results = controller.rerank_or_fallback("query", candidates)
+
+    assert len(results) == settings.rerank.top_k
+    assert [result.chunk_id for result in results] == [
+        candidate.chunk_id for candidate in candidates[: settings.rerank.top_k]
+    ]
+
+
+@pytest.mark.parametrize(
+    "error,expected_reason",
+    [
+        (TimeoutError("provider timeout"), "reranker_timeout"),
+        (
+            ProviderError(
+                "provider call failed",
+                cause=TimeoutError("wrapped provider timeout"),
+            ),
+            "reranker_timeout",
+        ),
+        (ProviderError("provider unavailable"), "reranker_error"),
+        (RuntimeError("unexpected provider failure"), "reranker_error"),
+    ],
+)
+def test_rerank_controller_falls_back_on_timeout_or_provider_exception(
+    error: Exception,
+    expected_reason: str,
+) -> None:
+    """Require provider failures to preserve only the filtered candidate list."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    trace = Mock()
+    reranker = RaisingReranker(error, mutate_input=True)
+    controller = RerankController(settings=settings, reranker=reranker)
+    candidates = [
+        _candidate("chunk-a", "A", metadata={"filtered": True}),
+        _candidate("chunk-b", "B"),
+    ]
+
+    results = controller.rerank_or_fallback(
+        "query",
+        candidates,
+        trace_context=trace,
+    )
+
+    assert reranker.received_chunk_ids == ["chunk-a", "chunk-b"]
+    assert [result.chunk_id for result in results] == ["chunk-a", "chunk-b"]
+    assert "corrupted" not in results[0].metadata
+    assert "corrupted" not in candidates[0].metadata
+    details = trace.record_stage.call_args.kwargs["details"]
+    assert details["fallback_reason"] == expected_reason
+    assert details["error_type"] == type(error).__name__
+    assert "error_message" not in details
+
+
+def test_rerank_controller_rejects_foreign_results_by_falling_back() -> None:
+    """Require invalid reranker output to never reintroduce filtered candidates."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    trace = Mock()
+    controller = RerankController(
+        settings=settings,
+        reranker=ForeignCandidateReranker(),
+    )
+    candidates = [_candidate("allowed", "Allowed filtered candidate.")]
+
+    results = controller.rerank_or_fallback(
+        "query",
+        candidates,
+        trace_context=trace,
+    )
+
+    assert [result.chunk_id for result in results] == ["allowed"]
+    assert trace.record_stage.call_args.kwargs["status"] == "degraded"
+    assert (
+        trace.record_stage.call_args.kwargs["details"]["fallback_reason"]
+        == "invalid_reranker_output"
+    )
+
+
+def test_rerank_controller_rejects_candidate_loss_by_falling_back() -> None:
+    """Require rerankers to reorder candidates instead of silently filtering."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    trace = Mock()
+    controller = RerankController(
+        settings=settings,
+        reranker=EmptyResultReranker(),
+    )
+    candidates = [
+        _candidate("chunk-a", "A"),
+        _candidate("chunk-b", "B"),
+    ]
+
+    results = controller.rerank_or_fallback(
+        "query",
+        candidates,
+        trace_context=trace,
+    )
+
+    assert [result.chunk_id for result in results] == ["chunk-a", "chunk-b"]
+    assert trace.record_stage.call_args.kwargs["status"] == "degraded"
+    assert (
+        trace.record_stage.call_args.kwargs["details"]["fallback_reason"]
+        == "invalid_reranker_output"
+    )
+
+
+def test_rerank_controller_validates_inputs_before_fallback_or_provider_calls() -> None:
+    """Require invalid query limits to fail instead of being hidden by fallback."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    reranker = RaisingReranker(RuntimeError("must not be called"))
+    controller = RerankController(settings=settings, reranker=reranker)
+
+    with pytest.raises(ValueError, match="Rerank query must not be blank"):
+        controller.rerank_or_fallback(" ", [_candidate("chunk-a", "A")])
+    with pytest.raises(ValueError, match="top_k must be greater than zero"):
+        controller.rerank_or_fallback(
+            "query",
+            [_candidate("chunk-a", "A")],
+            top_k=0,
+        )
+
+    assert reranker.received_chunk_ids == []
+
+
+def test_rerank_controller_ignores_trace_sink_failures() -> None:
+    """Require diagnostic trace failures not to replace rerank results."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    trace = Mock()
+    trace.record_stage.side_effect = RuntimeError("trace unavailable")
+    controller = RerankController(
+        settings=settings,
+        reranker=FakeReranker(ordered_chunk_ids=["chunk-b"]),
+    )
+
+    results = controller.rerank_or_fallback(
+        "query",
+        [_candidate("chunk-a", "A"), _candidate("chunk-b", "B")],
+        trace_context=trace,
+    )
+
+    assert [result.chunk_id for result in results] == ["chunk-b", "chunk-a"]

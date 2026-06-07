@@ -208,7 +208,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D6 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | 已实现 CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D6 单元测试通过 |
 | D7 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | 已实现 CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D7 单元测试通过 |
 | D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-07 | 已实现 LLMReranker、PromptTemplate 加载、BaseLLM 注入、结构化 JSON 排名解析、未知/重复/非法 score 错误边界、未返回候选按过滤后顺序追加、rerank metadata 诊断、RerankerFactory llm 注册和 settings-only 无客户端时 fallback 到 RRF；15 个 Reranker 单元测试、22 个 Factory 单元测试通过 |
-| D9 | 实现 rerank fallback | [ ] |  | 不可用、超时、异常时回退过滤后的 RRF 结果 |
+| D9 | 实现 rerank fallback | [✔] | 2026-06-07 | 已实现 RerankController、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、低侵入 rerank trace 和 trace sink 失败隔离；26 个 Reranker 单元测试通过 |
 | D10 | 实现引用构造 | [ ] |  | 来源标题、章节、路径、trace_id |
 | D11 | 实现多模态 Response Builder | [ ] |  | 组装 chunk 关联图片，隐藏内部工具 JSON |
 | D12 | 新增 `query.py` 脚本入口 | [ ] |  | 调用完整 `hybridsearch + filter + rerank`，支持 query/top-k/collection/verbose/no-rerank |
@@ -269,12 +269,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 8 | 57% |
+| Phase D | 14 | 9 | 64% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **37** | **53%** |
+| **总计** | **70** | **38** | **54%** |
 
 ### 6.5 阶段实施明细
 
@@ -1008,13 +1008,18 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：在 reranker 不可用、超时或异常时回退到过滤后的 RRF 结果。
 
-修改文件：`src/core/query_engine/reranker.py`、`tests/unit/test_reranker.py`
+修改文件：`src/core/query_engine/reranker.py`、`src/core/query_engine/__init__.py`、`tests/unit/test_reranker.py`
 
 实现类/函数：
 
-- `RerankController.rerank_or_fallback()`：执行 rerank 并在异常时回退过滤后的 RRF 结果
+- `RerankController.rerank_or_fallback()`：调用配置的 Reranker，并在不可用、超时、异常或非法输出时回退过滤后的 RRF 结果
+- `RerankController._validate_provider_results()`：校验 provider 结果数量符合 `min(filtered_count, top_k)`、只包含过滤后候选且不存在重复 ID
+- `RerankController._is_timeout_error()`：识别直接 TimeoutError 和 ProviderError/SDK 异常链中包装的 timeout
+- `RerankController._fallback()`：从 provider 调用前保存的候选副本恢复过滤后 RRF 顺序
+- `RerankController._record_trace()`：记录 rerank 前后排名、fallback 原因、错误类型和耗时
+- `RerankTraceContext.record_stage()`：定义 rerank 阶段使用的最小 trace 注入接口
 
-验收标准：超时、异常、不可用时回退过滤后的 RRF 排序；不会重新引入已被过滤的候选。
+验收标准：默认使用 `settings.rerank.top_k`，并支持调用方覆盖正整数 `top_k`；reranker 成功时返回 provider 排序的 `RetrievalResult` 防御性副本，输出数量必须等于 `min(filtered_count, top_k)`，避免排序组件意外过滤或清空召回结果；reranker 为 `None`、抛出直接 `TimeoutError`、在 `ProviderError`/SDK 异常链中包装 timeout、Provider 异常或普通异常时，回退到调用前保存的过滤后 RRF 候选顺序；provider 调用使用独立候选深拷贝，即使 provider 修改输入后失败也不能污染 fallback 结果；provider 返回未知 chunk_id、重复 ID、数量不符或非法 `RetrievalResult` 时视为非法输出并 fallback；任何路径都不能重新引入已被 metadata filter 排除的候选；空候选直接返回空列表；query 为空或 top_k 非法时 fail fast，不被 fallback 隐藏；可选 trace 记录 before/after order、fallback_used、fallback_reason、error_type、项目异常的 trace-safe context 和耗时，不记录任意第三方异常原文，trace sink 异常不得替换查询结果。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 

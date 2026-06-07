@@ -278,7 +278,7 @@ services/ai-service/rag/
 | `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
 | `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult` |
 | `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
-| `src/core/query_engine/reranker.py` | 对过滤后的融合结果做精排 | Cross-Encoder/LLM Rerank、超时异常 fallback 到过滤后的 RRF 结果 |
+| `src/core/query_engine/reranker.py` | 编排过滤后候选的精排与降级 | `RerankController` 调用 Cross-Encoder/LLM Reranker；provider 缺失、超时、异常或返回过滤集外候选时 fallback 到调用前保存的过滤后 RRF 顺序；输出和 fallback 均使用防御性副本并记录低侵入 rerank trace |
 | `src/core/response/response_builder.py` | 构建 RAG 工具响应 | 输出 answer_context、citations、metadata、trace_id |
 | `src/core/response/citation_builder.py` | 构建引用来源 | 文档标题、source_uri、section_path、chunk_id、score |
 | `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 根据 `image_refs` 返回相关图片 metadata 和 file_path |

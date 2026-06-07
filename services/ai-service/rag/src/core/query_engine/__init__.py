@@ -21,6 +21,7 @@ from src.core.query_engine.query_processor import (
     QueryProcessor,
     QueryRewriter,
 )
+from src.core.query_engine.reranker import RerankController, RerankTraceContext
 from src.core.query_engine.sparse_route import SparseRoute, SparseTraceContext
 
 __all__ = (
@@ -35,6 +36,8 @@ __all__ = (
     "QueryIntent",
     "QueryProcessor",
     "QueryRewriter",
+    "RerankController",
+    "RerankTraceContext",
     "reciprocal_rank_fusion",
     "SparseRoute",
     "SparseTraceContext",
