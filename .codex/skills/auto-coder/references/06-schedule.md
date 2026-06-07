@@ -204,7 +204,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D2 | 实现 Dense Route 向量检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、Query Embedding、配置驱动 dense_top_k、VectorStore 语义召回、RetrievalResult 校验、embedding/vector search 错误边界和低侵入 Trace；8 个 D2 单元测试通过 |
 | D3 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D3 单元测试通过 |
 | D4 | 实现 RRF Fusion | [✔] | 2026-06-07 | 已实现 Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D4 单元测试通过 |
-| D5 | 实现 HybridSearch 编排 | [ ] |  | 依赖 D1/D2/D3/D4，集成候选去重、双路召回、融合和降级 |
+| D5 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | 已实现 ProcessedQuery 输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D5 单元测试通过 |
 | D6 | 实现 Rerank 前候选过滤 | [ ] |  | 在进入 Reranker 前按 `collection`、`doc_type` 等参数过滤候选 |
 | D7 | 实现 Cross-Encoder Reranker 适配 | [ ] |  |  |
 | D8 | 实现 LLM Rerank 适配 | [ ] |  |  |
@@ -269,12 +269,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 4 | 29% |
+| Phase D | 14 | 5 | 36% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **33** | **47%** |
+| **总计** | **70** | **34** | **49%** |
 
 ### 6.5 阶段实施明细
 
@@ -934,14 +934,16 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：编排 Dense Route、Sparse Route 和 RRF Fusion，完成候选去重、双路召回融合和单路失败降级。
 
-修改文件：`src/core/query_engine/hybrid_engine.py`、`tests/unit/test_retrieval.py`
+修改文件：`src/core/query_engine/__init__.py`、`src/core/query_engine/hybrid_engine.py`、`tests/unit/test_retrieval.py`
 
 实现类/函数：
 
-- `HybridSearch.search()`：编排双路召回、候选去重和 RRF 融合
+- `HybridTraceContext.record_stage()`：定义 HybridSearch 使用的最小 Trace 注入接口
 - `HybridSearchResult`：定义流程返回结果
+- `HybridSearch.search()`：编排双路召回、候选去重和 RRF 融合
+- `HybridSearch._record_trace()`：记录 hybrid 阶段候选数量、失败路线和降级原因
 
-验收标准：前置依赖为 D1、D2、D3、D4；输入 `ProcessedQuery`；分别执行 Dense/BM25 两路检索；按 `chunk_id` 去重并保留 `dense_rank`、`sparse_rank`、`dense_score`、`sparse_score`；调用 RRF Fusion 生成融合排序；单路失败时允许降级为另一条路线并写入 trace details。
+验收标准：前置依赖为 D1、D2、D3、D4；输入 `ProcessedQuery`；分别执行 Dense/BM25 两路检索；调用 RRF Fusion 生成融合排序，按 `chunk_id` 去重并保留 `dense_rank`、`sparse_rank`、`dense_score`、`sparse_score`；使用 `retrieval.fusion_top_k` 和 `retrieval.rrf_k`；返回结果必须同时保留 dense 原始候选、sparse 原始候选、融合候选、fallback 状态和 fallback 原因；单路失败时允许降级为另一条路线并写入 trace details；双路均失败时抛出 `RetrievalError`；Trace sink 异常不得覆盖检索结果或原始 RetrievalError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 

@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from src.core.errors import RetrievalError
 from src.core.query_engine.dense_route import DenseRoute
 from src.core.query_engine.fusion import reciprocal_rank_fusion
+from src.core.query_engine.hybrid_engine import HybridSearch
 from src.core.query_engine.query_processor import (
     ProcessedQuery,
     QueryIntent,
@@ -73,6 +74,20 @@ def _result(
         text=text or f"{chunk_id} text",
         score=score,
         metadata=dict(metadata or {}),
+    )
+
+
+def _processed_query() -> ProcessedQuery:
+    """Build a reusable processed query fixture for hybrid retrieval tests."""
+
+    return ProcessedQuery(
+        raw_query="无线耳机推荐",
+        normalized_query="无线耳机推荐",
+        keywords=("无线耳机", "推荐"),
+        intent=QueryIntent.RECOMMENDATION,
+        collection="shopping_guides",
+        top_k=5,
+        requires_product_tool=True,
     )
 
 
@@ -799,3 +814,156 @@ def test_rrf_fusion_rejects_invalid_limits(
 
     with pytest.raises(RetrievalError, match=message):
         reciprocal_rank_fusion([], [], top_k=top_k, rrf_k=rrf_k)
+
+
+def test_hybrid_search_runs_dense_sparse_and_rrf_fusion() -> None:
+    """Require HybridSearch to orchestrate both routes and RRF with settings."""
+
+    settings = _settings(rewrite_enabled=False)
+    settings.retrieval.fusion_top_k = 2
+    settings.retrieval.rrf_k = 60
+    processed = _processed_query()
+    dense_route = Mock()
+    dense_route.search.return_value = [
+        _result("dense-only", score=0.8),
+        _result("shared", score=0.7),
+    ]
+    sparse_route = Mock()
+    sparse_route.search.return_value = [
+        _result("shared", score=4.0),
+        _result("sparse-only", score=3.0),
+    ]
+    trace = Mock()
+    search = HybridSearch(
+        settings=settings,
+        dense_route=dense_route,
+        sparse_route=sparse_route,
+    )
+
+    result = search.search(processed, trace_context=trace)
+
+    dense_route.search.assert_called_once_with(processed, trace_context=trace)
+    sparse_route.search.assert_called_once_with(processed, trace_context=trace)
+    assert [candidate.chunk_id for candidate in result.results] == [
+        "shared",
+        "dense-only",
+    ]
+    assert result.dense_results == dense_route.search.return_value
+    assert result.sparse_results == sparse_route.search.return_value
+    assert result.fallback_used is False
+    assert result.fallback_reasons == {}
+    assert result.results[0].metadata["fusion"]["dense_rank"] == 2
+    assert result.results[0].metadata["fusion"]["sparse_rank"] == 1
+    assert trace.record_stage.call_args.kwargs["stage"] == "hybrid"
+    assert trace.record_stage.call_args.kwargs["status"] == "success"
+
+
+def test_hybrid_search_falls_back_to_sparse_when_dense_route_fails() -> None:
+    """Require Dense failures to degrade to Sparse results when available."""
+
+    settings = _settings(rewrite_enabled=False)
+    settings.retrieval.fusion_top_k = 3
+    settings.retrieval.rrf_k = 10
+    processed = _processed_query()
+    dense_route = Mock()
+    dense_route.search.side_effect = RetrievalError("dense unavailable")
+    sparse_route = Mock()
+    sparse_route.search.return_value = [_result("sparse-only", score=2.0)]
+    trace = Mock()
+    search = HybridSearch(
+        settings=settings,
+        dense_route=dense_route,
+        sparse_route=sparse_route,
+    )
+
+    result = search.search(processed, trace_context=trace)
+
+    assert [candidate.chunk_id for candidate in result.results] == ["sparse-only"]
+    assert result.dense_results == []
+    assert result.sparse_results == sparse_route.search.return_value
+    assert result.fallback_used is True
+    assert result.fallback_reasons == {"dense": "dense unavailable"}
+    assert result.results[0].metadata["fusion"]["sources"] == ["sparse"]
+    assert trace.record_stage.call_args.kwargs["status"] == "degraded"
+    assert trace.record_stage.call_args.kwargs["details"]["failed_routes"] == ["dense"]
+
+
+def test_hybrid_search_falls_back_to_dense_when_sparse_route_fails() -> None:
+    """Require Sparse failures to degrade to Dense results when available."""
+
+    settings = _settings(rewrite_enabled=False)
+    settings.retrieval.fusion_top_k = 3
+    settings.retrieval.rrf_k = 10
+    processed = _processed_query()
+    dense_route = Mock()
+    dense_route.search.return_value = [_result("dense-only", score=0.9)]
+    sparse_route = Mock()
+    sparse_route.search.side_effect = RetrievalError("sparse unavailable")
+    search = HybridSearch(
+        settings=settings,
+        dense_route=dense_route,
+        sparse_route=sparse_route,
+    )
+
+    result = search.search(processed)
+
+    assert [candidate.chunk_id for candidate in result.results] == ["dense-only"]
+    assert result.dense_results == dense_route.search.return_value
+    assert result.sparse_results == []
+    assert result.fallback_used is True
+    assert result.fallback_reasons == {"sparse": "sparse unavailable"}
+    assert result.results[0].metadata["fusion"]["sources"] == ["dense"]
+
+
+def test_hybrid_search_raises_when_both_routes_fail() -> None:
+    """Require HybridSearch to fail only when no retrieval route can return."""
+
+    settings = _settings(rewrite_enabled=False)
+    settings.retrieval.fusion_top_k = 3
+    settings.retrieval.rrf_k = 10
+    dense_route = Mock()
+    dense_route.search.side_effect = RetrievalError("dense unavailable")
+    sparse_route = Mock()
+    sparse_route.search.side_effect = RetrievalError("sparse unavailable")
+    trace = Mock()
+    search = HybridSearch(
+        settings=settings,
+        dense_route=dense_route,
+        sparse_route=sparse_route,
+    )
+
+    with pytest.raises(RetrievalError, match="Hybrid search failed") as captured:
+        search.search(_processed_query(), trace_context=trace)
+
+    assert captured.value.context == {
+        "stage": "hybrid",
+        "failed_routes": ["dense", "sparse"],
+    }
+    assert trace.record_stage.call_args.kwargs["status"] == "failed"
+    assert trace.record_stage.call_args.kwargs["details"]["failed_routes"] == [
+        "dense",
+        "sparse",
+    ]
+
+
+def test_hybrid_search_trace_failure_does_not_break_successful_retrieval() -> None:
+    """Require optional hybrid trace failures to remain isolated from results."""
+
+    settings = _settings(rewrite_enabled=False)
+    settings.retrieval.fusion_top_k = 3
+    settings.retrieval.rrf_k = 10
+    dense_route = Mock()
+    dense_route.search.return_value = [_result("dense-only", score=0.9)]
+    sparse_route = Mock()
+    sparse_route.search.return_value = []
+    trace = Mock()
+    trace.record_stage.side_effect = RuntimeError("trace sink unavailable")
+    search = HybridSearch(
+        settings=settings,
+        dense_route=dense_route,
+        sparse_route=sparse_route,
+    )
+
+    result = search.search(_processed_query(), trace_context=trace)
+
+    assert [candidate.chunk_id for candidate in result.results] == ["dense-only"]

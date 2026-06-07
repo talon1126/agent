@@ -8,6 +8,11 @@ not depend on concrete LLM or storage implementations.
 
 from src.core.query_engine.dense_route import DenseRoute, DenseTraceContext
 from src.core.query_engine.fusion import reciprocal_rank_fusion
+from src.core.query_engine.hybrid_engine import (
+    HybridSearch,
+    HybridSearchResult,
+    HybridTraceContext,
+)
 from src.core.query_engine.query_processor import (
     ProcessedQuery,
     QueryIntent,
@@ -19,6 +24,9 @@ from src.core.query_engine.sparse_route import SparseRoute, SparseTraceContext
 __all__ = (
     "DenseRoute",
     "DenseTraceContext",
+    "HybridSearch",
+    "HybridSearchResult",
+    "HybridTraceContext",
     "ProcessedQuery",
     "QueryIntent",
     "QueryProcessor",
