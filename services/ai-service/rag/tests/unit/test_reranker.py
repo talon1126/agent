@@ -17,7 +17,7 @@ import pytest
 
 from src.core.config import load_settings
 from src.core.errors import ProviderError
-from src.core.query_engine import RerankController
+from src.core.query_engine import RerankController, RerankOutcome
 from src.core.types import RetrievalResult
 from src.libs.llm.base_llm import BaseLLM, ChatMessage, LLMResponse
 from src.libs.reranker import (
@@ -468,6 +468,28 @@ def test_rerank_controller_returns_provider_order_and_records_success() -> None:
     ]
 
 
+def test_rerank_controller_outcome_reports_success_without_metadata_heuristics() -> None:
+    """Return explicit success state even when a valid reranker adds no metadata."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    controller = RerankController(
+        settings=settings,
+        reranker=FakeReranker(ordered_chunk_ids=["chunk-b", "chunk-a"]),
+    )
+    candidates = [
+        _candidate("chunk-a", "A"),
+        _candidate("chunk-b", "B"),
+    ]
+
+    outcome = controller.rerank_with_outcome("query", candidates, top_k=2)
+
+    assert isinstance(outcome, RerankOutcome)
+    assert [result.chunk_id for result in outcome.results] == ["chunk-b", "chunk-a"]
+    assert outcome.fallback_used is False
+    assert outcome.fallback_reason is None
+    assert all("rerank" not in result.metadata for result in outcome.results)
+
+
 def test_rerank_controller_falls_back_when_reranker_is_unavailable() -> None:
     """Require a missing reranker to preserve filtered RRF order and top_k."""
 
@@ -493,6 +515,23 @@ def test_rerank_controller_falls_back_when_reranker_is_unavailable() -> None:
         trace.record_stage.call_args.kwargs["details"]["fallback_reason"]
         == "reranker_unavailable"
     )
+
+
+def test_rerank_controller_outcome_reports_fallback_reason() -> None:
+    """Expose fallback state directly to query orchestration callers."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    controller = RerankController(settings=settings, reranker=None)
+    candidates = [
+        _candidate("chunk-a", "A"),
+        _candidate("chunk-b", "B"),
+    ]
+
+    outcome = controller.rerank_with_outcome("query", candidates, top_k=1)
+
+    assert [result.chunk_id for result in outcome.results] == ["chunk-a"]
+    assert outcome.fallback_used is True
+    assert outcome.fallback_reason == "reranker_unavailable"
 
 
 def test_rerank_controller_uses_configured_top_k_when_override_is_absent() -> None:

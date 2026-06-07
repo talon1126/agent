@@ -1517,7 +1517,7 @@ services/ai-service/rag/
 | `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
 | `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，并将 `Chunk.source_ref` 深拷贝到 result metadata 供 CitationBuilder 使用 |
 | `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
-| `src/core/query_engine/reranker.py` | 编排过滤后候选的精排与降级 | `RerankController` 调用 Cross-Encoder/LLM Reranker；provider 缺失、超时、异常或返回过滤集外候选时 fallback 到调用前保存的过滤后 RRF 顺序；输出和 fallback 均使用防御性副本并记录低侵入 rerank trace |
+| `src/core/query_engine/reranker.py` | 编排过滤后候选的精排与降级 | `RerankController` 调用 Cross-Encoder/LLM Reranker；provider 缺失、超时、异常或返回过滤集外候选时 fallback 到调用前保存的过滤后 RRF 顺序；`RerankOutcome` 显式返回最终结果、fallback 状态和原因，禁止从 provider metadata 推断控制流；输出和 fallback 均使用防御性副本并记录低侵入 rerank trace |
 | `src/core/response/response_builder.py` | 构建 RAG 工具公开响应 | `KnowledgeHubResponseBuilder` 只从最终排序 chunk 文本生成编号上下文，组合 citations、images、trace_id 和 `is_empty`；不序列化内部 route/tool metadata |
 | `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 Citation、KnowledgeHubResponse、ResponseImage 及其 Builder/Assembler |
 | `src/core/response/citation_builder.py` | 从最终排序结果构建引用来源 | `source_ref` 优先、顶层 metadata 兼容、标题文件名回退、section_path 归一化、trace_id 关联、缺失来源 fail fast、不从 chunk 正文猜测 citation |
@@ -1869,7 +1869,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase A | 配置与项目骨架 | 独立模块基础文件、uv 依赖锁定、Docker 部署骨架、pytest 冒烟测试、配置模板、prompt 配置、核心类型和配置加载 | [✔] |
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
-| Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [~] |
+| Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [✔] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [ ] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [ ] |
 | Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、策略对比和评估趋势 | [ ] |
@@ -1913,7 +1913,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase A | 配置与项目骨架 | 独立 RAG 模块骨架、uv 锁定环境、运行配置、Prompt 和共享数据契约已就绪，可进入持久化与可插拔组件开发 | `uv.lock`、项目 `.venv`、独立 CLI、frozen Docker 构建、类型化配置加载、活动环境变量校验、英文 Prompt、核心领域类型和统一异常 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q` | 2026-06-06 |
 | Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Loader/Splitter/LLM/Embedding/VectorStore/Reranker/Evaluator Factory、BaseTransform、DeepSeek、DashScope Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q` | 2026-06-06 |
 | Phase C | Ingestion & Indexing Pipeline | 离线摄取与索引主链路已完成，可通过 CLI 将 Markdown/PDF 文件或目录写入 PostgreSQL、pgvector、BM25 和图片索引 | SHA256 去重、Loader、智能分块、Transform、图片 caption 降级、差量 Dense 编码、BM25、事务 upsert、生命周期管理和 `ingest.py` CLI | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.ingest --help` | 2026-06-07 |
-| Phase D | Retrieval | 未完成 | 暂无 | 暂无 |  |
+| Phase D | Retrieval | 在线查询主链路已完成，可基于已摄取知识库执行 Query Processor、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Response Builder 和 CLI 查询 | QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
 | Phase E | MCP 工具服务 | 未完成 | 暂无 | 暂无 |  |
 | Phase F | 可观测与管理平台 | 未完成 | 暂无 | 暂无 |  |
 | Phase G | 质量评估体系 | 未完成 | 暂无 | 暂无 |  |
@@ -2001,6 +2001,33 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 
 阶段 D 直接复用已持久化的 chunk、Dense 向量和 BM25 posting，实现 Query Processor、Dense Route、Sparse Route、RRF Fusion、metadata filter、Rerank 和本地 `query.py` 调试入口。
 
+#### 阶段 D 交付里程碑：Retrieval
+
+完成日期：2026-06-07
+
+项目当前位置：
+
+RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 query 开始，完成查询预处理、Dense 向量召回、BM25 关键词召回、RRF 排名融合、Rerank 前 metadata filter、可降级 Rerank、引用构造和多模态响应组装。
+
+可用功能：
+
+- 通过 `QueryProcessor` 生成 normalized query、keywords、collection、top_k 和购物意图信号。
+- 通过 `DenseRoute` 查询 pgvector 语义候选，通过 `SparseRoute` 查询 BM25 倒排索引并回表 chunk。
+- 通过 `HybridSearch` 执行 Dense/Sparse 双路 RRF 融合，并在 Rerank 前完成 collection、doc_type、source_type、document_status、lifecycle_status 和 permission 过滤。
+- 通过 `RerankController` 在 Cross-Encoder/LLM Reranker 可用时重排候选，在不可用、超时、异常或非法输出时回退过滤后的 RRF 顺序。
+- 通过 `RerankOutcome` 显式返回 rerank 结果、fallback 状态和 fallback reason，避免从 provider metadata 推断控制流。
+- 通过 `KnowledgeHubResponseBuilder` 输出文本上下文、引用来源和命中图片，不暴露内部 route/tool metadata。
+- 通过 `python -m src.scripts.query --query ... [--top-k ...] [--collection ...] [--verbose] [--no-rerank]` 调试完整查询链路。
+
+验证方式：
+
+- `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`
+- `uv run --project services/ai-service/rag python -m src.scripts.query --help`
+
+下一阶段入口：
+
+阶段 E 直接复用 `QueryRuntime`、`KnowledgeHubResponse`、citation 和 collection 查询能力，把在线检索链路封装为 MCP tools，提供给 AImodel Agent 调用。
+
 ### 6.3 阶段任务跟踪表
 
 任务拆分原则：
@@ -2065,12 +2092,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D6 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | 已实现 CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D6 单元测试通过 |
 | D7 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | 已实现 CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D7 单元测试通过 |
 | D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-07 | 已实现 LLMReranker、PromptTemplate 加载、BaseLLM 注入、结构化 JSON 排名解析、未知/重复/非法 score 错误边界、未返回候选按过滤后顺序追加、rerank metadata 诊断、RerankerFactory llm 注册和 settings-only 无客户端时 fallback 到 RRF；15 个 Reranker 单元测试、22 个 Factory 单元测试通过 |
-| D9 | 实现 rerank fallback | [✔] | 2026-06-07 | 已实现 RerankController、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、低侵入 rerank trace 和 trace sink 失败隔离；26 个 Reranker 单元测试通过 |
+| D9 | 实现 rerank fallback | [✔] | 2026-06-07 | 已实现 RerankController、RerankOutcome、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、显式 fallback 状态、低侵入 rerank trace 和 trace sink 失败隔离；28 个 Reranker 单元测试通过 |
 | D10 | 实现引用构造 | [✔] | 2026-06-07 | 已实现共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 source_ref 传播、source_ref 优先和顶层 metadata 兼容、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；11 个 Citation 单元测试、16 个核心类型回归测试、2 个 source_ref 单元测试和 1 个 pgvector 集成测试通过 |
 | D11 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 已实现不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号文本上下文、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；16 个 Response Builder 单元测试和 1 个真实 PostgreSQL 图片查询集成测试通过 |
-| D12 | 新增 `query.py` 脚本入口 | [✔] | 2026-06-07 | 已实现配置驱动完整查询链路、PostgreSQL BM25 collection 查询、过滤前 Fusion 快照、安全 verbose 输出、no-rerank 跳过和连接池释放；63 个 Retrieval 单元测试通过 |
+| D12 | 新增 `query.py` 脚本入口 | [✔] | 2026-06-07 | 已实现配置驱动完整查询链路、PostgreSQL BM25 collection 查询、过滤前 Fusion 快照、RerankOutcome 显式 fallback 状态、安全 verbose 输出、no-rerank 跳过和连接池释放；63 个 Retrieval 单元测试通过 |
 | D13 | 实现 Retrieval 单元测试矩阵 | [✔] | 2026-06-07 | 已形成 120 个 Retrieval/Reranker/Response 单元测试，补齐 Fusion 失败、PostgreSQL BM25 边界、QueryRuntime rerank、no-op/duplicate/empty fallback、Citation source_ref 和图片 resolver 脏契约；目标模块覆盖率 91% |
-| D14 | 实现 Retrieval 集成测试 | [ ] |  | 覆盖 Dense/BM25/Hybrid/Filter/Rerank/fallback/query.py |
+| D14 | 实现 Retrieval 集成测试 | [✔] | 2026-06-07 | 已新增 PostgreSQL/pgvector 集成测试，覆盖 QueryProcessor、DenseRoute、SparseRoute、HybridSearch、metadata filter、RerankController、Response Builder、`query.py` verbose 输出、Dense 失败时 Sparse fallback；2 个 D14 集成测试通过 |
 
 #### 阶段 E：MCP 工具服务
 
@@ -2126,12 +2153,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 13 | 93% |
+| Phase D | 14 | 14 | 100% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **42** | **60%** |
+| **总计** | **70** | **43** | **61%** |
 
 ### 6.5 阶段实施明细
 
@@ -2870,13 +2897,15 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 实现类/函数：
 
 - `RerankController.rerank_or_fallback()`：调用配置的 Reranker，并在不可用、超时、异常或非法输出时回退过滤后的 RRF 结果
+- `RerankController.rerank_with_outcome()`：返回最终候选和显式 fallback 状态，避免从 provider metadata 推断控制流
+- `RerankOutcome`：封装 rerank 结果、fallback_used 和 fallback_reason
 - `RerankController._validate_provider_results()`：校验 provider 结果数量符合 `min(filtered_count, top_k)`、只包含过滤后候选且不存在重复 ID
 - `RerankController._is_timeout_error()`：识别直接 TimeoutError 和 ProviderError/SDK 异常链中包装的 timeout
 - `RerankController._fallback()`：从 provider 调用前保存的候选副本恢复过滤后 RRF 顺序
 - `RerankController._record_trace()`：记录 rerank 前后排名、fallback 原因、错误类型和耗时
 - `RerankTraceContext.record_stage()`：定义 rerank 阶段使用的最小 trace 注入接口
 
-验收标准：默认使用 `settings.rerank.top_k`，并支持调用方覆盖正整数 `top_k`；reranker 成功时返回 provider 排序的 `RetrievalResult` 防御性副本，输出数量必须等于 `min(filtered_count, top_k)`，避免排序组件意外过滤或清空召回结果；reranker 为 `None`、抛出直接 `TimeoutError`、在 `ProviderError`/SDK 异常链中包装 timeout、Provider 异常或普通异常时，回退到调用前保存的过滤后 RRF 候选顺序；provider 调用使用独立候选深拷贝，即使 provider 修改输入后失败也不能污染 fallback 结果；provider 返回未知 chunk_id、重复 ID、数量不符或非法 `RetrievalResult` 时视为非法输出并 fallback；任何路径都不能重新引入已被 metadata filter 排除的候选；空候选直接返回空列表；query 为空或 top_k 非法时 fail fast，不被 fallback 隐藏；可选 trace 记录 before/after order、fallback_used、fallback_reason、error_type、项目异常的 trace-safe context 和耗时，不记录任意第三方异常原文，trace sink 异常不得替换查询结果。
+验收标准：默认使用 `settings.rerank.top_k`，并支持调用方覆盖正整数 `top_k`；reranker 成功时返回 provider 排序的 `RetrievalResult` 防御性副本，输出数量必须等于 `min(filtered_count, top_k)`，避免排序组件意外过滤或清空召回结果；`rerank_with_outcome()` 必须显式返回 fallback_used 和 fallback_reason，业务编排层不得通过 `RetrievalResult.metadata` 判断 rerank 是否降级；reranker 为 `None`、抛出直接 `TimeoutError`、在 `ProviderError`/SDK 异常链中包装 timeout、Provider 异常或普通异常时，回退到调用前保存的过滤后 RRF 候选顺序；provider 调用使用独立候选深拷贝，即使 provider 修改输入后失败也不能污染 fallback 结果；provider 返回未知 chunk_id、重复 ID、数量不符或非法 `RetrievalResult` 时视为非法输出并 fallback；任何路径都不能重新引入已被 metadata filter 排除的候选；空候选直接返回空列表；query 为空或 top_k 非法时 fail fast，不被 fallback 隐藏；可选 trace 记录 before/after order、fallback_used、fallback_reason、error_type、项目异常的 trace-safe context 和耗时，不记录任意第三方异常原文，trace sink 异常不得替换查询结果。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 
@@ -2952,6 +2981,7 @@ metadata；空候选返回 `ok=true`、`is_empty=true`、空 content/citations/i
 - `parse_args()`：解析命令行参数
 - `run_query_cli()`：执行本地查询流程
 - `QueryRuntime.execute()`：串联 QueryProcessor、HybridSearch、Filter、可选 Rerank 和 Response Builder
+- `RerankController.rerank_with_outcome()`：为 `QueryRuntime` 提供显式 rerank/fallback 状态
 - `BM25Storage.query()`：按 collection 查询 PostgreSQL BM25 posting 并返回有序候选
 - `normalize_bm25_keywords()`：统一摄取和在线查询的 BM25 关键词分析
 - `HybridSearchResult.fused_results`：保存 metadata 过滤前的 RRF 结果，供 verbose、Trace 和评估对比
@@ -2962,6 +2992,8 @@ collection 隔离 posting 和 corpus stats，并在 rerank 前过滤候选；支
 展示 QueryProcessor、Dense、Sparse、Fusion、Filter、Rerank 等中间结果，但只输出
 chunk_id、score 和稳定 query 字段，不泄漏 metadata、向量、Provider 响应或 tool
 payload；支持 `--no-rerank` 直接跳过 RerankController 并保持过滤后 RRF 顺序；
+正常 rerank 和 rerank fallback 都必须由 `RerankOutcome` 显式决定，不允许根据
+最终候选的 metadata 是否存在 rerank 字段来推断；
 该标志必须在组件组合阶段阻止 LLM/Cross-Encoder Reranker 的创建，避免已跳过阶段
 仍因模型依赖或凭据不可用而启动失败；
 成功和异常路径都必须关闭 PostgreSQL pool；摄取和在线 BM25 查询使用同一 analyzer，
@@ -2996,9 +3028,14 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- `test_query_pipeline_hybrid()`：验证对应行为
+- `FixedQueryEmbedding.embed()`：使用固定查询向量驱动真实 pgvector 检索
+- `FailingQueryEmbedding.embed()`：模拟 Dense provider 不可用
+- `_persist_fixture()`：写入隔离 collection、document、chunk、dense vector 和 BM25 posting
+- `_runtime()`：组合 QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController 和 Response Builder
+- `test_query_pipeline_hybrid()`：验证 Dense、BM25、RRF、Filter、Rerank、Response 和 `query.py --verbose`
+- `test_query_pipeline_falls_back_to_sparse_when_dense_provider_fails()`：验证 Dense 失败时仍可使用 Sparse 结果完成响应
 
-验收标准：覆盖 Dense/BM25/Hybrid/Filter/Rerank/fallback。
+验收标准：使用真实 PostgreSQL、pgvector 和 BM25Storage，测试数据必须使用隔离 collection 并在 finally 中清理；Dense Route 能召回语义候选，Sparse Route 能通过 `BM25Indexer.index()` 生成的 posting 召回关键词候选；HybridSearch 必须先融合 Dense/Sparse，再在 Rerank 前过滤 collection；Rerank 成功时 final_results 按 provider 排序，且 `fallback_used=false` 不依赖 result metadata；Dense provider 失败时保留 Sparse 结果并标记 fallback；`query.py --verbose` 输出必须包含稳定 debug 字段且不泄漏 metadata。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
 #### 阶段 E：MCP 工具服务

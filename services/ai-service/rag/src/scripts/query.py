@@ -151,23 +151,21 @@ class QueryRuntime:
             filters={"collection": processed.collection},
         )
         rerank_applied = not no_rerank and self._rerank_controller is not None
+        rerank_fallback = False
         if rerank_applied:
-            final_results = self._rerank_controller.rerank_or_fallback(
+            outcome = self._rerank_controller.rerank_with_outcome(
                 processed.normalized_query,
                 hybrid.results,
                 top_k=top_k,
             )
+            final_results = outcome.results
+            rerank_fallback = outcome.fallback_used
         else:
             final_results = [
                 candidate.model_copy(deep=True)
                 for candidate in hybrid.results[:top_k]
             ]
 
-        rerank_fallback = bool(
-            rerank_applied
-            and final_results
-            and not any("rerank" in result.metadata for result in final_results)
-        )
         response = self._response_builder.build(
             final_results,
             trace_id=trace_id,

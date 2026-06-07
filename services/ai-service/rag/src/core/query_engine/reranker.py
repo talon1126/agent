@@ -14,6 +14,7 @@ the response layer respectively.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Protocol
 
@@ -54,6 +55,27 @@ class RerankTraceContext(Protocol):
         """
 
 
+@dataclass(frozen=True, slots=True)
+class RerankOutcome:
+    """Describe rerank results and explicit degradation state.
+
+    ``RetrievalResult.metadata`` is provider-owned evidence data, not a reliable
+    control-plane signal. This outcome object lets orchestration code determine
+    whether fallback occurred without inspecting provider-specific metadata.
+
+    Attributes:
+        results: Defensive final candidates returned by rerank or fallback.
+        fallback_used: Whether the controller preserved filtered RRF order due
+            to unavailable, failed, or invalid reranking.
+        fallback_reason: Stable reason code such as ``reranker_unavailable``.
+            ``None`` means reranking succeeded or the input was empty.
+    """
+
+    results: list[RetrievalResult]
+    fallback_used: bool
+    fallback_reason: str | None
+
+
 class RerankController:
     """Execute reranking while preserving filtered candidates as fallback."""
 
@@ -82,7 +104,7 @@ class RerankController:
         top_k: int | None = None,
         trace_context: RerankTraceContext | None = None,
     ) -> list[RetrievalResult]:
-        """Rerank filtered candidates or preserve their RRF order on failure.
+        """Return only final rerank results for legacy callers.
 
         Args:
             query: Original or rewritten user query.
@@ -94,6 +116,36 @@ class RerankController:
         Returns:
             Defensive candidate copies in provider order on success, or in the
             original filtered RRF order when fallback is required.
+        """
+
+        return self.rerank_with_outcome(
+            query,
+            candidates,
+            top_k=top_k,
+            trace_context=trace_context,
+        ).results
+
+    def rerank_with_outcome(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalResult],
+        *,
+        top_k: int | None = None,
+        trace_context: RerankTraceContext | None = None,
+    ) -> RerankOutcome:
+        """Rerank filtered candidates and return explicit fallback metadata.
+
+        Args:
+            query: Original or rewritten user query.
+            candidates: Candidates that already passed metadata filtering.
+            top_k: Optional positive result limit. When omitted,
+                ``settings.rerank.top_k`` is used.
+            trace_context: Optional low-intrusion trace recorder.
+
+        Returns:
+            ``RerankOutcome`` with final candidates plus degradation state.
+            This avoids inferring fallback from provider-specific result
+            metadata, which may be absent for valid reranker implementations.
 
         Raises:
             ValueError: If query is blank or ``top_k`` is not a positive
@@ -138,7 +190,11 @@ class RerankController:
                 fallback_reason=None,
                 error=None,
             )
-            return []
+            return RerankOutcome(
+                results=[],
+                fallback_used=False,
+                fallback_reason=None,
+            )
 
         if self._reranker is None:
             return self._fallback(
@@ -206,7 +262,11 @@ class RerankController:
             fallback_reason=None,
             error=None,
         )
-        return results
+        return RerankOutcome(
+            results=results,
+            fallback_used=False,
+            fallback_reason=None,
+        )
 
     @staticmethod
     def _validate_provider_results(
@@ -300,7 +360,7 @@ class RerankController:
         top_k: int,
         fallback_reason: str,
         error: Exception | None,
-    ) -> list[RetrievalResult]:
+    ) -> RerankOutcome:
         """Return filtered RRF candidates and record degraded execution.
 
         Args:
@@ -314,7 +374,8 @@ class RerankController:
             error: Optional provider or validation exception.
 
         Returns:
-            Filtered candidates in unchanged RRF order, limited by ``top_k``.
+            Outcome containing filtered candidates in unchanged RRF order,
+            limited by ``top_k``, and the explicit fallback reason.
         """
 
         results = [
@@ -331,7 +392,11 @@ class RerankController:
             fallback_reason=fallback_reason,
             error=error,
         )
-        return results
+        return RerankOutcome(
+            results=results,
+            fallback_used=True,
+            fallback_reason=fallback_reason,
+        )
 
     @staticmethod
     def _record_trace(

@@ -25,6 +25,7 @@ from src.core.query_engine.query_processor import (
     QueryIntent,
     QueryProcessor,
 )
+from src.core.query_engine.reranker import RerankOutcome
 from src.core.query_engine.sparse_route import SparseRoute
 from src.core.response import KnowledgeHubResponse
 from src.core.types import Chunk, RetrievalResult
@@ -1551,7 +1552,11 @@ def test_query_runtime_applies_reranker_before_response_construction() -> None:
         fallback_used=False,
     )
     rerank_controller = Mock()
-    rerank_controller.rerank_or_fallback.return_value = reranked
+    rerank_controller.rerank_with_outcome.return_value = RerankOutcome(
+        results=reranked,
+        fallback_used=False,
+        fallback_reason=None,
+    )
     response_builder = Mock()
     response_builder.build.return_value = KnowledgeHubResponse(
         content="[1] Reranked",
@@ -1575,7 +1580,7 @@ def test_query_runtime_applies_reranker_before_response_construction() -> None:
         trace_id="query-runtime-rerank",
     )
 
-    rerank_controller.rerank_or_fallback.assert_called_once_with(
+    rerank_controller.rerank_with_outcome.assert_called_once_with(
         processed.normalized_query,
         filtered,
         top_k=1,
