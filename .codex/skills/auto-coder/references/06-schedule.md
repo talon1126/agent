@@ -12,7 +12,7 @@
 | Phase A | 配置与项目骨架 | 独立模块基础文件、uv 依赖锁定、Docker 部署骨架、pytest 冒烟测试、配置模板、prompt 配置、核心类型和配置加载 | [✔] |
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
-| Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [ ] |
+| Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [~] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [ ] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [ ] |
 | Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、策略对比和评估趋势 | [ ] |
@@ -200,7 +200,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| D1 | 实现 Query Processor | [ ] |  | query 标准化、意图识别、可选 query rewrite |
+| D1 | 实现 Query Processor | [✔] | 2026-06-07 | 已实现不可变 ProcessedQuery 和 keywords 快照、Unicode/空白标准化、关键词提取、collection/top_k 类型校验与默认覆盖、四类购物意图、商品工具协同判断、可注入 QueryRewriter 和异常/空结果 fallback；15 个 D1 单元测试通过 |
 | D2 | 实现 Dense Route 向量检索 | [ ] |  | 输入 query/ProcessedQuery，完成 Query Embedding、pgvector 检索并返回 `RetrievalResult` |
 | D3 | 实现 Sparse Route BM25 回表检索 | [ ] |  | `ProcessedQuery.keywords -> bm25_indexer.query -> chunk_ids -> vector_store.get_by_ids` |
 | D4 | 实现 RRF Fusion | [ ] |  | 基于排名倒数融合，不比较两路分数 |
@@ -269,12 +269,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 0 | 0% |
+| Phase D | 14 | 1 | 7% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **29** | **41%** |
+| **总计** | **70** | **30** | **43%** |
 
 ### 6.5 阶段实施明细
 
@@ -865,13 +865,16 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：完成 query 标准化、意图识别和可选 rewrite。
 
-修改文件：`src/core/query_engine/query_processor.py`、`tests/unit/test_retrieval.py`
+修改文件：`src/core/query_engine/__init__.py`、`src/core/query_engine/query_processor.py`、`tests/unit/test_retrieval.py`
 
 实现类/函数：
 
-- `QueryProcessor.process()`：处理输入并输出标准对象
+- `QueryIntent`：定义知识查询、推荐、对比和动态商品查询意图
+- `QueryRewriter.rewrite()`：定义可注入的最小 query rewrite 接口
+- `ProcessedQuery`：定义 Query Processor 向后续检索阶段传递的不可变标准对象
+- `QueryProcessor.process()`：标准化输入、解析默认参数、识别意图、执行可选 rewrite 并提取关键词
 
-验收标准：支持 normalize、意图识别、可选 rewrite。
+验收标准：支持 Unicode NFKC 和空白 normalize；拒绝空 query、非字符串或空 collection、非整数或非正整数 top_k；collection 和 top_k 默认读取 settings 且允许调用方覆盖；输出不可变的有序去重 keywords 快照；识别 `knowledge_query`、`recommendation`、`comparison` 和 `product_lookup`；标记是否需要商品 API 工具协同；配置关闭或未注入 rewriter 时不调用 rewrite；rewrite 成功后使用重写 query 生成 keywords；rewrite 异常或空结果时回退标准化原 query 并记录稳定原因。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 

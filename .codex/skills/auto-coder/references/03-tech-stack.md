@@ -124,6 +124,22 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `score` | `float` | 当前检索路线返回的相关性分数；Dense/BM25 分数量纲不同，只记录，不直接互相比大小 |
 | `metadata` | `dict` | chunk metadata，包含 collection、source_ref、section_path、image_refs、文档状态等过滤和引用信息 |
 
+`ProcessedQuery` 是 Query Processor 向 Dense Route、Sparse Route、HybridSearch 和 Trace 传递的统一查询对象：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `raw_query` | `str` | 用户原始输入，保留用于 Trace 和问题回溯 |
+| `normalized_query` | `str` | Unicode、全半角和空白归一化后的检索 query；rewrite 成功时保存 rewrite 结果 |
+| `keywords` | `tuple[str, ...]` | 不可变的有序去重关键词快照，供 Sparse Route 查询 BM25 |
+| `intent` | `str` | `knowledge_query`、`recommendation`、`comparison` 或 `product_lookup` |
+| `collection` | `str` | 查询目标知识集合 |
+| `top_k` | `int` | 最终期望返回数量 |
+| `requires_product_tool` | `bool` | 是否需要商品 API 补充价格、库存、链接或具体商品事实 |
+| `rewrite_applied` | `bool` | 是否成功应用 query rewrite |
+| `rewrite_fallback_reason` | `str/null` | rewrite 异常或空结果时的稳定降级原因 |
+
+Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Query Processor 不直接创建或判断具体 LLM Provider。未注入 rewriter 或配置关闭时直接使用原始标准化 query；Provider 异常或返回空白时自动 fallback，不阻断后续检索。
+
 #### 3.2.4 检索流水线
 
 检索流水线的目标是把用户自然语言问题转换为高质量上下文，供 AImodel 生成最终回答。
