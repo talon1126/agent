@@ -1,0 +1,509 @@
+"""Run the complete local hybrid retrieval pipeline from the command line.
+
+This module is the Phase D operator and developer entry point for online RAG
+queries. It loads validated settings, opens PostgreSQL once, composes
+QueryProcessor, Dense Route, persisted BM25 Sparse Route, RRF fusion,
+collection filtering, optional reranking, citation construction, and
+multimodal response assembly, then prints one JSON document.
+
+The script exposes trace-safe summaries under ``--verbose``. It never serializes
+raw retrieval metadata, vectors, provider responses, Prompt content, or internal
+tool payloads. It also does not generate a final shopping answer; callers receive
+ranked knowledge evidence for Agent summarization.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from dotenv import find_dotenv, load_dotenv
+
+from src.core.config import (
+    RAG_ROOT,
+    DatabaseSettings,
+    RagSettings,
+    load_settings,
+)
+from src.core.query_engine import (
+    DenseRoute,
+    HybridSearch,
+    ProcessedQuery,
+    QueryProcessor,
+    RerankController,
+    SparseRoute,
+)
+from src.core.response import (
+    KnowledgeHubResponse,
+    KnowledgeHubResponseBuilder,
+    MultimodalAssembler,
+)
+from src.core.types import RetrievalResult
+from src.libs.embedding import EmbeddingFactory
+from src.libs.llm import LLMFactory
+from src.libs.reranker import RerankerFactory
+from src.libs.vector_store import VectorStoreFactory
+from src.storage.bm25_storage import BM25Storage
+from src.storage.image_storage import ImageStorage
+from src.storage.postgres import PostgresPool, init_schema
+
+SettingsLoader = Callable[[], RagSettings]
+PoolFactory = Callable[[DatabaseSettings], PostgresPool]
+SchemaInitializer = Callable[[PostgresPool], None]
+RuntimeBuilder = Callable[[RagSettings, PostgresPool, bool], "QueryRuntime"]
+TraceIdFactory = Callable[[], str]
+MessageWriter = Callable[[str], Any]
+
+
+@dataclass(frozen=True, slots=True)
+class QueryExecutionResult:
+    """Capture public output and trace-safe stage snapshots for one CLI query.
+
+    Attributes:
+        processed_query: Immutable normalized query produced before retrieval.
+        dense_results: Dense candidates in provider order.
+        sparse_results: Sparse candidates in BM25 order.
+        fused_results: RRF candidates before metadata filtering.
+        filtered_results: Candidates allowed to enter reranking.
+        final_results: Reranked or explicitly preserved RRF candidates.
+        response: Public knowledge response containing no internal metadata.
+        rerank_applied: Whether a configured reranker stage was attempted.
+        fallback_used: Whether route or reranker degradation preserved results.
+    """
+
+    processed_query: ProcessedQuery
+    dense_results: tuple[RetrievalResult, ...]
+    sparse_results: tuple[RetrievalResult, ...]
+    fused_results: tuple[RetrievalResult, ...]
+    filtered_results: tuple[RetrievalResult, ...]
+    final_results: tuple[RetrievalResult, ...]
+    response: KnowledgeHubResponse
+    rerank_applied: bool
+    fallback_used: bool
+
+
+class QueryRuntime:
+    """Execute configured query stages without owning process resources."""
+
+    def __init__(
+        self,
+        *,
+        query_processor: QueryProcessor,
+        hybrid_search: HybridSearch,
+        rerank_controller: RerankController | None,
+        response_builder: KnowledgeHubResponseBuilder,
+    ) -> None:
+        """Configure the already-created query pipeline components.
+
+        Args:
+            query_processor: User-query normalization and intent component.
+            hybrid_search: Dense, Sparse, RRF, and metadata-filter orchestration.
+            rerank_controller: Optional rerank/fallback controller. ``None``
+                means reranking is disabled by configuration.
+            response_builder: Public evidence, citation, and image assembler.
+        """
+
+        self._query_processor = query_processor
+        self._hybrid_search = hybrid_search
+        self._rerank_controller = rerank_controller
+        self._response_builder = response_builder
+
+    def execute(
+        self,
+        query: str,
+        *,
+        collection: str,
+        top_k: int,
+        no_rerank: bool,
+        trace_id: str,
+    ) -> QueryExecutionResult:
+        """Run the complete query path and return public/debug projections.
+
+        Args:
+            query: Raw user question.
+            collection: Collection selected by CLI override or settings.
+            top_k: Positive final result limit.
+            no_rerank: Explicit caller request to bypass reranking.
+            trace_id: Stable query identifier included in every citation.
+
+        Returns:
+            Public response plus immutable stage snapshots used by verbose CLI
+            output and later integration tests.
+
+        Side Effects:
+            Calls embedding, PostgreSQL vector/BM25/image storage, and possibly
+            the configured reranker provider.
+        """
+
+        processed = self._query_processor.process(
+            query,
+            collection=collection,
+            top_k=top_k,
+        )
+        hybrid = self._hybrid_search.search(
+            processed,
+            filters={"collection": processed.collection},
+        )
+        rerank_applied = not no_rerank and self._rerank_controller is not None
+        if rerank_applied:
+            final_results = self._rerank_controller.rerank_or_fallback(
+                processed.normalized_query,
+                hybrid.results,
+                top_k=top_k,
+            )
+        else:
+            final_results = [
+                candidate.model_copy(deep=True)
+                for candidate in hybrid.results[:top_k]
+            ]
+
+        rerank_fallback = bool(
+            rerank_applied
+            and final_results
+            and not any("rerank" in result.metadata for result in final_results)
+        )
+        response = self._response_builder.build(
+            final_results,
+            trace_id=trace_id,
+        )
+        return QueryExecutionResult(
+            processed_query=processed,
+            dense_results=tuple(hybrid.dense_results),
+            sparse_results=tuple(hybrid.sparse_results),
+            fused_results=tuple(hybrid.fused_results),
+            filtered_results=tuple(hybrid.results),
+            final_results=tuple(final_results),
+            response=response,
+            rerank_applied=rerank_applied,
+            fallback_used=hybrid.fallback_used or rerank_fallback,
+        )
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the supported local-query command-line options.
+
+    Args:
+        argv: Optional arguments excluding the executable name. ``None`` uses
+            ``sys.argv``.
+
+    Returns:
+        Namespace containing query text, final limit, collection override,
+        verbose flag, and rerank bypass flag.
+
+    Raises:
+        SystemExit: If required values are missing or invalid.
+    """
+
+    parser = argparse.ArgumentParser(
+        description="Run hybrid RAG retrieval and print a grounded JSON response."
+    )
+    parser.add_argument(
+        "--query",
+        required=True,
+        type=_non_blank_value("--query"),
+        help="Natural-language knowledge query.",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=_positive_integer,
+        default=10,
+        help="Maximum final results (default: 10).",
+    )
+    parser.add_argument(
+        "--collection",
+        type=_non_blank_value("--collection"),
+        help="Restrict retrieval to one collection.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Include trace-safe stage result IDs and scores.",
+    )
+    parser.add_argument(
+        "--no-rerank",
+        action="store_true",
+        help="Skip the configured reranker and preserve filtered RRF order.",
+    )
+    return parser.parse_args(argv)
+
+
+def run_query_cli(
+    argv: Sequence[str] | None = None,
+    *,
+    settings_loader: SettingsLoader = load_settings,
+    pool_factory: PoolFactory | None = None,
+    schema_initializer: SchemaInitializer = init_schema,
+    runtime_builder: RuntimeBuilder | None = None,
+    trace_id_factory: TraceIdFactory | None = None,
+    output: MessageWriter = print,
+    error_output: MessageWriter | None = None,
+) -> int:
+    """Execute one local query and return a process-compatible exit code.
+
+    Args:
+        argv: Optional CLI arguments excluding the executable name.
+        settings_loader: Injectable validated-settings loader.
+        pool_factory: Injectable lazy PostgreSQL pool constructor.
+        schema_initializer: Injectable idempotent schema initializer.
+        runtime_builder: Injectable component composition function. The third
+            argument indicates whether reranker construction must be skipped.
+        trace_id_factory: Injectable stable identifier source for tests.
+        output: Writer receiving one JSON success document.
+        error_output: Writer receiving one readable failure message. ``None``
+            writes to standard error.
+
+    Returns:
+        ``0`` on success or ``1`` when configuration, database, provider, or
+        retrieval execution fails. Argument errors are handled by argparse.
+
+    Side Effects:
+        Loads local environment values, opens PostgreSQL, may call configured
+        embedding/reranker providers, reads indexes, and writes one message.
+    """
+
+    args = parse_args(argv)
+    write_error = error_output or _print_error
+    active_pool_factory = pool_factory or _create_pool
+    active_runtime_builder = runtime_builder or _build_runtime
+    active_trace_id_factory = trace_id_factory or (
+        lambda: f"query-{uuid4().hex}"
+    )
+    pool: PostgresPool | None = None
+    try:
+        _load_local_environment()
+        settings = settings_loader()
+        collection = (
+            args.collection
+            or settings.retrieval.filters.default_collection
+        )
+        pool = active_pool_factory(settings.database)
+        pool.open()
+        schema_initializer(pool)
+        runtime = active_runtime_builder(settings, pool, args.no_rerank)
+        execution = runtime.execute(
+            args.query,
+            collection=collection,
+            top_k=args.top_k,
+            no_rerank=args.no_rerank,
+            trace_id=active_trace_id_factory(),
+        )
+        payload: dict[str, Any] = {
+            "query": args.query,
+            "collection": collection,
+            "top_k": args.top_k,
+            "rerank_applied": execution.rerank_applied,
+            "response": execution.response.model_dump(mode="json"),
+        }
+        if args.verbose:
+            payload["debug"] = _build_verbose_debug(execution)
+        output(json.dumps(payload, ensure_ascii=False))
+        return 0
+    except Exception as error:
+        write_error(f"Query failed: {error}")
+        return 1
+    finally:
+        if pool is not None:
+            pool.close()
+
+
+def main() -> int:
+    """Run the query CLI with process arguments.
+
+    Returns:
+        Process exit code from ``run_query_cli``.
+    """
+
+    return run_query_cli()
+
+
+def _build_runtime(
+    settings: RagSettings,
+    pool: PostgresPool,
+    no_rerank: bool = False,
+) -> QueryRuntime:
+    """Compose the production query pipeline from settings-backed providers.
+
+    Args:
+        settings: Validated runtime settings.
+        pool: Open PostgreSQL pool shared by all storage adapters.
+        no_rerank: When true, do not construct model-backed reranker
+            dependencies because the caller explicitly bypasses that stage.
+
+    Returns:
+        A complete ``QueryRuntime`` ready to execute user queries.
+    """
+
+    query_processor = QueryProcessor(settings=settings)
+    embedding = EmbeddingFactory.create(settings=settings)
+    vector_store = VectorStoreFactory.create(settings=settings, pool=pool)
+    hybrid_search = HybridSearch(
+        settings=settings,
+        dense_route=DenseRoute(
+            settings=settings,
+            query_processor=query_processor,
+            embedding=embedding,
+            vector_store=vector_store,
+        ),
+        sparse_route=SparseRoute(
+            settings=settings,
+            query_processor=query_processor,
+            bm25_indexer=BM25Storage(pool),
+            vector_store=vector_store,
+        ),
+    )
+    rerank_controller: RerankController | None = None
+    if settings.rerank.enabled and not no_rerank:
+        reranker_options: dict[str, Any] = {}
+        provider_settings = settings.rerank.providers.get(
+            settings.rerank.default
+        )
+        llm_provider = (
+            getattr(provider_settings, "llm_provider", None)
+            if provider_settings is not None
+            else None
+        )
+        if isinstance(llm_provider, str) and llm_provider.strip():
+            reranker_options["llm_client"] = LLMFactory.create(
+                settings=settings,
+                provider=llm_provider,
+            )
+        rerank_controller = RerankController(
+            settings=settings,
+            reranker=RerankerFactory.create(
+                settings=settings,
+                **reranker_options,
+            ),
+        )
+
+    return QueryRuntime(
+        query_processor=query_processor,
+        hybrid_search=hybrid_search,
+        rerank_controller=rerank_controller,
+        response_builder=KnowledgeHubResponseBuilder(
+            multimodal_assembler=MultimodalAssembler(
+                resolver=ImageStorage(
+                    pool,
+                    root_dir=_resolve_runtime_path(
+                        settings.ingestion.image_dir
+                    ),
+                )
+            )
+        ),
+    )
+
+
+def _build_verbose_debug(
+    execution: QueryExecutionResult,
+) -> dict[str, Any]:
+    """Build trace-safe stage summaries for ``--verbose`` output.
+
+    Args:
+        execution: Completed query execution with immutable stage snapshots.
+
+    Returns:
+        Query processing fields and chunk ID/score summaries. Retrieval
+        metadata is intentionally omitted to prevent internal payload leakage.
+    """
+
+    processed = execution.processed_query
+    return {
+        "query_processor": {
+            "raw_query": processed.raw_query,
+            "normalized_query": processed.normalized_query,
+            "keywords": list(processed.keywords),
+            "intent": processed.intent.value,
+            "collection": processed.collection,
+            "top_k": processed.top_k,
+            "rewrite_applied": processed.rewrite_applied,
+            "rewrite_fallback_reason": processed.rewrite_fallback_reason,
+        },
+        "dense": _result_summaries(execution.dense_results),
+        "sparse": _result_summaries(execution.sparse_results),
+        "fusion": _result_summaries(execution.fused_results),
+        "filter": _result_summaries(execution.filtered_results),
+        "rerank": {
+            "applied": execution.rerank_applied,
+            "fallback_used": execution.fallback_used,
+            "results": _result_summaries(execution.final_results),
+        },
+    }
+
+
+def _result_summaries(
+    results: Sequence[RetrievalResult],
+) -> list[dict[str, str | float]]:
+    """Project retrieval results onto public debug identifiers and scores."""
+
+    return [
+        {"chunk_id": result.chunk_id, "score": result.score}
+        for result in results
+    ]
+
+
+def _create_pool(settings: DatabaseSettings) -> PostgresPool:
+    """Create the configured PostgreSQL pool without opening it."""
+
+    return PostgresPool.from_settings(settings)
+
+
+def _load_local_environment() -> None:
+    """Load the nearest parent ``.env`` without overriding process values."""
+
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
+
+def _resolve_runtime_path(path: str | Path) -> Path:
+    """Resolve settings paths independently of the launching shell directory."""
+
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (RAG_ROOT / candidate).resolve()
+
+
+def _non_blank_value(option: str) -> Callable[[str], str]:
+    """Create an argparse converter for one non-blank string option."""
+
+    def validate(value: str) -> str:
+        """Strip and validate one command-line string value."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise argparse.ArgumentTypeError(f"{option} must not be blank")
+        return normalized
+
+    return validate
+
+
+def _positive_integer(value: str) -> int:
+    """Convert one CLI value to a strictly positive integer."""
+
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "--top-k must be an integer"
+        ) from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(
+            "--top-k must be greater than zero"
+        )
+    return parsed
+
+
+def _print_error(message: str) -> None:
+    """Write one CLI error message to standard error."""
+
+    print(message, file=sys.stderr)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -199,6 +199,7 @@ class HybridSearchResult(BaseModel):
 
     dense_results: list[RetrievalResult] = Field(default_factory=list)
     sparse_results: list[RetrievalResult] = Field(default_factory=list)
+    fused_results: list[RetrievalResult] = Field(default_factory=list)
     results: list[RetrievalResult] = Field(default_factory=list)
     fallback_used: bool = False
     fallback_reasons: dict[str, str] = Field(default_factory=dict)
@@ -333,6 +334,7 @@ class HybridSearch:
         return HybridSearchResult(
             dense_results=dense_results,
             sparse_results=sparse_results,
+            fused_results=fused_results,
             results=filter_report.results,
             fallback_used=fallback_used,
             fallback_reasons=fallback_reasons,

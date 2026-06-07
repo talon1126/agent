@@ -8,8 +8,9 @@ overrides, and optional rewrite fallback without invoking an external LLM.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from pydantic import ValidationError
@@ -24,7 +25,10 @@ from src.core.query_engine.query_processor import (
     QueryProcessor,
 )
 from src.core.query_engine.sparse_route import SparseRoute
+from src.core.response import KnowledgeHubResponse
 from src.core.types import Chunk, RetrievalResult
+from src.scripts import query as query_module
+from src.storage.bm25_storage import BM25Storage
 
 
 def _settings(*, rewrite_enabled: bool = True) -> SimpleNamespace:
@@ -498,7 +502,11 @@ def test_sparse_route_queries_bm25_and_hydrates_chunks_in_candidate_order() -> N
 
     results = route.search(processed)
 
-    bm25_indexer.query.assert_called_once_with(list(processed.keywords), top_k=25)
+    bm25_indexer.query.assert_called_once_with(
+        list(processed.keywords),
+        top_k=25,
+        collection="shopping_guides",
+    )
     vector_store.get_by_ids.assert_called_once_with(["chunk-b", "chunk-a"])
     assert [result.chunk_id for result in results] == ["chunk-b", "chunk-a"]
     assert [result.score for result in results] == [2.4, 1.7]
@@ -536,7 +544,11 @@ def test_sparse_route_processes_raw_query_and_allows_top_k_override() -> None:
     assert route.search("耳机推荐", top_k=7) == []
 
     processor.process.assert_called_once_with("耳机推荐")
-    bm25_indexer.query.assert_called_once_with(["耳机", "推荐"], top_k=7)
+    bm25_indexer.query.assert_called_once_with(
+        ["耳机", "推荐"],
+        top_k=7,
+        collection="shopping_guides",
+    )
     vector_store.get_by_ids.assert_not_called()
 
 
@@ -1145,3 +1157,306 @@ def test_hybrid_search_filter_trace_failure_does_not_break_results() -> None:
     )
 
     assert [candidate.chunk_id for candidate in report.results] == ["keep"]
+
+
+def test_query_parse_args_supports_required_query_and_optional_controls() -> None:
+    """Require the local query CLI to expose the complete D12 option contract."""
+
+    defaults = query_module.parse_args(["--query", "无线耳机怎么选"])
+    configured = query_module.parse_args(
+        [
+            "--query",
+            "无线耳机怎么选",
+            "--top-k",
+            "7",
+            "--collection",
+            "premium_guides",
+            "--verbose",
+            "--no-rerank",
+        ]
+    )
+
+    assert defaults.query == "无线耳机怎么选"
+    assert defaults.top_k == 10
+    assert defaults.collection is None
+    assert defaults.verbose is False
+    assert defaults.no_rerank is False
+    assert configured.top_k == 7
+    assert configured.collection == "premium_guides"
+    assert configured.verbose is True
+    assert configured.no_rerank is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["--query", " "],
+        ["--query", "valid", "--top-k", "0"],
+        ["--query", "valid", "--collection", " "],
+    ],
+)
+def test_query_parse_args_rejects_invalid_required_values(
+    argv: list[str],
+) -> None:
+    """Reject missing, blank, or non-positive query parameters at parsing."""
+
+    with pytest.raises(SystemExit):
+        query_module.parse_args(argv)
+
+
+def test_run_query_cli_emits_public_response_and_verbose_stage_summaries() -> None:
+    """Run one injected query runtime and expose only trace-safe diagnostics."""
+
+    processed = _processed_query().model_copy(
+        update={"top_k": 3, "collection": "premium_guides"}
+    )
+    dense = [_result("dense-a", score=0.91)]
+    sparse = [_result("sparse-a", score=2.4)]
+    fused = [_result("shared", score=0.032)]
+    filtered = [_result("shared", score=0.032)]
+    final = [_result("shared", score=0.97)]
+    response = KnowledgeHubResponse(
+        content="[1] Ranked knowledge.",
+        citations=(),
+        images=(),
+        trace_id="query-test-001",
+        is_empty=False,
+    )
+    execution = query_module.QueryExecutionResult(
+        processed_query=processed,
+        dense_results=tuple(dense),
+        sparse_results=tuple(sparse),
+        fused_results=tuple(fused),
+        filtered_results=tuple(filtered),
+        final_results=tuple(final),
+        response=response,
+        rerank_applied=True,
+        fallback_used=False,
+    )
+    runtime = Mock()
+    runtime.execute.return_value = execution
+    runtime_builder = Mock(return_value=runtime)
+    pool = Mock()
+    settings = SimpleNamespace(
+        database=SimpleNamespace(),
+        retrieval=SimpleNamespace(
+            filters=SimpleNamespace(default_collection="shopping_guides")
+        ),
+    )
+    output: list[str] = []
+
+    exit_code = query_module.run_query_cli(
+        [
+            "--query",
+            "无线耳机怎么选",
+            "--top-k",
+            "3",
+            "--collection",
+            "premium_guides",
+            "--verbose",
+        ],
+        settings_loader=lambda: settings,
+        pool_factory=lambda _: pool,
+        schema_initializer=lambda _: None,
+        runtime_builder=runtime_builder,
+        trace_id_factory=lambda: "query-test-001",
+        output=output.append,
+    )
+
+    assert exit_code == 0
+    pool.open.assert_called_once_with()
+    pool.close.assert_called_once_with()
+    runtime_builder.assert_called_once_with(settings, pool, False)
+    runtime.execute.assert_called_once_with(
+        "无线耳机怎么选",
+        collection="premium_guides",
+        top_k=3,
+        no_rerank=False,
+        trace_id="query-test-001",
+    )
+    payload = json.loads(output[0])
+    assert payload["response"] == response.model_dump(mode="json")
+    assert payload["debug"]["query_processor"]["collection"] == "premium_guides"
+    assert payload["debug"]["dense"] == [{"chunk_id": "dense-a", "score": 0.91}]
+    assert payload["debug"]["sparse"] == [{"chunk_id": "sparse-a", "score": 2.4}]
+    assert payload["debug"]["fusion"] == [{"chunk_id": "shared", "score": 0.032}]
+    assert payload["debug"]["filter"] == [{"chunk_id": "shared", "score": 0.032}]
+    assert payload["debug"]["rerank"] == {
+        "applied": True,
+        "fallback_used": False,
+        "results": [{"chunk_id": "shared", "score": 0.97}],
+    }
+    serialized = output[0]
+    assert "metadata" not in serialized
+    assert "tool_result" not in serialized
+
+
+def test_run_query_cli_forwards_no_rerank_and_closes_pool_after_failure() -> None:
+    """Forward rerank bypass and release PostgreSQL when query execution fails."""
+
+    runtime = Mock()
+    runtime.execute.side_effect = RuntimeError("query failed")
+    runtime_builder = Mock(return_value=runtime)
+    pool = Mock()
+    settings = SimpleNamespace(
+        database=SimpleNamespace(),
+        retrieval=SimpleNamespace(
+            filters=SimpleNamespace(default_collection="shopping_guides")
+        ),
+    )
+    errors: list[str] = []
+
+    exit_code = query_module.run_query_cli(
+        ["--query", "无线耳机", "--no-rerank"],
+        settings_loader=lambda: settings,
+        pool_factory=lambda _: pool,
+        schema_initializer=lambda _: None,
+        runtime_builder=runtime_builder,
+        trace_id_factory=lambda: "query-test-failure",
+        output=lambda _: None,
+        error_output=errors.append,
+    )
+
+    assert exit_code == 1
+    runtime_builder.assert_called_once_with(settings, pool, True)
+    runtime.execute.assert_called_once_with(
+        "无线耳机",
+        collection="shopping_guides",
+        top_k=10,
+        no_rerank=True,
+        trace_id="query-test-failure",
+    )
+    pool.close.assert_called_once_with()
+    assert errors == ["Query failed: query failed"]
+
+
+def test_postgres_bm25_query_scores_collection_postings_in_rank_order() -> None:
+    """Calculate BM25 from persisted postings using collection corpus stats."""
+
+    connection = MagicMock()
+    connection.execute.return_value.fetchall.return_value = [
+        ("chunk-b", "无线耳机", 2, 10, 3, 12.0, 2),
+        ("chunk-a", "无线耳机", 1, 8, 3, 12.0, 2),
+        ("chunk-a", "推荐", 1, 8, 3, 12.0, 1),
+    ]
+    pool = MagicMock()
+    pool.connection.return_value.__enter__.return_value = connection
+    storage = BM25Storage(pool)
+
+    candidates = storage.query(
+        ["无线耳机", "推荐"],
+        top_k=2,
+        collection="shopping_guides",
+    )
+
+    assert [candidate.chunk_id for candidate in candidates] == [
+        "chunk-a",
+        "chunk-b",
+    ]
+    assert candidates[0].score > candidates[1].score > 0
+    params = connection.execute.call_args.args[1]
+    assert params[0] == "shopping_guides"
+    assert params[1][0] == "无线耳机"
+    assert "耳机" in params[1]
+    assert "推荐" in params[1]
+
+
+def test_query_runtime_skips_reranker_and_preserves_filtered_order() -> None:
+    """Bypass the rerank controller and build from filtered hybrid results."""
+
+    processed = _processed_query().model_copy(update={"top_k": 2})
+    fused = [
+        _result("filtered-a", score=0.04),
+        _result("filtered-b", score=0.03),
+        _result("filtered-c", score=0.02),
+    ]
+    hybrid_report = SimpleNamespace(
+        dense_results=[_result("dense-a", score=0.9)],
+        sparse_results=[_result("sparse-a", score=2.1)],
+        fused_results=list(fused),
+        results=list(fused),
+        fallback_used=False,
+    )
+    query_processor = Mock()
+    query_processor.process.return_value = processed
+    hybrid_search = Mock()
+    hybrid_search.search.return_value = hybrid_report
+    rerank_controller = Mock()
+    response = KnowledgeHubResponse(
+        content="[1] A\n\n[2] B",
+        citations=(),
+        images=(),
+        trace_id="query-runtime-no-rerank",
+        is_empty=False,
+    )
+    response_builder = Mock()
+    response_builder.build.return_value = response
+    runtime = query_module.QueryRuntime(
+        query_processor=query_processor,
+        hybrid_search=hybrid_search,
+        rerank_controller=rerank_controller,
+        response_builder=response_builder,
+    )
+
+    execution = runtime.execute(
+        "无线耳机怎么选",
+        collection="shopping_guides",
+        top_k=2,
+        no_rerank=True,
+        trace_id="query-runtime-no-rerank",
+    )
+
+    query_processor.process.assert_called_once_with(
+        "无线耳机怎么选",
+        collection="shopping_guides",
+        top_k=2,
+    )
+    hybrid_search.search.assert_called_once_with(
+        processed,
+        filters={"collection": "shopping_guides"},
+    )
+    rerank_controller.rerank_or_fallback.assert_not_called()
+    assert [result.chunk_id for result in execution.final_results] == [
+        "filtered-a",
+        "filtered-b",
+    ]
+    response_builder.build.assert_called_once_with(
+        list(execution.final_results),
+        trace_id="query-runtime-no-rerank",
+    )
+    assert execution.rerank_applied is False
+    assert execution.fallback_used is False
+
+
+def test_build_runtime_does_not_construct_reranker_when_explicitly_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Avoid model-backed reranker initialization for ``--no-rerank``."""
+
+    settings = _settings()
+    settings.rerank = SimpleNamespace(enabled=True)
+    settings.ingestion = SimpleNamespace(image_dir="data/images")
+    embedding = Mock()
+    vector_store = Mock()
+    embedding_create = Mock(return_value=embedding)
+    vector_store_create = Mock(return_value=vector_store)
+    reranker_create = Mock(side_effect=AssertionError("must not construct reranker"))
+    llm_create = Mock(side_effect=AssertionError("must not construct LLM"))
+    monkeypatch.setattr(query_module.EmbeddingFactory, "create", embedding_create)
+    monkeypatch.setattr(
+        query_module.VectorStoreFactory,
+        "create",
+        vector_store_create,
+    )
+    monkeypatch.setattr(query_module.RerankerFactory, "create", reranker_create)
+    monkeypatch.setattr(query_module.LLMFactory, "create", llm_create)
+    pool = Mock()
+
+    runtime = query_module._build_runtime(settings, pool, no_rerank=True)
+
+    assert isinstance(runtime, query_module.QueryRuntime)
+    embedding_create.assert_called_once_with(settings=settings)
+    vector_store_create.assert_called_once_with(settings=settings, pool=pool)
+    reranker_create.assert_not_called()
+    llm_create.assert_not_called()

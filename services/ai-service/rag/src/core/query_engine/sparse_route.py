@@ -34,12 +34,21 @@ class BM25CandidateLike(Protocol):
 class BM25IndexerLike(Protocol):
     """Describe the minimal sparse indexer query contract."""
 
-    def query(self, keywords: list[str] | str, *, top_k: int) -> list[BM25CandidateLike]:
+    def query(
+        self,
+        keywords: list[str] | str,
+        *,
+        top_k: int,
+        collection: str | None = None,
+    ) -> list[BM25CandidateLike]:
         """Return ranked sparse candidates for normalized query keywords.
 
         Args:
             keywords: Ordered unique query keywords from ``ProcessedQuery``.
             top_k: Maximum number of sparse candidates to return.
+            collection: Target knowledge collection. In-memory indexes may
+                ignore it; persistent indexes must use it to isolate corpus
+                statistics and postings.
 
         Returns:
             BM25 candidates containing chunk IDs and native sparse scores.
@@ -167,7 +176,11 @@ class SparseRoute:
             return []
 
         try:
-            candidates = self._bm25_indexer.query(keywords, top_k=candidate_limit)
+            candidates = self._bm25_indexer.query(
+                keywords,
+                top_k=candidate_limit,
+                collection=processed_query.collection,
+            )
             chunk_ids = [candidate.chunk_id for candidate in candidates]
             score_by_chunk_id = {
                 candidate.chunk_id: candidate.score

@@ -8,10 +8,16 @@ chunks from remaining searchable.
 
 from __future__ import annotations
 
+import math
+from collections import defaultdict
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
+import psycopg
+
+from src.core.bm25_analyzer import BM25Candidate, normalize_bm25_keywords
+from src.core.errors import DatabaseError
 from src.storage.postgres import PostgresPool
 
 if TYPE_CHECKING:
@@ -42,12 +48,36 @@ class BM25TermRecord:
 
 
 class BM25Storage:
-    """Store and inspect document-scoped BM25 posting snapshots."""
+    """Store document postings and execute collection-scoped sparse queries."""
 
-    def __init__(self, pool: PostgresPool) -> None:
-        """Bind sparse storage to the application PostgreSQL pool."""
+    def __init__(
+        self,
+        pool: PostgresPool,
+        *,
+        k1: float = 1.5,
+        b: float = 0.75,
+    ) -> None:
+        """Bind sparse storage to PostgreSQL and configure BM25 scoring.
+
+        Args:
+            pool: Open application PostgreSQL pool.
+            k1: Term-frequency saturation factor shared with ``BM25Indexer``.
+            b: Document-length normalization factor shared with
+                ``BM25Indexer``.
+
+        Raises:
+            ValueError: If either scoring parameter is outside the supported
+                BM25 range.
+        """
+
+        if k1 <= 0:
+            raise ValueError("BM25 k1 must be positive")
+        if not 0 <= b <= 1:
+            raise ValueError("BM25 b must be between 0 and 1")
 
         self._pool = pool
+        self._k1 = k1
+        self._b = b
 
     def upsert_index(
         self,
@@ -148,3 +178,149 @@ class BM25Storage:
                 (document_id,),
             ).fetchall()
         return [BM25TermRecord(*row) for row in rows]
+
+    def query(
+        self,
+        keywords: list[str] | str,
+        *,
+        top_k: int,
+        collection: str | None = None,
+    ) -> list[BM25Candidate]:
+        """Rank persisted sparse postings for one knowledge collection.
+
+        Args:
+            keywords: Processed query keywords or raw text. The same analyzer
+                used during ingestion expands CJK terms and normalizes English.
+            top_k: Positive maximum number of sparse candidates.
+            collection: Required collection identifier. Persisted indexes are
+                collection-scoped so unrelated knowledge cannot influence
+                corpus statistics or ranking.
+
+        Returns:
+            BM25 candidates ordered by descending score and stable chunk ID.
+            Empty terms or an empty collection return an empty list.
+
+        Raises:
+            ValueError: If ``top_k`` is invalid or collection is absent/blank.
+            DatabaseError: If PostgreSQL cannot read the inverted index.
+
+        Notes:
+            Corpus size, average document length, and per-term document
+            frequency are calculated from current PostgreSQL rows rather than
+            trusting document-local values captured during ingestion. This
+            keeps scoring correct after multiple documents enter a collection.
+        """
+
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
+            raise ValueError("top_k must be positive")
+        if not isinstance(collection, str) or not collection.strip():
+            raise ValueError("collection must be a non-blank string")
+
+        terms = normalize_bm25_keywords(keywords)
+        if not terms:
+            return []
+
+        try:
+            with self._pool.connection() as connection:
+                rows = connection.execute(
+                    """
+                    WITH query_input AS (
+                        SELECT
+                            %s::TEXT AS collection_id,
+                            %s::TEXT[] AS terms
+                    ),
+                    corpus AS (
+                        SELECT DISTINCT posting.chunk_id, posting.document_length
+                        FROM rag_bm25_terms AS posting
+                        CROSS JOIN query_input
+                        WHERE posting.collection_id = query_input.collection_id
+                    ),
+                    corpus_stats AS (
+                        SELECT
+                            COUNT(*)::BIGINT AS chunk_count,
+                            COALESCE(AVG(document_length), 0)::DOUBLE PRECISION
+                                AS average_document_length
+                        FROM corpus
+                    ),
+                    term_stats AS (
+                        SELECT
+                            posting.term,
+                            COUNT(DISTINCT posting.chunk_id)::BIGINT
+                                AS document_frequency
+                        FROM rag_bm25_terms AS posting
+                        CROSS JOIN query_input
+                        WHERE posting.collection_id = query_input.collection_id
+                          AND posting.term = ANY(query_input.terms)
+                        GROUP BY posting.term
+                    )
+                    SELECT
+                        posting.chunk_id,
+                        posting.term,
+                        posting.term_frequency,
+                        posting.document_length,
+                        corpus_stats.chunk_count,
+                        corpus_stats.average_document_length,
+                        term_stats.document_frequency
+                    FROM rag_bm25_terms AS posting
+                    JOIN term_stats ON term_stats.term = posting.term
+                    CROSS JOIN corpus_stats
+                    CROSS JOIN query_input
+                    WHERE posting.collection_id = query_input.collection_id
+                      AND posting.term = ANY(query_input.terms)
+                    ORDER BY posting.chunk_id ASC, posting.term ASC
+                    """,
+                    (collection.strip(), terms),
+                ).fetchall()
+        except DatabaseError:
+            raise
+        except psycopg.Error as error:
+            raise DatabaseError(
+                "PostgreSQL BM25 query failed",
+                context={
+                    "operation": "bm25_query",
+                    "collection": collection.strip(),
+                },
+                cause=error,
+            ) from error
+
+        scores: dict[str, float] = defaultdict(float)
+        for (
+            chunk_id,
+            _term,
+            term_frequency,
+            document_length,
+            chunk_count,
+            average_document_length,
+            document_frequency,
+        ) in rows:
+            if chunk_count <= 0 or average_document_length <= 0:
+                continue
+            idf = math.log(
+                1
+                + (
+                    chunk_count
+                    - document_frequency
+                    + 0.5
+                )
+                / (document_frequency + 0.5)
+            )
+            denominator = term_frequency + self._k1 * (
+                1
+                - self._b
+                + self._b * document_length / average_document_length
+            )
+            scores[chunk_id] += (
+                idf
+                * (term_frequency * (self._k1 + 1))
+                / denominator
+            )
+
+        ranked = sorted(
+            (
+                BM25Candidate(chunk_id=chunk_id, score=score)
+                for chunk_id, score in scores.items()
+                if score > 0
+            ),
+            key=lambda candidate: (-candidate.score, candidate.chunk_id),
+        )
+        return ranked[:top_k]
