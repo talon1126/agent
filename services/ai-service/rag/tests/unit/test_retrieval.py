@@ -12,10 +12,11 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
+import psycopg
 import pytest
 from pydantic import ValidationError
 
-from src.core.errors import RetrievalError
+from src.core.errors import DatabaseError, RetrievalError
 from src.core.query_engine.dense_route import DenseRoute
 from src.core.query_engine.fusion import reciprocal_rank_fusion
 from src.core.query_engine.hybrid_engine import CandidateFilter, HybridSearch
@@ -969,6 +970,40 @@ def test_hybrid_search_raises_when_both_routes_fail() -> None:
     ]
 
 
+def test_hybrid_search_wraps_unexpected_fusion_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Protect the fusion error boundary after both routes return candidates."""
+
+    settings = _settings(rewrite_enabled=False)
+    settings.retrieval.fusion_top_k = 3
+    settings.retrieval.rrf_k = 10
+    dense_route = Mock()
+    dense_route.search.return_value = [_result("dense-only", score=0.9)]
+    sparse_route = Mock()
+    sparse_route.search.return_value = [_result("sparse-only", score=2.0)]
+    trace = Mock()
+    monkeypatch.setattr(
+        "src.core.query_engine.hybrid_engine.reciprocal_rank_fusion",
+        Mock(side_effect=RuntimeError("fusion implementation failed")),
+    )
+    search = HybridSearch(
+        settings=settings,
+        dense_route=dense_route,
+        sparse_route=sparse_route,
+    )
+
+    with pytest.raises(RetrievalError, match="Hybrid fusion failed") as captured:
+        search.search(_processed_query(), trace_context=trace)
+
+    assert captured.value.context == {
+        "stage": "hybrid",
+        "operation": "fusion",
+    }
+    assert isinstance(captured.value.cause, RuntimeError)
+    assert trace.record_stage.call_args.kwargs["status"] == "failed"
+
+
 def test_hybrid_search_trace_failure_does_not_break_successful_retrieval() -> None:
     """Require optional hybrid trace failures to remain isolated from results."""
 
@@ -1362,6 +1397,67 @@ def test_postgres_bm25_query_scores_collection_postings_in_rank_order() -> None:
     assert "推荐" in params[1]
 
 
+@pytest.mark.parametrize(
+    "keywords,top_k,collection,message",
+    [
+        (["耳机"], 0, "shopping_guides", "top_k"),
+        (["耳机"], True, "shopping_guides", "top_k"),
+        (["耳机"], 5, None, "collection"),
+        (["耳机"], 5, " ", "collection"),
+    ],
+)
+def test_postgres_bm25_query_rejects_invalid_boundaries_before_database_access(
+    keywords: list[str],
+    top_k: int,
+    collection: str | None,
+    message: str,
+) -> None:
+    """Fail fast for invalid Sparse query limits and collection isolation."""
+
+    pool = MagicMock()
+    storage = BM25Storage(pool)
+
+    with pytest.raises(ValueError, match=message):
+        storage.query(keywords, top_k=top_k, collection=collection)
+
+    pool.connection.assert_not_called()
+
+
+def test_postgres_bm25_query_short_circuits_empty_terms() -> None:
+    """Avoid PostgreSQL work when query analysis produces no searchable terms."""
+
+    pool = MagicMock()
+
+    assert BM25Storage(pool).query(
+        "   --- ",
+        top_k=5,
+        collection="shopping_guides",
+    ) == []
+    pool.connection.assert_not_called()
+
+
+def test_postgres_bm25_query_wraps_driver_failures() -> None:
+    """Translate psycopg failures into the shared database error contract."""
+
+    connection = MagicMock()
+    connection.execute.side_effect = psycopg.OperationalError("database offline")
+    pool = MagicMock()
+    pool.connection.return_value.__enter__.return_value = connection
+
+    with pytest.raises(DatabaseError, match="PostgreSQL BM25 query failed") as captured:
+        BM25Storage(pool).query(
+            ["无线耳机"],
+            top_k=5,
+            collection="shopping_guides",
+        )
+
+    assert captured.value.context == {
+        "operation": "bm25_query",
+        "collection": "shopping_guides",
+    }
+    assert isinstance(captured.value.cause, psycopg.OperationalError)
+
+
 def test_query_runtime_skips_reranker_and_preserves_filtered_order() -> None:
     """Bypass the rerank controller and build from filtered hybrid results."""
 
@@ -1426,6 +1522,70 @@ def test_query_runtime_skips_reranker_and_preserves_filtered_order() -> None:
         trace_id="query-runtime-no-rerank",
     )
     assert execution.rerank_applied is False
+    assert execution.fallback_used is False
+
+
+def test_query_runtime_applies_reranker_before_response_construction() -> None:
+    """Exercise the enabled rerank path and preserve its final result snapshot."""
+
+    processed = _processed_query().model_copy(update={"top_k": 1})
+    filtered = [
+        _result("filtered-a", score=0.04),
+        _result("filtered-b", score=0.03),
+    ]
+    reranked = [
+        _result(
+            "filtered-b",
+            score=0.97,
+            metadata={"rerank": {"provider": "fake"}},
+        )
+    ]
+    query_processor = Mock()
+    query_processor.process.return_value = processed
+    hybrid_search = Mock()
+    hybrid_search.search.return_value = SimpleNamespace(
+        dense_results=[],
+        sparse_results=[],
+        fused_results=list(filtered),
+        results=list(filtered),
+        fallback_used=False,
+    )
+    rerank_controller = Mock()
+    rerank_controller.rerank_or_fallback.return_value = reranked
+    response_builder = Mock()
+    response_builder.build.return_value = KnowledgeHubResponse(
+        content="[1] Reranked",
+        citations=(),
+        images=(),
+        trace_id="query-runtime-rerank",
+        is_empty=False,
+    )
+    runtime = query_module.QueryRuntime(
+        query_processor=query_processor,
+        hybrid_search=hybrid_search,
+        rerank_controller=rerank_controller,
+        response_builder=response_builder,
+    )
+
+    execution = runtime.execute(
+        "无线耳机怎么选",
+        collection="shopping_guides",
+        top_k=1,
+        no_rerank=False,
+        trace_id="query-runtime-rerank",
+    )
+
+    rerank_controller.rerank_or_fallback.assert_called_once_with(
+        processed.normalized_query,
+        filtered,
+        top_k=1,
+    )
+    response_builder.build.assert_called_once_with(
+        reranked,
+        trace_id="query-runtime-rerank",
+    )
+    assert execution.final_results == tuple(reranked)
+    assert execution.rerank_applied is True
     assert execution.fallback_used is False
 
 

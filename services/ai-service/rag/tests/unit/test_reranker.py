@@ -25,6 +25,7 @@ from src.libs.reranker import (
     CrossEncoderReranker,
     FakeReranker,
     LLMReranker,
+    NoOpReranker,
     RerankerFactory,
 )
 
@@ -158,6 +159,48 @@ class EmptyResultReranker(BaseReranker):
         """Simulate a provider that accidentally drops the candidate set."""
 
         return []
+
+
+class DuplicateResultReranker(BaseReranker):
+    """Return one allowed candidate twice to violate reorder-only semantics."""
+
+    def rerank(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalResult],
+        *,
+        top_k: int | None = None,
+    ) -> list[RetrievalResult]:
+        """Duplicate the first candidate so controller validation must fallback."""
+
+        return [candidates[0], candidates[0]]
+
+
+def test_no_op_reranker_preserves_order_with_defensive_copies() -> None:
+    """Protect the safe fallback provider used when model rerank is disabled."""
+
+    candidates = [
+        _candidate("chunk-a", "A", metadata={"rank": 1}),
+        _candidate("chunk-b", "B", metadata={"rank": 2}),
+    ]
+
+    results = NoOpReranker().rerank("query", candidates, top_k=1)
+
+    assert [result.chunk_id for result in results] == ["chunk-a"]
+    assert results[0] is not candidates[0]
+    results[0].metadata["rank"] = 99
+    assert candidates[0].metadata["rank"] == 1
+
+
+def test_no_op_reranker_validates_query_and_limit() -> None:
+    """Require the fallback adapter to enforce the shared reranker contract."""
+
+    reranker = NoOpReranker()
+
+    with pytest.raises(ValueError, match="query must not be blank"):
+        reranker.rerank(" ", [_candidate("chunk-a", "A")])
+    with pytest.raises(ValueError, match="top_k must be greater than zero"):
+        reranker.rerank("query", [_candidate("chunk-a", "A")], top_k=0)
 
 
 def test_cross_encoder_reranker_scores_query_document_pairs_and_sorts_descending() -> None:
@@ -570,6 +613,53 @@ def test_rerank_controller_rejects_candidate_loss_by_falling_back() -> None:
         trace.record_stage.call_args.kwargs["details"]["fallback_reason"]
         == "invalid_reranker_output"
     )
+
+
+def test_rerank_controller_rejects_duplicate_provider_results_by_falling_back() -> None:
+    """Prevent rerank providers from duplicating filtered candidates."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    trace = Mock()
+    controller = RerankController(
+        settings=settings,
+        reranker=DuplicateResultReranker(),
+    )
+    candidates = [
+        _candidate("chunk-a", "A"),
+        _candidate("chunk-b", "B"),
+    ]
+
+    results = controller.rerank_or_fallback(
+        "query",
+        candidates,
+        trace_context=trace,
+    )
+
+    assert [result.chunk_id for result in results] == ["chunk-a", "chunk-b"]
+    assert trace.record_stage.call_args.kwargs["status"] == "degraded"
+    assert (
+        trace.record_stage.call_args.kwargs["details"]["fallback_reason"]
+        == "invalid_reranker_output"
+    )
+
+
+def test_rerank_controller_records_empty_candidates_as_skipped() -> None:
+    """Short-circuit empty filtered input without invoking the provider."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    reranker = Mock(spec=BaseReranker)
+    trace = Mock()
+    controller = RerankController(settings=settings, reranker=reranker)
+
+    assert controller.rerank_or_fallback(
+        "query",
+        [],
+        trace_context=trace,
+    ) == []
+
+    reranker.rerank.assert_not_called()
+    assert trace.record_stage.call_args.kwargs["status"] == "skipped"
+    assert trace.record_stage.call_args.kwargs["candidate_count"] == 0
 
 
 def test_rerank_controller_validates_inputs_before_fallback_or_provider_calls() -> None:

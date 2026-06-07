@@ -2069,7 +2069,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D10 | 实现引用构造 | [✔] | 2026-06-07 | 已实现共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 source_ref 传播、source_ref 优先和顶层 metadata 兼容、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；11 个 Citation 单元测试、16 个核心类型回归测试、2 个 source_ref 单元测试和 1 个 pgvector 集成测试通过 |
 | D11 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 已实现不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号文本上下文、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；16 个 Response Builder 单元测试和 1 个真实 PostgreSQL 图片查询集成测试通过 |
 | D12 | 新增 `query.py` 脚本入口 | [✔] | 2026-06-07 | 已实现配置驱动完整查询链路、PostgreSQL BM25 collection 查询、过滤前 Fusion 快照、安全 verbose 输出、no-rerank 跳过和连接池释放；63 个 Retrieval 单元测试通过 |
-| D13 | 实现 Retrieval 单元测试矩阵 | [ ] |  | Query Processor、Dense、Sparse、RRF、HybridSearch、Filter、Rerank、Response、query.py |
+| D13 | 实现 Retrieval 单元测试矩阵 | [✔] | 2026-06-07 | 已形成 120 个 Retrieval/Reranker/Response 单元测试，补齐 Fusion 失败、PostgreSQL BM25 边界、QueryRuntime rerank、no-op/duplicate/empty fallback、Citation source_ref 和图片 resolver 脏契约；目标模块覆盖率 91% |
 | D14 | 实现 Retrieval 集成测试 | [ ] |  | 覆盖 Dense/BM25/Hybrid/Filter/Rerank/fallback/query.py |
 
 #### 阶段 E：MCP 工具服务
@@ -2126,12 +2126,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 12 | 86% |
+| Phase D | 14 | 13 | 93% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **41** | **59%** |
+| **总计** | **70** | **42** | **60%** |
 
 ### 6.5 阶段实施明细
 
@@ -2979,7 +2979,12 @@ payload；支持 `--no-rerank` 直接跳过 RerankController 并保持过滤后 
 
 - 测试用例
 
-验收标准：Query、Dense、Sparse、RRF、HybridSearch、Rerank 前过滤、Rerank、Response、query.py 参数解析均覆盖。
+验收标准：Query、Dense、Sparse、RRF、HybridSearch、Rerank 前过滤、Rerank、
+Response、query.py 参数解析均覆盖；同时覆盖 Hybrid Fusion 非预期异常边界、
+PostgreSQL BM25 非法 top_k/collection、空 terms 和驱动异常、QueryRuntime 的
+rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、NoOpReranker
+防御性副本、Citation 的 null/非法 source_ref 以及图片 resolver 重复记录；单元测试
+不访问真实模型或网络服务，目标 Retrieval/Reranker/Response 模块覆盖率不低于 90%。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit -v`
 

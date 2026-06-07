@@ -133,6 +133,46 @@ def test_citation_builder_does_not_mutate_retrieval_metadata() -> None:
     assert candidate.metadata == original_metadata
 
 
+def test_citation_builder_accepts_null_source_ref_with_top_level_fallback() -> None:
+    """Treat a persisted null source_ref as absent compatibility metadata."""
+
+    citation = CitationBuilder().build(
+        [
+            _result(
+                "chunk-a",
+                metadata={
+                    "source_ref": None,
+                    "document_id": "doc-a",
+                    "source_path": "shopping_guides/a.md",
+                },
+            )
+        ],
+        trace_id="query-trace-null-source",
+    )[0]
+
+    assert citation.document_id == "doc-a"
+    assert citation.source_uri == "shopping_guides/a.md"
+
+
+def test_citation_builder_rejects_non_mapping_source_ref() -> None:
+    """Reject malformed nested source metadata before constructing citations."""
+
+    with pytest.raises(ValueError, match="source_ref must be a mapping"):
+        CitationBuilder().build(
+            [
+                _result(
+                    "chunk-a",
+                    metadata={
+                        "source_ref": ["invalid"],
+                        "document_id": "doc-a",
+                        "source_path": "shopping_guides/a.md",
+                    },
+                )
+            ],
+            trace_id="query-trace-invalid-source",
+        )
+
+
 @pytest.mark.parametrize(
     "metadata,expected_message",
     [
@@ -412,6 +452,34 @@ def test_multimodal_assembler_skips_missing_records_without_mutating_results() -
     assert [image.image_id for image in images] == ["image-found"]
     assert resolver.requests == [("image-missing", "image-found")]
     assert candidate.metadata == original_metadata
+
+
+def test_multimodal_assembler_rejects_duplicate_resolver_records() -> None:
+    """Reject ambiguous storage responses containing one image ID twice."""
+
+    candidate = _result(
+        "chunk-a",
+        metadata={
+            "document_id": "doc-a",
+            "source_path": "shopping_guides/a.md",
+            "image_refs": ["image-a"],
+        },
+    )
+    duplicate = _ImageRecord(
+        image_id="image-a",
+        file_path="data/images/shopping_guides/image-a.png",
+        mime_type="image/png",
+        page_num=1,
+        width=100,
+        height=100,
+        quality_status="ok",
+        metadata={},
+    )
+
+    with pytest.raises(ValueError, match="duplicate record"):
+        MultimodalAssembler(
+            resolver=_ImageResolver([duplicate, duplicate])
+        ).assemble([candidate])
 
 
 def test_multimodal_assembler_rejects_invalid_image_reference_contracts() -> None:
