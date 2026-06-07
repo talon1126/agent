@@ -1539,17 +1539,17 @@ services/ai-service/rag/
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | content_hash 计算、差量判断、单 chunk `embed()` 编码和 C8 批量 `embed_batch()` 编码；不承担 retry、upsert 或 BM25 职责 |
 | `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | C7 已实现 in-memory BM25 分词、词频、倒排索引构建和关键词候选查询，为后续 Sparse Route 和 BM25 持久化提供可复用统计结果 |
 | `src/ingestion/embedding/batch_processor.py` | 批处理优化 | C8 已实现按 batch_size 拆分、可配置 throttle_seconds 节流、失败批次按 item 隔离、有限 retry、失败记录和有序成功结果返回 |
-| `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | chunk、向量、BM25、images、trace 统一 upsert |
+| `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | C9 已实现完整文档快照校验、受管图片复制、document/chunk/vector/BM25/image_index 单事务写入、失败回滚和输入顺序保持 |
 
 #### 5.3.5 Storage 与本地运行层
 
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
 | `src/storage/postgres.py` | 管理 PostgreSQL 连接 | 连接池、事务、超时、健康检查 |
-| `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`image_index`、traces、evaluation |
+| `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`rag_bm25_terms`、`image_index`、traces、evaluation |
 | `src/storage/vector_storage.py` | 管理向量存储 | pgvector upsert/search、metadata filter |
-| `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | 倒排索引、词项统计、chunk 词频 |
-| `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`，`image_index` 表记录 image_id、file_path、collection、doc_hash、page_num |
+| `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | C9 已实现 document 级完整 posting 快照替换，持久化 term_frequency、document_frequency、document_length 和 average_document_length |
+| `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`；支持安全路径解析、原子文件替换和调用方事务内 image_index upsert |
 | `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
 | `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、traces、evaluation_runs |
 | `src/logs/app.log` | 保存应用运行日志 | 普通运行日志和错误排查 |
@@ -1980,7 +1980,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | C6 | 实现 DenseEncoder | [✔] | 2026-06-06 | 已实现 DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C7 | 实现 BM25Indexer | [✔] | 2026-06-07 | 已实现 BM25Candidate、BM25IndexResult、BM25Indexer.index/query、词频统计、倒排索引、关键词 Top-k 排序、中文连续文本 n-gram fallback 和重复 index 状态重建；6 个相关测试、137 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C8 | 实现 BatchProcessor 批处理优化 | [✔] | 2026-06-07 | 已实现 BatchProcessor、BatchRunResult、BatchSuccess、BatchFailure、DenseEncoder.encode_batch、batch_size 拆分、throttle_seconds 节流、有限 retry、失败隔离、EmbeddingStep.run_batch、Dense/BM25 批处理编排；20 个相关测试、145 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C9 | 实现 pgvector upsert | [ ] |  | 同一 chunk 两次 upsert 产生相同 id；内容变更 id 变更；支持批量 upsert 且保持顺序 |
+| C9 | 实现统一 upsert | [✔] | 2026-06-07 | 已实现 rag_bm25_terms schema、BM25Storage、UpsertStep 单事务完整快照写入、pgvector/image/repository 调用方事务接口、图片文件失败恢复、重复 upsert 幂等和内容变更旧 chunk 清理；2 个 C9 PostgreSQL 集成测试、148 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C10 | 实现统一 Pipeline MVP 编排和集成测试 | [ ] |  | 串联摄取、ImageCaptioner、content_hash、Dense、BM25Indexer、batch、upsert，验证最小可运行索引链路 |
 | C11 | 新增 `ingest.py` 摄取脚本入口 | [ ] |  | 调用 pipeline，支持 `--collection`、`--path`、`--force` |
 
@@ -2056,13 +2056,13 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | --- | ---: | ---: | --- |
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
-| Phase C | 11 | 8 | 73% |
+| Phase C | 11 | 9 | 82% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **26** | **37%** |
+| **总计** | **70** | **27** | **39%** |
 
 ### 6.5 阶段实施明细
 
@@ -2594,14 +2594,19 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：将文档、chunk、向量、BM25 和图片索引一致写入，并保证 upsert 幂等性和批量顺序。
 
-修改文件：`src/ingestion/storage/upsert_step.py`、`src/storage/image_storage.py`、`tests/integration/test_ingestion_pipeline.py`
+修改文件：`src/storage/schema.sql`、`src/storage/bm25_storage.py`、`src/storage/repositories.py`、`src/libs/vector_store/pgvector_store.py`、`src/ingestion/storage/upsert_step.py`、`src/storage/image_storage.py`、`tests/integration/test_ingestion_pipeline.py`、`tests/integration/test_repositories.py`
 
 实现类/函数：
 
-- `UpsertStep.run()`：统一写入 chunk、向量、BM25 和图片索引
-- `ImageStorage.upsert_index()`：写入图片索引并保持数据库记录一致
+- `UpsertStep.run()`：校验完整索引快照，并在一个 PostgreSQL 事务内统一写入 document、chunk、向量、BM25 和图片索引
+- `BM25Storage.upsert_index()`：按 document 替换完整 BM25 posting 快照
+- `DocumentRepository.upsert_in_transaction()`：复用调用方事务写入 document
+- `ChunkRepository.upsert_many_in_transaction()`：复用调用方事务替换完整 chunk 快照
+- `PgVectorStore.upsert_in_transaction()`：复用调用方事务写入 Dense 向量
+- `ImageStorage.image_path()`：安全解析 `data/images/{collection}/` 下的受管图片路径
+- `ImageStorage.upsert_index_in_transaction()`：复用调用方事务写入图片索引
 
-验收标准：同一 chunk 两次 upsert 产生相同 id；chunk 内容变更时 id 随 `content_hash` 变更；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 记录一致写入。
+验收标准：同一完整快照重复 upsert 不产生重复记录且返回相同有序 ID；Transform 基于新 content_hash 生成新 chunk_id 后，统一 upsert 清理旧 chunk 及其 BM25 posting；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 在同一个 PostgreSQL 事务内一致写入；向量或数据库写入失败时所有数据库记录回滚，事务前被替换的受管图片恢复原内容。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 

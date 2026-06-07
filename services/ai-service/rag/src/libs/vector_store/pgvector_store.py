@@ -108,7 +108,46 @@ class PgVectorStore(BaseVectorStore):
             return []
 
         normalized = [self._vector_literal(vector) for vector in vectors]
-        updated_ids: list[str] = []
+        with self._pool.transaction() as connection:
+            return self.upsert_in_transaction(
+                connection,
+                chunks,
+                vectors,
+                normalized_vectors=normalized,
+            )
+
+    def upsert_in_transaction(
+        self,
+        connection: Any,
+        chunks: Sequence[Chunk],
+        vectors: Sequence[Sequence[float]],
+        *,
+        normalized_vectors: Sequence[str] | None = None,
+    ) -> list[str]:
+        """Write vectors through a caller-owned PostgreSQL transaction.
+
+        Args:
+            connection: Active psycopg connection.
+            chunks: Already persisted chunks.
+            vectors: Dense vectors aligned with ``chunks``.
+            normalized_vectors: Optional prevalidated pgvector literals supplied
+                by ``upsert`` to avoid duplicate normalization.
+
+        Returns:
+            Updated chunk IDs in input order.
+
+        Raises:
+            ValueError: If chunk/vector counts or dimensions are invalid.
+            DatabaseError: If any chunk row is missing.
+        """
+
+        if len(chunks) != len(vectors):
+            raise ValueError("Chunk and vector counts must match")
+        literals = (
+            list(normalized_vectors)
+            if normalized_vectors is not None
+            else [self._vector_literal(vector) for vector in vectors]
+        )
         update_query = sql.SQL(
             """
             UPDATE {chunk_table}
@@ -119,21 +158,21 @@ class PgVectorStore(BaseVectorStore):
             """
         ).format(chunk_table=sql.Identifier(self._chunk_table))
 
-        with self._pool.transaction() as connection:
-            for chunk, vector_literal in zip(chunks, normalized, strict=True):
-                row = connection.execute(
-                    update_query,
-                    (vector_literal, chunk.id),
-                ).fetchone()
-                if row is None:
-                    raise DatabaseError(
-                        "Cannot write embedding for a missing chunk",
-                        context={
-                            "operation": "pgvector_upsert",
-                            "chunk_id": chunk.id,
-                        },
-                    )
-                updated_ids.append(row[0])
+        updated_ids: list[str] = []
+        for chunk, vector_literal in zip(chunks, literals, strict=True):
+            row = connection.execute(
+                update_query,
+                (vector_literal, chunk.id),
+            ).fetchone()
+            if row is None:
+                raise DatabaseError(
+                    "Cannot write embedding for a missing chunk",
+                    context={
+                        "operation": "pgvector_upsert",
+                        "chunk_id": chunk.id,
+                    },
+                )
+            updated_ids.append(row[0])
         return updated_ids
 
     def search(

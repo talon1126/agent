@@ -187,51 +187,91 @@ class DocumentRepository:
         """
 
         with self._pool.transaction() as connection:
-            _ensure_collection(connection, collection_id)
-            # Document IDs may include source_hash, so changed source content can
-            # legitimately produce a new ID while retaining the same logical
-            # collection/source_path identity. Removing the superseded version
-            # first also activates schema cascades for stale chunks and images.
-            connection.execute(
-                """
-                DELETE FROM rag_documents
-                WHERE collection_id = %s
-                  AND source_path = %s
-                  AND id <> %s
-                """,
-                (collection_id, source_path, document.id),
+            self.upsert_in_transaction(
+                connection,
+                document,
+                collection_id=collection_id,
+                source_path=source_path,
+                source_hash=source_hash,
+                title=title,
             )
-            connection.execute(
-                """
-                INSERT INTO rag_documents (
-                    id,
-                    collection_id,
-                    source_path,
-                    source_hash,
-                    title,
-                    content,
-                    metadata
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (id) DO UPDATE SET
-                    collection_id = EXCLUDED.collection_id,
-                    source_path = EXCLUDED.source_path,
-                    source_hash = EXCLUDED.source_hash,
-                    title = EXCLUDED.title,
-                    content = EXCLUDED.content,
-                    metadata = EXCLUDED.metadata,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    document.id,
-                    collection_id,
-                    source_path,
-                    source_hash,
-                    title,
-                    document.text,
-                    Jsonb(document.metadata),
-                ),
+        return document
+
+    def upsert_in_transaction(
+        self,
+        connection: Any,
+        document: Document,
+        *,
+        collection_id: str,
+        source_path: str,
+        source_hash: str,
+        title: str | None = None,
+    ) -> Document:
+        """Persist a document through a caller-owned PostgreSQL transaction.
+
+        Args:
+            connection: Active psycopg connection whose transaction is managed
+                by the caller.
+            document: Validated canonical document.
+            collection_id: Collection receiving the document.
+            source_path: Stable logical source path.
+            source_hash: SHA256 digest of source bytes.
+            title: Optional Dashboard display title.
+
+        Returns:
+            The same validated document.
+
+        Side Effects:
+            Creates the collection, removes a superseded document with the same
+            collection/source path, and upserts the current document without
+            committing independently.
+        """
+
+        _ensure_collection(connection, collection_id)
+        # Document IDs may include source_hash, so changed source content can
+        # legitimately produce a new ID while retaining the same logical
+        # collection/source_path identity. Removing the superseded version first
+        # activates schema cascades for stale chunks, BM25 postings, and images.
+        connection.execute(
+            """
+            DELETE FROM rag_documents
+            WHERE collection_id = %s
+              AND source_path = %s
+              AND id <> %s
+            """,
+            (collection_id, source_path, document.id),
+        )
+        connection.execute(
+            """
+            INSERT INTO rag_documents (
+                id,
+                collection_id,
+                source_path,
+                source_hash,
+                title,
+                content,
+                metadata
             )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                collection_id = EXCLUDED.collection_id,
+                source_path = EXCLUDED.source_path,
+                source_hash = EXCLUDED.source_hash,
+                title = EXCLUDED.title,
+                content = EXCLUDED.content,
+                metadata = EXCLUDED.metadata,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                document.id,
+                collection_id,
+                source_path,
+                source_hash,
+                title,
+                document.text,
+                Jsonb(document.metadata),
+            ),
+        )
         return document
 
     def get_by_id(self, document_id: str) -> Document | None:
@@ -644,9 +684,41 @@ class ChunkRepository:
             ``content_hash`` from UTF-8 chunk text.
         """
 
+        with self._pool.transaction() as connection:
+            return self.upsert_many_in_transaction(
+                connection,
+                chunks,
+                collection_id=collection_id,
+                document_id=document_id,
+            )
+
+    def upsert_many_in_transaction(
+        self,
+        connection: Any,
+        chunks: list[Chunk],
+        *,
+        collection_id: str,
+        document_id: str,
+        replace_document: bool = False,
+    ) -> list[Chunk]:
+        """Persist chunks through a caller-owned PostgreSQL transaction.
+
+        Args:
+            connection: Active psycopg connection.
+            chunks: Ordered chunks belonging to one document.
+            collection_id: Parent collection.
+            document_id: Parent document.
+            replace_document: When true, delete the document's complete previous
+                chunk snapshot before inserting the new ordered batch.
+
+        Returns:
+            A shallow list copy preserving input order.
+
+        Raises:
+            ValueError: If IDs or chunk indexes are duplicated in the batch.
+        """
+
         persisted = list(chunks)
-        if not persisted:
-            return persisted
         chunk_ids = [chunk.id for chunk in persisted]
         chunk_indexes = [chunk.chunk_index for chunk in persisted]
         if len(set(chunk_ids)) != len(chunk_ids):
@@ -654,12 +726,16 @@ class ChunkRepository:
         if len(set(chunk_indexes)) != len(chunk_indexes):
             raise ValueError("Chunk batch contains duplicate chunk indexes")
 
-        with self._pool.transaction() as connection:
+        if replace_document:
+            connection.execute(
+                "DELETE FROM rag_chunks WHERE document_id = %s",
+                (document_id,),
+            )
+        elif persisted:
             # Stable chunk IDs do not include chunk_index. Re-splitting can move
             # existing IDs to new positions, including swapping two positions.
             # Removing every incoming ID/index collision before insertion avoids
-            # order-dependent primary-key failures while preserving one atomic
-            # document-level batch update.
+            # order-dependent primary-key failures.
             connection.execute(
                 """
                 DELETE FROM rag_chunks
@@ -671,39 +747,40 @@ class ChunkRepository:
                 """,
                 (document_id, chunk_ids, chunk_indexes),
             )
-            for chunk in persisted:
-                heading_path = chunk.metadata.get("heading_path", [])
-                connection.execute(
-                    """
-                    INSERT INTO rag_chunks (
-                        id,
-                        collection_id,
-                        document_id,
-                        chunk_index,
-                        content,
-                        content_hash,
-                        start_offset,
-                        end_offset,
-                        source_ref,
-                        heading_path,
-                        metadata
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        chunk.id,
-                        collection_id,
-                        document_id,
-                        chunk.chunk_index,
-                        chunk.text,
-                        sha256(chunk.text.encode("utf-8")).hexdigest(),
-                        chunk.start_offset,
-                        chunk.end_offset,
-                        Jsonb(chunk.source_ref) if chunk.source_ref is not None else None,
-                        Jsonb(heading_path),
-                        Jsonb(chunk.metadata),
-                    ),
+
+        for chunk in persisted:
+            heading_path = chunk.metadata.get("heading_path", [])
+            connection.execute(
+                """
+                INSERT INTO rag_chunks (
+                    id,
+                    collection_id,
+                    document_id,
+                    chunk_index,
+                    content,
+                    content_hash,
+                    start_offset,
+                    end_offset,
+                    source_ref,
+                    heading_path,
+                    metadata
                 )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    chunk.id,
+                    collection_id,
+                    document_id,
+                    chunk.chunk_index,
+                    chunk.text,
+                    sha256(chunk.text.encode("utf-8")).hexdigest(),
+                    chunk.start_offset,
+                    chunk.end_offset,
+                    Jsonb(chunk.source_ref) if chunk.source_ref is not None else None,
+                    Jsonb(heading_path),
+                    Jsonb(chunk.metadata),
+                ),
+            )
         return persisted
 
     def get_by_id(self, chunk_id: str) -> Chunk | None:

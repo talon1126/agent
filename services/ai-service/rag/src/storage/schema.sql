@@ -166,6 +166,45 @@ CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding
     ON rag_chunks
     USING hnsw (embedding vector_cosine_ops);
 
+-- Persist the sparse statistics required to calculate BM25 scores without
+-- re-tokenizing chunk text during query execution. One row represents one
+-- term/chunk posting. Document-level replacement deletes stale postings
+-- through the chunk foreign key before the new complete snapshot is inserted.
+CREATE TABLE IF NOT EXISTS rag_bm25_terms (
+    collection_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    term_frequency INTEGER NOT NULL,
+    document_frequency INTEGER NOT NULL,
+    document_length INTEGER NOT NULL,
+    average_document_length DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (chunk_id, term),
+    CONSTRAINT fk_rag_bm25_terms_chunk
+        FOREIGN KEY (chunk_id)
+        REFERENCES rag_chunks(id)
+        ON DELETE CASCADE,
+    CONSTRAINT fk_rag_bm25_terms_document_collection
+        FOREIGN KEY (document_id, collection_id)
+        REFERENCES rag_documents(id, collection_id)
+        ON DELETE CASCADE,
+    CONSTRAINT chk_rag_bm25_terms_term_not_blank
+        CHECK (length(btrim(term)) > 0),
+    CONSTRAINT chk_rag_bm25_terms_frequency
+        CHECK (term_frequency > 0 AND document_frequency > 0),
+    CONSTRAINT chk_rag_bm25_terms_document_length
+        CHECK (document_length >= 0),
+    CONSTRAINT chk_rag_bm25_terms_average_length
+        CHECK (average_document_length >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_bm25_terms_collection_term
+    ON rag_bm25_terms (collection_id, term);
+CREATE INDEX IF NOT EXISTS idx_rag_bm25_terms_document
+    ON rag_bm25_terms (document_id, chunk_id);
+
 -- Index extracted image files stored under data/images/{collection}/. The
 -- relational keys keep image metadata aligned with its source document while
 -- physical dimensions and quality state support caption processing, Dashboard

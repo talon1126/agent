@@ -420,6 +420,7 @@ def test_core_schema_declares_idempotent_tables_and_indexes() -> None:
         "rag_collections",
         "rag_documents",
         "rag_chunks",
+        "rag_bm25_terms",
         "image_index",
         "rag_query_traces",
         "rag_ingestion_traces",
@@ -437,6 +438,35 @@ def test_core_schema_declares_idempotent_tables_and_indexes() -> None:
     assert "CREATE INDEX IF NOT EXISTS idx_rag_chunks_document_id" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_rag_chunks_content_hash" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding" in sql
+    assert "CREATE INDEX IF NOT EXISTS idx_rag_bm25_terms_collection_term" in sql
+    assert "CREATE INDEX IF NOT EXISTS idx_rag_bm25_terms_document" in sql
+
+
+@pytest.mark.integration
+def test_bm25_schema_persists_sparse_posting_statistics() -> None:
+    """Require term/chunk postings needed for query-time BM25 scoring."""
+
+    sql = _schema_sql()
+    terms = _table_definition(sql, "rag_bm25_terms")
+
+    for field_contract in (
+        r"\bcollection_id\s+TEXT\s+NOT\s+NULL\b",
+        r"\bdocument_id\s+TEXT\s+NOT\s+NULL\b",
+        r"\bchunk_id\s+TEXT\s+NOT\s+NULL\b",
+        r"\bterm\s+TEXT\s+NOT\s+NULL\b",
+        r"\bterm_frequency\s+INTEGER\s+NOT\s+NULL\b",
+        r"\bdocument_frequency\s+INTEGER\s+NOT\s+NULL\b",
+        r"\bdocument_length\s+INTEGER\s+NOT\s+NULL\b",
+        r"\baverage_document_length\s+DOUBLE\s+PRECISION\s+NOT\s+NULL\b",
+    ):
+        assert re.search(field_contract, terms, re.IGNORECASE)
+
+    assert re.search(
+        r"PRIMARY\s+KEY\s*\(\s*chunk_id\s*,\s*term\s*\)",
+        terms,
+        re.IGNORECASE,
+    )
+    assert "REFERENCES rag_chunks(id)" in terms
 
 
 @pytest.mark.integration

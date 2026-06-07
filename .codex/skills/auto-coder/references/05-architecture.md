@@ -340,17 +340,17 @@ services/ai-service/rag/
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | content_hash 计算、差量判断、单 chunk `embed()` 编码和 C8 批量 `embed_batch()` 编码；不承担 retry、upsert 或 BM25 职责 |
 | `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | C7 已实现 in-memory BM25 分词、词频、倒排索引构建和关键词候选查询，为后续 Sparse Route 和 BM25 持久化提供可复用统计结果 |
 | `src/ingestion/embedding/batch_processor.py` | 批处理优化 | C8 已实现按 batch_size 拆分、可配置 throttle_seconds 节流、失败批次按 item 隔离、有限 retry、失败记录和有序成功结果返回 |
-| `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | chunk、向量、BM25、images、trace 统一 upsert |
+| `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | C9 已实现完整文档快照校验、受管图片复制、document/chunk/vector/BM25/image_index 单事务写入、失败回滚和输入顺序保持 |
 
 #### 5.3.5 Storage 与本地运行层
 
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
 | `src/storage/postgres.py` | 管理 PostgreSQL 连接 | 连接池、事务、超时、健康检查 |
-| `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`image_index`、traces、evaluation |
+| `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`rag_bm25_terms`、`image_index`、traces、evaluation |
 | `src/storage/vector_storage.py` | 管理向量存储 | pgvector upsert/search、metadata filter |
-| `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | 倒排索引、词项统计、chunk 词频 |
-| `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`，`image_index` 表记录 image_id、file_path、collection、doc_hash、page_num |
+| `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | C9 已实现 document 级完整 posting 快照替换，持久化 term_frequency、document_frequency、document_length 和 average_document_length |
+| `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`；支持安全路径解析、原子文件替换和调用方事务内 image_index upsert |
 | `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
 | `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、traces、evaluation_runs |
 | `src/logs/app.log` | 保存应用运行日志 | 普通运行日志和错误排查 |

@@ -117,13 +117,8 @@ class ImageStorage:
             file when the same stable image ID is saved again.
         """
 
-        self._validate_path_part(collection, field_name="collection")
-        self._validate_path_part(image_id, field_name="image_id")
-        if not _SAFE_SUFFIX.fullmatch(suffix):
-            raise ValueError("suffix must start with '.' and contain only ASCII letters or digits")
-
-        collection_dir = self._root_dir / collection
-        target = (collection_dir / f"{image_id}{suffix.lower()}").resolve()
+        target = self.image_path(collection, image_id, suffix=suffix)
+        collection_dir = target.parent
         temporary = target.with_name(f".{target.name}.tmp")
         try:
             collection_dir.mkdir(parents=True, exist_ok=True)
@@ -139,6 +134,45 @@ class ImageStorage:
                     "image_id": image_id,
                 },
                 cause=error,
+            ) from error
+        return target
+
+    def image_path(
+        self,
+        collection: str,
+        image_id: str,
+        *,
+        suffix: str,
+    ) -> Path:
+        """Resolve one managed image path without writing file content.
+
+        Args:
+            collection: Stable collection directory name.
+            image_id: Stable image filename stem.
+            suffix: File extension including the leading dot.
+
+        Returns:
+            Absolute path below ``root_dir/{collection}``.
+
+        Raises:
+            ValueError: If any path component violates the portable path
+                contract.
+        """
+
+        self._validate_path_part(collection, field_name="collection")
+        self._validate_path_part(image_id, field_name="image_id")
+        if not _SAFE_SUFFIX.fullmatch(suffix):
+            raise ValueError(
+                "suffix must start with '.' and contain only ASCII letters or digits"
+            )
+        target = (
+            self._root_dir / collection / f"{image_id}{suffix.lower()}"
+        ).resolve()
+        try:
+            target.relative_to(self._root_dir)
+        except ValueError as error:
+            raise ValueError(
+                "Managed image path must remain below the configured root directory"
             ) from error
         return target
 
@@ -186,7 +220,62 @@ class ImageStorage:
         """
 
         with self._pool.transaction() as connection:
-            row = connection.execute(
+            return self.upsert_index_in_transaction(
+                connection,
+                image_id=image_id,
+                file_path=file_path,
+                collection_id=collection_id,
+                document_id=document_id,
+                doc_hash=doc_hash,
+                image_hash=image_hash,
+                page_num=page_num,
+                width=width,
+                height=height,
+                mime_type=mime_type,
+                quality_status=quality_status,
+                metadata=metadata,
+            )
+
+    def upsert_index_in_transaction(
+        self,
+        connection: Any,
+        *,
+        image_id: str,
+        file_path: str | Path,
+        collection_id: str,
+        document_id: str,
+        doc_hash: str,
+        image_hash: str,
+        page_num: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        mime_type: str | None = None,
+        quality_status: str = "pending",
+        metadata: dict[str, Any] | None = None,
+    ) -> ImageIndexRecord:
+        """Upsert one image index row in a caller-owned transaction.
+
+        Args:
+            connection: Active psycopg connection.
+            image_id: Stable image identifier.
+            file_path: Managed image file path.
+            collection_id: Owning collection.
+            document_id: Owning source document.
+            doc_hash: SHA256 source-document digest.
+            image_hash: SHA256 image-byte digest.
+            page_num: Source page when available.
+            width: Image width when known.
+            height: Image height when known.
+            mime_type: Image MIME type.
+            quality_status: Schema-supported caption quality state.
+            metadata: Caption and extraction metadata.
+
+        Returns:
+            Complete inserted or updated index record without committing the
+            caller transaction.
+        """
+
+        row = connection.execute(
                 """
                 INSERT INTO image_index (
                     image_id,
