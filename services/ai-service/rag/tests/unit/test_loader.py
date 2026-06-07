@@ -9,6 +9,7 @@ runs persist a complete ingestion trace summary.
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from hashlib import sha256
 from pathlib import Path
@@ -38,6 +39,206 @@ PdfConversionResult = pdf_conversion_module.PdfConversionResult
 extract_images = pdf_conversion_module.extract_images
 MarkdownLoader = markdown_loader_module.MarkdownLoader
 PdfLoader = pdf_loader_module.PdfLoader
+
+
+def test_ingest_parse_args_supports_path_collection_and_force() -> None:
+    """Require the C11 CLI to expose every approved ingestion option."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+
+    args = ingest_module.parse_args(
+        [
+            "--path",
+            "data/raw/shopping_guides",
+            "--collection",
+            "shopping_guides",
+            "--force",
+        ]
+    )
+
+    assert args.path == Path("data/raw/shopping_guides")
+    assert args.collection == "shopping_guides"
+    assert args.force is True
+
+
+def test_ingest_parse_args_reports_missing_path(capsys: pytest.CaptureFixture[str]) -> None:
+    """Require argparse to return a readable error when --path is missing."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+
+    with pytest.raises(SystemExit) as captured:
+        ingest_module.parse_args([])
+
+    assert captured.value.code == 2
+    assert "--path" in capsys.readouterr().err
+
+
+def test_run_ingest_cli_uses_default_collection_and_forwards_force(
+    tmp_path: Path,
+) -> None:
+    """Require one source file to run through the injected Pipeline boundary."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    source = tmp_path / "guide.md"
+    source.write_text("# Guide", encoding="utf-8")
+    settings = SimpleNamespace(
+        project=SimpleNamespace(default_collection="shopping_guides"),
+        database=SimpleNamespace(),
+    )
+    pool = Mock()
+    pipeline = Mock()
+    pipeline.run.return_value = SimpleNamespace(
+        trace_id="trace-c11",
+        status="indexed",
+        source_uri=str(source.resolve()),
+        source_hash="a" * 64,
+        trace_summary={"chunk_count": 1},
+    )
+    built_sources: list[Path] = []
+    output: list[str] = []
+
+    exit_code = ingest_module.run_ingest_cli(
+        ["--path", str(source), "--force"],
+        settings_loader=lambda: settings,
+        pool_factory=lambda _: pool,
+        schema_initializer=lambda active_pool: active_pool,
+        pipeline_builder=lambda path, _settings, _pool: (
+            built_sources.append(path) or pipeline
+        ),
+        output=output.append,
+        error_output=Mock(),
+    )
+
+    assert exit_code == 0
+    assert built_sources == [source.resolve()]
+    pipeline.run.assert_called_once_with(
+        source.resolve(),
+        collection_id="shopping_guides",
+        force=True,
+    )
+    pool.open.assert_called_once_with()
+    pool.close.assert_called_once_with()
+    assert json.loads(output[0]) == {
+        "collection": "shopping_guides",
+        "force": True,
+        "processed": 1,
+        "results": [
+            {
+                "source": str(source.resolve()),
+                "status": "indexed",
+                "trace_id": "trace-c11",
+                "source_hash": "a" * 64,
+                "summary": {"chunk_count": 1},
+            }
+        ],
+    }
+
+
+def test_run_ingest_cli_discovers_supported_directory_sources_in_order(
+    tmp_path: Path,
+) -> None:
+    """Require directory ingestion to recurse, filter unsupported files, and sort."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    markdown = nested / "b.md"
+    pdf = tmp_path / "a.pdf"
+    ignored = tmp_path / "notes.txt"
+    markdown.write_text("# B", encoding="utf-8")
+    pdf.write_bytes(b"%PDF fixture")
+    ignored.write_text("ignore", encoding="utf-8")
+    settings = SimpleNamespace(
+        project=SimpleNamespace(default_collection="default"),
+        database=SimpleNamespace(),
+    )
+    pool = Mock()
+    processed: list[Path] = []
+
+    def build_pipeline(source: Path, _settings: object, _pool: object) -> Mock:
+        """Create a source-specific Pipeline double and record source ordering."""
+
+        processed.append(source)
+        pipeline = Mock()
+        pipeline.run.return_value = SimpleNamespace(
+            trace_id=f"trace-{source.stem}",
+            status="indexed",
+            source_uri=str(source),
+            source_hash="b" * 64,
+            trace_summary={},
+        )
+        return pipeline
+
+    exit_code = ingest_module.run_ingest_cli(
+        ["--path", str(tmp_path), "--collection", "catalog"],
+        settings_loader=lambda: settings,
+        pool_factory=lambda _: pool,
+        schema_initializer=lambda active_pool: active_pool,
+        pipeline_builder=build_pipeline,
+        output=Mock(),
+        error_output=Mock(),
+    )
+
+    assert exit_code == 0
+    assert processed == sorted([pdf.resolve(), markdown.resolve()])
+
+
+def test_run_ingest_cli_reports_unsupported_or_empty_source_path(
+    tmp_path: Path,
+) -> None:
+    """Require invalid source selections to fail before opening PostgreSQL."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    source = tmp_path / "notes.txt"
+    source.write_text("unsupported", encoding="utf-8")
+    settings_loader = Mock()
+    pool_factory = Mock()
+    errors: list[str] = []
+
+    exit_code = ingest_module.run_ingest_cli(
+        ["--path", str(source)],
+        settings_loader=settings_loader,
+        pool_factory=pool_factory,
+        output=Mock(),
+        error_output=errors.append,
+    )
+
+    assert exit_code == 2
+    assert "No supported ingestion files" in errors[0]
+    settings_loader.assert_not_called()
+    pool_factory.assert_not_called()
+
+
+def test_run_ingest_cli_closes_pool_and_reports_pipeline_failure(
+    tmp_path: Path,
+) -> None:
+    """Require runtime failures to return code 1 without leaking the DB pool."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    source = tmp_path / "guide.md"
+    source.write_text("# Guide", encoding="utf-8")
+    settings = SimpleNamespace(
+        project=SimpleNamespace(default_collection="shopping_guides"),
+        database=SimpleNamespace(),
+    )
+    pool = Mock()
+    pipeline = Mock()
+    pipeline.run.side_effect = RuntimeError("embedding provider unavailable")
+    errors: list[str] = []
+
+    exit_code = ingest_module.run_ingest_cli(
+        ["--path", str(source)],
+        settings_loader=lambda: settings,
+        pool_factory=lambda _: pool,
+        schema_initializer=lambda active_pool: active_pool,
+        pipeline_builder=lambda _source, _settings, _pool: pipeline,
+        output=Mock(),
+        error_output=errors.append,
+    )
+
+    assert exit_code == 1
+    assert errors == ["Ingestion failed: embedding provider unavailable"]
+    pool.close.assert_called_once_with()
 
 
 def test_calculate_sha256_hashes_original_file_bytes(tmp_path: Path) -> None:

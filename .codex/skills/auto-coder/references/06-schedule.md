@@ -11,7 +11,7 @@
 | --- | --- | --- | --- |
 | Phase A | 配置与项目骨架 | 独立模块基础文件、uv 依赖锁定、Docker 部署骨架、pytest 冒烟测试、配置模板、prompt 配置、核心类型和配置加载 | [✔] |
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
-| Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [~] |
+| Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [ ] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [ ] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [ ] |
@@ -55,7 +55,7 @@
 | --- | --- | --- | --- | --- | --- |
 | Phase A | 配置与项目骨架 | 独立 RAG 模块骨架、uv 锁定环境、运行配置、Prompt 和共享数据契约已就绪，可进入持久化与可插拔组件开发 | `uv.lock`、项目 `.venv`、独立 CLI、frozen Docker 构建、类型化配置加载、活动环境变量校验、英文 Prompt、核心领域类型和统一异常 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q` | 2026-06-06 |
 | Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Loader/Splitter/LLM/Embedding/VectorStore/Reranker/Evaluator Factory、BaseTransform、DeepSeek、DashScope Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q` | 2026-06-06 |
-| Phase C | Ingestion & Indexing Pipeline | 未完成 | 暂无 | 暂无 |  |
+| Phase C | Ingestion & Indexing Pipeline | 离线摄取与索引主链路已完成，可通过 CLI 将 Markdown/PDF 文件或目录写入 PostgreSQL、pgvector、BM25 和图片索引 | SHA256 去重、Loader、智能分块、Transform、图片 caption 降级、差量 Dense 编码、BM25、事务 upsert、生命周期管理和 `ingest.py` CLI | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.ingest --help` | 2026-06-07 |
 | Phase D | Retrieval | 未完成 | 暂无 | 暂无 |  |
 | Phase E | MCP 工具服务 | 未完成 | 暂无 | 暂无 |  |
 | Phase F | 可观测与管理平台 | 未完成 | 暂无 | 暂无 |  |
@@ -117,6 +117,33 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 阶段 C 复用 `DocumentRepository`、`ChunkRepository`、`ImageStorage`、`LoaderFactory`、`SplitterFactory`、`BaseTransform`、`EmbeddingFactory` 和 `VectorStoreFactory`，实现 dedup -> load -> split -> transform -> encode -> upsert 的完整 Ingestion Pipeline。Transform 由 `src/ingestion/transform/TransformPipeline` 串行编排，不创建独立工厂。
 
+#### 阶段 C 交付里程碑：Ingestion & Indexing Pipeline
+
+完成日期：2026-06-07
+
+项目当前位置：
+
+RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipeline` 可以从原始 Markdown/PDF 文档开始，完成 source hash 去重、Loader 标准化、业务 Chunk 适配、串行 Transform、图片描述降级、Dense/BM25 双路索引、差量向量复用和 PostgreSQL 事务写入。
+
+可用功能：
+
+- 对未变化且已成功摄取的文档执行 SHA256 skipped 快速结束。
+- 从 Markdown/PDF 提取正文、标题层级、图片占位符和图片 metadata。
+- 生成稳定 chunk ID、source_ref、image_refs 和有序 chunk_index。
+- 串行执行 metadata enrich、chunk rewrite、semantic merge、denoise 和 image caption。
+- 复用成功文档中相同 content_hash 的 Dense 向量，仅编码新增或变化内容。
+- 将 document、chunk、pgvector、BM25 posting 和 image index 作为完整快照写入。
+- 通过 `python -m src.scripts.ingest --path ... [--collection ...] [--force]` 摄取单文件或递归目录。
+
+验证方式：
+
+- `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`
+- `uv run --project services/ai-service/rag python -m src.scripts.ingest --help`
+
+下一阶段入口：
+
+阶段 D 直接复用已持久化的 chunk、Dense 向量和 BM25 posting，实现 Query Processor、Dense Route、Sparse Route、RRF Fusion、metadata filter、Rerank 和本地 `query.py` 调试入口。
+
 ### 6.3 阶段任务跟踪表
 
 任务拆分原则：
@@ -167,7 +194,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | C8 | 实现 BatchProcessor 批处理优化 | [✔] | 2026-06-07 | 已实现 BatchProcessor、BatchRunResult、BatchSuccess、BatchFailure、DenseEncoder.encode_batch、batch_size 拆分、throttle_seconds 节流、有限 retry、失败隔离、EmbeddingStep.run_batch、Dense/BM25 批处理编排；20 个相关测试、145 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C9 | 实现统一 upsert | [✔] | 2026-06-07 | 已实现 rag_bm25_terms schema、BM25Storage、UpsertStep 单事务完整快照写入、pgvector/image/repository 调用方事务接口、图片文件失败恢复、重复 upsert 幂等和内容变更旧 chunk 清理；2 个 C9 PostgreSQL 集成测试、148 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C10 | 实现统一 Pipeline MVP 编排和集成测试 | [✔] | 2026-06-07 | 已实现 IngestionPipelineResult、完整依赖校验、run_indexing、Markdown 图片摄取、Splitter、Transform/ImageCaptioner、成功文档 content_hash 向量复用、重复内容单次编码、Dense/BM25 batch、统一 upsert、lifecycle success 和重复文件 dedup skip；6 个 ingestion integration 测试、14 个 embedding 单元测试、153 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C11 | 新增 `ingest.py` 摄取脚本入口 | [ ] |  | 调用 pipeline，支持 `--collection`、`--path`、`--force` |
+| C11 | 新增 `ingest.py` 摄取脚本入口 | [✔] | 2026-06-07 | 已实现必填 `--path`、可选 `--collection`、`--force`、递归 Markdown/PDF 发现、配置驱动 Pipeline 组装、JSON 结果、错误码和连接池释放；22 个 Loader/CLI 测试、160 个全量测试通过，2 个 external smoke test 默认跳过 |
 
 #### 阶段 D：Retrieval
 
@@ -241,13 +268,13 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 | --- | ---: | ---: | --- |
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
-| Phase C | 11 | 10 | 91% |
+| Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 0 | 0% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **28** | **40%** |
+| **总计** | **70** | **29** | **41%** |
 
 ### 6.5 阶段实施明细
 
@@ -817,14 +844,17 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 目标：提供本地命令行入口，调用 Ingestion Pipeline 执行离线文档摄取。
 
-修改文件：`src/scripts/ingest.py`、`tests/unit/test_loader.py`
+修改文件：`src/scripts/__init__.py`、`src/scripts/ingest.py`、`tests/unit/test_loader.py`
 
 实现类/函数：
 
 - `parse_args()`：解析命令行参数
 - `run_ingest_cli()`：执行本地摄取流程
+- `_discover_sources()`：递归发现并按路径排序 Markdown/PDF 文件
+- `_build_pipeline()`：通过配置、Factory、Repository 和 Storage 组装完整 Pipeline
+- `main()`：提供 `python -m src.scripts.ingest` 模块入口
 
-验收标准：支持 `--collection` 指定 collection；支持 `--path` 指定待摄取文件或目录；支持 `--force` 强制重新摄取并绕过 SHA256 skipped 快速结束；参数缺失时返回可读错误。
+验收标准：`--path` 必填并支持单个 `.md`、`.markdown`、`.pdf` 文件或递归目录；`--collection` 可覆盖 collection，未提供时读取 `project.default_collection`；`--force` 原样传入 Pipeline 并绕过 SHA256 skipped 快速结束；目录只处理支持的文档类型并按绝对路径稳定排序；无支持文件时返回退出码 2 和可读错误；运行失败时返回退出码 1 并始终关闭 PostgreSQL pool；全部成功时输出包含 collection、force、processed 和逐文件状态的 JSON。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_loader.py -v`
 #### 阶段 D：Retrieval
