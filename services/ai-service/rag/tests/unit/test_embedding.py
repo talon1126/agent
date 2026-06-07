@@ -367,3 +367,42 @@ def test_embedding_step_run_batch_orchestrates_dense_and_bm25() -> None:
     ]
     assert embedding.embed_batch.call_args_list[1].args[0] == [chunks[2].text]
     assert not embedding.embed.called
+
+
+def test_embedding_step_run_batch_reuses_vectors_and_expands_duplicate_content() -> None:
+    """Require batch indexing to return one dense result per ordered chunk.
+
+    Persisted vectors must be reused by content hash without calling the
+    provider again. Duplicate content introduced within the current run must
+    also share one provider result while still producing distinct storage
+    records for each chunk ID.
+    """
+
+    persisted = make_chunk(chunk_id="chunk-existing", text="Stable guidance.")
+    new = make_chunk(chunk_id="chunk-new", text="New guidance.")
+    duplicate = make_chunk(chunk_id="chunk-duplicate", text="New guidance.")
+    embedding = Mock()
+    embedding.embed_batch.return_value = [[0.25, 0.75]]
+    step = EmbeddingStep(
+        dense_encoder=DenseEncoder(embedding=embedding),
+        batch_processor=BatchProcessor(batch_size=8, max_retries=0),
+    )
+
+    result = step.run_batch(
+        [persisted, new, duplicate],
+        existing_vectors_by_hash={
+            content_hash(persisted.text): [1.0, 0.0],
+        },
+    )
+
+    assert [item.chunk_id for item in result.dense_results] == [
+        persisted.id,
+        new.id,
+        duplicate.id,
+    ]
+    assert [item.vector for item in result.dense_results] == [
+        [1.0, 0.0],
+        [0.25, 0.75],
+        [0.25, 0.75],
+    ]
+    embedding.embed_batch.assert_called_once_with([new.text])

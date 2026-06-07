@@ -12,6 +12,7 @@ import os
 import sys
 from hashlib import sha256
 from pathlib import Path
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -384,3 +385,345 @@ def test_upsert_step_rolls_back_database_snapshot_when_vector_write_fails(
                 (collection_id,),
             )
         pool.close()
+
+
+@pytest.mark.integration
+def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
+    tmp_path: Path,
+) -> None:
+    """Require C10 to compose the complete offline indexing workflow."""
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for ingestion pipeline integration")
+
+    from src.ingestion import IngestionPipeline, IngestionPipelineResult
+    from src.ingestion.chunk import DocumentChunker, SplitterStep
+    from src.ingestion.embedding import (
+        BatchProcessor,
+        BM25Indexer,
+        DenseEncoder,
+        EmbeddingStep,
+    )
+    from src.ingestion.storage import UpsertStep
+    from src.ingestion.transform import (
+        ImageCaptioner,
+        MetadataEnricher,
+        TransformPipeline,
+    )
+    from src.libs.embedding import FakeEmbedding
+    from src.libs.loader import MarkdownLoader
+    from src.libs.splitter import FakeSplitter
+    from src.libs.vector_store import PgVectorStore
+    from src.storage.bm25_storage import BM25Storage
+    from src.storage.image_storage import ImageStorage
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import (
+        ChunkRepository,
+        DocumentRepository,
+        TraceRepository,
+    )
+
+    class FakeImageTransform:
+        """Return a deterministic caption without an external Vision provider."""
+
+        def transform(
+            self,
+            image: dict[str, object],
+            *,
+            document_context: str = "",
+        ) -> dict[str, object]:
+            """Generate one stable success caption for the referenced image."""
+
+            assert image["id"]
+            assert document_context
+            return {
+                "status": "success",
+                "description": "Product comparison image for wireless headphones.",
+                "extracted_text": "wireless headphones",
+                "key_facts": ["product comparison"],
+                "provider": "fake",
+                "model": "fake-vision",
+            }
+
+    collection_id = f"c10-{uuid4().hex}"
+    source_image = tmp_path / "product.png"
+    source_image.write_bytes(b"pipeline-image")
+    source = tmp_path / "guide.md"
+    source.write_text(
+        "# Wireless Headphones\n\n"
+        "![Product](product.png)\n\n"
+        "Choose headphones by comfort, battery life, and noise cancellation.",
+        encoding="utf-8",
+    )
+
+    pool = PostgresPool.from_settings(
+        _database_settings(),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        documents = DocumentRepository(pool)
+        chunks = ChunkRepository(pool)
+        embedding = Mock(wraps=FakeEmbedding(dimensions=1536))
+        pipeline = IngestionPipeline(
+            loader=MarkdownLoader(),
+            document_repository=documents,
+            chunk_repository=chunks,
+            trace_repository=TraceRepository(pool),
+            splitter_step=SplitterStep(
+                DocumentChunker(splitter=FakeSplitter())
+            ),
+            transform_pipeline=TransformPipeline(
+                [
+                    MetadataEnricher(),
+                    ImageCaptioner(
+                        image_transform=FakeImageTransform(),
+                        enabled=True,
+                    ),
+                ]
+            ),
+            embedding_step=EmbeddingStep(
+                dense_encoder=DenseEncoder(embedding=embedding),
+                bm25_indexer=BM25Indexer(),
+                batch_processor=BatchProcessor(batch_size=8, max_retries=1),
+            ),
+            upsert_step=UpsertStep(
+                pool=pool,
+                document_repository=documents,
+                chunk_repository=chunks,
+                vector_store=PgVectorStore(
+                    pool=pool,
+                    embedding_dimensions=1536,
+                ),
+                bm25_storage=BM25Storage(pool),
+                image_storage=ImageStorage(
+                    pool,
+                    root_dir=tmp_path / "managed-images",
+                ),
+            ),
+        )
+
+        first = pipeline.run(source, collection_id=collection_id)
+        second = pipeline.run(source, collection_id=collection_id)
+
+        assert isinstance(first, IngestionPipelineResult)
+        assert first.status == "indexed"
+        assert first.document is not None
+        assert len(first.chunks) == 1
+        assert first.chunks[0].metadata["image_caption_status"] == "success"
+        assert first.indexing_result is not None
+        assert first.indexing_result.bm25_index.chunk_count == 1
+        assert first.upsert_result is not None
+        assert first.upsert_result.chunk_ids == [first.chunks[0].id]
+        assert documents.get_lifecycle_status(first.document.id) == "success"
+
+        assert second.status == "skipped"
+        assert second.document is None
+        assert second.chunks == ()
+        assert embedding.embed_batch.call_count == 1
+
+        with pool.connection() as connection:
+            counts = connection.execute(
+                """
+                SELECT
+                    (
+                        SELECT COUNT(*)
+                        FROM rag_chunks
+                        WHERE document_id = %s AND embedding IS NOT NULL
+                    ),
+                    (
+                        SELECT COUNT(*)
+                        FROM rag_bm25_terms
+                        WHERE document_id = %s
+                    ),
+                    (
+                        SELECT COUNT(*)
+                        FROM image_index
+                        WHERE document_id = %s
+                    )
+                """,
+                (first.document.id, first.document.id, first.document.id),
+            ).fetchone()
+        assert counts is not None
+        assert counts[0] == 1
+        assert counts[1] > 0
+        assert counts[2] == 1
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+@pytest.mark.integration
+def test_ingestion_pipeline_reuses_dense_vectors_for_unchanged_chunks(
+    tmp_path: Path,
+) -> None:
+    """Require changed documents to embed only chunks with new content hashes."""
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for differential ingestion integration")
+
+    from src.ingestion import IngestionPipeline
+    from src.ingestion.chunk import DocumentChunker, SplitterStep
+    from src.ingestion.embedding import (
+        BatchProcessor,
+        BM25Indexer,
+        DenseEncoder,
+        EmbeddingStep,
+    )
+    from src.ingestion.storage import UpsertStep
+    from src.ingestion.transform import MetadataEnricher, TransformPipeline
+    from src.libs.embedding import FakeEmbedding
+    from src.libs.loader import MarkdownLoader
+    from src.libs.splitter import BaseSplitter
+    from src.libs.vector_store import PgVectorStore
+    from src.storage.bm25_storage import BM25Storage
+    from src.storage.image_storage import ImageStorage
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import (
+        ChunkRepository,
+        DocumentRepository,
+        TraceRepository,
+    )
+
+    class ParagraphSplitter(BaseSplitter):
+        """Split the fixture into stable paragraph-level business chunks."""
+
+        def split(self, text: str) -> list[str]:
+            """Return non-blank paragraphs in source order."""
+
+            return [part for part in text.split("\n\n") if part.strip()]
+
+    collection_id = f"c10-differential-{uuid4().hex}"
+    source = tmp_path / "differential.md"
+    source.write_text(
+        "Stable product guidance.\n\nChanging recommendation v1.",
+        encoding="utf-8",
+    )
+
+    pool = PostgresPool.from_settings(
+        _database_settings(),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        documents = DocumentRepository(pool)
+        chunks = ChunkRepository(pool)
+        embedding = Mock(wraps=FakeEmbedding(dimensions=1536))
+        pipeline = IngestionPipeline(
+            loader=MarkdownLoader(),
+            document_repository=documents,
+            chunk_repository=chunks,
+            trace_repository=TraceRepository(pool),
+            splitter_step=SplitterStep(
+                DocumentChunker(splitter=ParagraphSplitter())
+            ),
+            transform_pipeline=TransformPipeline([MetadataEnricher()]),
+            embedding_step=EmbeddingStep(
+                dense_encoder=DenseEncoder(embedding=embedding),
+                bm25_indexer=BM25Indexer(),
+                batch_processor=BatchProcessor(batch_size=8, max_retries=1),
+            ),
+            upsert_step=UpsertStep(
+                pool=pool,
+                document_repository=documents,
+                chunk_repository=chunks,
+                vector_store=PgVectorStore(
+                    pool=pool,
+                    embedding_dimensions=1536,
+                ),
+                bm25_storage=BM25Storage(pool),
+                image_storage=ImageStorage(
+                    pool,
+                    root_dir=tmp_path / "managed-images-differential",
+                ),
+            ),
+        )
+
+        first = pipeline.run(source, collection_id=collection_id)
+        source.write_text(
+            "Stable product guidance.\n\nChanging recommendation v2.",
+            encoding="utf-8",
+        )
+        second = pipeline.run(source, collection_id=collection_id)
+
+        assert first.status == "indexed"
+        assert second.status == "indexed"
+        assert embedding.embed_batch.call_count == 2
+        assert [
+            text.strip() for text in embedding.embed_batch.call_args_list[0].args[0]
+        ] == [
+            "Stable product guidance.",
+            "Changing recommendation v1.",
+        ]
+        assert [
+            text.strip() for text in embedding.embed_batch.call_args_list[1].args[0]
+        ] == [
+            "Changing recommendation v2."
+        ]
+        assert second.indexing_result is not None
+        assert [item.chunk_id for item in second.indexing_result.dense_results] == [
+            chunk.id for chunk in second.chunks
+        ]
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+def test_ingestion_pipeline_rejects_partial_complete_mode_configuration() -> None:
+    """Require Loader-only or fully configured construction, never a partial chain."""
+
+    from src.ingestion import IngestionPipeline
+
+    with pytest.raises(ValueError, match="Complete ingestion mode requires"):
+        IngestionPipeline(
+            loader=Mock(),
+            document_repository=Mock(),
+            trace_repository=Mock(),
+            splitter_step=Mock(),
+        )
+
+
+def test_ingestion_pipeline_rejects_empty_indexing_snapshot() -> None:
+    """Require empty Splitter/Transform output to remain a failed ingestion."""
+
+    from src.core.errors import IngestionError
+    from src.core.types import Document
+    from src.ingestion import IngestionPipeline
+
+    embedding_step = Mock()
+    upsert_step = Mock()
+    pipeline = IngestionPipeline(
+        loader=Mock(),
+        document_repository=Mock(),
+        chunk_repository=Mock(),
+        trace_repository=Mock(),
+        splitter_step=Mock(),
+        transform_pipeline=Mock(),
+        embedding_step=embedding_step,
+        upsert_step=upsert_step,
+    )
+    document = Document(id="doc-empty", text="Source text.", metadata={})
+
+    with pytest.raises(IngestionError, match="without searchable chunks"):
+        pipeline.run_indexing(
+            document=document,
+            chunks=[],
+            collection_id="shopping_guides",
+            source_path="D:/fixtures/empty.md",
+            source_hash=sha256(b"Source text.").hexdigest(),
+        )
+
+    embedding_step.run_batch.assert_not_called()
+    upsert_step.run.assert_not_called()

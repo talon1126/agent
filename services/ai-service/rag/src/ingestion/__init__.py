@@ -11,6 +11,7 @@ the business sequence and data flow between those components.
 
 from src.ingestion.pipeline import (
     IngestionPipeline,
+    IngestionPipelineResult,
     IngestionRunResult,
     calculate_sha256,
     should_skip_document,
@@ -18,6 +19,7 @@ from src.ingestion.pipeline import (
 
 __all__ = (
     "IngestionPipeline",
+    "IngestionPipelineResult",
     "IngestionRunResult",
     "calculate_sha256",
     "should_skip_document",

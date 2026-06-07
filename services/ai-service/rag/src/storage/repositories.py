@@ -15,6 +15,7 @@ higher-level pipeline operations.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -782,6 +783,73 @@ class ChunkRepository:
                 ),
             )
         return persisted
+
+    def get_dense_vectors_by_content_hashes(
+        self,
+        content_hashes: set[str],
+        *,
+        collection_id: str,
+    ) -> dict[str, list[float]]:
+        """Load reusable dense vectors for successfully indexed chunk content.
+
+        Args:
+            content_hashes: SHA256 hashes calculated from final transformed
+                chunk text before embedding.
+            collection_id: Collection that owns the reusable vector data.
+
+        Returns:
+            A mapping from content hash to dense vector. Missing hashes and
+            chunks without embeddings are omitted.
+
+        Raises:
+            DatabaseError: If PostgreSQL lookup or vector decoding fails.
+
+        Notes:
+            Reuse is restricted to chunks whose parent document lifecycle is
+            ``success``. This prevents a failed or incomplete ingestion attempt
+            from becoming the source of a later differential embedding result.
+        """
+
+        requested_hashes = sorted(content_hashes)
+        if not requested_hashes:
+            return {}
+
+        rows = _read_rows(
+            self._pool,
+            operation="chunk_dense_vectors_by_content_hash",
+            query="""
+            SELECT DISTINCT ON (chunk.content_hash)
+                chunk.content_hash,
+                chunk.embedding::text
+            FROM rag_chunks AS chunk
+            JOIN rag_documents AS document
+              ON document.id = chunk.document_id
+            WHERE chunk.collection_id = %s
+              AND chunk.content_hash = ANY(%s)
+              AND chunk.embedding IS NOT NULL
+              AND document.lifecycle_status = 'success'
+            ORDER BY
+                chunk.content_hash,
+                chunk.updated_at DESC,
+                chunk.id ASC
+            """,
+            params=(collection_id, requested_hashes),
+            many=True,
+        )
+        try:
+            return {
+                content_hash: [float(value) for value in json.loads(vector_text)]
+                for content_hash, vector_text in rows
+            }
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise DatabaseError(
+                "Unable to decode stored dense vector",
+                context={
+                    "operation": "chunk_dense_vectors_by_content_hash",
+                    "collection_id": collection_id,
+                },
+                cause=error,
+            ) from error
 
     def get_by_id(self, chunk_id: str) -> Chunk | None:
         """Load one chunk by its current stable ID.

@@ -9,6 +9,8 @@ the same batch boundary while leaving PostgreSQL writes to later tasks.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.core.types import Chunk
@@ -94,6 +96,7 @@ class EmbeddingStep:
         chunks: list[Chunk],
         *,
         existing_content_hashes: set[str] | None = None,
+        existing_vectors_by_hash: Mapping[str, list[float]] | None = None,
     ) -> EmbeddingBatchResult:
         """Run Dense batch encoding and BM25 indexing for ordered chunks.
 
@@ -102,15 +105,24 @@ class EmbeddingStep:
             existing_content_hashes: Hashes already indexed for this ingestion
                 scope. Hashes generated during this run are tracked internally
                 so duplicate chunk text is encoded once.
+            existing_vectors_by_hash: Durable vectors keyed by content hash.
+                These vectors are reused without calling the embedding provider
+                and expanded to the current ordered chunk IDs.
 
         Returns:
             ``EmbeddingBatchResult`` containing ordered Dense successes, Dense
             failures, one BM25 index result, BM25 failures, and batch counters.
         """
 
+        reusable_vectors = {
+            content_hash: list(vector)
+            for content_hash, vector in (existing_vectors_by_hash or {}).items()
+        }
+        known_hashes = set(existing_content_hashes or set())
+        known_hashes.update(reusable_vectors)
         dense_candidates = self._select_dense_candidates(
             chunks,
-            existing_content_hashes=existing_content_hashes,
+            existing_content_hashes=known_hashes,
         )
         dense_run = self._batch_processor.run(
             dense_candidates,
@@ -126,9 +138,22 @@ class EmbeddingStep:
             if bm25_values
             else BM25IndexResult(chunk_count=0, average_document_length=0.0)
         )
+        vectors_by_hash = dict(reusable_vectors)
+        for result in dense_run.successful_values():
+            vectors_by_hash[result.content_hash] = list(result.vector)
+        ordered_dense_results = [
+            DenseEncodingResult(
+                chunk_id=chunk.id,
+                content_hash=self._dense_encoder.content_hash(chunk),
+                vector=vectors_by_hash[self._dense_encoder.content_hash(chunk)],
+                metadata={"chunk_index": chunk.chunk_index},
+            )
+            for chunk in chunks
+            if self._dense_encoder.content_hash(chunk) in vectors_by_hash
+        ]
 
         return EmbeddingBatchResult(
-            dense_results=dense_run.successful_values(),
+            dense_results=ordered_dense_results,
             bm25_index=bm25_index,
             dense_failures=dense_run.failures,
             bm25_failures=bm25_run.failures,
