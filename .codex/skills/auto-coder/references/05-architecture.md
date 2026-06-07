@@ -96,10 +96,10 @@ services/ai-service/rag/
 │   │   │   ├── fusion.py                          # RRF 排名倒数融合
 │   │   │   └── reranker.py                        # 调用 reranker 并处理 fallback
 │   │   ├── response/
-│   │   │   ├── __init__.py                        # 导出 Citation 和 CitationBuilder 响应层公共契约
-│   │   │   ├── response_builder.py                # 构建最终返回给 Agent 的上下文响应
+│   │   │   ├── __init__.py                        # 导出 Citation、KnowledgeHubResponse 等响应层公共契约
+│   │   │   ├── response_builder.py                # 构建格式化上下文、引用、图片和空结果标记
 │   │   │   ├── citation_builder.py                # 组装引用来源和文档出处
-│   │   │   └── multimodal_assembler.py            # 组装命中 chunk 关联的图片等多模态内容
+│   │   │   └── multimodal_assembler.py            # 批量解析 image_refs 并组装公开图片信息
 │   │   └── trace/
 │   │       ├── trace_context.py                   # 单次 ingestion/query 的 trace 上下文
 │   │       └── trace_controller.py                # trace 阶段记录和 flush 编排
@@ -280,10 +280,10 @@ services/ai-service/rag/
 | `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，并将 `Chunk.source_ref` 深拷贝到 result metadata 供 CitationBuilder 使用 |
 | `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
 | `src/core/query_engine/reranker.py` | 编排过滤后候选的精排与降级 | `RerankController` 调用 Cross-Encoder/LLM Reranker；provider 缺失、超时、异常或返回过滤集外候选时 fallback 到调用前保存的过滤后 RRF 顺序；输出和 fallback 均使用防御性副本并记录低侵入 rerank trace |
-| `src/core/response/response_builder.py` | 构建 RAG 工具响应 | 输出 answer_context、citations、metadata、trace_id |
-| `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 `Citation`、`CitationBuilder` |
+| `src/core/response/response_builder.py` | 构建 RAG 工具公开响应 | `KnowledgeHubResponseBuilder` 只从最终排序 chunk 文本生成编号上下文，组合 citations、images、trace_id 和 `is_empty`；不序列化内部 route/tool metadata |
+| `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 Citation、KnowledgeHubResponse、ResponseImage 及其 Builder/Assembler |
 | `src/core/response/citation_builder.py` | 从最终排序结果构建引用来源 | `source_ref` 优先、顶层 metadata 兼容、标题文件名回退、section_path 归一化、trace_id 关联、缺失来源 fail fast、不从 chunk 正文猜测 citation |
-| `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 根据 `image_refs` 返回相关图片 metadata 和 file_path |
+| `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 按最终检索顺序收集、去重 `image_refs`，通过最小 `ImageResolver.find_by_ids()` 接口批量读取图片索引，恢复首次引用顺序，只投影 file_path、caption、尺寸、质量状态和关联 chunk IDs |
 | `src/core/trace/trace_context.py` | 管理单次 trace 上下文 | `trace_id`、基础信息、阶段列表、汇总指标、评估指标 |
 | `src/core/trace/trace_controller.py` | 编排 trace 写入 | `record_stage()`、`flush()`、错误和 fallback 记录 |
 
@@ -353,7 +353,7 @@ services/ai-service/rag/
 | `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`rag_bm25_terms`、`image_index`、traces、evaluation |
 | `src/storage/vector_storage.py` | 管理向量存储 | pgvector upsert/search、metadata filter |
 | `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | C9 已实现 document 级完整 posting 快照替换，持久化 term_frequency、document_frequency、document_length 和 average_document_length |
-| `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`；支持安全路径解析、原子文件替换和调用方事务内 image_index upsert |
+| `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`；支持安全路径解析、原子文件替换、调用方事务内 image_index upsert，以及 Response Builder 使用的 `find_by_ids()` 批量查询 |
 | `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
 | `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、成功文档 content_hash 向量复用查询、traces、evaluation_runs |
 | `src/logs/app.log` | 保存应用运行日志 | 普通运行日志和错误排查 |

@@ -894,6 +894,10 @@ def test_image_storage_saves_files_and_queries_upserted_indexes(
         assert updated.quality_status == "low_quality"
         assert storage.find_by_collection(collection_id) == [updated]
         assert storage.find_by_doc_hash(doc_hash) == [updated]
+        assert storage.find_by_ids(
+            [f"missing-{uuid4().hex}", image_id, image_id]
+        ) == [updated]
+        assert storage.find_by_ids([]) == []
     finally:
         with pool.transaction() as connection:
             connection.execute(

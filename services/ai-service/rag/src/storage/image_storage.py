@@ -371,6 +371,68 @@ class ImageStorage:
 
         return self._find("doc_hash", doc_hash)
 
+    def find_by_ids(self, image_ids: list[str]) -> list[ImageIndexRecord]:
+        """Load image records for response assembly in one database query.
+
+        Args:
+            image_ids: Stable image IDs collected from ranked chunk
+                ``metadata.image_refs``. Duplicate IDs are accepted because
+                response assembly may combine multiple chunks.
+
+        Returns:
+            Matching records ordered by ``image_id``. Callers that need
+            retrieval-reference order must restore it from their input IDs.
+            An empty input returns immediately without opening a connection.
+
+        Raises:
+            ValueError: If any image ID is not a non-blank string.
+            DatabaseError: If PostgreSQL query execution fails.
+        """
+
+        if any(
+            not isinstance(image_id, str) or not image_id.strip()
+            for image_id in image_ids
+        ):
+            raise ValueError("image_ids must contain only non-blank strings")
+        unique_ids = list(dict.fromkeys(image_ids))
+        if not unique_ids:
+            return []
+
+        try:
+            with self._pool.connection() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT
+                        image_id,
+                        file_path,
+                        collection_id,
+                        document_id,
+                        doc_hash,
+                        page_num,
+                        width,
+                        height,
+                        mime_type,
+                        image_hash,
+                        quality_status,
+                        metadata,
+                        created_at,
+                        updated_at
+                    FROM image_index
+                    WHERE image_id = ANY(%s)
+                    ORDER BY image_id ASC
+                    """,
+                    (unique_ids,),
+                ).fetchall()
+        except DatabaseError:
+            raise
+        except psycopg.Error as error:
+            raise DatabaseError(
+                "PostgreSQL image-index batch read failed",
+                context={"operation": "image_index_find_by_ids"},
+                cause=error,
+            ) from error
+        return [self._to_record(row) for row in rows]
+
     def _find(self, column: str, value: str) -> list[ImageIndexRecord]:
         """Execute one allowlisted image-index lookup.
 

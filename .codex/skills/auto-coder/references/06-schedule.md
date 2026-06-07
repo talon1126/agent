@@ -210,7 +210,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-07 | 已实现 LLMReranker、PromptTemplate 加载、BaseLLM 注入、结构化 JSON 排名解析、未知/重复/非法 score 错误边界、未返回候选按过滤后顺序追加、rerank metadata 诊断、RerankerFactory llm 注册和 settings-only 无客户端时 fallback 到 RRF；15 个 Reranker 单元测试、22 个 Factory 单元测试通过 |
 | D9 | 实现 rerank fallback | [✔] | 2026-06-07 | 已实现 RerankController、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、低侵入 rerank trace 和 trace sink 失败隔离；26 个 Reranker 单元测试通过 |
 | D10 | 实现引用构造 | [✔] | 2026-06-07 | 已实现共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 source_ref 传播、source_ref 优先和顶层 metadata 兼容、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；11 个 Citation 单元测试、16 个核心类型回归测试、2 个 source_ref 单元测试和 1 个 pgvector 集成测试通过 |
-| D11 | 实现多模态 Response Builder | [ ] |  | 组装 chunk 关联图片，隐藏内部工具 JSON |
+| D11 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 已实现不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号文本上下文、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；16 个 Response Builder 单元测试和 1 个真实 PostgreSQL 图片查询集成测试通过 |
 | D12 | 新增 `query.py` 脚本入口 | [ ] |  | 调用完整 `hybridsearch + filter + rerank`，支持 query/top-k/collection/verbose/no-rerank |
 | D13 | 实现 Retrieval 单元测试矩阵 | [ ] |  | Query Processor、Dense、Sparse、RRF、HybridSearch、Filter、Rerank、Response、query.py |
 | D14 | 实现 Retrieval 集成测试 | [ ] |  | 覆盖 Dense/BM25/Hybrid/Filter/Rerank/fallback/query.py |
@@ -269,12 +269,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 10 | 71% |
+| Phase D | 14 | 11 | 79% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **39** | **56%** |
+| **总计** | **70** | **40** | **57%** |
 
 ### 6.5 阶段实施明细
 
@@ -1047,18 +1047,38 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 ##### D11：实现多模态响应组装
 
-目标：组装命中 chunk 关联图片，并隐藏内部工具 JSON。
+目标：把最终排序 chunk 转换为可直接交给 MCP、AImodel、CLI 和 Dashboard 的
+公开知识响应；响应包含格式化文本上下文、D10 引用、命中图片和 trace_id，但不
+暴露 Dense/Sparse 中间结果、向量、Provider payload、过滤报告或内部 tool JSON。
 
-修改文件：`src/core/response/multimodal_assembler.py`、`src/core/response/response_builder.py`、`tests/unit/test_response_builder.py`
+修改文件：`src/core/response/__init__.py`、`src/core/response/multimodal_assembler.py`、
+`src/core/response/response_builder.py`、`src/storage/image_storage.py`、
+`tests/unit/test_response_builder.py`、`tests/integration/test_repositories.py`
 
 实现类/函数：
 
-- `MultimodalAssembler`：组装多模态内容
-- `KnowledgeHubResponseBuilder`：构建知识库工具返回内容和引用信息
+- `ResponseImage`：定义只包含公开图片字段的不可变响应对象
+- `ImageResolver.find_by_ids()`：定义 Response 层所依赖的最小图片批量查询接口
+- `MultimodalAssembler.assemble()`：按最终排名收集、去重并解析 chunk 关联图片
+- `MultimodalAssembler._collect_references()`：验证 image_refs 契约并聚合关联 chunk IDs
+- `MultimodalAssembler._to_response_image()`：隔离内部索引 metadata，只投影公开图片字段
+- `KnowledgeHubResponse`：定义 content、citations、images、trace_id 和 is_empty 公共响应
+- `KnowledgeHubResponseBuilder.build()`：组合格式化上下文、引用和多模态内容
+- `KnowledgeHubResponseBuilder._format_content()`：将排序 chunk 文本格式化为编号上下文
+- `ImageStorage.find_by_ids()`：单次 PostgreSQL 查询读取命中图片索引
 
-验收标准：可组装图片信息，不泄漏内部 JSON。
+验收标准：输入最终排序后的 `Sequence[RetrievalResult]` 和非空 trace_id，输出
+不可变 `KnowledgeHubResponse`；`content` 只包含按 `[1]`、`[2]` 排名编号的
+chunk 文本，不包含 retrieval metadata；citations 复用 D10 的 grounded citation；
+图片引用从 `metadata.image_refs` 读取，必须是非空字符串列表，跨 chunk 去重并
+保持首次引用顺序，同一图片记录所有关联 chunk IDs；图片索引采用一次批量查询，
+解析结果不依赖数据库返回顺序；缺失图片索引安全跳过且不影响文本响应；公开图片
+只包含 image_id、managed file_path、mime_type、page、尺寸、caption、quality_status
+和 chunk_ids，不泄漏 image hash、原始 extraction path、Provider payload 或任意扩展
+metadata；空候选返回 `ok=true`、`is_empty=true`、空 content/citations/images，且不
+访问图片存储；构造过程不修改 RetrievalResult。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`；使用 Docker PostgreSQL 设置 `DATABASE_URL` 后执行 `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py::test_image_storage_saves_files_and_queries_upserted_indexes -v`
 
 ##### D12：新增 query.py 脚本入口
 

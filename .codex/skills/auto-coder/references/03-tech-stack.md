@@ -175,20 +175,40 @@ MCP 工具一：`query_knowledge_hub`
 ```json
 {
   "ok": true,
-  "content": "可用于回答的知识摘要",
+  "content": "[1] 可用于回答的第一段知识上下文\n\n[2] 可用于回答的第二段知识上下文",
   "citations": [
     {
-      "document_id": 1,
-      "chunk_id": 12,
+      "document_id": "doc_wireless_earbuds",
+      "chunk_id": "chunk_wireless_earbuds_core",
       "title": "无线耳机选购指南",
-      "heading_path": ["核心判断标准"],
+      "section_path": ["核心判断标准"],
       "source_uri": "shopping_guides/wireless-earbuds.md",
-      "score": 0.82
+      "score": 0.82,
+      "trace_id": "query_20260604_xxx"
     }
   ],
-  "trace_id": "query_20260604_xxx"
+  "images": [
+    {
+      "image_id": "image_codec_table",
+      "file_path": "data/images/shopping_guides/image_codec_table.png",
+      "mime_type": "image/png",
+      "page": 2,
+      "width": 800,
+      "height": 600,
+      "caption": "无线耳机编码格式对比表。",
+      "quality_status": "ok",
+      "chunk_ids": ["chunk_wireless_earbuds_core"]
+    }
+  ],
+  "trace_id": "query_20260604_xxx",
+  "is_empty": false
 }
 ```
+
+`content` 只由最终排序后的 chunk 文本按 `[1]`、`[2]` 编号格式化，不直接序列化
+Dense/Sparse 分数、向量、Provider 返回、过滤报告或内部 tool result。`citations` 和
+`images` 使用独立公共契约；没有检索命中时返回 `ok=true`、`is_empty=true`、空
+`content`、空引用和空图片列表。
 
 MCP 工具二：`list_collections`
 

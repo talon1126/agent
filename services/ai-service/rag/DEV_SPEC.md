@@ -352,20 +352,40 @@ MCP 工具一：`query_knowledge_hub`
 ```json
 {
   "ok": true,
-  "content": "可用于回答的知识摘要",
+  "content": "[1] 可用于回答的第一段知识上下文\n\n[2] 可用于回答的第二段知识上下文",
   "citations": [
     {
-      "document_id": 1,
-      "chunk_id": 12,
+      "document_id": "doc_wireless_earbuds",
+      "chunk_id": "chunk_wireless_earbuds_core",
       "title": "无线耳机选购指南",
-      "heading_path": ["核心判断标准"],
+      "section_path": ["核心判断标准"],
       "source_uri": "shopping_guides/wireless-earbuds.md",
-      "score": 0.82
+      "score": 0.82,
+      "trace_id": "query_20260604_xxx"
     }
   ],
-  "trace_id": "query_20260604_xxx"
+  "images": [
+    {
+      "image_id": "image_codec_table",
+      "file_path": "data/images/shopping_guides/image_codec_table.png",
+      "mime_type": "image/png",
+      "page": 2,
+      "width": 800,
+      "height": 600,
+      "caption": "无线耳机编码格式对比表。",
+      "quality_status": "ok",
+      "chunk_ids": ["chunk_wireless_earbuds_core"]
+    }
+  ],
+  "trace_id": "query_20260604_xxx",
+  "is_empty": false
 }
 ```
+
+`content` 只由最终排序后的 chunk 文本按 `[1]`、`[2]` 编号格式化，不直接序列化
+Dense/Sparse 分数、向量、Provider 返回、过滤报告或内部 tool result。`citations` 和
+`images` 使用独立公共契约；没有检索命中时返回 `ok=true`、`is_empty=true`、空
+`content`、空引用和空图片列表。
 
 MCP 工具二：`list_collections`
 
@@ -1312,10 +1332,10 @@ services/ai-service/rag/
 │   │   │   ├── fusion.py                          # RRF 排名倒数融合
 │   │   │   └── reranker.py                        # 调用 reranker 并处理 fallback
 │   │   ├── response/
-│   │   │   ├── __init__.py                        # 导出 Citation 和 CitationBuilder 响应层公共契约
-│   │   │   ├── response_builder.py                # 构建最终返回给 Agent 的上下文响应
+│   │   │   ├── __init__.py                        # 导出 Citation、KnowledgeHubResponse 等响应层公共契约
+│   │   │   ├── response_builder.py                # 构建格式化上下文、引用、图片和空结果标记
 │   │   │   ├── citation_builder.py                # 组装引用来源和文档出处
-│   │   │   └── multimodal_assembler.py            # 组装命中 chunk 关联的图片等多模态内容
+│   │   │   └── multimodal_assembler.py            # 批量解析 image_refs 并组装公开图片信息
 │   │   └── trace/
 │   │       ├── trace_context.py                   # 单次 ingestion/query 的 trace 上下文
 │   │       └── trace_controller.py                # trace 阶段记录和 flush 编排
@@ -1496,10 +1516,10 @@ services/ai-service/rag/
 | `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，并将 `Chunk.source_ref` 深拷贝到 result metadata 供 CitationBuilder 使用 |
 | `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
 | `src/core/query_engine/reranker.py` | 编排过滤后候选的精排与降级 | `RerankController` 调用 Cross-Encoder/LLM Reranker；provider 缺失、超时、异常或返回过滤集外候选时 fallback 到调用前保存的过滤后 RRF 顺序；输出和 fallback 均使用防御性副本并记录低侵入 rerank trace |
-| `src/core/response/response_builder.py` | 构建 RAG 工具响应 | 输出 answer_context、citations、metadata、trace_id |
-| `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 `Citation`、`CitationBuilder` |
+| `src/core/response/response_builder.py` | 构建 RAG 工具公开响应 | `KnowledgeHubResponseBuilder` 只从最终排序 chunk 文本生成编号上下文，组合 citations、images、trace_id 和 `is_empty`；不序列化内部 route/tool metadata |
+| `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 Citation、KnowledgeHubResponse、ResponseImage 及其 Builder/Assembler |
 | `src/core/response/citation_builder.py` | 从最终排序结果构建引用来源 | `source_ref` 优先、顶层 metadata 兼容、标题文件名回退、section_path 归一化、trace_id 关联、缺失来源 fail fast、不从 chunk 正文猜测 citation |
-| `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 根据 `image_refs` 返回相关图片 metadata 和 file_path |
+| `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 按最终检索顺序收集、去重 `image_refs`，通过最小 `ImageResolver.find_by_ids()` 接口批量读取图片索引，恢复首次引用顺序，只投影 file_path、caption、尺寸、质量状态和关联 chunk IDs |
 | `src/core/trace/trace_context.py` | 管理单次 trace 上下文 | `trace_id`、基础信息、阶段列表、汇总指标、评估指标 |
 | `src/core/trace/trace_controller.py` | 编排 trace 写入 | `record_stage()`、`flush()`、错误和 fallback 记录 |
 
@@ -1569,7 +1589,7 @@ services/ai-service/rag/
 | `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`rag_bm25_terms`、`image_index`、traces、evaluation |
 | `src/storage/vector_storage.py` | 管理向量存储 | pgvector upsert/search、metadata filter |
 | `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | C9 已实现 document 级完整 posting 快照替换，持久化 term_frequency、document_frequency、document_length 和 average_document_length |
-| `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`；支持安全路径解析、原子文件替换和调用方事务内 image_index upsert |
+| `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`；支持安全路径解析、原子文件替换、调用方事务内 image_index upsert，以及 Response Builder 使用的 `find_by_ids()` 批量查询 |
 | `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
 | `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、成功文档 content_hash 向量复用查询、traces、evaluation_runs |
 | `src/logs/app.log` | 保存应用运行日志 | 普通运行日志和错误排查 |
@@ -2045,7 +2065,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-07 | 已实现 LLMReranker、PromptTemplate 加载、BaseLLM 注入、结构化 JSON 排名解析、未知/重复/非法 score 错误边界、未返回候选按过滤后顺序追加、rerank metadata 诊断、RerankerFactory llm 注册和 settings-only 无客户端时 fallback 到 RRF；15 个 Reranker 单元测试、22 个 Factory 单元测试通过 |
 | D9 | 实现 rerank fallback | [✔] | 2026-06-07 | 已实现 RerankController、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、低侵入 rerank trace 和 trace sink 失败隔离；26 个 Reranker 单元测试通过 |
 | D10 | 实现引用构造 | [✔] | 2026-06-07 | 已实现共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 source_ref 传播、source_ref 优先和顶层 metadata 兼容、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；11 个 Citation 单元测试、16 个核心类型回归测试、2 个 source_ref 单元测试和 1 个 pgvector 集成测试通过 |
-| D11 | 实现多模态 Response Builder | [ ] |  | 组装 chunk 关联图片，隐藏内部工具 JSON |
+| D11 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 已实现不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号文本上下文、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；16 个 Response Builder 单元测试和 1 个真实 PostgreSQL 图片查询集成测试通过 |
 | D12 | 新增 `query.py` 脚本入口 | [ ] |  | 调用完整 `hybridsearch + filter + rerank`，支持 query/top-k/collection/verbose/no-rerank |
 | D13 | 实现 Retrieval 单元测试矩阵 | [ ] |  | Query Processor、Dense、Sparse、RRF、HybridSearch、Filter、Rerank、Response、query.py |
 | D14 | 实现 Retrieval 集成测试 | [ ] |  | 覆盖 Dense/BM25/Hybrid/Filter/Rerank/fallback/query.py |
@@ -2104,12 +2124,12 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
-| Phase D | 14 | 10 | 71% |
+| Phase D | 14 | 11 | 79% |
 | Phase E | 4 | 0 | 0% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **39** | **56%** |
+| **总计** | **70** | **40** | **57%** |
 
 ### 6.5 阶段实施明细
 
@@ -2882,18 +2902,38 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 ##### D11：实现多模态响应组装
 
-目标：组装命中 chunk 关联图片，并隐藏内部工具 JSON。
+目标：把最终排序 chunk 转换为可直接交给 MCP、AImodel、CLI 和 Dashboard 的
+公开知识响应；响应包含格式化文本上下文、D10 引用、命中图片和 trace_id，但不
+暴露 Dense/Sparse 中间结果、向量、Provider payload、过滤报告或内部 tool JSON。
 
-修改文件：`src/core/response/multimodal_assembler.py`、`src/core/response/response_builder.py`、`tests/unit/test_response_builder.py`
+修改文件：`src/core/response/__init__.py`、`src/core/response/multimodal_assembler.py`、
+`src/core/response/response_builder.py`、`src/storage/image_storage.py`、
+`tests/unit/test_response_builder.py`、`tests/integration/test_repositories.py`
 
 实现类/函数：
 
-- `MultimodalAssembler`：组装多模态内容
-- `KnowledgeHubResponseBuilder`：构建知识库工具返回内容和引用信息
+- `ResponseImage`：定义只包含公开图片字段的不可变响应对象
+- `ImageResolver.find_by_ids()`：定义 Response 层所依赖的最小图片批量查询接口
+- `MultimodalAssembler.assemble()`：按最终排名收集、去重并解析 chunk 关联图片
+- `MultimodalAssembler._collect_references()`：验证 image_refs 契约并聚合关联 chunk IDs
+- `MultimodalAssembler._to_response_image()`：隔离内部索引 metadata，只投影公开图片字段
+- `KnowledgeHubResponse`：定义 content、citations、images、trace_id 和 is_empty 公共响应
+- `KnowledgeHubResponseBuilder.build()`：组合格式化上下文、引用和多模态内容
+- `KnowledgeHubResponseBuilder._format_content()`：将排序 chunk 文本格式化为编号上下文
+- `ImageStorage.find_by_ids()`：单次 PostgreSQL 查询读取命中图片索引
 
-验收标准：可组装图片信息，不泄漏内部 JSON。
+验收标准：输入最终排序后的 `Sequence[RetrievalResult]` 和非空 trace_id，输出
+不可变 `KnowledgeHubResponse`；`content` 只包含按 `[1]`、`[2]` 排名编号的
+chunk 文本，不包含 retrieval metadata；citations 复用 D10 的 grounded citation；
+图片引用从 `metadata.image_refs` 读取，必须是非空字符串列表，跨 chunk 去重并
+保持首次引用顺序，同一图片记录所有关联 chunk IDs；图片索引采用一次批量查询，
+解析结果不依赖数据库返回顺序；缺失图片索引安全跳过且不影响文本响应；公开图片
+只包含 image_id、managed file_path、mime_type、page、尺寸、caption、quality_status
+和 chunk_ids，不泄漏 image hash、原始 extraction path、Provider payload 或任意扩展
+metadata；空候选返回 `ok=true`、`is_empty=true`、空 content/citations/images，且不
+访问图片存储；构造过程不修改 RetrievalResult。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`；使用 Docker PostgreSQL 设置 `DATABASE_URL` 后执行 `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py::test_image_storage_saves_files_and_queries_upserted_indexes -v`
 
 ##### D12：新增 query.py 脚本入口
 

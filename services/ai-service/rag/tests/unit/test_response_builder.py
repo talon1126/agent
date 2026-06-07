@@ -1,18 +1,26 @@
-"""Verify response-layer citation construction from retrieved chunk metadata.
+"""Verify citation and public knowledge-response construction.
 
-D10 establishes the source-attribution boundary used by later response, MCP,
-Dashboard, and AImodel adapters. These tests ensure citations remain grounded
-in retrieval metadata, preserve ranked order, include the query trace ID, and
-never guess a source from chunk prose.
+D10 establishes the source-attribution boundary, while D11 adds the public
+response contract consumed by MCP, Dashboard, CLI, and AImodel adapters. These
+tests ensure citations remain grounded, image references are resolved in
+retrieval order, response text is readable, and internal retrieval metadata is
+never serialized as tool output.
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
-from src.core.response import Citation, CitationBuilder
+from src.core.response import (
+    Citation,
+    CitationBuilder,
+    KnowledgeHubResponseBuilder,
+    MultimodalAssembler,
+)
 from src.core.types import RetrievalResult
 
 
@@ -222,3 +230,224 @@ def test_citation_serializes_section_path_as_json_array() -> None:
 
     assert payload["section_path"] == ["Audio", "Wireless"]
     assert payload["title"] == "audio guide"
+
+
+@dataclass(frozen=True)
+class _ImageRecord:
+    """Provide the image-index fields consumed by ``MultimodalAssembler``."""
+
+    image_id: str
+    file_path: str
+    mime_type: str | None
+    page_num: int | None
+    width: int | None
+    height: int | None
+    quality_status: str
+    metadata: dict[str, Any]
+
+
+class _ImageResolver:
+    """Record batch lookups while returning image records in storage order."""
+
+    def __init__(self, records: list[_ImageRecord]) -> None:
+        """Store deterministic records for response-layer unit tests.
+
+        Args:
+            records: Image index records returned by ``find_by_ids``.
+        """
+
+        self.records = records
+        self.requests: list[tuple[str, ...]] = []
+
+    def find_by_ids(self, image_ids: list[str]) -> list[_ImageRecord]:
+        """Return configured records and capture the requested stable IDs.
+
+        Args:
+            image_ids: Ordered unique image IDs collected from ranked chunks.
+
+        Returns:
+            Configured records. Their order intentionally differs from request
+            order in tests so the assembler must restore reference order.
+        """
+
+        self.requests.append(tuple(image_ids))
+        return list(self.records)
+
+
+def test_response_builder_formats_context_and_assembles_ranked_images() -> None:
+    """Build a readable public response without exposing retrieval internals."""
+
+    candidates = [
+        RetrievalResult(
+            chunk_id="chunk-headphones",
+            text="  Battery life and codec support should be compared together.  ",
+            score=0.94,
+            metadata={
+                "source_ref": {
+                    "document_id": "doc-headphones",
+                    "source_path": "shopping_guides/headphones.md",
+                    "title": "Wireless Headphones Guide",
+                },
+                "image_refs": ["image-codec", "image-battery"],
+                "tool_result": {
+                    "tool": "dense_search",
+                    "raw_vector": [0.1, 0.2],
+                },
+            },
+        ),
+        RetrievalResult(
+            chunk_id="chunk-battery",
+            text="A charging-case rating should be separated from earbud runtime.",
+            score=0.88,
+            metadata={
+                "source_ref": {
+                    "document_id": "doc-headphones",
+                    "source_path": "shopping_guides/headphones.md",
+                    "title": "Wireless Headphones Guide",
+                },
+                "image_refs": ["image-battery"],
+                "dense_score": 0.995,
+            },
+        ),
+    ]
+    resolver = _ImageResolver(
+        [
+            _ImageRecord(
+                image_id="image-battery",
+                file_path="data/images/shopping_guides/image-battery.png",
+                mime_type="image/png",
+                page_num=3,
+                width=640,
+                height=360,
+                quality_status="ok",
+                metadata={"caption": "Charging case and battery-life table."},
+            ),
+            _ImageRecord(
+                image_id="image-codec",
+                file_path="data/images/shopping_guides/image-codec.jpg",
+                mime_type="image/jpeg",
+                page_num=2,
+                width=800,
+                height=600,
+                quality_status="low_quality",
+                metadata={"caption": ""},
+            ),
+        ]
+    )
+    builder = KnowledgeHubResponseBuilder(
+        multimodal_assembler=MultimodalAssembler(resolver=resolver)
+    )
+
+    response = builder.build(candidates, trace_id="query-trace-response")
+
+    assert response.ok is True
+    assert response.is_empty is False
+    assert response.content == (
+        "[1] Battery life and codec support should be compared together.\n\n"
+        "[2] A charging-case rating should be separated from earbud runtime."
+    )
+    assert [citation.chunk_id for citation in response.citations] == [
+        "chunk-headphones",
+        "chunk-battery",
+    ]
+    assert resolver.requests == [("image-codec", "image-battery")]
+    assert [image.image_id for image in response.images] == [
+        "image-codec",
+        "image-battery",
+    ]
+    assert response.images[0].chunk_ids == ("chunk-headphones",)
+    assert response.images[0].caption is None
+    assert response.images[1].chunk_ids == (
+        "chunk-headphones",
+        "chunk-battery",
+    )
+    assert response.images[1].caption == (
+        "Charging case and battery-life table."
+    )
+
+    payload = response.model_dump(mode="json")
+    serialized = str(payload)
+    assert set(payload) == {
+        "ok",
+        "content",
+        "citations",
+        "images",
+        "trace_id",
+        "is_empty",
+    }
+    assert "tool_result" not in serialized
+    assert "dense_score" not in serialized
+    assert "raw_vector" not in serialized
+
+
+def test_multimodal_assembler_skips_missing_records_without_mutating_results() -> None:
+    """Degrade to available images while preserving retrieval metadata."""
+
+    candidate = _result(
+        "chunk-a",
+        metadata={
+            "document_id": "doc-a",
+            "source_path": "shopping_guides/a.md",
+            "image_refs": ["image-missing", "image-found", "image-found"],
+        },
+    )
+    original_metadata = deepcopy(candidate.metadata)
+    resolver = _ImageResolver(
+        [
+            _ImageRecord(
+                image_id="image-found",
+                file_path="data/images/shopping_guides/image-found.png",
+                mime_type="image/png",
+                page_num=None,
+                width=None,
+                height=None,
+                quality_status="skipped",
+                metadata={},
+            )
+        ]
+    )
+
+    images = MultimodalAssembler(resolver=resolver).assemble([candidate])
+
+    assert [image.image_id for image in images] == ["image-found"]
+    assert resolver.requests == [("image-missing", "image-found")]
+    assert candidate.metadata == original_metadata
+
+
+def test_multimodal_assembler_rejects_invalid_image_reference_contracts() -> None:
+    """Reject malformed image_refs instead of stringifying internal objects."""
+
+    candidate = _result(
+        "chunk-a",
+        metadata={
+            "document_id": "doc-a",
+            "source_path": "shopping_guides/a.md",
+            "image_refs": [{"id": "image-a"}],
+        },
+    )
+
+    with pytest.raises(ValueError, match="image_refs"):
+        MultimodalAssembler(resolver=_ImageResolver([])).assemble([candidate])
+
+
+def test_response_builder_returns_explicit_empty_response_without_image_lookup() -> None:
+    """Represent no retrieval hits without inventing context or citations."""
+
+    resolver = _ImageResolver([])
+    response = KnowledgeHubResponseBuilder(
+        multimodal_assembler=MultimodalAssembler(resolver=resolver)
+    ).build([], trace_id="query-trace-empty-response")
+
+    assert response.ok is True
+    assert response.is_empty is True
+    assert response.content == ""
+    assert response.citations == ()
+    assert response.images == ()
+    assert resolver.requests == []
+
+
+def test_response_builder_requires_a_non_blank_trace_id() -> None:
+    """Reject responses that cannot be correlated with a query trace."""
+
+    with pytest.raises(ValueError, match="trace_id"):
+        KnowledgeHubResponseBuilder().build([], trace_id=" ")
