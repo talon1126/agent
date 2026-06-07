@@ -45,17 +45,19 @@ vision_llm:
       api_key_env: OPENAI_API_KEY
       timeout_seconds: 90
 
-# Dense embeddings use the approved first-release OpenAI model.
+# Dense embeddings use the Qwen3-Embedding series through DashScope's
+# OpenAI-compatible endpoint while preserving the 1536-dimension pgvector schema.
 embedding:
-  default: openai
+  default: dashscope
   fallback: none
   batch_size: 64
   cache_enabled: true
   providers:
-    openai:
-      model: text-embedding-3-small
+    dashscope:
+      model: text-embedding-v4
       dimensions: 1536
-      api_key_env: OPENAI_API_KEY
+      api_key_env: DASHSCOPE_API_KEY
+      base_url_env: DASHSCOPE_BASE_URL
       timeout_seconds: 60
 
 # PostgreSQL with pgvector is the only first-release vector store.

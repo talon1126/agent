@@ -124,7 +124,7 @@ services/ai-service/rag/
 │   │   ├── embedding/
 │   │   │   ├── base_embedding.py                  # EmbeddingClient 最小抽象接口
 │   │   │   ├── embedding_factory.py               # 根据配置创建 EmbeddingClient
-│   │   │   ├── openai_embedding.py                # text-embedding-3-small 实现
+│   │   │   ├── openai_embedding.py                # OpenAI 兼容 Embedding 实现，支持百炼 text-embedding-v4
 │   │   │   └── fake_embedding.py                  # 单元测试使用的假 embedding 实现
 │   │   ├── vector_store/
 │   │   │   ├── base_vector_store.py               # VectorStore 最小抽象接口
@@ -305,7 +305,7 @@ services/ai-service/rag/
 | `src/libs/transform/base_transform.py` | 定义 Transform 抽象接口 | `transform(chunks, context) -> chunks`；具体执行顺序由 ingestion pipeline 负责 |
 | `src/libs/embedding/base_embedding.py` | 定义 EmbeddingClient 抽象接口 | `embed(text)`、`embed_batch(texts)` |
 | `src/libs/embedding/embedding_factory.py` | 创建 EmbeddingClient | 根据配置选择 OpenAI/fake embedding |
-| `src/libs/embedding/openai_embedding.py` | OpenAI embedding 实现 | `text-embedding-3-small`、批量调用 |
+| `src/libs/embedding/openai_embedding.py` | OpenAI 兼容 embedding 实现 | 百炼 `text-embedding-v4`、1536 维、批量调用和响应顺序恢复 |
 | `src/libs/embedding/fake_embedding.py` | 测试 embedding 实现 | 单元测试稳定向量，不访问外部 API |
 | `src/libs/vector_store/base_vector_store.py` | 定义 VectorStore 抽象接口 | `upsert(chunks)`、`search(vector, filters, top_k)` |
 | `src/libs/vector_store/vector_store_factory.py` | 创建向量存储实现 | 首版创建 pgvector store，预留扩展 |
@@ -323,7 +323,7 @@ services/ai-service/rag/
 
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
-| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | dedup -> load -> split -> transform -> image_caption -> content_hash -> Dense/BM25Indexer -> BatchProcessor -> upsert，接入 TraceContext，提供 MVP 集成测试入口 |
+| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | C10 已实现 dedup -> load -> split -> transform/image_caption -> existing content_hash vector lookup -> Dense/BM25 batch -> transactional upsert -> lifecycle success；保留 Loader-only 兼容模式并拒绝部分依赖和空 chunk 快照 |
 | `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 去重通过后的 Loader 调用和 Document 标准化 |
 | `src/ingestion/pdf_to_markdown.py` | PDF 转 Markdown 辅助逻辑 | MarkItDown、页码、图片抽取 |
 | `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
@@ -336,7 +336,7 @@ services/ai-service/rag/
 | `src/ingestion/transform/denoise_transform.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留，保留图片占位符 |
 | `src/ingestion/transform/image_to_text_transform.py` | 图片理解适配 | 调用注入的 Vision LLM，解析 status、description、extracted_text、key_facts 和 reason |
 | `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、caption 写入 chunk metadata |
-| `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | C8 已实现 `run_dense()` 和 `run_batch()`；按 content_hash 跳过已索引 chunk，使用 BatchProcessor 批量执行 Dense 编码，并通过同一批处理边界编排 BM25Indexer |
+| `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | `run_dense()` 提供窄粒度差量编码；`run_batch()` 复用数据库已有 content_hash 向量、对当前批次重复内容只调用一次模型，并为每个有序 chunk 生成完整 Dense 结果，同时编排 BM25Indexer |
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | content_hash 计算、差量判断、单 chunk `embed()` 编码和 C8 批量 `embed_batch()` 编码；不承担 retry、upsert 或 BM25 职责 |
 | `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | C7 已实现 in-memory BM25 分词、词频、倒排索引构建和关键词候选查询，为后续 Sparse Route 和 BM25 持久化提供可复用统计结果 |
 | `src/ingestion/embedding/batch_processor.py` | 批处理优化 | C8 已实现按 batch_size 拆分、可配置 throttle_seconds 节流、失败批次按 item 隔离、有限 retry、失败记录和有序成功结果返回 |
@@ -352,7 +352,7 @@ services/ai-service/rag/
 | `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | C9 已实现 document 级完整 posting 快照替换，持久化 term_frequency、document_frequency、document_length 和 average_document_length |
 | `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`；支持安全路径解析、原子文件替换和调用方事务内 image_index upsert |
 | `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
-| `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、traces、evaluation_runs |
+| `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、成功文档 content_hash 向量复用查询、traces、evaluation_runs |
 | `src/logs/app.log` | 保存应用运行日志 | 普通运行日志和错误排查 |
 | `src/logs/traces.jsonl` | 保存结构化 trace 日志 | ingestion/query trace JSON Lines |
 | `src/cache/embedding/` | 缓存 embedding 结果 | content_hash 差量计算和重复请求复用 |

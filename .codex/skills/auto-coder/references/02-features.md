@@ -34,7 +34,7 @@
 本项目采用 **混合检索**：
 
 - **稀疏检索 BM25**：根据关键词、词频和文档相关性进行匹配，适合品牌名、类目名、参数名、政策关键词等精确查询。
-- **稠密检索 Dense Embedding**：使用 `text-embedding-3-small` 把问题和 chunk 转成向量，适合理解“高性价比”“适合送人”“通勤降噪”这类语义问题。
+- **稠密检索 Dense Embedding**：使用百炼 `text-embedding-v4`（Qwen3-Embedding 系列）把问题和 chunk 转成向量，适合理解“高性价比”“适合送人”“通勤降噪”这类语义问题。
 
 两路结果再做融合排序，既保留关键词检索的稳定性，也利用语义检索的泛化能力。
 
@@ -60,7 +60,7 @@ RAG 系统里最容易变化的是模型、向量库、重排器和评估方式�
 首批支持方向包括：
 
 - LLM：Azure OpenAI、OpenAI、Ollama、DeepSeek。
-- Embedding：OpenAI `text-embedding-3-small`。
+- Embedding：百炼 `text-embedding-v4`，通过 OpenAI 兼容接口调用。
 - VectorStore：PostgreSQL + pgvector。
 - Splitter：仅使用 LangChain 的 `RecursiveCharacterTextSplitter`，不依赖 LangChain RAG 框架。
 

@@ -257,6 +257,23 @@ def test_embedding_factory_creates_fake_embedding_with_batch_interface() -> None
     assert batch_vectors[0] != batch_vectors[1]
 
 
+def test_embedding_factory_registers_dashscope_openai_compatible_provider() -> None:
+    """Require DashScope to reuse the provider-independent embedding adapter."""
+
+    sdk_client = Mock()
+    embedding = EmbeddingFactory.create(
+        provider="dashscope",
+        model="text-embedding-v4",
+        dimensions=1536,
+        api_key_env="DASHSCOPE_API_KEY",
+        base_url_env="DASHSCOPE_BASE_URL",
+        client=sdk_client,
+    )
+
+    assert isinstance(embedding, OpenAIEmbedding)
+    assert "dashscope" in EmbeddingFactory.list_providers()
+
+
 def test_model_factories_fail_fast_when_required_environment_is_missing() -> None:
     """Require real providers to reject missing credentials before SDK calls."""
 
@@ -268,7 +285,8 @@ def test_model_factories_fail_fast_when_required_environment_is_missing() -> Non
         EmbeddingFactory.create(settings=settings, environ={})
 
     assert llm_error.value.context["environment_variable"] == "DASHSCOPE_API_KEY"
-    assert embedding_error.value.context["environment_variable"] == "OPENAI_API_KEY"
+    assert embedding_error.value.context["environment_variable"] == "DASHSCOPE_API_KEY"
+    assert embedding_error.value.context["provider"] == "dashscope"
 
 
 def test_vector_store_factory_creates_order_preserving_fake_store() -> None:

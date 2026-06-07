@@ -348,7 +348,7 @@ def test_core_schema_enables_pgvector_and_preserves_domain_fields() -> None:
 
     Storage must retain chunk ordering, source offsets, source references,
     extensible metadata, content hashes, and the configured 1536-dimensional
-    embedding produced by ``text-embedding-3-small``.
+    1536-dimension embedding produced by the selected provider.
     """
 
     sql = _schema_sql()

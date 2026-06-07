@@ -64,6 +64,8 @@ RAG 子系统错误分为：
 
 ```dotenv
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agent
+DASHSCOPE_API_KEY=你的阿里云百炼 API Key
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 OPENAI_API_KEY=你的 OpenAI API Key
 RAG_SETTINGS_PATH=services/ai-service/rag/config/settings.yaml
 RAG_DEFAULT_COLLECTION=shopping_guides

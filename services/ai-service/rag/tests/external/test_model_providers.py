@@ -2,8 +2,8 @@
 
 These tests are excluded from normal development runs unless
 ``RUN_RAG_EXTERNAL_TESTS=1`` is set explicitly. This prevents accidental API
-charges while retaining a repeatable way to verify Bailian DeepSeek and OpenAI
-Embedding credentials before deployment.
+charges while retaining a repeatable way to verify Bailian DeepSeek and
+DashScope Embedding credentials before deployment.
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ def test_deepseek_provider_returns_non_blank_content() -> None:
     assert response.provider == "deepseek"
 
 
-def test_openai_embedding_returns_configured_dimensions() -> None:
-    """Call OpenAI Embedding and verify the configured vector dimensions."""
+def test_dashscope_embedding_returns_configured_dimensions() -> None:
+    """Call DashScope Embedding and verify the configured vector dimensions."""
 
     # Provider constructors validate only the environment variables they use.
     # Avoid requiring DATABASE_URL for a model-only external smoke test.

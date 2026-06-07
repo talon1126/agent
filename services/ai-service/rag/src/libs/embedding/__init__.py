@@ -3,7 +3,8 @@
 Embedding implementations provide single-text and batch vector generation
 behind a common interface so ingestion code can switch providers through
 configuration. The package exports deterministic fake vectors and the
-``text-embedding-3-small`` OpenAI adapter through one registry-backed factory.
+OpenAI-compatible adapter used by DashScope ``text-embedding-v4`` and OpenAI
+models through one registry-backed factory.
 """
 
 from src.libs.embedding.base_embedding import BaseEmbedding

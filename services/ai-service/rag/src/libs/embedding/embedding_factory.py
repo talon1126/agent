@@ -28,14 +28,15 @@ class EmbeddingFactory:
         """Register project-owned embedding implementations once per process.
 
         Side Effects:
-            Populates the registry with the deterministic fake and OpenAI
-            embedding implementations.
+            Populates the registry with the deterministic fake, OpenAI, and
+            DashScope OpenAI-compatible embedding implementations.
         """
 
         if cls._builtins_registered:
             return
         cls.register("fake", FakeEmbedding)
         cls.register("openai", OpenAIEmbedding)
+        cls.register("dashscope", OpenAIEmbedding)
         cls._builtins_registered = True
 
     @classmethod
@@ -107,6 +108,8 @@ class EmbeddingFactory:
             provider_settings = settings.embedding.providers.get(provider_name)
             if provider_settings is not None:
                 options.update(provider_settings.model_dump(exclude_none=True))
+        if embedding_class is OpenAIEmbedding:
+            options.setdefault("provider_name", provider_name)
         options.update(override_options)
 
         try:

@@ -20,7 +20,7 @@ from src.libs.embedding.base_embedding import BaseEmbedding
 
 
 class OpenAIEmbedding(BaseEmbedding):
-    """Generate dense vectors with the configured OpenAI embedding model."""
+    """Generate dense vectors through an OpenAI-compatible embedding API."""
 
     def __init__(
         self,
@@ -31,6 +31,7 @@ class OpenAIEmbedding(BaseEmbedding):
         base_url_env: str | None = None,
         base_url: str | None = None,
         timeout_seconds: int = 60,
+        provider_name: str = "openai",
         client: Any | None = None,
         environ: Mapping[str, str] | None = None,
         **_: Any,
@@ -38,13 +39,16 @@ class OpenAIEmbedding(BaseEmbedding):
         """Configure the embedding provider and expected vector dimensions.
 
         Args:
-            model: OpenAI embedding model identifier.
+            model: Provider-specific embedding model identifier accepted by the
+                OpenAI-compatible endpoint.
             dimensions: Required vector length shared with pgvector schema.
             api_key_env: Environment variable containing the OpenAI API key.
             base_url_env: Optional environment variable for a compatible API
                 endpoint.
             base_url: Optional literal compatible endpoint.
             timeout_seconds: SDK request timeout.
+            provider_name: Configuration-facing provider identifier retained in
+                error context when this adapter serves a compatible endpoint.
             client: Optional SDK-compatible client injected by tests.
             environ: Optional isolated environment mapping for tests.
             **_: Forward-compatible provider settings ignored by this adapter.
@@ -58,13 +62,23 @@ class OpenAIEmbedding(BaseEmbedding):
         """
 
         if not model.strip():
-            raise ConfigurationError("OpenAI embedding model must not be blank")
+            raise ConfigurationError(
+                "OpenAI-compatible embedding model must not be blank"
+            )
         if dimensions <= 0:
-            raise ConfigurationError("OpenAI embedding dimensions must be positive")
+            raise ConfigurationError(
+                "OpenAI-compatible embedding dimensions must be positive"
+            )
         if timeout_seconds <= 0:
-            raise ConfigurationError("OpenAI embedding timeout must be positive")
+            raise ConfigurationError(
+                "OpenAI-compatible embedding timeout must be positive"
+            )
+        normalized_provider = provider_name.strip().lower()
+        if not normalized_provider:
+            raise ConfigurationError("Embedding provider name must not be blank")
 
         self._model = model
+        self._provider = normalized_provider
         self.dimensions = dimensions
         if client is not None:
             self._client = client
@@ -73,15 +87,15 @@ class OpenAIEmbedding(BaseEmbedding):
         environment = os.environ if environ is None else environ
         if not api_key_env or not api_key_env.strip():
             raise ConfigurationError(
-                "OpenAI embedding api_key_env must be configured",
-                context={"provider": "openai", "setting": "api_key_env"},
+                "OpenAI-compatible embedding api_key_env must be configured",
+                context={"provider": self._provider, "setting": "api_key_env"},
             )
         api_key = environment.get(api_key_env, "").strip()
         if not api_key:
             raise ConfigurationError(
-                f"Missing OpenAI environment variable: {api_key_env}",
+                f"Missing embedding environment variable: {api_key_env}",
                 context={
-                    "provider": "openai",
+                    "provider": self._provider,
                     "environment_variable": api_key_env,
                 },
             )
@@ -91,9 +105,9 @@ class OpenAIEmbedding(BaseEmbedding):
             resolved_base_url = environment.get(base_url_env, "").strip()
             if not resolved_base_url:
                 raise ConfigurationError(
-                    f"Missing OpenAI environment variable: {base_url_env}",
+                    f"Missing embedding environment variable: {base_url_env}",
                     context={
-                        "provider": "openai",
+                        "provider": self._provider,
                         "environment_variable": base_url_env,
                     },
                 )
@@ -108,8 +122,8 @@ class OpenAIEmbedding(BaseEmbedding):
             self._client = OpenAI(**client_options)
         except Exception as error:
             raise ConfigurationError(
-                "Unable to initialize OpenAI embedding SDK client",
-                context={"provider": "openai"},
+                "Unable to initialize OpenAI-compatible embedding SDK client",
+                context={"provider": self._provider},
                 cause=error,
             ) from error
 
@@ -148,7 +162,7 @@ class OpenAIEmbedding(BaseEmbedding):
         if any(not text.strip() for text in texts):
             raise ProviderError(
                 "Cannot embed blank text",
-                context={"provider": "openai", "model": self._model},
+                context={"provider": self._provider, "model": self._model},
             )
 
         try:
@@ -159,17 +173,17 @@ class OpenAIEmbedding(BaseEmbedding):
             )
         except Exception as error:
             raise ProviderError(
-                "OpenAI embedding request failed",
-                context={"provider": "openai", "model": self._model},
+                "OpenAI-compatible embedding request failed",
+                context={"provider": self._provider, "model": self._model},
                 cause=error,
             ) from error
 
         data = list(getattr(response, "data", ()) or ())
         if len(data) != len(texts):
             raise ProviderError(
-                "OpenAI embedding response count does not match input",
+                "OpenAI-compatible embedding response count does not match input",
                 context={
-                    "provider": "openai",
+                    "provider": self._provider,
                     "model": self._model,
                     "expected_count": len(texts),
                     "actual_count": len(data),
@@ -182,14 +196,14 @@ class OpenAIEmbedding(BaseEmbedding):
             vector = getattr(item, "embedding", None)
             if not isinstance(index, int) or index < 0 or index >= len(texts):
                 raise ProviderError(
-                    "OpenAI embedding response contains an invalid index",
-                    context={"provider": "openai", "model": self._model},
+                    "OpenAI-compatible embedding response contains an invalid index",
+                    context={"provider": self._provider, "model": self._model},
                 )
             if not isinstance(vector, list | tuple) or len(vector) != self.dimensions:
                 raise ProviderError(
-                    "OpenAI embedding response has unexpected dimensions",
+                    "OpenAI-compatible embedding response has unexpected dimensions",
                     context={
-                        "provider": "openai",
+                        "provider": self._provider,
                         "model": self._model,
                         "expected_dimensions": self.dimensions,
                     },
@@ -198,7 +212,7 @@ class OpenAIEmbedding(BaseEmbedding):
 
         if set(vectors_by_index) != set(range(len(texts))):
             raise ProviderError(
-                "OpenAI embedding response indexes are incomplete",
-                context={"provider": "openai", "model": self._model},
+                "OpenAI-compatible embedding response indexes are incomplete",
+                context={"provider": self._provider, "model": self._model},
             )
         return [vectors_by_index[index] for index in range(len(texts))]

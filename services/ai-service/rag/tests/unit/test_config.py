@@ -131,7 +131,7 @@ def test_default_component_selection_matches_the_spec() -> None:
     """Protect the approved first-release provider and fallback selections.
 
     The assertions pin only architecture decisions already approved in
-    ``DEV_SPEC.md``: DeepSeek chat, Qwen vision, OpenAI embeddings, pgvector,
+    ``DEV_SPEC.md``: DeepSeek chat, Qwen vision, DashScope embeddings, pgvector,
     recursive splitting, and RRF fallback. A failure indicates unreviewed
     provider drift rather than a model-runtime error.
     """
@@ -140,7 +140,11 @@ def test_default_component_selection_matches_the_spec() -> None:
     assert settings["llm"]["default"] == "deepseek"
     assert settings["llm"]["providers"]["deepseek"]["model"] == "deepseek-v4-flash"
     assert settings["vision_llm"]["providers"]["qwen_vl_max"]["model"] == "Qwen-VL-Max"
-    assert settings["embedding"]["providers"]["openai"]["model"] == ("text-embedding-3-small")
+    assert settings["embedding"]["default"] == "dashscope"
+    assert settings["embedding"]["providers"]["dashscope"]["model"] == (
+        "text-embedding-v4"
+    )
+    assert settings["embedding"]["providers"]["dashscope"]["dimensions"] == 1536
     assert settings["vector_store"]["provider"] == "pgvector"
     assert settings["splitter"]["default"] == "recursive_character"
     assert settings["rerank"]["fallback"] == "rrf"
@@ -159,7 +163,12 @@ def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:
 
     assert settings["database"]["url_env"] == "DATABASE_URL"
     assert settings["llm"]["providers"]["deepseek"]["api_key_env"] == ("DASHSCOPE_API_KEY")
-    assert settings["embedding"]["providers"]["openai"]["api_key_env"] == ("OPENAI_API_KEY")
+    assert settings["embedding"]["providers"]["dashscope"]["api_key_env"] == (
+        "DASHSCOPE_API_KEY"
+    )
+    assert settings["embedding"]["providers"]["dashscope"]["base_url_env"] == (
+        "DASHSCOPE_BASE_URL"
+    )
     assert "sk-" not in serialized
     assert "YOUR_API_KEY" not in serialized
 
@@ -405,7 +414,7 @@ def test_load_settings_rejects_embedding_dimension_mismatch(tmp_path: Path) -> N
     configuration before an embedding request or database write occurs.
     """
     document = load_settings_document()
-    document["embedding"]["providers"]["openai"]["dimensions"] = 1024
+    document["embedding"]["providers"]["dashscope"]["dimensions"] = 1024
     settings_path = tmp_path / "settings.yaml"
     settings_path.write_text(yaml.safe_dump(document), encoding="utf-8")
 
@@ -430,7 +439,7 @@ def test_environment_validation_lists_only_active_requirements() -> None:
     assert "DATABASE_URL" in message
     assert "DASHSCOPE_API_KEY" in message
     assert "DASHSCOPE_BASE_URL" in message
-    assert "OPENAI_API_KEY" in message
+    assert "OPENAI_API_KEY" not in message
     assert message.count("DASHSCOPE_API_KEY") == 1
 
 

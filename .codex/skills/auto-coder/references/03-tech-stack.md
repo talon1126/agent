@@ -12,7 +12,7 @@
 | Web 服务 | FastAPI | AImodel 已使用 FastAPI |
 | 数据库 | PostgreSQL | 唯一持久化层 |
 | 向量库 | pgvector | 首版唯一实现 |
-| Embedding | OpenAI `text-embedding-3-small` | 默认维度 1536 |
+| Embedding | 百炼 `text-embedding-v4`（Qwen3-Embedding 系列） | 使用 1536 维，与现有 pgvector schema 保持一致 |
 | Splitter | `langchain-text-splitters` | 只使用 splitter，不使用 LangChain RAG |
 | PDF 转 Markdown | MarkItDown | 统一进入 Markdown 中间格式 |
 | MCP | Python 官方 MCP SDK | 暴露 RAG tools |
@@ -39,7 +39,7 @@ Dedup -> Loader -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25I
 查询预处理 -> 双路混合检索 -> 候选过滤 -> 重排 -> 引用结果构造
 ```
 
-流水线要支持 **可组合**：不同 Loader、Splitter、Transform、Embedding 和 VectorStore 可以通过配置组合成不同策略。例如首版使用 PDF/Markdown Loader + RecursiveCharacterTextSplitter + ImageCaptioner + OpenAI Embedding + pgvector，后续可以替换某一层而不重写整条链路。
+流水线要支持 **可组合**：不同 Loader、Splitter、Transform、Embedding 和 VectorStore 可以通过配置组合成不同策略。例如首版使用 PDF/Markdown Loader + RecursiveCharacterTextSplitter + ImageCaptioner + DashScope Embedding + pgvector，后续可以替换某一层而不重写整条链路。
 
 #### 3.2.2 数据摄取流水线
 
@@ -53,7 +53,7 @@ Dedup -> Loader -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25I
 | `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、继承 `document.metadata`、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并按图片占位符位置分发 `image_refs` |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
 | `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后写入 chunk metadata；未启用 Vision LLM、无 `image_refs` 或生成失败时安全跳过并写入状态 |
-| `BaseEmbedding` | 将增强后的 chunk 执行双路索引 | 在编码前先计算 `content_hash`，只对数据库中不存在的内容哈希执行新编码；DenseEncoder 调用 `text-embedding-3-small` 生成语义向量；BM25Indexer 生成词项、词频和倒排索引；BatchProcessor 统一处理批量、限流、重试和失败隔离 |
+| `BaseEmbedding` | 将增强后的 chunk 执行双路索引 | 在编码前先计算 `content_hash`，只对数据库中不存在的内容哈希执行新编码；DenseEncoder 调用百炼 `text-embedding-v4` 生成 1536 维语义向量；BM25Indexer 生成词项、词频和倒排索引；BatchProcessor 统一处理批量、限流、重试和失败隔离 |
 | `BaseVectorStore` | 将 chunk、metadata、Dense 向量和 Sparse 检索数据写入 PostgreSQL | 首版只实现 PostgreSQL + pgvector；upsert 时保证同一文档版本的 chunk 可覆盖更新；`chunk_id` 使用 `hash(source_path + section_path + content_hash)` 生成，确保同一来源、同一章节、同一内容具有稳定标识 |
 | 文档生命周期管理 | 管理文档从摄取、更新、删除到重建索引的状态 | 支持 `pending`、`processing`、`success`、`failed`、`deleted`；删除文档时同步删除对应 chunk、向量、BM25 统计和检索可见状态 |
 
@@ -249,8 +249,8 @@ llm:
   model: deepseek-v4-flash
 
 embedding:
-  provider: openai
-  model: text-embedding-3-small
+  provider: dashscope
+  model: text-embedding-v4
 
 rerank:
   provider: cross_encoder
@@ -292,7 +292,7 @@ Transform 不创建 Factory，也不作为 Provider 选项。Transform 由 inges
 | 能力 | Provider |
 | --- | --- |
 | LLM | Azure OpenAI、OpenAI、Ollama、DeepSeek |
-| Embedding | OpenAI `text-embedding-3-small`；后续可扩展 Azure OpenAI Embedding、Ollama Embedding |
+| Embedding | 百炼 `text-embedding-v4`；通过 OpenAI 兼容适配器调用，后续可扩展 OpenAI、Azure OpenAI Embedding、Ollama Embedding |
 | VectorStore | pgvector；接口预留 Qdrant、Milvus、Chroma |
 | Splitter | RecursiveCharacterTextSplitter |
 | Reranker | Cross-Encoder、LLM Rerank、None |
@@ -370,15 +370,16 @@ vision_llm:
       timeout_seconds: 90
 
 embedding:
-  default: openai
+  default: dashscope
   fallback: none
   batch_size: 64
   cache_enabled: true
   providers:
-    openai:
-      model: text-embedding-3-small
+    dashscope:
+      model: text-embedding-v4
       dimensions: 1536
-      api_key_env: OPENAI_API_KEY
+      api_key_env: DASHSCOPE_API_KEY
+      base_url_env: DASHSCOPE_BASE_URL
       timeout_seconds: 60
 
 vector_store:
