@@ -13,14 +13,13 @@ from typing import Any
 
 import pytest
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
 
 from src.core.config import load_settings
 from src.core.errors import McpError
 from src.core.response import KnowledgeHubResponse, ResponseImage
 from src.core.types import Citation
 from src.mcp_server.server import create_mcp_server, parse_args, run_stdio_server
-from src.mcp_server.tools import QueryKnowledgeHubTool
+from src.mcp_server.tools import MetadataTool, QueryKnowledgeHubTool
 
 SETTINGS_PATH = "services/ai-service/rag/config/settings.example.yaml"
 
@@ -94,6 +93,52 @@ class FakeRuntime:
         return FakeQueryExecution(response=self.response)
 
 
+class FakeMetadataReader:
+    """Serve deterministic collection and document metadata to MCP tool tests."""
+
+    def __init__(
+        self,
+        *,
+        collections: list[dict[str, Any]] | None = None,
+        document_summary: dict[str, Any] | None = None,
+    ) -> None:
+        """Store fake metadata responses and record lookup arguments.
+
+        Args:
+            collections: Public collection overview rows returned by
+                ``list_collections``.
+            document_summary: Public document summary returned by
+                ``get_document_summary``. ``None`` simulates a missing document.
+        """
+
+        self.collections = collections or []
+        self.document_summary = document_summary
+        self.summary_calls: list[dict[str, str | None]] = []
+
+    def list_collections(self) -> list[dict[str, Any]]:
+        """Return the configured collection overview rows."""
+
+        return self.collections
+
+    def get_document_summary(
+        self,
+        *,
+        document_id: str | None = None,
+        source_uri: str | None = None,
+        collection: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Record lookup arguments and return the configured summary."""
+
+        self.summary_calls.append(
+            {
+                "document_id": document_id,
+                "source_uri": source_uri,
+                "collection": collection,
+            }
+        )
+        return self.document_summary
+
+
 def _knowledge_response(
     *,
     images: tuple[ResponseImage, ...] = (),
@@ -146,6 +191,25 @@ def _query_tool(
     return tool, active_pool, active_runtime
 
 
+def _metadata_tool(
+    *,
+    reader: FakeMetadataReader | None = None,
+    pool: FakePool | None = None,
+) -> tuple[MetadataTool, FakePool, FakeMetadataReader]:
+    """Create metadata MCP tools with fake resources for unit tests."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    active_pool = pool or FakePool()
+    active_reader = reader or FakeMetadataReader()
+    tool = MetadataTool(
+        settings_loader=lambda: settings,
+        pool_factory=lambda _database_settings: active_pool,
+        schema_initializer=lambda _pool: None,
+        reader_factory=lambda _pool: active_reader,
+    )
+    return tool, active_pool, active_reader
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_create_mcp_server_registers_configured_tools() -> None:
@@ -170,17 +234,38 @@ async def test_create_mcp_server_registers_configured_tools() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_mcp_server_placeholder_tools_fail_with_stable_error() -> None:
-    """Keep E3 placeholder tools explicit until collection tools are implemented."""
+async def test_mcp_server_registers_collection_tools_as_real_handlers() -> None:
+    """Allow E3 collection tools to replace placeholders through injection."""
 
     settings = load_settings(SETTINGS_PATH, validate_environment=False)
-    server = create_mcp_server(settings=settings)
 
-    with pytest.raises(ToolError, match="not implemented"):
-        await server.call_tool(
-            "list_collections",
-            {},
-        )
+    async def list_collections() -> dict[str, Any]:
+        """Return a minimal structured collection response."""
+
+        return {"ok": True, "collections": []}
+
+    async def get_document_summary(document_id: str) -> dict[str, Any]:
+        """Return a minimal structured document summary response."""
+
+        return {"ok": True, "document": {"document_id": document_id}}
+
+    server = create_mcp_server(
+        settings=settings,
+        list_collections=list_collections,
+        get_document_summary=get_document_summary,
+    )
+
+    list_result = await server.call_tool("list_collections", {})
+    summary_result = await server.call_tool(
+        "get_document_summary",
+        {"document_id": "doc-shopping-guide"},
+    )
+
+    assert list_result[1] == {"ok": True, "collections": []}
+    assert summary_result[1] == {
+        "ok": True,
+        "document": {"document_id": "doc-shopping-guide"},
+    }
 
 
 @pytest.mark.unit
@@ -407,3 +492,141 @@ async def test_create_mcp_server_can_register_real_query_tool() -> None:
     payload = result[1]
     assert payload["ok"] is True
     assert payload["trace_id"] == "trace-mcp-test"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_list_collections_returns_overview_and_closes_pool() -> None:
+    """Expose searchable collection counts without leaking database rows."""
+
+    reader = FakeMetadataReader(
+        collections=[
+            {
+                "collection": "shopping_guides",
+                "document_count": 2,
+                "chunk_count": 8,
+                "updated_at": "2026-06-08T10:00:00+00:00",
+            }
+        ]
+    )
+    tool, pool, _reader = _metadata_tool(reader=reader)
+
+    payload = await tool.list_collections()
+
+    assert payload == {
+        "ok": True,
+        "collections": [
+            {
+                "collection": "shopping_guides",
+                "document_count": 2,
+                "chunk_count": 8,
+                "updated_at": "2026-06-08T10:00:00+00:00",
+            }
+        ],
+    }
+    assert pool.closed is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_list_collections_returns_readable_error_for_empty_catalog() -> None:
+    """Return a readable business error when no searchable collection exists."""
+
+    tool, pool, _reader = _metadata_tool(reader=FakeMetadataReader(collections=[]))
+
+    payload = await tool.list_collections()
+
+    assert payload == {
+        "ok": False,
+        "error": {
+            "code": "no_collections",
+            "message": "no searchable collections are available",
+        },
+    }
+    assert pool.closed is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_document_summary_returns_public_summary() -> None:
+    """Expose document status and section outline by document identity."""
+
+    reader = FakeMetadataReader(
+        document_summary={
+            "document_id": "doc-shopping-guide",
+            "collection": "shopping_guides",
+            "source_uri": "shopping_guides/relax-toys.md",
+            "title": "Relax Toy Guide",
+            "summary": "A concise buying guide for stress relief toys.",
+            "lifecycle_status": "success",
+            "chunk_count": 3,
+            "sections": [
+                {"path": ["Selection Criteria"], "chunk_count": 2},
+                {"path": ["Safety"], "chunk_count": 1},
+            ],
+            "updated_at": "2026-06-08T10:00:00+00:00",
+        }
+    )
+    tool, pool, active_reader = _metadata_tool(reader=reader)
+
+    payload = await tool.get_document_summary(document_id="doc-shopping-guide")
+
+    assert payload["ok"] is True
+    assert payload["document"]["document_id"] == "doc-shopping-guide"
+    assert payload["document"]["sections"] == [
+        {"path": ["Selection Criteria"], "chunk_count": 2},
+        {"path": ["Safety"], "chunk_count": 1},
+    ]
+    assert active_reader.summary_calls == [
+        {
+            "document_id": "doc-shopping-guide",
+            "source_uri": None,
+            "collection": None,
+        }
+    ]
+    assert pool.closed is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_document_summary_validates_lookup_identity_before_settings() -> None:
+    """Reject ambiguous summary lookups before loading environment settings."""
+
+    def failing_settings_loader():
+        """Fail if validation incorrectly waits for settings first."""
+
+        raise AssertionError("settings should not be loaded for invalid lookup")
+
+    tool = MetadataTool(settings_loader=failing_settings_loader)
+
+    missing_identity = await tool.get_document_summary()
+    ambiguous_identity = await tool.get_document_summary(
+        document_id="doc-shopping-guide",
+        source_uri="shopping_guides/relax-toys.md",
+    )
+
+    assert missing_identity["ok"] is False
+    assert missing_identity["error"]["code"] == "invalid_request"
+    assert "document_id or source_uri" in missing_identity["error"]["message"]
+    assert ambiguous_identity["ok"] is False
+    assert ambiguous_identity["error"]["code"] == "invalid_request"
+    assert "only one" in ambiguous_identity["error"]["message"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_document_summary_returns_readable_error_when_missing() -> None:
+    """Return a stable not-found envelope instead of exposing SQL details."""
+
+    tool, pool, _reader = _metadata_tool(reader=FakeMetadataReader(document_summary=None))
+
+    payload = await tool.get_document_summary(source_uri="shopping_guides/missing.md")
+
+    assert payload == {
+        "ok": False,
+        "error": {
+            "code": "document_not_found",
+            "message": "document summary was not found",
+        },
+    }
+    assert pool.closed is True

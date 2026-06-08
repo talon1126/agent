@@ -248,7 +248,7 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 | --- | --- | --- | --- | --- |
 | E1 | 搭建 MCP Server | [✔] | 2026-06-07 | 已实现 FastMCP server 工厂、stdio 启动入口、`.env` 加载、app.log 文件日志、配置驱动 tool 注册、未知工具 fail fast、E1 placeholder tool 错误边界和 SDK ToolError 包装契约；5 个 MCP 单元测试通过 |
 | E2 | 暴露 `query_knowledge_hub` | [✔] | 2026-06-08 | 已实现 QueryKnowledgeHubTool、QueryRuntime 适配、请求原语校验先于 settings 加载、默认 collection/top_k、no_rerank、结构化业务错误、默认不返回图片 base64、显式 include_image_base64 支持、PostgreSQL pool 打开失败也能释放资源和 FastMCP 真实 query tool 注册；12 个 MCP 单元测试通过 |
-| E3 | 暴露 `list_collections` 和 `get_document_summary` | [ ] |  |  |
+| E3 | 暴露 `list_collections` 和 `get_document_summary` | [✔] | 2026-06-08 | 已实现 MetadataTool、PostgresMetadataReader、真实 FastMCP collection/summary handler 注册、空 collection 可读业务错误、document_id/source_uri 参数校验、文档摘要与章节 outline 返回；17 个 MCP 单元测试通过 |
 | E4 | 完成 MCP tools 测试 | [ ] |  |  |
 
 #### 阶段 F：可观测与管理平台
@@ -297,11 +297,11 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 14 | 100% |
-| Phase E | 4 | 2 | 50% |
+| Phase E | 4 | 3 | 75% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **45** | **64%** |
+| **总计** | **70** | **46** | **66%** |
 
 ### 6.5 阶段实施明细
 
@@ -1234,10 +1234,14 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- `list_collections`：暴露对外工具能力
-- `get_document_summary`：暴露对外工具能力
+- `MetadataTool.list_collections()`：列出可检索 collection，返回文档数、chunk 数和最近更新时间
+- `MetadataTool.get_document_summary()`：按 document_id 或 source_uri 返回文档摘要、章节列表和摄取状态
+- `MetadataTool._validate_summary_request()`：在加载配置和打开数据库前校验摘要查询身份参数
+- `PostgresMetadataReader.list_collections()`：从 PostgreSQL 读取 success 文档可检索 collection 概览
+- `PostgresMetadataReader.get_document_summary()`：从 PostgreSQL 读取单文档公开摘要，不返回全文、向量或内部 trace
+- `create_mcp_server(list_collections=..., get_document_summary=...)`：把 E3 的真实 metadata tools 注册到 FastMCP
 
-验收标准：空集合返回可读错误。
+验收标准：`list_collections` 返回可检索 collection、文档数量、chunk 数量和最近更新时间；无可检索 collection 时返回可读 `ok=false` 业务错误；`get_document_summary` 支持按 `document_id` 或 `source_uri` 查询，返回文档摘要、章节列表、摄取状态和 chunk 数量；缺失文档返回可读 `document_not_found` 业务错误；工具输出不得泄漏全文、向量、BM25 postings、内部 trace 或数据库原始异常。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 

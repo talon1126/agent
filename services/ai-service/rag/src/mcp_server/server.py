@@ -2,8 +2,7 @@
 
 This module owns only the transport-facing server assembly. It uses the Python
 MCP SDK's ``FastMCP`` class, validates the configured tool names, and registers
-stable tool placeholders that later Phase E tasks replace with real retrieval
-and repository behavior.
+the concrete Phase E tool handlers exposed to AImodel and other MCP clients.
 
 The server factory deliberately does not open PostgreSQL connections, construct
 LLM providers, run Retrieval, or import the local query CLI. Those actions are
@@ -26,7 +25,7 @@ from mcp.server.fastmcp import FastMCP
 
 from src.core.config import RagSettings, load_settings
 from src.core.errors import McpError
-from src.mcp_server.tools import QueryKnowledgeHubTool
+from src.mcp_server.tools import MetadataTool, QueryKnowledgeHubTool
 
 RAG_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 DEFAULT_APP_LOG_PATH: Final[Path] = RAG_ROOT / "src" / "logs" / "app.log"
@@ -138,6 +137,8 @@ def create_mcp_server(
     *,
     settings: RagSettings,
     query_knowledge_hub: McpToolHandler | None = None,
+    list_collections: McpToolHandler | None = None,
+    get_document_summary: McpToolHandler | None = None,
 ) -> FastMCP:
     """Create a configured MCP server and register enabled RAG tool names.
 
@@ -147,6 +148,10 @@ def create_mcp_server(
         query_knowledge_hub: Optional E2 query tool handler. Tests and AImodel
             integration can inject a preconfigured handler; ``None`` creates
             the default ``QueryKnowledgeHubTool`` without opening resources.
+        list_collections: Optional E3 collection catalog handler. ``None``
+            creates the default ``MetadataTool`` handler lazily.
+        get_document_summary: Optional E3 document summary handler. ``None``
+            creates the default ``MetadataTool`` handler lazily.
 
     Returns:
         A ``FastMCP`` server with E1 placeholder handlers registered for every
@@ -163,8 +168,17 @@ def create_mcp_server(
     _validate_tool_names(tool_names)
     server = FastMCP(name=SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
     query_tool = query_knowledge_hub or QueryKnowledgeHubTool().query_knowledge_hub
+    metadata_tool = MetadataTool()
+    list_tool = list_collections or metadata_tool.list_collections
+    summary_tool = get_document_summary or metadata_tool.get_document_summary
     for tool_name in tool_names:
-        _register_tool(server, tool_name, query_knowledge_hub=query_tool)
+        _register_tool(
+            server,
+            tool_name,
+            query_knowledge_hub=query_tool,
+            list_collections=list_tool,
+            get_document_summary=summary_tool,
+        )
     return server
 
 
@@ -192,6 +206,8 @@ def _register_tool(
     tool_name: str,
     *,
     query_knowledge_hub: McpToolHandler,
+    list_collections: McpToolHandler,
+    get_document_summary: McpToolHandler,
 ) -> None:
     """Attach the current Phase E handler for one configured tool.
 
@@ -199,10 +215,12 @@ def _register_tool(
         server: ``FastMCP`` instance receiving the tool registration.
         tool_name: Stable external tool identifier.
         query_knowledge_hub: E2 knowledge query handler.
+        list_collections: E3 collection catalog handler.
+        get_document_summary: E3 document summary handler.
 
     Notes:
-        E2 replaces ``query_knowledge_hub`` with a concrete Retrieval adapter.
-        E3 will replace the collection and document-summary placeholders.
+        Phase E registers concrete tool handlers while keeping server assembly
+        free of database, Retrieval, and provider side effects.
     """
 
     if tool_name == "query_knowledge_hub":
@@ -214,14 +232,14 @@ def _register_tool(
         return
     if tool_name == "list_collections":
         server.add_tool(
-            _list_collections_placeholder,
+            list_collections,
             name=tool_name,
             description="List searchable RAG collections.",
         )
         return
     if tool_name == "get_document_summary":
         server.add_tool(
-            _get_document_summary_placeholder,
+            get_document_summary,
             name=tool_name,
             description="Return a document summary and structural outline.",
         )
@@ -304,41 +322,6 @@ def _configure_stdio_logging(log_path: str | Path) -> logging.Logger:
     )
     logger.addHandler(file_handler)
     return logger
-
-
-async def _list_collections_placeholder() -> dict[str, Any]:
-    """Reserve the collection listing tool until E3 adds repository access.
-
-    Raises:
-        McpError: Always in E1, because collection repository access is not
-            wired yet.
-    """
-
-    raise McpError(
-        "MCP tool list_collections is not implemented until task E3",
-        context={"tool": "list_collections"},
-    )
-
-
-async def _get_document_summary_placeholder(
-    document_id: str | None = None,
-    source_uri: str | None = None,
-) -> dict[str, Any]:
-    """Reserve the document summary tool until E3 adds repository access.
-
-    Args:
-        document_id: Optional persisted document identifier.
-        source_uri: Optional source URI used to locate a document.
-
-    Raises:
-        McpError: Always in E1, because document summary lookup is not wired
-            yet.
-    """
-
-    raise McpError(
-        "MCP tool get_document_summary is not implemented until task E3",
-        context={"tool": "get_document_summary"},
-    )
 
 
 if __name__ == "__main__":
