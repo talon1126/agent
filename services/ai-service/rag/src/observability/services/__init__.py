@@ -18,6 +18,18 @@ from src.observability.services.data_browser_service import (
     DocumentBrowserRow,
     ImageBrowserRow,
 )
+from src.observability.services.evaluation_service import (
+    EvaluationMetricTrendPoint,
+    EvaluationRunDetail,
+    EvaluationRunSummary,
+    EvaluationService,
+)
+from src.observability.services.trace_reader_service import (
+    TraceDetail,
+    TraceHistoryItem,
+    TraceReaderService,
+    TraceStageWaterfallItem,
+)
 
 __all__ = [
     "ChunkBrowserRow",
@@ -27,5 +39,13 @@ __all__ = [
     "ConfigReaderService",
     "DataBrowserService",
     "DocumentBrowserRow",
+    "EvaluationMetricTrendPoint",
+    "EvaluationRunDetail",
+    "EvaluationRunSummary",
+    "EvaluationService",
     "ImageBrowserRow",
+    "TraceDetail",
+    "TraceHistoryItem",
+    "TraceReaderService",
+    "TraceStageWaterfallItem",
 ]

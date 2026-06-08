@@ -288,7 +288,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | 已实现 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；已保留 `src/logs/.gitkeep`，运行时 `*.log/*.jsonl` 仍不提交；15 个 TraceContext/TraceWriter 单元测试通过 |
 | F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-08 | 已将 TraceContext/TraceController 注入 ingestion 和 query 主链路，CLI 默认写入 JSONL trace；8 个 ingestion/query 集成测试、15 个 trace 单元测试和 ruff 通过 |
 | F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | 已实现 Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
-| F7 | 实现 Trace 读取和评估服务 | [ ] |  | Dashboard services，配套单元测试 |
+| F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | 已实现 Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
 | F8 | 实现系统总览与 Ingestion 管理页面 | [ ] |  | Streamlit 页面可启动 |
 | F9 | 实现数据浏览器与 Query Trace 页面 | [ ] |  | 文档、chunk、召回对比、rerank 变化 |
 | F10 | 实现 Ingestion Trace 与评估面板页面 | [ ] |  | 阶段耗时、评估趋势 |
@@ -1414,16 +1414,24 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：为 Dashboard 提供 trace 历史和评估趋势数据。
 
-修改文件：`src/observability/services/trace_reader_service.py`、`src/observability/services/evaluation_service.py`、`tests/integration/test_dashboard_services.py`
+修改文件：`src/observability/services/__init__.py`、`src/observability/services/trace_reader_service.py`、`src/observability/services/evaluation_service.py`、`tests/integration/test_dashboard_services.py`
 
 实现类/函数：
 
 - `TraceReaderService`：读取 query/ingestion trace 历史和详情
 - `EvaluationService`：运行评估任务并读取指标趋势
+- `TraceReaderService.list_query_traces()`：返回 Query Trace 历史列表，包含耗时、阶段数量、fallback 状态和输入摘要
+- `TraceReaderService.list_ingestion_traces()`：返回 Ingestion Trace 历史列表，包含耗时、阶段数量和来源文件摘要
+- `TraceReaderService.get_query_trace_detail()`：返回 Query Trace 阶段瀑布图、候选数量、summary/evaluation metrics 和 rerank delta
+- `TraceReaderService.get_ingestion_trace_detail()`：返回 Ingestion Trace 阶段瀑布图、summary/evaluation metrics 和错误详情
+- `EvaluationService.run_evaluation()`：通过 EvaluatorFactory 同步运行评估并持久化 run/results
+- `EvaluationService.list_runs()`：返回 evaluation run 历史和指标摘要
+- `EvaluationService.get_run_detail()`：按 run_id 返回评估详情、指标明细和 settings snapshot
+- `EvaluationService.metric_trends()`：按 metric_name 返回历史趋势点
 
 验收标准：可读取 trace 历史和评估趋势。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ##### F8：实现总览和摄取管理页面
 

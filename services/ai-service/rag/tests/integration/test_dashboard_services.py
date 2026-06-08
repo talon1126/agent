@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
@@ -233,6 +234,240 @@ def test_data_browser_service_lists_documents_chunks_and_images(
 
         assert chunk_detail == chunk_rows[0]
         assert service.get_chunk_detail("missing-chunk") is None
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+@pytest.mark.integration
+def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
+    """Require Dashboard trace service to expose history and detail DTOs."""
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for Dashboard service integration")
+
+    from src.observability.services import TraceReaderService
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import (
+        IngestionTraceRecord,
+        QueryTraceRecord,
+        TraceRepository,
+    )
+
+    collection_id = f"f7-traces-{uuid4().hex}"
+    query_trace_id = f"query-{uuid4().hex}"
+    ingestion_trace_id = f"ingestion-{uuid4().hex}"
+    started_at = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
+    finished_at = started_at + timedelta(milliseconds=180)
+    source_hash = sha256(b"trace-fixture").hexdigest()
+
+    pool = PostgresPool.from_settings(
+        _database_settings(),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        repository = TraceRepository(pool)
+        repository.upsert_query_trace(
+            QueryTraceRecord(
+                trace_id=query_trace_id,
+                collection_id=collection_id,
+                raw_query="How should I choose wireless headphones?",
+                request_source="dashboard-test",
+                started_at=started_at,
+                finished_at=finished_at,
+                status="success",
+                basic_info={
+                    "collection": collection_id,
+                    "raw_query": "How should I choose wireless headphones?",
+                },
+                stages=(
+                    {
+                        "stage": "dense",
+                        "duration_ms": 40.0,
+                        "candidate_count": 4,
+                        "status": "success",
+                    },
+                    {
+                        "stage": "rerank",
+                        "duration_ms": 25.0,
+                        "candidate_count": 2,
+                        "status": "degraded",
+                        "details": {"fallback_reason": "reranker unavailable"},
+                    },
+                ),
+                summary_metrics={
+                    "total_duration_ms": 180.0,
+                    "candidate_count_by_stage": {"dense": 4, "rerank": 2},
+                    "fallback_used": True,
+                    "top_k_results": [{"chunk_id": "chunk-1"}],
+                },
+                evaluation_metrics={
+                    "query_document_relevance": 0.91,
+                    "rerank_delta": {"chunk-1": 1},
+                },
+            )
+        )
+        repository.upsert_ingestion_trace(
+            IngestionTraceRecord(
+                trace_id=ingestion_trace_id,
+                collection_id=collection_id,
+                source_uri="fixtures/wireless.md",
+                source_hash=source_hash,
+                started_at=started_at - timedelta(minutes=5),
+                finished_at=started_at - timedelta(minutes=4, milliseconds=500),
+                status="success",
+                basic_info={
+                    "collection": collection_id,
+                    "source_uri": "fixtures/wireless.md",
+                },
+                stages=(
+                    {
+                        "stage": "load",
+                        "duration_ms": 30.0,
+                        "status": "success",
+                    },
+                    {
+                        "stage": "upsert",
+                        "duration_ms": 55.0,
+                        "status": "success",
+                    },
+                ),
+                summary_metrics={
+                    "total_duration_ms": 500.0,
+                    "document_status": "success",
+                    "chunk_count": 3,
+                    "embedded_count": 3,
+                    "skipped_count": 0,
+                },
+                evaluation_metrics={
+                    "embedding_coverage": 1.0,
+                    "index_ready": True,
+                },
+            )
+        )
+
+        service = TraceReaderService(pool)
+        query_history = service.list_query_traces(collection_id)
+        ingestion_history = service.list_ingestion_traces(collection_id)
+        query_detail = service.get_query_trace_detail(query_trace_id)
+        ingestion_detail = service.get_ingestion_trace_detail(ingestion_trace_id)
+
+        assert [item.trace_id for item in query_history] == [query_trace_id]
+        assert query_history[0].trace_type == "query"
+        assert query_history[0].display_input == "How should I choose wireless headphones?"
+        assert query_history[0].duration_ms == 180.0
+        assert query_history[0].stage_count == 2
+        assert query_history[0].fallback_used is True
+
+        assert query_detail is not None
+        assert query_detail.trace_id == query_trace_id
+        assert [stage.stage for stage in query_detail.waterfall] == ["dense", "rerank"]
+        assert query_detail.candidate_counts == {"dense": 4, "rerank": 2}
+        assert query_detail.rerank_delta == {"chunk-1": 1}
+        assert query_detail.evaluation_metrics["query_document_relevance"] == 0.91
+
+        assert [item.trace_id for item in ingestion_history] == [ingestion_trace_id]
+        assert ingestion_history[0].trace_type == "ingestion"
+        assert ingestion_history[0].display_input == "fixtures/wireless.md"
+        assert ingestion_history[0].duration_ms == 500.0
+
+        assert ingestion_detail is not None
+        assert [stage.stage for stage in ingestion_detail.waterfall] == [
+            "load",
+            "upsert",
+        ]
+        assert ingestion_detail.summary_metrics["chunk_count"] == 3
+        assert ingestion_detail.evaluation_metrics["index_ready"] is True
+        assert service.get_query_trace_detail("missing-query-trace") is None
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+@pytest.mark.integration
+def test_evaluation_service_runs_evaluator_and_reads_metric_trends() -> None:
+    """Require Dashboard evaluation service to persist runs and trend data."""
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for Dashboard service integration")
+
+    from src.observability.services import EvaluationService
+    from src.storage.postgres import PostgresPool, init_schema
+
+    collection_id = f"f7-evaluation-{uuid4().hex}"
+    run_id = f"run-{uuid4().hex}"
+    dataset = [
+        {
+            "id": "wireless-001",
+            "question": "How should I choose wireless headphones?",
+            "expected_sources": ["wireless.md"],
+        }
+    ]
+    predictions = [
+        {
+            "id": "wireless-001",
+            "answer": "Compare stability, comfort, battery, and warranty.",
+            "sources": ["wireless.md"],
+        }
+    ]
+
+    pool = PostgresPool.from_settings(
+        _database_settings(),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        service = EvaluationService(pool)
+        run_detail = service.run_evaluation(
+            collection_id=collection_id,
+            evaluator="fake",
+            dataset_name="shopping-guide-golden",
+            dataset=dataset,
+            predictions=predictions,
+            evaluator_options={
+                "metrics": {
+                    "hit_rate_at_k": 0.95,
+                    "mrr": 0.88,
+                }
+            },
+            settings_snapshot={"retrieval": "hybrid", "rerank": "fake"},
+            run_id=run_id,
+        )
+
+        run_history = service.list_runs(collection_id)
+        run_detail_by_id = service.get_run_detail(run_id)
+        trends = service.metric_trends(collection_id)
+
+        assert run_detail.run_id == run_id
+        assert run_detail.status == "success"
+        assert run_detail.metrics == {
+            "hit_rate_at_k": 0.95,
+            "mrr": 0.88,
+        }
+        assert run_detail.summary["sample_count"] == 1
+
+        assert [run.run_id for run in run_history] == [run_id]
+        assert run_history[0].metric_count == 2
+        assert run_history[0].metrics["mrr"] == 0.88
+        assert run_detail_by_id == run_detail
+
+        assert set(trends) == {"hit_rate_at_k", "mrr"}
+        assert trends["hit_rate_at_k"][0].run_id == run_id
+        assert trends["hit_rate_at_k"][0].metric_value == 0.95
+        assert service.get_run_detail("missing-run") is None
     finally:
         with pool.transaction() as connection:
             connection.execute(

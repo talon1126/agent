@@ -1,0 +1,394 @@
+"""Run and read RAG evaluation data for the Dashboard evaluation panel.
+
+``EvaluationService`` is the Dashboard-facing orchestration boundary for
+quality metrics. It can execute a configured evaluator synchronously for local
+development demos, persist the run and metric rows through
+``EvaluationRepository``, and project historical records into compact trend
+DTOs. The service does not implement metric formulas itself; concrete
+evaluators remain behind ``EvaluatorFactory``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from hashlib import sha256
+from math import isfinite
+from typing import Any
+from uuid import uuid4
+
+from src.libs.evaluator import EvaluatorFactory
+from src.storage.postgres import PostgresPool
+from src.storage.repositories import (
+    EvaluationRepository,
+    EvaluationResultRecord,
+    EvaluationRunRecord,
+)
+
+EvaluationClock = Callable[[], datetime]
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationMetricTrendPoint:
+    """Represent one metric value in a Dashboard trend chart.
+
+    The evaluation page groups these rows by ``metric_name`` so users can see
+    whether retrieval or generation quality improved across strategy changes.
+    It intentionally includes run identity, evaluator, dataset, status, and
+    timestamp evidence so a chart point can link back to its full run detail.
+    """
+
+    run_id: str
+    metric_name: str
+    metric_value: float
+    evaluator: str
+    dataset_name: str
+    status: str
+    created_at: datetime | None
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationRunSummary:
+    """Represent one evaluation run in the Dashboard history table.
+
+    Summary rows attach a compact metric map to each run. This prevents
+    Streamlit page code from issuing one query per metric column or unpacking
+    repository records directly while still showing enough information for a
+    user to select a run for detailed inspection.
+    """
+
+    run_id: str
+    collection_id: str
+    evaluator: str
+    dataset_name: str
+    status: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime | None
+    metric_count: int
+    metrics: Mapping[str, float] = field(default_factory=dict)
+    summary: Mapping[str, Any] = field(default_factory=dict)
+    error: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationRunDetail:
+    """Represent one evaluation run with all metric and settings evidence.
+
+    Detail rows preserve the reproducibility snapshot written with the run,
+    the aggregate summary, every metric value, and evaluator-specific metric
+    details. Dashboard pages use this object to explain why a score changed
+    without reaching back into repository dataclasses.
+    """
+
+    run_id: str
+    collection_id: str
+    evaluator: str
+    dataset_name: str
+    status: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime | None
+    metrics: Mapping[str, float] = field(default_factory=dict)
+    metric_details: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    settings_snapshot: Mapping[str, Any] = field(default_factory=dict)
+    summary: Mapping[str, Any] = field(default_factory=dict)
+    error: Mapping[str, Any] | None = None
+
+
+class EvaluationService:
+    """Coordinate Dashboard evaluation runs, history rows, and trends."""
+
+    def __init__(
+        self,
+        pool: PostgresPool,
+        *,
+        repository: EvaluationRepository | None = None,
+        clock: EvaluationClock | None = None,
+    ) -> None:
+        """Bind the service to persistence and deterministic time providers.
+
+        Args:
+            pool: Open PostgreSQL pool used when ``repository`` is omitted.
+            repository: Optional repository injection for tests or alternate
+                persistence.
+            clock: Optional callable returning an aware ``datetime``. ``None``
+                uses the current UTC time.
+        """
+
+        self._repository = repository or EvaluationRepository(pool)
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    def run_evaluation(
+        self,
+        *,
+        collection_id: str,
+        evaluator: str,
+        dataset_name: str,
+        dataset: Sequence[Mapping[str, Any]],
+        predictions: Sequence[Mapping[str, Any]],
+        evaluator_options: Mapping[str, Any] | None = None,
+        settings_snapshot: Mapping[str, Any] | None = None,
+        run_id: str | None = None,
+    ) -> EvaluationRunDetail:
+        """Execute one evaluator and persist its run plus metric rows.
+
+        Args:
+            collection_id: Collection whose retrieval/generation strategy is
+                being evaluated.
+            evaluator: Provider name resolved through ``EvaluatorFactory``.
+            dataset_name: Human-readable golden dataset identifier.
+            dataset: Golden records passed to the evaluator.
+            predictions: Prediction records aligned with ``dataset``.
+            evaluator_options: Provider constructor options such as fake metric
+                values in tests.
+            settings_snapshot: Retrieval, rerank, model, or dataset settings
+                captured for later comparison.
+            run_id: Optional stable run ID. When omitted, a UUID-based ID is
+                generated by Python.
+
+        Returns:
+            Persisted evaluation detail with metric values and metadata.
+
+        Side Effects:
+            Writes one ``rag_evaluation_runs`` row and one
+            ``rag_evaluation_results`` row per returned metric.
+        """
+
+        collection = _require_non_blank(collection_id, field_name="collection_id")
+        evaluator_name = _require_non_blank(evaluator, field_name="evaluator")
+        dataset_label = _require_non_blank(dataset_name, field_name="dataset_name")
+        stable_run_id = (
+            _require_non_blank(run_id, field_name="run_id")
+            if run_id is not None
+            else f"eval-{uuid4().hex}"
+        )
+        started_at = self._clock()
+        evaluator_client = EvaluatorFactory.create(
+            provider=evaluator_name,
+            **dict(evaluator_options or {}),
+        )
+        try:
+            metric_values = evaluator_client.evaluate(dataset, predictions)
+            normalized_metrics = _normalize_metric_values(metric_values)
+        except Exception as error:
+            failed_at = self._clock()
+            failed_run = self._repository.upsert_run(
+                EvaluationRunRecord(
+                    id=stable_run_id,
+                    collection_id=collection,
+                    evaluator=evaluator_name,
+                    dataset_name=dataset_label,
+                    status="failed",
+                    started_at=started_at,
+                    finished_at=failed_at,
+                    settings_snapshot=dict(settings_snapshot or {}),
+                    summary={"sample_count": len(dataset), "metric_count": 0},
+                    error={
+                        "type": error.__class__.__name__,
+                        "message": str(error),
+                    },
+                )
+            )
+            return _run_detail(failed_run, [])
+
+        finished_at = self._clock()
+        run = self._repository.upsert_run(
+            EvaluationRunRecord(
+                id=stable_run_id,
+                collection_id=collection,
+                evaluator=evaluator_name,
+                dataset_name=dataset_label,
+                status="success",
+                started_at=started_at,
+                finished_at=finished_at,
+                settings_snapshot=dict(settings_snapshot or {}),
+                summary={
+                    "sample_count": len(dataset),
+                    "prediction_count": len(predictions),
+                    "metric_count": len(normalized_metrics),
+                },
+            )
+        )
+        results = self._repository.upsert_results(
+            stable_run_id,
+            [
+                EvaluationResultRecord(
+                    id=_metric_result_id(stable_run_id, metric_name),
+                    run_id=stable_run_id,
+                    metric_name=metric_name,
+                    metric_value=metric_value,
+                    details={
+                        "dataset_name": dataset_label,
+                        "sample_count": len(dataset),
+                    },
+                )
+                for metric_name, metric_value in normalized_metrics.items()
+            ],
+        )
+        return _run_detail(run, results)
+
+    def list_runs(self, collection_id: str) -> list[EvaluationRunSummary]:
+        """Return evaluation run summaries newest-first for one collection.
+
+        Args:
+            collection_id: Dashboard-selected collection.
+
+        Returns:
+            Evaluation rows with metric maps already attached.
+        """
+
+        collection = _require_non_blank(collection_id, field_name="collection_id")
+        summaries: list[EvaluationRunSummary] = []
+        for run in self._repository.list_runs(collection):
+            results = self._repository.list_results(run.id)
+            summaries.append(_run_summary(run, results))
+        return summaries
+
+    def get_run_detail(self, run_id: str) -> EvaluationRunDetail | None:
+        """Return one evaluation run detail with all metric rows.
+
+        Args:
+            run_id: Stable Python-generated evaluation run ID.
+
+        Returns:
+            Detail DTO, or ``None`` when no run exists.
+        """
+
+        stable_run_id = _require_non_blank(run_id, field_name="run_id")
+        run = self._repository.get_run(stable_run_id)
+        if run is None:
+            return None
+        return _run_detail(run, self._repository.list_results(stable_run_id))
+
+    def metric_trends(
+        self,
+        collection_id: str,
+    ) -> dict[str, list[EvaluationMetricTrendPoint]]:
+        """Return metric-name grouped trend points for one collection.
+
+        Args:
+            collection_id: Dashboard-selected collection.
+
+        Returns:
+            Mapping from metric name to chronological trend points.
+        """
+
+        collection = _require_non_blank(collection_id, field_name="collection_id")
+        trends: dict[str, list[EvaluationMetricTrendPoint]] = {}
+        oldest_supported_timestamp = datetime.min.replace(tzinfo=UTC)
+        runs = sorted(
+            self._repository.list_runs(collection),
+            key=lambda run: run.created_at or run.started_at or oldest_supported_timestamp,
+        )
+        for run in runs:
+            for result in self._repository.list_results(run.id):
+                trends.setdefault(result.metric_name, []).append(
+                    EvaluationMetricTrendPoint(
+                        run_id=run.id,
+                        metric_name=result.metric_name,
+                        metric_value=result.metric_value,
+                        evaluator=run.evaluator,
+                        dataset_name=run.dataset_name,
+                        status=run.status,
+                        created_at=result.created_at or run.created_at,
+                        details=result.details,
+                    )
+                )
+        return trends
+
+
+def _run_summary(
+    run: EvaluationRunRecord,
+    results: list[EvaluationResultRecord],
+) -> EvaluationRunSummary:
+    """Convert repository records into a Dashboard history row."""
+
+    metrics = _metric_map(results)
+    return EvaluationRunSummary(
+        run_id=run.id,
+        collection_id=run.collection_id,
+        evaluator=run.evaluator,
+        dataset_name=run.dataset_name,
+        status=run.status,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        created_at=run.created_at,
+        metric_count=len(results),
+        metrics=metrics,
+        summary=run.summary,
+        error=run.error,
+    )
+
+
+def _run_detail(
+    run: EvaluationRunRecord,
+    results: list[EvaluationResultRecord],
+) -> EvaluationRunDetail:
+    """Convert repository records into a Dashboard run detail payload."""
+
+    return EvaluationRunDetail(
+        run_id=run.id,
+        collection_id=run.collection_id,
+        evaluator=run.evaluator,
+        dataset_name=run.dataset_name,
+        status=run.status,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        created_at=run.created_at,
+        metrics=_metric_map(results),
+        metric_details={result.metric_name: result.details for result in results},
+        settings_snapshot=run.settings_snapshot,
+        summary=run.summary,
+        error=run.error,
+    )
+
+
+def _metric_map(results: list[EvaluationResultRecord]) -> dict[str, float]:
+    """Return metric values keyed by stable metric name."""
+
+    return {result.metric_name: result.metric_value for result in results}
+
+
+def _normalize_metric_values(metrics: Mapping[str, Any]) -> dict[str, float]:
+    """Validate evaluator metrics before marking a run successful.
+
+    Args:
+        metrics: Raw metric mapping returned by a ``BaseEvaluator``.
+
+    Returns:
+        Finite float values keyed by non-blank metric names.
+
+    Raises:
+        ValueError: If a metric name is blank or a metric value cannot be
+            represented as a finite PostgreSQL ``DOUBLE PRECISION`` value.
+    """
+
+    normalized: dict[str, float] = {}
+    for metric_name, metric_value in metrics.items():
+        name = _require_non_blank(str(metric_name), field_name="metric_name")
+        try:
+            value = float(metric_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"metric {name} must be numeric") from error
+        if not isfinite(value):
+            raise ValueError(f"metric {name} must be finite")
+        normalized[name] = value
+    return normalized
+
+
+def _metric_result_id(run_id: str, metric_name: str) -> str:
+    """Create a deterministic metric row ID for idempotent re-runs."""
+
+    digest = sha256(f"{run_id}:{metric_name}".encode()).hexdigest()
+    return f"eval-result-{digest[:32]}"
+
+
+def _require_non_blank(value: str, *, field_name: str) -> str:
+    """Return a trimmed identifier or raise before repository access."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must not be blank")
+    return value.strip()
