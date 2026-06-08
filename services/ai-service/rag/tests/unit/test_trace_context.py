@@ -15,6 +15,150 @@ import pytest
 from src.core.trace import TraceContext, TraceController
 
 
+def test_ingestion_trace_requires_source_identity_and_basic_info() -> None:
+    """Ingestion traces must expose the documented source identity fields."""
+
+    started_at = datetime(2026, 6, 8, 10, 0, 0, tzinfo=UTC)
+    context = TraceContext.ingestion(
+        trace_id="trace-ingestion-source",
+        collection="shopping_guides",
+        source_uri="shopping_guides/relax-toys.pdf",
+        source_hash="a" * 64,
+        started_at=started_at,
+    )
+
+    assert context.to_dict()["basic_info"] == {
+        "trace_id": "trace-ingestion-source",
+        "trace_type": "ingestion",
+        "started_at": "2026-06-08T10:00:00+00:00",
+        "collection": "shopping_guides",
+        "source_uri": "shopping_guides/relax-toys.pdf",
+        "source_hash": "a" * 64,
+    }
+
+    with pytest.raises(ValueError, match="source_hash"):
+        TraceContext.ingestion(
+            collection="shopping_guides",
+            source_uri="shopping_guides/relax-toys.pdf",
+            source_hash="not-a-sha256",
+        )
+
+
+def test_ingestion_trace_records_only_documented_stages() -> None:
+    """Ingestion stage recording should stay aligned with the DEV_SPEC stages."""
+
+    context = TraceContext.ingestion(
+        trace_id="trace-ingestion-stages",
+        collection="shopping_guides",
+        source_uri="shopping_guides/relax-toys.pdf",
+        source_hash="b" * 64,
+    )
+
+    context.record_ingestion_stage(
+        "dedup",
+        duration_ms=3.5,
+        input_summary={"source_hash": "b" * 64},
+        output_summary={"skip_ingestion": False},
+        method="sha256",
+        provider="DocumentRepository",
+        details={"successful_hash_hit": False, "skip_reason": None},
+    )
+
+    stage = context.to_dict()["stages"][0]
+    assert stage["stage"] == "dedup"
+    assert stage["duration_ms"] == 3.5
+    assert stage["method"] == "sha256"
+    assert stage["provider"] == "DocumentRepository"
+    assert stage["details"] == {
+        "successful_hash_hit": False,
+        "skip_reason": None,
+    }
+
+    with pytest.raises(ValueError, match="ingestion stage"):
+        context.record_ingestion_stage("query_processing")
+
+
+def test_ingestion_trace_finish_adds_summary_and_evaluation_sections() -> None:
+    """Finish should normalize the documented ingestion summary/evaluation keys."""
+
+    started_at = datetime(2026, 6, 8, 10, 0, 0, tzinfo=UTC)
+    finished_at = started_at + timedelta(milliseconds=500)
+    context = TraceContext.ingestion(
+        trace_id="trace-ingestion-summary",
+        collection="shopping_guides",
+        source_uri="shopping_guides/relax-toys.pdf",
+        source_hash="c" * 64,
+        started_at=started_at,
+    )
+
+    snapshot = context.finish_ingestion(
+        status="success",
+        finished_at=finished_at,
+        document_status="success",
+        chunk_count=12,
+        embedded_count=10,
+        skipped_count=2,
+        chunk_quality_score=0.92,
+        noise_reduction_summary={"removed_headers": 3},
+        embedding_coverage=0.83,
+        index_ready=True,
+    )
+
+    assert snapshot["summary_metrics"] == {
+        "document_status": "success",
+        "chunk_count": 12,
+        "embedded_count": 10,
+        "skipped_count": 2,
+        "error": None,
+        "total_duration_ms": 500.0,
+    }
+    assert snapshot["evaluation_metrics"] == {
+        "chunk_quality_score": 0.92,
+        "noise_reduction_summary": {"removed_headers": 3},
+        "embedding_coverage": 0.83,
+        "index_ready": True,
+    }
+
+
+def test_ingestion_trace_rejects_invalid_summary_metrics() -> None:
+    """Reject invalid identity, final status, counts, and readiness values."""
+
+    with pytest.raises(ValueError, match="source_uri"):
+        TraceContext(trace_type="ingestion", collection="shopping_guides")
+
+    context = TraceContext.ingestion(
+        collection="shopping_guides",
+        source_uri="shopping_guides/relax-toys.pdf",
+        source_hash="d" * 64,
+    )
+
+    with pytest.raises(ValueError, match="chunk_count"):
+        context.finish_ingestion(
+            status="success",
+            document_status="success",
+            chunk_count=-1,
+            embedded_count=0,
+            skipped_count=0,
+        )
+    with pytest.raises(ValueError, match="document_status"):
+        context.finish_ingestion(
+            status="success",
+            document_status="processing",
+            chunk_count=0,
+            embedded_count=0,
+            skipped_count=0,
+        )
+    with pytest.raises(ValueError, match="index_ready"):
+        context.finish_ingestion(
+            status="success",
+            document_status="success",
+            chunk_count=0,
+            embedded_count=0,
+            skipped_count=0,
+            index_ready="yes",
+        )
+
+
 def test_trace_context_records_stage_duration_and_summaries() -> None:
     """Record one Query stage with timing, provider, method, and summaries."""
 
