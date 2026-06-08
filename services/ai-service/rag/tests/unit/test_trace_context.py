@@ -8,11 +8,14 @@ controller flushes one JSON-compatible snapshot to a caller-provided sink.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.core.trace import TraceContext, TraceController
+from src.observability.structured_log import JsonFormatter
+from src.storage.trace_log_storage import JsonlTraceWriter
 
 
 def test_query_trace_requires_raw_query_and_basic_info() -> None:
@@ -44,6 +47,105 @@ def test_query_trace_requires_raw_query_and_basic_info() -> None:
         )
     with pytest.raises(ValueError, match="raw_query"):
         TraceContext(trace_type="query", collection="shopping_guides")
+
+
+def test_json_formatter_serializes_log_records_as_single_json_object() -> None:
+    """Structured trace logs must be valid JSON Lines without ad-hoc strings."""
+
+    record = JsonFormatter.make_record(
+        logger_name="aimodel_rag.trace",
+        level_name="INFO",
+        message="trace flushed",
+        extra={
+            "trace_id": "trace-query-json",
+            "trace_type": "query",
+            "payload": {"status": "success", "duration_ms": 12.5},
+        },
+    )
+
+    parsed = json.loads(JsonFormatter().format(record))
+
+    assert parsed["logger"] == "aimodel_rag.trace"
+    assert parsed["level"] == "INFO"
+    assert parsed["message"] == "trace flushed"
+    assert parsed["trace_id"] == "trace-query-json"
+    assert parsed["trace_type"] == "query"
+    assert parsed["payload"] == {"status": "success", "duration_ms": 12.5}
+    assert isinstance(parsed["timestamp"], str)
+
+
+def test_jsonl_trace_writer_appends_valid_trace_snapshots(tmp_path) -> None:
+    """Trace writer should create parent directories and append JSON snapshots."""
+
+    log_path = tmp_path / "src" / "logs" / "traces.jsonl"
+    writer = JsonlTraceWriter(log_path)
+    first_trace = TraceContext.query(
+        trace_id="trace-query-jsonl-1",
+        collection="shopping_guides",
+        raw_query="推荐解压玩具",
+        request_source="aimodel",
+    ).finish_query(
+        status="success",
+        top_k_results=[{"chunk_id": "chunk-a", "rank": 1}],
+        candidate_count_by_stage={"dense": 1, "sparse": 0, "fusion": 1},
+        fallback_used=False,
+        empty_result=False,
+    )
+    second_trace = TraceContext.ingestion(
+        trace_id="trace-ingestion-jsonl-2",
+        collection="shopping_guides",
+        source_uri="shopping_guides/relax-toys.pdf",
+        source_hash="e" * 64,
+    ).finish_ingestion(
+        status="skipped",
+        document_status="skipped",
+        chunk_count=0,
+        embedded_count=0,
+        skipped_count=1,
+        index_ready=True,
+    )
+
+    writer.write(first_trace)
+    writer(second_trace)
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    parsed = [json.loads(line) for line in lines]
+    assert [item["trace_id"] for item in parsed] == [
+        "trace-query-jsonl-1",
+        "trace-ingestion-jsonl-2",
+    ]
+    assert parsed[0]["basic_info"]["raw_query"] == "推荐解压玩具"
+    assert parsed[1]["basic_info"]["source_hash"] == "e" * 64
+
+
+def test_trace_controller_flush_can_use_jsonl_trace_writer(tmp_path) -> None:
+    """TraceController sink integration should append the flushed snapshot."""
+
+    log_path = tmp_path / "traces.jsonl"
+    writer = JsonlTraceWriter(log_path)
+    context = TraceContext.query(
+        trace_id="trace-query-controller-jsonl",
+        collection="shopping_guides",
+        raw_query="如何选择无线耳机",
+        request_source="mcp",
+    )
+    controller = TraceController(context, sink=writer)
+
+    flushed = controller.flush(
+        status="success",
+        summary_metrics={
+            "top_k_results": [],
+            "candidate_count_by_stage": {"dense": 0},
+            "fallback_used": False,
+        },
+        evaluation_metrics={"empty_result": True},
+    )
+
+    parsed = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert parsed["trace_id"] == "trace-query-controller-jsonl"
+    assert parsed["summary_metrics"] == flushed["summary_metrics"]
+    assert parsed["evaluation_metrics"] == {"empty_result": True}
 
 
 def test_query_trace_records_only_documented_stages() -> None:

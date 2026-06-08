@@ -2171,7 +2171,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | F1 | 实现 TraceContext 和 TraceController | [✔] | 2026-06-08 | 已实现 `src/core/trace` 包导出、内存 TraceContext、TraceController、阶段耗时/输入输出摘要记录、flush sink、错误/fallback 详情和防御性快照；4 个 TraceContext 单元测试通过 |
 | F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、dedup/load/split/transform/embed/upsert 阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；8 个 TraceContext 单元测试通过 |
 | F3 | 实现 query trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.query()`、raw_query/request_source 基础信息校验、query_processing/dense/sparse/fusion/filter/rerank 阶段 allowlist、query summary/evaluation 指标和检索候选计数校验；12 个 TraceContext 单元测试通过 |
-| F4 | 实现 Python logging + JSONFormatter | [ ] |  | 追加写入 `src/logs/traces.jsonl` |
+| F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | 已实现 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；已保留 `src/logs/.gitkeep`，运行时 `*.log/*.jsonl` 仍不提交；15 个 TraceContext/TraceWriter 单元测试通过 |
 | F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [ ] |  | 每个 pipeline 阶段调用 `record_stage()`，结束时 flush |
 | F6 | 实现配置读取和数据浏览服务 | [ ] |  | Dashboard services，配套单元测试 |
 | F7 | 实现 Trace 读取和评估服务 | [ ] |  | Dashboard services，配套单元测试 |
@@ -2211,10 +2211,10 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 14 | 100% |
 | Phase E | 4 | 4 | 100% |
-| Phase F | 12 | 3 | 25% |
+| Phase F | 12 | 4 | 33% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **50** | **71%** |
+| **总计** | **70** | **51** | **73%** |
 
 ### 6.5 阶段实施明细
 
@@ -3244,9 +3244,13 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- `JsonlTraceWriter`：将 trace 追加写入 JSON Lines 日志
+- `JsonFormatter.format()`：将 Python `logging.LogRecord` 序列化为单行 JSON，保留中文 query 和 trace payload
+- `JsonFormatter.make_record()`：为单元测试和适配层构造带结构化 extra 的 log record
+- `configure_jsonl_logger()`：创建独立 UTF-8 file logger，使用 JSONFormatter 追加写入 JSON Lines
+- `JsonlTraceWriter.write()`：校验 trace snapshot 并追加写入 `traces.jsonl`
+- `JsonlTraceWriter.__call__()`：作为 `TraceController` sink 直接接收 flush 后的 trace snapshot
 
-验收标准：每行合法 JSON，可追加写入。
+验收标准：每行合法 JSON，可追加写入；`JsonlTraceWriter` 自动创建父目录；写入的 trace 行以 trace snapshot 为顶层对象，便于 Dashboard 按行读取；同一个 writer 连续写入多条 trace 时保持追加顺序；可直接作为 `TraceController` 的 sink 使用。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
