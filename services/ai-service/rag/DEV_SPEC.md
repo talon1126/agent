@@ -1900,7 +1900,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [✔] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [✔] |
-| Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [ ] |
+| Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [~] |
 | Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、策略对比和评估趋势 | [ ] |
 | Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调和端到端测试 | [ ] |
 
@@ -2168,7 +2168,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| F1 | 实现 TraceContext 和 TraceController | [ ] |  |  |
+| F1 | 实现 TraceContext 和 TraceController | [✔] | 2026-06-08 | 已实现 `src/core/trace` 包导出、内存 TraceContext、TraceController、阶段耗时/输入输出摘要记录、flush sink、错误/fallback 详情和防御性快照；4 个 TraceContext 单元测试通过 |
 | F2 | 实现 ingestion trace 数据结构 | [ ] |  | 基础信息、阶段详情、汇总指标、评估指标 |
 | F3 | 实现 query trace 数据结构 | [ ] |  | Dense/BM25、fusion、filter、rerank 前后变化 |
 | F4 | 实现 Python logging + JSONFormatter | [ ] |  | 追加写入 `src/logs/traces.jsonl` |
@@ -2211,10 +2211,10 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 14 | 100% |
 | Phase E | 4 | 4 | 100% |
-| Phase F | 12 | 0 | 0% |
+| Phase F | 12 | 1 | 8% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **47** | **67%** |
+| **总计** | **70** | **48** | **69%** |
 
 ### 6.5 阶段实施明细
 
@@ -3180,14 +3180,20 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：提供 ingestion/query 链路通用 Trace 上下文。
 
-修改文件：`src/core/trace/trace_context.py`、`src/core/trace/trace_controller.py`、`tests/unit/test_trace_context.py`
+修改文件：`src/core/trace/__init__.py`、`src/core/trace/trace_context.py`、`src/core/trace/trace_controller.py`、`tests/unit/test_trace_context.py`
 
 实现类/函数：
 
 - `TraceContext`：保存单次 query/ingestion 的 trace 上下文
 - `TraceController`：统一记录阶段信息并 flush 结构化日志
+- `TraceContext.record_stage()`：记录阶段名、耗时、状态、输入摘要、输出摘要、provider、method、candidate_count、details 和 error，并兼容现有 query_engine trace protocol
+- `TraceContext.finish()`：设置完成状态、finished_at、汇总指标、评估指标和端到端耗时
+- `TraceContext.to_dict()`：生成 JSON-compatible trace 快照
+- `TraceController.record_stage()`：将阶段记录委托给 TraceContext
+- `TraceController.flush()`：完成 trace 并调用注入的 sink
+- `src/core/trace/__init__.py`：导出 TraceContext 和 TraceController
 
-验收标准：可记录阶段耗时和输入输出摘要。
+验收标准：可记录阶段耗时和输入输出摘要；可记录错误和 fallback 详情；`flush()` 可生成结构化快照并调用注入 sink；F1 不提前实现 JSONFormatter/traces.jsonl 文件写入，该能力留给 F4。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
