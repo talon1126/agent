@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import ANY, MagicMock, Mock
 
 import psycopg
 import pytest
@@ -879,8 +879,11 @@ def test_hybrid_search_runs_dense_sparse_and_rrf_fusion() -> None:
     assert result.fallback_reasons == {}
     assert result.results[0].metadata["fusion"]["dense_rank"] == 2
     assert result.results[0].metadata["fusion"]["sparse_rank"] == 1
-    assert trace.record_stage.call_args.kwargs["stage"] == "hybrid"
-    assert trace.record_stage.call_args.kwargs["status"] == "success"
+    fusion_call = next(
+        call for call in trace.record_stage.call_args_list
+        if call.kwargs["stage"] == "fusion"
+    )
+    assert fusion_call.kwargs["status"] == "success"
 
 
 def test_hybrid_search_falls_back_to_sparse_when_dense_route_fails() -> None:
@@ -909,8 +912,12 @@ def test_hybrid_search_falls_back_to_sparse_when_dense_route_fails() -> None:
     assert result.fallback_used is True
     assert result.fallback_reasons == {"dense": "dense unavailable"}
     assert result.results[0].metadata["fusion"]["sources"] == ["sparse"]
-    assert trace.record_stage.call_args.kwargs["status"] == "degraded"
-    assert trace.record_stage.call_args.kwargs["details"]["failed_routes"] == ["dense"]
+    fusion_call = next(
+        call for call in trace.record_stage.call_args_list
+        if call.kwargs["stage"] == "fusion"
+    )
+    assert fusion_call.kwargs["status"] == "degraded"
+    assert fusion_call.kwargs["details"]["failed_routes"] == ["dense"]
 
 
 def test_hybrid_search_falls_back_to_dense_when_sparse_route_fails() -> None:
@@ -961,7 +968,7 @@ def test_hybrid_search_raises_when_both_routes_fail() -> None:
         search.search(_processed_query(), trace_context=trace)
 
     assert captured.value.context == {
-        "stage": "hybrid",
+        "stage": "fusion",
         "failed_routes": ["dense", "sparse"],
     }
     assert trace.record_stage.call_args.kwargs["status"] == "failed"
@@ -998,7 +1005,7 @@ def test_hybrid_search_wraps_unexpected_fusion_failures(
         search.search(_processed_query(), trace_context=trace)
 
     assert captured.value.context == {
-        "stage": "hybrid",
+        "stage": "fusion",
         "operation": "fusion",
     }
     assert isinstance(captured.value.cause, RuntimeError)
@@ -1512,6 +1519,7 @@ def test_query_runtime_skips_reranker_and_preserves_filtered_order() -> None:
     hybrid_search.search.assert_called_once_with(
         processed,
         filters={"collection": "shopping_guides"},
+        trace_context=ANY,
     )
     rerank_controller.rerank_or_fallback.assert_not_called()
     assert [result.chunk_id for result in execution.final_results] == [
@@ -1584,6 +1592,7 @@ def test_query_runtime_applies_reranker_before_response_construction() -> None:
         processed.normalized_query,
         filtered,
         top_k=1,
+        trace_context=ANY,
     )
     response_builder.build.assert_called_once_with(
         reranked,

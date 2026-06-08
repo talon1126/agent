@@ -3,7 +3,7 @@
 ``HybridSearch`` is the first online query component that coordinates multiple
 retrieval routes. It accepts an already validated ``ProcessedQuery``, executes
 Dense and Sparse routes independently, fuses all available candidates with RRF,
-and degrades to one route when the other fails.
+filters the fused set, and degrades to one route when the other fails.
 
 This module deliberately does not perform query preprocessing, metadata
 filtering, reranking, response construction, provider creation, or persistence.
@@ -257,7 +257,7 @@ class HybridSearch:
 
         Side Effects:
             Calls the configured route instances. When a trace context exists,
-            records exactly one hybrid stage after route/fusion work.
+            records one fusion stage before metadata filtering.
         """
 
         started_at = perf_counter()
@@ -288,7 +288,7 @@ class HybridSearch:
             raise RetrievalError(
                 "Hybrid search failed",
                 context={
-                    "stage": "hybrid",
+                    "stage": "fusion",
                     "failed_routes": sorted(fallback_reasons),
                 },
             )
@@ -312,24 +312,24 @@ class HybridSearch:
             )
             raise RetrievalError(
                 "Hybrid fusion failed",
-                context={"stage": "hybrid", "operation": "fusion"},
+                context={"stage": "fusion", "operation": "fusion"},
                 cause=error,
             ) from error
 
-        filter_report = self.apply_metadata_filter(
-            fused_results,
-            filters=filters,
-            trace_context=trace_context,
-        )
         fallback_used = bool(fallback_reasons)
         self._record_trace(
             trace_context,
             started_at=started_at,
-            candidate_count=len(filter_report.results),
+            candidate_count=len(fused_results),
             status="degraded" if fallback_used else "success",
             dense_results=dense_results,
             sparse_results=sparse_results,
             fallback_reasons=fallback_reasons,
+        )
+        filter_report = self.apply_metadata_filter(
+            fused_results,
+            filters=filters,
+            trace_context=trace_context,
         )
         return HybridSearchResult(
             dense_results=dense_results,
@@ -399,7 +399,7 @@ class HybridSearch:
             return
         try:
             trace_context.record_stage(
-                stage="hybrid",
+                stage="fusion",
                 method="rrf",
                 provider="HybridSearch",
                 duration_ms=(perf_counter() - started_at) * 1000,

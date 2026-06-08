@@ -310,6 +310,7 @@ def _runtime(
     embedding: BaseEmbedding,
     reranker: FakeReranker | None,
     pool: PostgresPool | None = None,
+    trace_sink: object | None = None,
 ) -> QueryRuntime:
     """Compose the real Retrieval stages around deterministic model adapters.
 
@@ -356,6 +357,7 @@ def _runtime(
         hybrid_search=hybrid,
         rerank_controller=controller,
         response_builder=KnowledgeHubResponseBuilder(),
+        trace_sink=trace_sink,
     )
 
 
@@ -412,10 +414,12 @@ def test_query_pipeline_hybrid() -> None:
                 fixture.primary_chunk.id,
             ]
         )
+        trace_payloads: list[dict[str, object]] = []
         runtime = _runtime(
             fixture,
             embedding=FixedQueryEmbedding(fixture.query_vector),
             reranker=reranker,
+            trace_sink=trace_payloads.append,
         )
 
         execution = runtime.execute(
@@ -453,6 +457,32 @@ def test_query_pipeline_hybrid() -> None:
             fixture.rerank_chunk.id,
             fixture.primary_chunk.id,
         ]
+        assert len(trace_payloads) == 1
+        query_trace = trace_payloads[0]
+        assert query_trace["trace_type"] == "query"
+        assert query_trace["trace_id"] == "d14-hybrid-query"
+        assert query_trace["status"] == "success"
+        assert [
+            stage["stage"]
+            for stage in query_trace["stages"]  # type: ignore[index]
+        ] == [
+            "query_processing",
+            "dense",
+            "sparse",
+            "fusion",
+            "filter",
+            "rerank",
+            "response",
+        ]
+        query_summary = query_trace["summary_metrics"]
+        query_evaluation = query_trace["evaluation_metrics"]
+        assert isinstance(query_summary, dict)
+        assert isinstance(query_evaluation, dict)
+        query_counts = query_summary["candidate_count_by_stage"]
+        assert isinstance(query_counts, dict)
+        assert query_summary["fallback_used"] is False
+        assert query_counts["rerank"] == 2
+        assert query_evaluation["empty_result"] is False
 
         output: list[str] = []
         cli_pool = PostgresPool.from_settings(
@@ -540,10 +570,12 @@ def test_query_pipeline_falls_back_to_sparse_when_dense_provider_fails() -> None
             collection_id=collection_id,
             other_collection_id=other_collection_id,
         )
+        trace_payloads: list[dict[str, object]] = []
         runtime = _runtime(
             fixture,
             embedding=FailingQueryEmbedding(),
             reranker=None,
+            trace_sink=trace_payloads.append,
         )
 
         execution = runtime.execute(
@@ -564,6 +596,28 @@ def test_query_pipeline_falls_back_to_sparse_when_dense_provider_fails() -> None
         assert execution.rerank_applied is False
         assert execution.fallback_used is True
         assert execution.response.citations[0].chunk_id == fixture.primary_chunk.id
+        assert len(trace_payloads) == 1
+        fallback_trace = trace_payloads[0]
+        assert fallback_trace["status"] == "degraded"
+        assert [
+            stage["stage"]
+            for stage in fallback_trace["stages"]  # type: ignore[index]
+        ] == [
+            "query_processing",
+            "dense",
+            "sparse",
+            "fusion",
+            "filter",
+            "rerank",
+            "response",
+        ]
+        fallback_summary = fallback_trace["summary_metrics"]
+        assert isinstance(fallback_summary, dict)
+        fallback_counts = fallback_summary["candidate_count_by_stage"]
+        assert isinstance(fallback_counts, dict)
+        assert fallback_summary["fallback_used"] is True
+        assert fallback_counts["dense"] == 0
+        assert fallback_counts["sparse"] == 1
     finally:
         if schema_ready:
             _delete_collections(pool, [collection_id, other_collection_id])

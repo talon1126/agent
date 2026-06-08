@@ -45,6 +45,7 @@ from src.storage.repositories import (
     DocumentRepository,
     TraceRepository,
 )
+from src.storage.trace_log_storage import JsonlTraceWriter
 
 SUPPORTED_SOURCE_SUFFIXES = frozenset({".md", ".markdown", ".pdf"})
 
@@ -264,6 +265,9 @@ def _build_pipeline(
         document_repository=documents,
         chunk_repository=chunks,
         trace_repository=TraceRepository(pool),
+        trace_sink=JsonlTraceWriter(
+            _resolve_runtime_path(settings.observability.trace_jsonl_path)
+        ),
         splitter_step=SplitterStep(
             DocumentChunker(splitter=SplitterFactory.create(settings=settings))
         ),

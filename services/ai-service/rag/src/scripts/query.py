@@ -20,6 +20,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
@@ -44,6 +45,8 @@ from src.core.response import (
     KnowledgeHubResponseBuilder,
     MultimodalAssembler,
 )
+from src.core.trace import TraceContext, TraceController
+from src.core.trace.trace_controller import TraceSink
 from src.core.types import RetrievalResult
 from src.libs.embedding import EmbeddingFactory
 from src.libs.llm import LLMFactory
@@ -52,6 +55,7 @@ from src.libs.vector_store import VectorStoreFactory
 from src.storage.bm25_storage import BM25Storage
 from src.storage.image_storage import ImageStorage
 from src.storage.postgres import PostgresPool, init_schema
+from src.storage.trace_log_storage import JsonlTraceWriter
 
 SettingsLoader = Callable[[], RagSettings]
 PoolFactory = Callable[[DatabaseSettings], PostgresPool]
@@ -98,6 +102,7 @@ class QueryRuntime:
         hybrid_search: HybridSearch,
         rerank_controller: RerankController | None,
         response_builder: KnowledgeHubResponseBuilder,
+        trace_sink: TraceSink | None = None,
     ) -> None:
         """Configure the already-created query pipeline components.
 
@@ -107,12 +112,16 @@ class QueryRuntime:
             rerank_controller: Optional rerank/fallback controller. ``None``
                 means reranking is disabled by configuration.
             response_builder: Public evidence, citation, and image assembler.
+            trace_sink: Optional trace sink receiving one finished query
+                snapshot. Production can inject JSON Lines logging while tests
+                pass a list appender.
         """
 
         self._query_processor = query_processor
         self._hybrid_search = hybrid_search
         self._rerank_controller = rerank_controller
         self._response_builder = response_builder
+        self._trace_sink = trace_sink
 
     def execute(
         self,
@@ -141,46 +150,160 @@ class QueryRuntime:
             the configured reranker provider.
         """
 
-        processed = self._query_processor.process(
-            query,
-            collection=collection,
-            top_k=top_k,
-        )
-        hybrid = self._hybrid_search.search(
-            processed,
-            filters={"collection": processed.collection},
-        )
-        rerank_applied = not no_rerank and self._rerank_controller is not None
-        rerank_fallback = False
-        if rerank_applied:
-            outcome = self._rerank_controller.rerank_with_outcome(
-                processed.normalized_query,
-                hybrid.results,
-                top_k=top_k,
-            )
-            final_results = outcome.results
-            rerank_fallback = outcome.fallback_used
-        else:
-            final_results = [
-                candidate.model_copy(deep=True)
-                for candidate in hybrid.results[:top_k]
-            ]
-
-        response = self._response_builder.build(
-            final_results,
+        trace_context = TraceContext.query(
             trace_id=trace_id,
+            collection=collection,
+            raw_query=query,
+            request_source="query_cli",
         )
-        return QueryExecutionResult(
-            processed_query=processed,
-            dense_results=tuple(hybrid.dense_results),
-            sparse_results=tuple(hybrid.sparse_results),
-            fused_results=tuple(hybrid.fused_results),
-            filtered_results=tuple(hybrid.results),
-            final_results=tuple(final_results),
-            response=response,
-            rerank_applied=rerank_applied,
-            fallback_used=hybrid.fallback_used or rerank_fallback,
-        )
+        trace_controller = TraceController(trace_context, sink=self._trace_sink)
+        hybrid = None
+        final_results: list[RetrievalResult] = []
+        rerank_applied = False
+        fallback_used = False
+        try:
+            processing_started = perf_counter()
+            try:
+                processed = self._query_processor.process(
+                    query,
+                    collection=collection,
+                    top_k=top_k,
+                )
+            except Exception as error:
+                trace_controller.record_stage(
+                    "query_processing",
+                    duration_ms=(perf_counter() - processing_started) * 1000,
+                    input_summary={"raw_query": query},
+                    output_summary={},
+                    method="normalize_rewrite_tokenize",
+                    provider=type(self._query_processor).__name__,
+                    status="failed",
+                    error={
+                        "error_type": type(error).__name__,
+                        "message": str(error),
+                    },
+                )
+                raise
+            trace_controller.record_stage(
+                "query_processing",
+                duration_ms=(perf_counter() - processing_started) * 1000,
+                input_summary={"raw_query": query},
+                output_summary={
+                    "normalized_query": processed.normalized_query,
+                    "keywords": list(processed.keywords),
+                    "intent": processed.intent.value,
+                    "collection": processed.collection,
+                    "top_k": processed.top_k,
+                    "rewrite_applied": processed.rewrite_applied,
+                },
+                method="normalize_rewrite_tokenize",
+                provider=type(self._query_processor).__name__,
+            )
+            hybrid = self._hybrid_search.search(
+                processed,
+                filters={"collection": processed.collection},
+                trace_context=trace_controller.context,
+            )
+            rerank_applied = not no_rerank and self._rerank_controller is not None
+            rerank_fallback = False
+            if rerank_applied:
+                outcome = self._rerank_controller.rerank_with_outcome(
+                    processed.normalized_query,
+                    hybrid.results,
+                    top_k=top_k,
+                    trace_context=trace_controller.context,
+                )
+                final_results = outcome.results
+                rerank_fallback = outcome.fallback_used
+            else:
+                final_results = [
+                    candidate.model_copy(deep=True)
+                    for candidate in hybrid.results[:top_k]
+                ]
+                trace_controller.record_stage(
+                    "rerank",
+                    duration_ms=0,
+                    method="rerank_or_fallback",
+                    provider="none",
+                    candidate_count=len(final_results),
+                    status="skipped",
+                    details={
+                        "top_k": top_k,
+                        "reason": "disabled_by_request"
+                        if no_rerank
+                        else "reranker_unavailable",
+                        "before_order": [
+                            candidate.chunk_id for candidate in hybrid.results
+                        ],
+                        "after_order": [
+                            candidate.chunk_id for candidate in final_results
+                        ],
+                    },
+                )
+
+            response_started = perf_counter()
+            response = self._response_builder.build(
+                final_results,
+                trace_id=trace_id,
+            )
+            trace_controller.record_stage(
+                "response",
+                duration_ms=(perf_counter() - response_started) * 1000,
+                input_summary={"final_result_count": len(final_results)},
+                output_summary={
+                    "citation_count": len(response.citations),
+                    "image_count": len(response.images),
+                    "is_empty": response.is_empty,
+                },
+                method="citation_multimodal_build",
+                provider=type(self._response_builder).__name__,
+                candidate_count=len(final_results),
+            )
+            fallback_used = hybrid.fallback_used or rerank_fallback
+            trace_controller.flush_query(
+                status="degraded" if fallback_used else "success",
+                top_k_results=_result_summaries(final_results),
+                candidate_count_by_stage=_candidate_counts(
+                    dense_results=hybrid.dense_results,
+                    sparse_results=hybrid.sparse_results,
+                    fused_results=hybrid.fused_results,
+                    filtered_results=hybrid.results,
+                    final_results=final_results,
+                ),
+                fallback_used=fallback_used,
+                empty_result=response.is_empty,
+            )
+            return QueryExecutionResult(
+                processed_query=processed,
+                dense_results=tuple(hybrid.dense_results),
+                sparse_results=tuple(hybrid.sparse_results),
+                fused_results=tuple(hybrid.fused_results),
+                filtered_results=tuple(hybrid.results),
+                final_results=tuple(final_results),
+                response=response,
+                rerank_applied=rerank_applied,
+                fallback_used=fallback_used,
+            )
+        except Exception as error:
+            if trace_controller.context.finished_at is None:
+                trace_controller.flush_query(
+                    status="failed",
+                    top_k_results=_result_summaries(final_results),
+                    candidate_count_by_stage=_candidate_counts(
+                        dense_results=hybrid.dense_results if hybrid else [],
+                        sparse_results=hybrid.sparse_results if hybrid else [],
+                        fused_results=hybrid.fused_results if hybrid else [],
+                        filtered_results=hybrid.results if hybrid else [],
+                        final_results=final_results,
+                    ),
+                    fallback_used=fallback_used,
+                    error={
+                        "error_type": type(error).__name__,
+                        "message": str(error),
+                    },
+                    empty_result=not final_results,
+                )
+            raise
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -393,6 +516,7 @@ def _build_runtime(
                 )
             )
         ),
+        trace_sink=_trace_sink_from_settings(settings),
     )
 
 
@@ -442,6 +566,55 @@ def _result_summaries(
         {"chunk_id": result.chunk_id, "score": result.score}
         for result in results
     ]
+
+
+def _candidate_counts(
+    *,
+    dense_results: Sequence[RetrievalResult],
+    sparse_results: Sequence[RetrievalResult],
+    fused_results: Sequence[RetrievalResult],
+    filtered_results: Sequence[RetrievalResult],
+    final_results: Sequence[RetrievalResult],
+) -> dict[str, int]:
+    """Build the documented per-stage candidate count summary.
+
+    Args:
+        dense_results: Dense Route candidates.
+        sparse_results: BM25 Sparse Route candidates.
+        fused_results: RRF candidates before metadata filtering.
+        filtered_results: Candidates that passed exact metadata filtering.
+        final_results: Reranked or preserved final candidates.
+
+    Returns:
+        Dictionary aligned with the TraceContext query summary contract.
+    """
+
+    return {
+        "dense": len(dense_results),
+        "sparse": len(sparse_results),
+        "fusion": len(fused_results),
+        "filter": len(filtered_results),
+        "rerank": len(final_results),
+    }
+
+
+def _trace_sink_from_settings(settings: RagSettings) -> TraceSink | None:
+    """Create the configured query trace sink when observability is available.
+
+    Args:
+        settings: Runtime settings. Unit tests may pass minimal settings
+            doubles that omit the observability section.
+
+    Returns:
+        A JSON Lines trace writer for production settings, or ``None`` for
+        minimal test settings and intentionally storage-free composition roots.
+    """
+
+    observability = getattr(settings, "observability", None)
+    trace_path = getattr(observability, "trace_jsonl_path", None)
+    if not trace_path:
+        return None
+    return JsonlTraceWriter(_resolve_runtime_path(trace_path))
 
 
 def _create_pool(settings: DatabaseSettings) -> PostgresPool:

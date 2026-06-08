@@ -2172,7 +2172,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、dedup/load/split/transform/embed/upsert 阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；8 个 TraceContext 单元测试通过 |
 | F3 | 实现 query trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.query()`、raw_query/request_source 基础信息校验、query_processing/dense/sparse/fusion/filter/rerank 阶段 allowlist、query summary/evaluation 指标和检索候选计数校验；12 个 TraceContext 单元测试通过 |
 | F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | 已实现 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；已保留 `src/logs/.gitkeep`，运行时 `*.log/*.jsonl` 仍不提交；15 个 TraceContext/TraceWriter 单元测试通过 |
-| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [ ] |  | 每个 pipeline 阶段调用 `record_stage()`，结束时 flush |
+| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-08 | 已将 TraceContext/TraceController 注入 ingestion 和 query 主链路，CLI 默认写入 JSONL trace；8 个 ingestion/query 集成测试、15 个 trace 单元测试和 ruff 通过 |
 | F6 | 实现配置读取和数据浏览服务 | [ ] |  | Dashboard services，配套单元测试 |
 | F7 | 实现 Trace 读取和评估服务 | [ ] |  | Dashboard services，配套单元测试 |
 | F8 | 实现系统总览与 Ingestion 管理页面 | [ ] |  | Streamlit 页面可启动 |
@@ -3258,18 +3258,22 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：让 Trace 不停留在独立工具层，而是真正进入 ingestion 和 query 的运行主链路。
 
-修改文件：`src/ingestion/pipeline.py`、`src/core/query_engine/query_processor.py`、`src/core/query_engine/hybrid_engine.py`、`tests/integration/test_ingestion_pipeline.py`、`tests/integration/test_query_pipeline.py`
+修改文件：`src/ingestion/pipeline.py`、`src/scripts/ingest.py`、`src/scripts/query.py`、`src/core/query_engine/hybrid_engine.py`、`src/core/trace/trace_context.py`、`src/core/trace/trace_controller.py`、`tests/integration/test_ingestion_pipeline.py`、`tests/integration/test_query_pipeline.py`
 
 实现类/函数：
 
 - `TraceController.record_stage()` 注入点：记录链路阶段信息
+- `TraceController.flush_ingestion()`：按 ingestion trace 契约 flush 汇总指标
+- `TraceController.flush_query()`：按 query trace 契约 flush 汇总指标
 - `IngestionPipeline.run()` trace 打点：注入链路追踪点
 - `IngestionPipeline.run_indexing()` trace 打点：注入索引子链路追踪点
-- `HybridEngine.search()` trace 打点：注入链路追踪点
+- `HybridSearch.search()` trace 打点：将 RRF 阶段统一记录为 `fusion`
+- `QueryRuntime.execute()` trace 打点：注入 query_processing、rerank 跳过、response 和最终 flush
+- `JsonlTraceWriter` CLI 注入：`ingest.py` 和 `query.py` 默认使用 `settings.observability.trace_jsonl_path`
 
 验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常结束和异常 fallback 都会 flush trace。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ##### F6：实现配置读取和数据浏览服务
 

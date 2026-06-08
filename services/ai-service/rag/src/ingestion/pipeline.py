@@ -7,9 +7,11 @@ optional so focused C1 unit tests and lightweight callers can still exercise the
 legacy ``loaded`` boundary; production composition injects the complete C10
 component set and receives an ``indexed`` result.
 
-Skipped runs persist their completed ingestion trace immediately. Full-chain
-stage tracing is introduced by the later observability phase, so C10 records
-only summary counts and the existing dedup trace behavior.
+Skipped runs still persist their completed ingestion trace through the legacy
+TraceRepository path. Phase F also injects a storage-independent TraceContext
+through every complete ingestion stage so JSON Lines logging and Dashboard
+readers can observe the full offline pipeline without coupling business logic
+to a concrete trace writer.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from src.core.errors import IngestionError
+from src.core.trace import TraceContext, TraceController
+from src.core.trace.trace_controller import TraceSink
 from src.core.types import Chunk, Document
 from src.ingestion.chunk import SplitterStep
 from src.ingestion.embedding import EmbeddingBatchResult, EmbeddingStep
@@ -168,6 +172,7 @@ class IngestionPipeline:
         document_repository: DocumentRepository,
         chunk_repository: ChunkRepository | None = None,
         trace_repository: TraceRepository,
+        trace_sink: TraceSink | None = None,
         splitter_step: SplitterStep | None = None,
         transform_pipeline: TransformPipeline | None = None,
         embedding_step: EmbeddingStep | None = None,
@@ -183,6 +188,8 @@ class IngestionPipeline:
             chunk_repository: Durable chunk-vector lookup used for differential
                 embedding in complete mode.
             trace_repository: Durable ingestion trace persistence.
+            trace_sink: Optional storage-independent trace sink receiving one
+                finished JSON-compatible snapshot per run.
             splitter_step: Optional Document-to-Chunk business adapter.
             transform_pipeline: Optional ordered transform chain.
             embedding_step: Optional Dense/BM25 batch indexing orchestrator.
@@ -214,6 +221,7 @@ class IngestionPipeline:
         self._document_repository = document_repository
         self._chunk_repository = chunk_repository
         self._trace_repository = trace_repository
+        self._trace_sink = trace_sink
         self._splitter_step = splitter_step
         self._transform_pipeline = transform_pipeline
         self._embedding_step = embedding_step
@@ -271,6 +279,37 @@ class IngestionPipeline:
             force=force,
         )
         dedup_duration_ms = max((perf_counter() - dedup_started) * 1000, 0.0)
+        trace_context = TraceContext.ingestion(
+            trace_id=trace_id,
+            collection=collection_id,
+            source_uri=source_uri,
+            source_hash=source_hash,
+            started_at=started_at,
+        )
+        trace_controller = TraceController(
+            trace_context,
+            sink=self._trace_sink,
+            clock=self._clock,
+        )
+        trace_controller.record_stage(
+            "dedup",
+            duration_ms=dedup_duration_ms,
+            input_summary={
+                "source_uri": source_uri,
+                "source_hash": source_hash,
+                "force": force,
+            },
+            output_summary={"skipped": skipped},
+            method="sha256",
+            provider=type(self._document_repository).__name__,
+            status="skipped" if skipped else "success",
+            details={
+                "successful_hash_hit": skipped,
+                "skip_reason": (
+                    "successful_source_hash_match" if skipped else None
+                ),
+            },
+        )
 
         if skipped:
             finished_at = self._clock()
@@ -311,6 +350,14 @@ class IngestionPipeline:
                 summary_metrics=summary,
             )
             self._trace_repository.upsert_ingestion_trace(trace)
+            trace_controller.flush_ingestion(
+                status="skipped",
+                document_status="skipped",
+                chunk_count=0,
+                embedded_count=0,
+                skipped_count=1,
+                index_ready=True,
+            )
             return IngestionPipelineResult(
                 trace_id=trace_id,
                 collection_id=collection_id,
@@ -321,67 +368,161 @@ class IngestionPipeline:
                 trace_summary=summary,
             )
 
-        document = self._loader.load(source_path)
-        if not self._complete_mode:
+        try:
+            load_started = perf_counter()
+            document = self._loader.load(source_path)
+            trace_controller.record_stage(
+                "load",
+                duration_ms=(perf_counter() - load_started) * 1000,
+                input_summary={"source_uri": source_uri},
+                output_summary={
+                    "document_id": document.id,
+                    "text_length": len(document.text),
+                    "image_count": _document_image_count(document),
+                },
+                method="load",
+                provider=type(self._loader).__name__,
+            )
+
+            if not self._complete_mode:
+                trace_controller.flush_ingestion(
+                    status="success",
+                    document_status="success",
+                    chunk_count=0,
+                    embedded_count=0,
+                    skipped_count=0,
+                    index_ready=False,
+                )
+                return IngestionPipelineResult(
+                    trace_id=trace_id,
+                    collection_id=collection_id,
+                    source_uri=source_uri,
+                    source_hash=source_hash,
+                    status="loaded",
+                    document=document,
+                    trace_summary={
+                        "skipped": False,
+                        "force": force,
+                        "loaded_documents": 1,
+                        "dedup_duration_ms": dedup_duration_ms,
+                    },
+                )
+
+            assert self._splitter_step is not None
+            assert self._transform_pipeline is not None
+            split_started = perf_counter()
+            chunks = self._splitter_step.run(document)
+            trace_controller.record_stage(
+                "split",
+                duration_ms=(perf_counter() - split_started) * 1000,
+                input_summary={"document_id": document.id},
+                output_summary={
+                    "chunk_count": len(chunks),
+                    "chunk_ids": [chunk.id for chunk in chunks],
+                },
+                method="document_chunker",
+                provider=type(self._splitter_step).__name__,
+            )
+
+            transform_context = {
+                "trace_id": trace_id,
+                "collection": collection_id,
+                "document_id": document.id,
+                "source_path": source_uri,
+                "title": document.metadata.get("title"),
+                "document_context": document.text,
+            }
+            transform_started = perf_counter()
+            transformed_chunks = self._transform_pipeline.run(
+                chunks,
+                context=transform_context,
+            )
+            trace_controller.record_stage(
+                "transform",
+                duration_ms=(perf_counter() - transform_started) * 1000,
+                input_summary={"chunk_count": len(chunks)},
+                output_summary={
+                    "chunk_count": len(transformed_chunks),
+                    "chunk_ids": [chunk.id for chunk in transformed_chunks],
+                },
+                method="transform_pipeline",
+                provider=type(self._transform_pipeline).__name__,
+            )
+            image_caption_summary = _image_caption_summary(transformed_chunks)
+            trace_controller.record_stage(
+                "image_caption",
+                duration_ms=0,
+                input_summary={
+                    "image_ref_count": image_caption_summary["image_ref_count"],
+                },
+                output_summary=image_caption_summary,
+                method="image_to_text",
+                provider=type(self._transform_pipeline).__name__,
+                status=(
+                    "success"
+                    if image_caption_summary["caption_count"] > 0
+                    else "skipped"
+                ),
+            )
+
+            indexing_result, upsert_result = self.run_indexing(
+                document=document,
+                chunks=transformed_chunks,
+                collection_id=collection_id,
+                source_path=source_uri,
+                source_hash=source_hash,
+                trace_controller=trace_controller,
+            )
+            self._document_repository.mark_success(document.id)
+            trace_controller.flush_ingestion(
+                status="success",
+                document_status="success",
+                chunk_count=len(transformed_chunks),
+                embedded_count=len(indexing_result.dense_results),
+                skipped_count=0,
+                embedding_coverage=(
+                    len(indexing_result.dense_results) / len(transformed_chunks)
+                    if transformed_chunks
+                    else 0
+                ),
+                index_ready=True,
+            )
             return IngestionPipelineResult(
                 trace_id=trace_id,
                 collection_id=collection_id,
                 source_uri=source_uri,
                 source_hash=source_hash,
-                status="loaded",
+                status="indexed",
                 document=document,
+                chunks=tuple(transformed_chunks),
+                indexing_result=indexing_result,
+                upsert_result=upsert_result,
                 trace_summary={
                     "skipped": False,
                     "force": force,
                     "loaded_documents": 1,
+                    "chunk_count": len(transformed_chunks),
+                    "dense_count": len(indexing_result.dense_results),
+                    "bm25_chunk_count": indexing_result.bm25_index.chunk_count,
+                    "image_count": len(upsert_result.image_ids),
                     "dedup_duration_ms": dedup_duration_ms,
                 },
             )
-
-        assert self._splitter_step is not None
-        assert self._transform_pipeline is not None
-        chunks = self._splitter_step.run(document)
-        transform_context = {
-            "trace_id": trace_id,
-            "collection": collection_id,
-            "document_id": document.id,
-            "source_path": source_uri,
-            "title": document.metadata.get("title"),
-            "document_context": document.text,
-        }
-        transformed_chunks = self._transform_pipeline.run(
-            chunks,
-            context=transform_context,
-        )
-        indexing_result, upsert_result = self.run_indexing(
-            document=document,
-            chunks=transformed_chunks,
-            collection_id=collection_id,
-            source_path=source_uri,
-            source_hash=source_hash,
-        )
-        self._document_repository.mark_success(document.id)
-        return IngestionPipelineResult(
-            trace_id=trace_id,
-            collection_id=collection_id,
-            source_uri=source_uri,
-            source_hash=source_hash,
-            status="indexed",
-            document=document,
-            chunks=tuple(transformed_chunks),
-            indexing_result=indexing_result,
-            upsert_result=upsert_result,
-            trace_summary={
-                "skipped": False,
-                "force": force,
-                "loaded_documents": 1,
-                "chunk_count": len(transformed_chunks),
-                "dense_count": len(indexing_result.dense_results),
-                "bm25_chunk_count": indexing_result.bm25_index.chunk_count,
-                "image_count": len(upsert_result.image_ids),
-                "dedup_duration_ms": dedup_duration_ms,
-            },
-        )
+        except Exception as error:
+            if trace_controller.context.finished_at is None:
+                trace_controller.flush_ingestion(
+                    status="failed",
+                    document_status="failed",
+                    chunk_count=len(locals().get("transformed_chunks", [])),
+                    embedded_count=0,
+                    skipped_count=0,
+                    error={
+                        "error_type": type(error).__name__,
+                        "message": str(error),
+                    },
+                    index_ready=False,
+                )
+            raise
 
     def run_indexing(
         self,
@@ -391,6 +532,7 @@ class IngestionPipeline:
         collection_id: str,
         source_path: str,
         source_hash: str,
+        trace_controller: TraceController | None = None,
     ) -> tuple[EmbeddingBatchResult, UpsertResult]:
         """Run the C8 indexing stage followed by the C9 persistence stage.
 
@@ -400,6 +542,8 @@ class IngestionPipeline:
             collection_id: Search collection receiving the source.
             source_path: Canonical source path used by deduplication.
             source_hash: SHA256 digest of original source bytes.
+            trace_controller: Optional request trace controller used to record
+                ``embed`` and ``upsert`` stages in the complete pipeline.
 
         Returns:
             A tuple containing the in-memory indexing result and durable upsert
@@ -428,25 +572,95 @@ class IngestionPipeline:
             raise RuntimeError(
                 "run_indexing() requires a chunk repository in complete mode"
             )
+        embed_started = perf_counter()
         content_hashes = {
             sha256(chunk.text.encode("utf-8")).hexdigest() for chunk in chunks
         }
-        existing_vectors = self._chunk_repository.get_dense_vectors_by_content_hashes(
-            content_hashes,
-            collection_id=collection_id,
+        try:
+            existing_vectors = self._chunk_repository.get_dense_vectors_by_content_hashes(
+                content_hashes,
+                collection_id=collection_id,
+            )
+            indexing_result = self._embedding_step.run_batch(
+                chunks,
+                existing_vectors_by_hash=existing_vectors,
+            )
+        except Exception as error:
+            _record_stage_best_effort(
+                trace_controller,
+                stage="embed",
+                started_at=embed_started,
+                input_summary={"chunk_count": len(chunks)},
+                output_summary={"dense_count": 0, "bm25_chunk_count": 0},
+                method="dense_and_bm25_batch",
+                provider=type(self._embedding_step).__name__,
+                status="failed",
+                details={"error_type": type(error).__name__},
+            )
+            raise
+        _record_stage_best_effort(
+            trace_controller,
+            stage="embed",
+            started_at=embed_started,
+            input_summary={
+                "chunk_count": len(chunks),
+                "content_hash_count": len(content_hashes),
+            },
+            output_summary={
+                "dense_count": len(indexing_result.dense_results),
+                "bm25_chunk_count": indexing_result.bm25_index.chunk_count,
+                "reused_vector_count": len(existing_vectors),
+            },
+            method="dense_and_bm25_batch",
+            provider=type(self._embedding_step).__name__,
+            status="success",
+            details={
+                "dense_batches_processed": indexing_result.dense_batches_processed,
+                "bm25_batches_processed": indexing_result.bm25_batches_processed,
+                "dense_failure_count": len(indexing_result.dense_failures),
+                "bm25_failure_count": len(indexing_result.bm25_failures),
+            },
         )
-        indexing_result = self._embedding_step.run_batch(
-            chunks,
-            existing_vectors_by_hash=existing_vectors,
-        )
-        upsert_result = self._upsert_step.run(
-            document=document,
-            chunks=chunks,
-            indexing_result=indexing_result,
-            collection_id=collection_id,
-            source_path=source_path,
-            source_hash=source_hash,
-            title=_optional_title(document.metadata.get("title")),
+
+        upsert_started = perf_counter()
+        try:
+            upsert_result = self._upsert_step.run(
+                document=document,
+                chunks=chunks,
+                indexing_result=indexing_result,
+                collection_id=collection_id,
+                source_path=source_path,
+                source_hash=source_hash,
+                title=_optional_title(document.metadata.get("title")),
+            )
+        except Exception as error:
+            _record_stage_best_effort(
+                trace_controller,
+                stage="upsert",
+                started_at=upsert_started,
+                input_summary={"chunk_count": len(chunks)},
+                output_summary={},
+                method="transactional_upsert",
+                provider=type(self._upsert_step).__name__,
+                status="failed",
+                details={"error_type": type(error).__name__},
+            )
+            raise
+        _record_stage_best_effort(
+            trace_controller,
+            stage="upsert",
+            started_at=upsert_started,
+            input_summary={"chunk_count": len(chunks)},
+            output_summary={
+                "document_id": upsert_result.document_id,
+                "chunk_ids": list(upsert_result.chunk_ids),
+                "vector_chunk_ids": list(upsert_result.vector_chunk_ids),
+                "bm25_chunk_ids": list(upsert_result.bm25_chunk_ids),
+                "image_ids": list(upsert_result.image_ids),
+            },
+            method="transactional_upsert",
+            provider=type(self._upsert_step).__name__,
+            status="success",
         )
         return indexing_result, upsert_result
 
@@ -473,3 +687,84 @@ def _optional_title(value: Any) -> str | None:
         return None
     title = str(value).strip()
     return title or None
+
+
+def _document_image_count(document: Document) -> int:
+    """Return the number of image metadata entries collected by the Loader."""
+
+    images = document.metadata.get("images", [])
+    return len(images) if isinstance(images, list) else 0
+
+
+def _image_caption_summary(chunks: list[Chunk]) -> dict[str, Any]:
+    """Summarize Image-to-Text transform output across final chunks.
+
+    Args:
+        chunks: Final chunks after the transform pipeline has run.
+
+    Returns:
+        Trace-safe counts used by the ingestion Dashboard to compare image
+        references with generated caption records and quality states.
+    """
+
+    image_refs: set[str] = set()
+    captions: list[dict[str, Any]] = []
+    status_counts: dict[str, int] = {}
+    for chunk in chunks:
+        refs = chunk.metadata.get("image_refs", [])
+        if isinstance(refs, list):
+            image_refs.update(str(ref) for ref in refs if str(ref))
+        for caption in chunk.metadata.get("image_captions", []):
+            if not isinstance(caption, dict):
+                continue
+            captions.append(caption)
+            status = str(caption.get("status") or "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+    return {
+        "image_ref_count": len(image_refs),
+        "caption_count": len(captions),
+        "status_counts": status_counts,
+    }
+
+
+def _record_stage_best_effort(
+    trace_controller: TraceController | None,
+    *,
+    stage: str,
+    started_at: float,
+    input_summary: dict[str, Any],
+    output_summary: dict[str, Any],
+    method: str,
+    provider: str,
+    status: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Record one trace stage without letting observability replace business flow.
+
+    Args:
+        trace_controller: Optional request trace controller.
+        stage: Stable ingestion stage name.
+        started_at: ``perf_counter`` value captured before the stage.
+        input_summary: Compact, trace-safe input summary.
+        output_summary: Compact, trace-safe output summary.
+        method: Logical algorithm or orchestration method.
+        provider: Concrete component class name.
+        status: Stage completion status.
+        details: Optional diagnostic details.
+    """
+
+    if trace_controller is None:
+        return
+    try:
+        trace_controller.record_stage(
+            stage,
+            duration_ms=(perf_counter() - started_at) * 1000,
+            input_summary=input_summary,
+            output_summary=output_summary,
+            method=method,
+            provider=provider,
+            status=status,
+            details=details,
+        )
+    except Exception:
+        return

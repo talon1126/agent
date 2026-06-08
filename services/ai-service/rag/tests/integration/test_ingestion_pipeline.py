@@ -467,11 +467,13 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
         documents = DocumentRepository(pool)
         chunks = ChunkRepository(pool)
         embedding = Mock(wraps=FakeEmbedding(dimensions=1536))
+        trace_payloads: list[dict[str, object]] = []
         pipeline = IngestionPipeline(
             loader=MarkdownLoader(),
             document_repository=documents,
             chunk_repository=chunks,
             trace_repository=TraceRepository(pool),
+            trace_sink=trace_payloads.append,
             splitter_step=SplitterStep(
                 DocumentChunker(splitter=FakeSplitter())
             ),
@@ -523,6 +525,43 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
         assert second.document is None
         assert second.chunks == ()
         assert embedding.embed_batch.call_count == 1
+        assert len(trace_payloads) == 2
+
+        indexed_trace, skipped_trace = trace_payloads
+        assert indexed_trace["trace_type"] == "ingestion"
+        assert indexed_trace["trace_id"] == first.trace_id
+        assert indexed_trace["status"] == "success"
+        assert [
+            stage["stage"]
+            for stage in indexed_trace["stages"]  # type: ignore[index]
+        ] == [
+            "dedup",
+            "load",
+            "split",
+            "transform",
+            "image_caption",
+            "embed",
+            "upsert",
+        ]
+        indexed_summary = indexed_trace["summary_metrics"]
+        indexed_evaluation = indexed_trace["evaluation_metrics"]
+        assert isinstance(indexed_summary, dict)
+        assert isinstance(indexed_evaluation, dict)
+        assert indexed_summary["document_status"] == "success"
+        assert indexed_summary["chunk_count"] == 1
+        assert indexed_summary["embedded_count"] == 1
+        assert indexed_evaluation["index_ready"] is True
+
+        assert skipped_trace["trace_type"] == "ingestion"
+        assert skipped_trace["trace_id"] == second.trace_id
+        assert skipped_trace["status"] == "skipped"
+        assert [
+            stage["stage"]
+            for stage in skipped_trace["stages"]  # type: ignore[index]
+        ] == ["dedup"]
+        skipped_summary = skipped_trace["summary_metrics"]
+        assert isinstance(skipped_summary, dict)
+        assert skipped_summary["document_status"] == "skipped"
 
         with pool.connection() as connection:
             counts = connection.execute(

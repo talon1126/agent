@@ -26,9 +26,25 @@ TraceStatus = Literal["running", "success", "skipped", "failed", "degraded"]
 StageStatus = Literal["success", "skipped", "failed", "degraded"]
 _VALID_TRACE_STATUSES = {"running", "success", "skipped", "failed", "degraded"}
 _VALID_STAGE_STATUSES = {"success", "skipped", "failed", "degraded"}
-_QUERY_STAGES = {"query_processing", "dense", "sparse", "fusion", "filter", "rerank"}
+_QUERY_STAGES = {
+    "query_processing",
+    "dense",
+    "sparse",
+    "fusion",
+    "filter",
+    "rerank",
+    "response",
+}
 _QUERY_CANDIDATE_STAGES = {"dense", "sparse", "fusion", "filter", "rerank"}
-_INGESTION_STAGES = {"dedup", "load", "split", "transform", "embed", "upsert"}
+_INGESTION_STAGES = {
+    "dedup",
+    "load",
+    "split",
+    "transform",
+    "image_caption",
+    "embed",
+    "upsert",
+}
 _DOCUMENT_STATUSES = {"success", "skipped", "failed"}
 _SHA256_HEX_LENGTH = 64
 
@@ -447,7 +463,7 @@ class TraceContext:
 
         Args:
             stage: One of ``query_processing``, ``dense``, ``sparse``,
-                ``fusion``, ``filter``, or ``rerank``.
+                ``fusion``, ``filter``, ``rerank``, or ``response``.
             duration_ms: Stage duration in milliseconds.
             input_summary: Query or candidate input digest.
             output_summary: Candidate, ranking, or rewrite output digest.
@@ -503,7 +519,7 @@ class TraceContext:
 
         Args:
             stage: One of ``dedup``, ``load``, ``split``, ``transform``,
-                ``embed``, or ``upsert``.
+                ``image_caption``, ``embed``, or ``upsert``.
             duration_ms: Stage duration in milliseconds.
             input_summary: Source or stage input digest.
             output_summary: Document/chunk/index output digest.
