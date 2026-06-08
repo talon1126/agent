@@ -287,7 +287,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | F3 | 实现 query trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.query()`、raw_query/request_source 基础信息校验、query_processing/dense/sparse/fusion/filter/rerank 阶段 allowlist、query summary/evaluation 指标和检索候选计数校验；12 个 TraceContext 单元测试通过 |
 | F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | 已实现 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；已保留 `src/logs/.gitkeep`，运行时 `*.log/*.jsonl` 仍不提交；15 个 TraceContext/TraceWriter 单元测试通过 |
 | F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-08 | 已将 TraceContext/TraceController 注入 ingestion 和 query 主链路，CLI 默认写入 JSONL trace；8 个 ingestion/query 集成测试、15 个 trace 单元测试和 ruff 通过 |
-| F6 | 实现配置读取和数据浏览服务 | [ ] |  | Dashboard services，配套单元测试 |
+| F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | 已实现 Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
 | F7 | 实现 Trace 读取和评估服务 | [ ] |  | Dashboard services，配套单元测试 |
 | F8 | 实现系统总览与 Ingestion 管理页面 | [ ] |  | Streamlit 页面可启动 |
 | F9 | 实现数据浏览器与 Query Trace 页面 | [ ] |  | 文档、chunk、召回对比、rerank 变化 |
@@ -1393,16 +1393,22 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：为 Dashboard 提供配置读取和文档/chunk 查询能力。
 
-修改文件：`src/observability/services/config_reader.py`、`src/observability/services/data_browser_service.py`、`tests/integration/test_dashboard_services.py`
+修改文件：`src/observability/services/__init__.py`、`src/observability/services/config_reader.py`、`src/observability/services/data_browser_service.py`、`tests/integration/test_dashboard_services.py`
 
 实现类/函数：
 
 - `ConfigReaderService`：读取 settings 并展示当前组件配置
 - `DataBrowserService`：查询文档、chunk、图片和索引状态
+- `ConfigReaderService.read_overview()`：输出项目身份、组件配置、Dashboard 页面和关键路径
+- `DataBrowserService.collection_stats()`：统计 collection 的文档、chunk、图片、Dense 和 BM25 索引数量
+- `DataBrowserService.list_documents()`：返回文档列表、生命周期、来源和子资源数量
+- `DataBrowserService.list_chunks()`：返回 chunk 明细、Dense/BM25 状态和 image_refs
+- `DataBrowserService.get_chunk_detail()`：按 chunk_id 查询单条 chunk 明细
+- `DataBrowserService.list_images()`：返回 image_index 记录
 
 验收标准：可读取 settings 和文档/chunk 数据。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ##### F7：实现 Trace 读取和评估服务
 
