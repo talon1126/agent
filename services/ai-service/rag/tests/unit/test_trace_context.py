@@ -15,6 +15,180 @@ import pytest
 from src.core.trace import TraceContext, TraceController
 
 
+def test_query_trace_requires_raw_query_and_basic_info() -> None:
+    """Query traces must expose the documented request identity fields."""
+
+    started_at = datetime(2026, 6, 8, 10, 0, 0, tzinfo=UTC)
+    context = TraceContext.query(
+        trace_id="trace-query-source",
+        collection="shopping_guides",
+        raw_query="如何挑选高性价比无线耳机？",
+        request_source="aimodel",
+        started_at=started_at,
+    )
+
+    assert context.to_dict()["basic_info"] == {
+        "trace_id": "trace-query-source",
+        "trace_type": "query",
+        "started_at": "2026-06-08T10:00:00+00:00",
+        "collection": "shopping_guides",
+        "raw_query": "如何挑选高性价比无线耳机？",
+        "request_source": "aimodel",
+    }
+
+    with pytest.raises(ValueError, match="raw_query"):
+        TraceContext.query(
+            collection="shopping_guides",
+            raw_query=" ",
+            request_source="mcp",
+        )
+    with pytest.raises(ValueError, match="raw_query"):
+        TraceContext(trace_type="query", collection="shopping_guides")
+
+
+def test_query_trace_records_only_documented_stages() -> None:
+    """Query stage recording should stay aligned with the DEV_SPEC stages."""
+
+    context = TraceContext.query(
+        trace_id="trace-query-stages",
+        collection="shopping_guides",
+        raw_query="推荐适合办公室的解压玩具",
+        request_source="mcp",
+    )
+
+    context.record_query_stage(
+        "dense",
+        duration_ms=18,
+        input_summary={"embedding_model": "text-embedding-v4"},
+        output_summary={
+            "top_k": 3,
+            "candidates": [
+                {"chunk_id": "chunk-a", "score": 0.91},
+                {"chunk_id": "chunk-b", "score": 0.88},
+            ],
+        },
+        method="pgvector_search",
+        provider="pgvector",
+        candidate_count=2,
+        details={"vector_dimension": 1536},
+    )
+
+    stage = context.to_dict()["stages"][0]
+    assert stage["stage"] == "dense"
+    assert stage["duration_ms"] == 18.0
+    assert stage["candidate_count"] == 2
+    assert stage["method"] == "pgvector_search"
+    assert stage["provider"] == "pgvector"
+    assert stage["details"] == {"vector_dimension": 1536}
+    assert stage["output_summary"]["candidates"] == [
+        {"chunk_id": "chunk-a", "score": 0.91},
+        {"chunk_id": "chunk-b", "score": 0.88},
+    ]
+
+    with pytest.raises(ValueError, match="query stage"):
+        context.record_query_stage("load")
+
+
+def test_query_trace_finish_adds_summary_and_evaluation_sections() -> None:
+    """Finish should normalize documented query summary/evaluation keys."""
+
+    started_at = datetime(2026, 6, 8, 10, 0, 0, tzinfo=UTC)
+    finished_at = started_at + timedelta(milliseconds=320)
+    context = TraceContext.query(
+        trace_id="trace-query-summary",
+        collection="shopping_guides",
+        raw_query="对比棉花娃娃和捏捏乐哪个更解压",
+        request_source="aimodel",
+        started_at=started_at,
+    )
+
+    snapshot = context.finish_query(
+        status="success",
+        finished_at=finished_at,
+        top_k_results=[
+            {"chunk_id": "chunk-a", "rank": 1, "score": 0.96},
+            {"chunk_id": "chunk-b", "rank": 2, "score": 0.91},
+        ],
+        candidate_count_by_stage={
+            "dense": 20,
+            "sparse": 14,
+            "fusion": 26,
+            "filter": 18,
+            "rerank": 5,
+        },
+        fallback_used=True,
+        error=None,
+        query_document_relevance=0.89,
+        citation_hit_rate=1.0,
+        rerank_delta={"chunk-a": {"before": 3, "after": 1}},
+        empty_result=False,
+    )
+
+    assert snapshot["summary_metrics"] == {
+        "top_k_results": [
+            {"chunk_id": "chunk-a", "rank": 1, "score": 0.96},
+            {"chunk_id": "chunk-b", "rank": 2, "score": 0.91},
+        ],
+        "candidate_count_by_stage": {
+            "dense": 20,
+            "sparse": 14,
+            "fusion": 26,
+            "filter": 18,
+            "rerank": 5,
+        },
+        "fallback_used": True,
+        "error": None,
+        "total_duration_ms": 320.0,
+    }
+    assert snapshot["evaluation_metrics"] == {
+        "query_document_relevance": 0.89,
+        "citation_hit_rate": 1.0,
+        "rerank_delta": {"chunk-a": {"before": 3, "after": 1}},
+        "empty_result": False,
+    }
+
+
+def test_query_trace_rejects_invalid_summary_metrics() -> None:
+    """Reject invalid query counts, boolean flags, and quality ratios."""
+
+    context = TraceContext.query(
+        collection="shopping_guides",
+        raw_query="高性价比无线耳机怎么选",
+        request_source="dashboard",
+    )
+
+    with pytest.raises(ValueError, match="candidate_count_by_stage"):
+        context.finish_query(
+            status="success",
+            top_k_results=[],
+            candidate_count_by_stage={"dense": -1},
+            fallback_used=False,
+        )
+    with pytest.raises(ValueError, match="fallback_used"):
+        context.finish_query(
+            status="success",
+            top_k_results=[],
+            candidate_count_by_stage={"dense": 0},
+            fallback_used="false",
+        )
+    with pytest.raises(ValueError, match="query_document_relevance"):
+        context.finish_query(
+            status="success",
+            top_k_results=[],
+            candidate_count_by_stage={"dense": 0},
+            fallback_used=False,
+            query_document_relevance=1.2,
+        )
+    with pytest.raises(ValueError, match="empty_result"):
+        context.finish_query(
+            status="success",
+            top_k_results=[],
+            candidate_count_by_stage={"dense": 0},
+            fallback_used=False,
+            empty_result="no",
+        )
+
+
 def test_ingestion_trace_requires_source_identity_and_basic_info() -> None:
     """Ingestion traces must expose the documented source identity fields."""
 

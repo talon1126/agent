@@ -2170,7 +2170,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | --- | --- | --- | --- | --- |
 | F1 | 实现 TraceContext 和 TraceController | [✔] | 2026-06-08 | 已实现 `src/core/trace` 包导出、内存 TraceContext、TraceController、阶段耗时/输入输出摘要记录、flush sink、错误/fallback 详情和防御性快照；4 个 TraceContext 单元测试通过 |
 | F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、dedup/load/split/transform/embed/upsert 阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；8 个 TraceContext 单元测试通过 |
-| F3 | 实现 query trace 数据结构 | [ ] |  | Dense/BM25、fusion、filter、rerank 前后变化 |
+| F3 | 实现 query trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.query()`、raw_query/request_source 基础信息校验、query_processing/dense/sparse/fusion/filter/rerank 阶段 allowlist、query summary/evaluation 指标和检索候选计数校验；12 个 TraceContext 单元测试通过 |
 | F4 | 实现 Python logging + JSONFormatter | [ ] |  | 追加写入 `src/logs/traces.jsonl` |
 | F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [ ] |  | 每个 pipeline 阶段调用 `record_stage()`，结束时 flush |
 | F6 | 实现配置读取和数据浏览服务 | [ ] |  | Dashboard services，配套单元测试 |
@@ -2211,10 +2211,10 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 14 | 100% |
 | Phase E | 4 | 4 | 100% |
-| Phase F | 12 | 2 | 17% |
+| Phase F | 12 | 3 | 25% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **49** | **70%** |
+| **总计** | **70** | **50** | **71%** |
 
 ### 6.5 阶段实施明细
 
@@ -3225,9 +3225,14 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- `build_query_trace()`：构建标准对象
+- `TraceContext.query()`：构建标准 query trace，上线前校验 `collection`、用户原始 `raw_query` 和可选 `request_source`
+- `TraceContext.record_query_stage()`：仅允许记录 `query_processing`、`dense`、`sparse`、`fusion`、`filter`、`rerank` 六个查询阶段
+- `TraceContext.finish_query()`：写入 query 汇总指标和评估指标，并生成完整结构化快照
+- `_validate_top_k_results()`：校验并复制最终 Top-k 结果摘要列表，避免 trace 泄漏内部 provider payload
+- `_validate_candidate_count_by_stage()`：校验 Dense、Sparse、Fusion、Filter、Rerank 阶段候选数量
+- `_validate_bool()`：校验 fallback、empty_result 等布尔指标，避免字符串 truthy 值污染结构化日志
 
-验收标准：包含 Dense/BM25、fusion、rerank 变化。
+验收标准：包含 query 基础信息、阶段详情、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=query`、`started_at`、`collection`、`raw_query`，并在存在时记录 `request_source`；阶段详情必须限制在 `query_processing/dense/sparse/fusion/filter/rerank`；汇总指标必须包含 `top_k_results`、`candidate_count_by_stage`、`fallback_used`、`error`、`total_duration_ms`；评估指标支持 `query_document_relevance`、`citation_hit_rate`、`rerank_delta`、`empty_result`。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
