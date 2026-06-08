@@ -514,6 +514,11 @@ class _FakeStreamlit:
 
         self.calls.append(("dataframe", args, kwargs))
 
+    def bar_chart(self, *args: object, **kwargs: object) -> None:
+        """Record a chart rendering call."""
+
+        self.calls.append(("bar_chart", args, kwargs))
+
     def write(self, *args: object, **kwargs: object) -> None:
         """Record generic structured output."""
 
@@ -778,3 +783,197 @@ def test_dashboard_page_model_builders_read_services_without_side_effects() -> N
     assert ingestion_model.collection_id == "shopping_guides"
     assert ingestion_model.raw_data_dir == "data/raw"
     assert ingestion_model.documents == (document,)
+
+
+@pytest.mark.integration
+def test_data_browser_page_builds_and_renders_document_chunk_details() -> None:
+    """Require data browser page to show documents, chunks, images, and source data."""
+
+    from src.observability.pages.data_browser import (
+        build_data_browser_page_model,
+        render_data_browser_page,
+    )
+    from src.observability.services import (
+        ChunkBrowserRow,
+        DocumentBrowserRow,
+        ImageBrowserRow,
+    )
+
+    document = DocumentBrowserRow(
+        document_id="doc-data",
+        collection_id="shopping_guides",
+        title="Wireless guide",
+        source_path="data/raw/wireless.md",
+        source_hash="c" * 64,
+        lifecycle_status="success",
+        chunk_count=1,
+        image_count=1,
+    )
+    chunk = ChunkBrowserRow(
+        chunk_id="chunk-data",
+        document_id="doc-data",
+        collection_id="shopping_guides",
+        chunk_index=0,
+        text="Wireless headphones should balance comfort and battery life.",
+        text_preview="Wireless headphones should balance comfort and battery life.",
+        text_length=61,
+        content_hash="d" * 64,
+        start_offset=0,
+        end_offset=61,
+        dense_indexed=True,
+        bm25_term_count=5,
+        image_refs=("image-data",),
+        metadata={"section_path": ["Audio"]},
+        source_ref={"source_path": "data/raw/wireless.md"},
+    )
+    image = ImageBrowserRow(
+        image_id="image-data",
+        file_path="data/images/shopping_guides/image-data.png",
+        collection_id="shopping_guides",
+        document_id="doc-data",
+        page_num=1,
+        width=640,
+        height=480,
+        mime_type="image/png",
+        quality_status="ok",
+    )
+
+    class _DataBrowser:
+        """Return fixed data-browser DTOs for page builder tests."""
+
+        def list_documents(self, collection_id: str) -> list[DocumentBrowserRow]:
+            """Return collection documents."""
+
+            assert collection_id == "shopping_guides"
+            return [document]
+
+        def list_chunks(self, document_id: str) -> list[ChunkBrowserRow]:
+            """Return chunks for the selected document."""
+
+            assert document_id == "doc-data"
+            return [chunk]
+
+        def get_chunk_detail(self, chunk_id: str) -> ChunkBrowserRow | None:
+            """Return the selected chunk detail."""
+
+            assert chunk_id == "chunk-data"
+            return chunk
+
+        def list_images(self, collection_id: str) -> list[ImageBrowserRow]:
+            """Return collection images."""
+
+            assert collection_id == "shopping_guides"
+            return [image]
+
+    model = build_data_browser_page_model(
+        data_browser=_DataBrowser(),
+        collection_id="shopping_guides",
+    )
+    fake_ui = _FakeStreamlit()
+    selection = render_data_browser_page(model, ui=fake_ui)
+
+    assert model.documents == (document,)
+    assert model.chunks == (chunk,)
+    assert model.selected_chunk == chunk
+    assert model.images == (image,)
+    assert selection.document_id == "doc-data"
+    assert selection.chunk_id == "chunk-data"
+    call_names = [name for name, _, _ in fake_ui.calls]
+    assert "title" in call_names
+    assert call_names.count("dataframe") >= 3
+    assert "write" in call_names
+
+
+@pytest.mark.integration
+def test_query_trace_page_builds_and_renders_retrieval_comparisons() -> None:
+    """Require Query Trace page to show history, candidates, and rerank deltas."""
+
+    from datetime import datetime
+
+    from src.observability.pages.query_trace import (
+        build_query_trace_page_model,
+        render_query_trace_page,
+    )
+    from src.observability.services import (
+        TraceDetail,
+        TraceHistoryItem,
+        TraceStageWaterfallItem,
+    )
+
+    history = TraceHistoryItem(
+        trace_id="query-page",
+        trace_type="query",
+        collection_id="shopping_guides",
+        status="success",
+        display_input="wireless headphones",
+        started_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+        finished_at=None,
+        duration_ms=128.0,
+        stage_count=4,
+        fallback_used=False,
+    )
+    detail = TraceDetail(
+        trace_id="query-page",
+        trace_type="query",
+        collection_id="shopping_guides",
+        status="success",
+        display_input="wireless headphones",
+        started_at=history.started_at,
+        finished_at=None,
+        duration_ms=128.0,
+        waterfall=(
+            TraceStageWaterfallItem(
+                stage="dense",
+                duration_ms=30.0,
+                status="success",
+                candidate_count=5,
+            ),
+            TraceStageWaterfallItem(
+                stage="sparse",
+                duration_ms=18.0,
+                status="success",
+                candidate_count=4,
+            ),
+            TraceStageWaterfallItem(
+                stage="rerank",
+                duration_ms=20.0,
+                status="success",
+                candidate_count=3,
+            ),
+        ),
+        candidate_counts={"dense": 5, "sparse": 4, "fusion": 6, "rerank": 3},
+        summary_metrics={"top_k_results": [{"chunk_id": "chunk-data", "rank": 1}]},
+        evaluation_metrics={"query_document_relevance": 0.92},
+        rerank_delta={"chunk-data": -2},
+    )
+
+    class _TraceReader:
+        """Return fixed Query Trace DTOs for page builder tests."""
+
+        def list_query_traces(self, collection_id: str) -> list[TraceHistoryItem]:
+            """Return query trace history for the requested collection."""
+
+            assert collection_id == "shopping_guides"
+            return [history]
+
+        def get_query_trace_detail(self, trace_id: str) -> TraceDetail | None:
+            """Return selected query trace detail."""
+
+            assert trace_id == "query-page"
+            return detail
+
+    model = build_query_trace_page_model(
+        trace_reader=_TraceReader(),
+        collection_id="shopping_guides",
+    )
+    fake_ui = _FakeStreamlit()
+    selected_trace_id = render_query_trace_page(model, ui=fake_ui)
+
+    assert model.history == (history,)
+    assert model.selected_trace == detail
+    assert selected_trace_id == "query-page"
+    call_names = [name for name, _, _ in fake_ui.calls]
+    assert "title" in call_names
+    assert call_names.count("dataframe") >= 3
+    assert "bar_chart" in call_names
+    assert "metric" in call_names
