@@ -1899,7 +1899,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [✔] |
-| Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [~] |
+| Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [✔] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [ ] |
 | Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、策略对比和评估趋势 | [ ] |
 | Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调和端到端测试 | [ ] |
@@ -1943,7 +1943,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Loader/Splitter/LLM/Embedding/VectorStore/Reranker/Evaluator Factory、BaseTransform、DeepSeek、DashScope Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q` | 2026-06-06 |
 | Phase C | Ingestion & Indexing Pipeline | 离线摄取与索引主链路已完成，可通过 CLI 将 Markdown/PDF 文件或目录写入 PostgreSQL、pgvector、BM25 和图片索引 | SHA256 去重、Loader、智能分块、Transform、图片 caption 降级、差量 Dense 编码、BM25、事务 upsert、生命周期管理和 `ingest.py` CLI | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.ingest --help` | 2026-06-07 |
 | Phase D | Retrieval | 在线查询主链路已完成，可基于已摄取知识库执行 Query Processor、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Response Builder 和 CLI 查询 | QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
-| Phase E | MCP 工具服务 | 未完成 | 暂无 | 暂无 |  |
+| Phase E | MCP 工具服务 | MCP stdio 工具服务已完成，可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
 | Phase F | 可观测与管理平台 | 未完成 | 暂无 | 暂无 |  |
 | Phase G | 质量评估体系 | 未完成 | 暂无 | 暂无 |  |
 | Phase H | AImodel 联调集成 | 未完成 | 暂无 | 暂无 |  |
@@ -2057,6 +2057,33 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 
 阶段 E 直接复用 `QueryRuntime`、`KnowledgeHubResponse`、citation 和 collection 查询能力，把在线检索链路封装为 MCP tools，提供给 AImodel Agent 调用。
 
+#### 阶段 E 交付里程碑：MCP 工具服务
+
+完成日期：2026-06-08
+
+项目当前位置：
+
+RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或其他外部调用方可以通过 MCP tools 发现工具 schema，并调用知识库查询、collection 列表和文档摘要能力。阶段 E 不重新实现检索算法，而是把阶段 D 的 `QueryRuntime`、`KnowledgeHubResponse`、citation、多模态图片公开字段和 collection 元数据查询封装成稳定的工具边界。
+
+可用功能：
+
+- 通过 `python -m src.mcp_server.server --transport stdio` 启动 FastMCP stdio server，stdout/stdin 只承载 MCP 协议帧，业务日志写入 `src/logs/app.log`。
+- 通过 `.env` 加载 `DATABASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`RAG_SETTINGS_PATH`、`RAG_DEFAULT_COLLECTION` 等运行变量。
+- 通过 `query_knowledge_hub` 查询 RAG 知识库，支持 `query`、`collection`、`top_k`、`no_rerank`、`include_image_base64` 参数，并默认不返回图片 base64。
+- 通过 `list_collections` 查看已摄取 collection 的文档、chunk 和更新时间摘要。
+- 通过 `get_document_summary` 按 `document_id` 或 `source_uri` 查询文档摘要、章节 outline 和基础索引信息。
+- 通过结构化业务错误 envelope 返回可恢复错误：`{"ok": false, "error": {"code": "...", "message": "..."}}`。
+- 通过 MCP contract 测试锁定 FastMCP 官方 schema、成功输出安全字段和业务错误格式，避免 Agent 看到内部工具 JSON、provider payload、prompt、向量或 BM25 细节。
+
+验证方式：
+
+- `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`
+- `uv run --project services/ai-service/rag python -m src.mcp_server.server --help`
+
+下一阶段入口：
+
+阶段 F 在 MCP 工具服务已稳定的基础上补齐可观测能力。后续任务需要把 Ingestion 和 Query 链路接入 TraceContext/TraceController，写入结构化日志，并为 Dashboard 六大页面提供 trace、配置、数据浏览和评估读取能力。
+
 ### 6.3 阶段任务跟踪表
 
 任务拆分原则：
@@ -2135,7 +2162,7 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 | E1 | 搭建 MCP Server | [✔] | 2026-06-07 | 已实现 FastMCP server 工厂、stdio 启动入口、`.env` 加载、app.log 文件日志、配置驱动 tool 注册、未知工具 fail fast、E1 placeholder tool 错误边界和 SDK ToolError 包装契约；5 个 MCP 单元测试通过 |
 | E2 | 暴露 `query_knowledge_hub` | [✔] | 2026-06-08 | 已实现 QueryKnowledgeHubTool、QueryRuntime 适配、请求原语校验先于 settings 加载、默认 collection/top_k、no_rerank、结构化业务错误、默认不返回图片 base64、显式 include_image_base64 支持、PostgreSQL pool 打开失败也能释放资源和 FastMCP 真实 query tool 注册；12 个 MCP 单元测试通过 |
 | E3 | 暴露 `list_collections` 和 `get_document_summary` | [✔] | 2026-06-08 | 已实现 MetadataTool、PostgresMetadataReader、真实 FastMCP collection/summary handler 注册、空 collection 可读业务错误、document_id/source_uri 参数校验、文档摘要与章节 outline 返回；17 个 MCP 单元测试通过 |
-| E4 | 完成 MCP tools 测试 | [ ] |  |  |
+| E4 | 完成 MCP tools 测试 | [✔] | 2026-06-08 | 已补充官方 FastMCP schema 精确断言、成功输出安全字段扫描、结构化业务错误 envelope 契约测试；20 个 MCP 单元测试通过 |
 
 #### 阶段 F：可观测与管理平台
 
@@ -2183,11 +2210,11 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 14 | 100% |
-| Phase E | 4 | 3 | 75% |
+| Phase E | 4 | 4 | 100% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **46** | **66%** |
+| **总计** | **70** | **47** | **67%** |
 
 ### 6.5 阶段实施明细
 
@@ -3139,9 +3166,11 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- schema 测试
+- `test_mcp_tool_schemas_match_documented_contract()`：通过官方 FastMCP `list_tools()` 校验工具输入 schema、required 字段、默认值、输出 schema 和描述
+- `test_mcp_success_outputs_do_not_leak_internal_fields()`：调用三个真实工具 handler 并递归检查返回值不泄漏 debug、metadata、embedding、BM25、provider、prompt、tool_result 等内部字段
+- `test_mcp_business_errors_use_stable_public_envelope()`：校验 query、collection 和 document summary 的可恢复错误都使用稳定 `ok=false` envelope
 
-验收标准：tools schema 与文档一致，不泄漏内部 JSON；E4 聚焦 MCP schema 和 tool contract，AImodel 连接后的完整 E2E 验收放在 H1 执行。
+验收标准：tools schema 与文档一致，不泄漏内部 JSON；三个 MCP tool 的成功输出只包含公共字段；可恢复错误统一返回 `{"ok": false, "error": {"code": "...", "message": "..."}}`；E4 聚焦 MCP schema 和 tool contract，AImodel 连接后的完整 E2E 验收放在 H1 执行。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 

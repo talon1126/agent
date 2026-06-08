@@ -22,6 +22,19 @@ from src.mcp_server.server import create_mcp_server, parse_args, run_stdio_serve
 from src.mcp_server.tools import MetadataTool, QueryKnowledgeHubTool
 
 SETTINGS_PATH = "services/ai-service/rag/config/settings.example.yaml"
+FORBIDDEN_MCP_OUTPUT_KEYS = {
+    "debug",
+    "metadata",
+    "embedding",
+    "vector",
+    "dense",
+    "sparse",
+    "bm25",
+    "provider",
+    "prompt",
+    "tool_result",
+    "raw",
+}
 
 
 @dataclass
@@ -210,6 +223,49 @@ def _metadata_tool(
     return tool, active_pool, active_reader
 
 
+def _assert_no_forbidden_output_keys(payload: Any) -> None:
+    """Recursively assert that MCP tool output stays on the public contract.
+
+    Args:
+        payload: JSON-compatible value returned by a FastMCP tool call or by a
+            direct tool adapter invocation.
+
+    Raises:
+        AssertionError: If a dictionary key exposes internal retrieval,
+            provider, prompt, debug, vector, or raw storage data. Values are not
+            scanned because public text can legitimately mention words such as
+            "metadata" or "vector" when a source document contains them.
+    """
+
+    if isinstance(payload, dict):
+        forbidden = FORBIDDEN_MCP_OUTPUT_KEYS.intersection(payload)
+        assert not forbidden, f"Forbidden MCP output keys leaked: {sorted(forbidden)}"
+        for value in payload.values():
+            _assert_no_forbidden_output_keys(value)
+    elif isinstance(payload, list | tuple):
+        for item in payload:
+            _assert_no_forbidden_output_keys(item)
+
+
+def _assert_business_error(
+    payload: dict[str, Any],
+    *,
+    code: str,
+    message_contains: str,
+) -> None:
+    """Assert the stable ``ok=false`` MCP business-error envelope.
+
+    Args:
+        payload: Tool response dictionary.
+        code: Expected machine-readable business error code.
+        message_contains: Required readable message fragment.
+    """
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == code
+    assert message_contains in payload["error"]["message"]
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_create_mcp_server_registers_configured_tools() -> None:
@@ -230,6 +286,61 @@ async def test_create_mcp_server_registers_configured_tools() -> None:
     assert {
         tool.name for tool in tools
     } == set(settings.mcp.tools)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_mcp_tool_schemas_match_documented_contract() -> None:
+    """Lock the public MCP schema consumed by AImodel and external clients.
+
+    The test verifies the official SDK schema representation rather than local
+    function signatures. A failure here means a tool argument was renamed,
+    removed, made required, or widened without updating the documented MCP
+    contract first.
+    """
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    server = create_mcp_server(settings=settings)
+    tools = {tool.name: tool.model_dump() for tool in await server.list_tools()}
+
+    assert set(tools) == {
+        "query_knowledge_hub",
+        "list_collections",
+        "get_document_summary",
+    }
+
+    query_schema = tools["query_knowledge_hub"]["inputSchema"]
+    assert query_schema["required"] == ["query"]
+    assert set(query_schema["properties"]) == {
+        "query",
+        "collection",
+        "top_k",
+        "no_rerank",
+        "include_image_base64",
+    }
+    assert query_schema["properties"]["query"]["type"] == "string"
+    assert query_schema["properties"]["top_k"]["default"] is None
+    assert query_schema["properties"]["no_rerank"]["default"] is False
+    assert query_schema["properties"]["include_image_base64"]["default"] is False
+
+    collection_schema = tools["list_collections"]["inputSchema"]
+    assert collection_schema["properties"] == {}
+    assert collection_schema["type"] == "object"
+
+    summary_schema = tools["get_document_summary"]["inputSchema"]
+    assert set(summary_schema["properties"]) == {
+        "document_id",
+        "source_uri",
+        "collection",
+    }
+    assert "required" not in summary_schema
+    for field_name in ("document_id", "source_uri", "collection"):
+        assert summary_schema["properties"][field_name]["default"] is None
+
+    for tool in tools.values():
+        assert tool["outputSchema"]["type"] == "object"
+        assert tool["outputSchema"]["additionalProperties"] is True
+        assert tool["description"]
 
 
 @pytest.mark.unit
@@ -492,6 +603,98 @@ async def test_create_mcp_server_can_register_real_query_tool() -> None:
     payload = result[1]
     assert payload["ok"] is True
     assert payload["trace_id"] == "trace-mcp-test"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_mcp_success_outputs_do_not_leak_internal_fields() -> None:
+    """Protect Agent-visible tool results from internal retrieval diagnostics."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    query_tool, _query_pool, _runtime = _query_tool()
+    metadata_tool, _metadata_pool, _reader = _metadata_tool(
+        reader=FakeMetadataReader(
+            collections=[
+                {
+                    "collection": "shopping_guides",
+                    "document_count": 1,
+                    "chunk_count": 2,
+                    "updated_at": "2026-06-08T10:00:00+00:00",
+                }
+            ],
+            document_summary={
+                "document_id": "doc-shopping-guide",
+                "collection": "shopping_guides",
+                "source_uri": "shopping_guides/relax-toys.md",
+                "title": "Relax Toy Guide",
+                "summary": "A concise buying guide for stress relief toys.",
+                "lifecycle_status": "success",
+                "chunk_count": 2,
+                "sections": [{"path": ["Selection Criteria"], "chunk_count": 2}],
+                "updated_at": "2026-06-08T10:00:00+00:00",
+            },
+        )
+    )
+    server = create_mcp_server(
+        settings=settings,
+        query_knowledge_hub=query_tool.query_knowledge_hub,
+        list_collections=metadata_tool.list_collections,
+        get_document_summary=metadata_tool.get_document_summary,
+    )
+
+    query_payload = (
+        await server.call_tool("query_knowledge_hub", {"query": "无线耳机怎么选"})
+    )[1]
+    collections_payload = (await server.call_tool("list_collections", {}))[1]
+    summary_payload = (
+        await server.call_tool(
+            "get_document_summary",
+            {"document_id": "doc-shopping-guide"},
+        )
+    )[1]
+
+    for payload in (query_payload, collections_payload, summary_payload):
+        assert payload["ok"] is True
+        _assert_no_forbidden_output_keys(payload)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_mcp_business_errors_use_stable_public_envelope() -> None:
+    """Require recoverable MCP errors to stay JSON-readable for AImodel."""
+
+    query_tool, _query_pool, _runtime = _query_tool()
+    metadata_tool, _metadata_pool, _reader = _metadata_tool(
+        reader=FakeMetadataReader(collections=[], document_summary=None)
+    )
+
+    blank_query = await query_tool.query_knowledge_hub(" ")
+    empty_collections = await metadata_tool.list_collections()
+    missing_summary_identity = await metadata_tool.get_document_summary()
+    missing_document = await metadata_tool.get_document_summary(
+        source_uri="shopping_guides/missing.md"
+    )
+
+    _assert_business_error(
+        blank_query,
+        code="invalid_request",
+        message_contains="query must not be blank",
+    )
+    _assert_business_error(
+        empty_collections,
+        code="no_collections",
+        message_contains="no searchable collections",
+    )
+    _assert_business_error(
+        missing_summary_identity,
+        code="invalid_request",
+        message_contains="document_id or source_uri",
+    )
+    _assert_business_error(
+        missing_document,
+        code="document_not_found",
+        message_contains="document summary was not found",
+    )
 
 
 @pytest.mark.unit
