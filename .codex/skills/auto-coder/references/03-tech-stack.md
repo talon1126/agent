@@ -15,7 +15,7 @@
 | Embedding | 百炼 `text-embedding-v4`（Qwen3-Embedding 系列） | 使用 1536 维，与现有 pgvector schema 保持一致 |
 | Splitter | `langchain-text-splitters` | 只使用 splitter，不使用 LangChain RAG |
 | PDF 转 Markdown | MarkItDown | 统一进入 Markdown 中间格式 |
-| MCP | Python 官方 MCP SDK | 暴露 RAG tools |
+| MCP | Python 官方 MCP SDK + stdio transport | 暴露 RAG tools；开发与首版集成都使用 stdio，由 AImodel 后端长期拉起 RAG MCP 子进程 |
 | Dashboard | Streamlit | 本地轻量 Dashboard |
 | 测试 | pytest | 单元、集成、E2E、评估测试 |
 
@@ -158,6 +158,16 @@ RRF 融合不直接比较 Dense 分数和 BM25 分数，因为两类分数的量
 
 ### 3.3 MCP 服务设计
 
+首版 MCP 传输协议固定为 **stdio**。AImodel 后端作为 MCP client，在服务启动时拉起并长期复用一个 RAG MCP 子进程，而不是每次用户对话临时启动。推荐启动命令：
+
+```powershell
+uv run --project services/ai-service/rag python -m src.mcp_server.server --transport stdio
+```
+
+stdio 协议要求 stdout/stdin 只承载 MCP 协议帧，业务日志不得写入 stdout。RAG MCP 普通运行日志写入 `src/logs/app.log`，错误诊断可以写 stderr；Trace 仍按可观测性阶段写入结构化日志。MCP 启动入口必须加载本地 `.env`，并读取 `DATABASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`RAG_SETTINGS_PATH`、`RAG_DEFAULT_COLLECTION` 等环境变量。
+
+AImodel 集成时不让 Agent 直接依赖 MCP SDK。后续 H2/H3 应新增 AImodel 侧 adapter：`rag_mcp_client.py` 负责启动/连接 stdio MCP 子进程，`rag_tool.py` 负责把 MCP `query_knowledge_hub` 包装成 LangChain Tool。Agent 只依赖 `RagKnowledgeTool` 这类业务工具，底层可以从直连 Python 平滑切换为 MCP。
+
 MCP 工具一：`query_knowledge_hub`
 
 输入：
@@ -166,7 +176,9 @@ MCP 工具一：`query_knowledge_hub`
 {
   "query": "如何挑选高性价比无线耳机？",
   "collection": "shopping_guides",
-  "top_k": 5
+  "top_k": 5,
+  "no_rerank": false,
+  "include_image_base64": false
 }
 ```
 
@@ -207,8 +219,25 @@ MCP 工具一：`query_knowledge_hub`
 
 `content` 只由最终排序后的 chunk 文本按 `[1]`、`[2]` 编号格式化，不直接序列化
 Dense/Sparse 分数、向量、Provider 返回、过滤报告或内部 tool result。`citations` 和
-`images` 使用独立公共契约；没有检索命中时返回 `ok=true`、`is_empty=true`、空
-`content`、空引用和空图片列表。
+`images` 使用独立公共契约；默认只返回图片 metadata 与受管 `file_path`，不默认返回
+base64，避免 stdio tool payload 过大。若调用方明确传入 `include_image_base64=true`，
+后续工具实现可以附加受限大小的 `base64_content` 字段。没有检索命中时返回
+`ok=true`、`is_empty=true`、空 `content`、空引用和空图片列表。
+
+业务可恢复错误不直接抛出给 Agent，而是返回结构化错误：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "empty_collection",
+    "message": "当前知识库暂无可检索内容"
+  }
+}
+```
+
+配置错误、数据库不可用、MCP server 启动失败等系统级错误可以抛出异常并写入
+`src/logs/app.log`。
 
 MCP 工具二：`list_collections`
 

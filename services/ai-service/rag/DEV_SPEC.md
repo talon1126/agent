@@ -192,7 +192,7 @@ RAG 项目不能只靠人工体验判断效果，需要有可重复的质量评�
 | Embedding | 百炼 `text-embedding-v4`（Qwen3-Embedding 系列） | 使用 1536 维，与现有 pgvector schema 保持一致 |
 | Splitter | `langchain-text-splitters` | 只使用 splitter，不使用 LangChain RAG |
 | PDF 转 Markdown | MarkItDown | 统一进入 Markdown 中间格式 |
-| MCP | Python 官方 MCP SDK | 暴露 RAG tools |
+| MCP | Python 官方 MCP SDK + stdio transport | 暴露 RAG tools；开发与首版集成都使用 stdio，由 AImodel 后端长期拉起 RAG MCP 子进程 |
 | Dashboard | Streamlit | 本地轻量 Dashboard |
 | 测试 | pytest | 单元、集成、E2E、评估测试 |
 
@@ -335,6 +335,16 @@ RRF 融合不直接比较 Dense 分数和 BM25 分数，因为两类分数的量
 
 ### 3.3 MCP 服务设计
 
+首版 MCP 传输协议固定为 **stdio**。AImodel 后端作为 MCP client，在服务启动时拉起并长期复用一个 RAG MCP 子进程，而不是每次用户对话临时启动。推荐启动命令：
+
+```powershell
+uv run --project services/ai-service/rag python -m src.mcp_server.server --transport stdio
+```
+
+stdio 协议要求 stdout/stdin 只承载 MCP 协议帧，业务日志不得写入 stdout。RAG MCP 普通运行日志写入 `src/logs/app.log`，错误诊断可以写 stderr；Trace 仍按可观测性阶段写入结构化日志。MCP 启动入口必须加载本地 `.env`，并读取 `DATABASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`RAG_SETTINGS_PATH`、`RAG_DEFAULT_COLLECTION` 等环境变量。
+
+AImodel 集成时不让 Agent 直接依赖 MCP SDK。后续 H2/H3 应新增 AImodel 侧 adapter：`rag_mcp_client.py` 负责启动/连接 stdio MCP 子进程，`rag_tool.py` 负责把 MCP `query_knowledge_hub` 包装成 LangChain Tool。Agent 只依赖 `RagKnowledgeTool` 这类业务工具，底层可以从直连 Python 平滑切换为 MCP。
+
 MCP 工具一：`query_knowledge_hub`
 
 输入：
@@ -343,7 +353,9 @@ MCP 工具一：`query_knowledge_hub`
 {
   "query": "如何挑选高性价比无线耳机？",
   "collection": "shopping_guides",
-  "top_k": 5
+  "top_k": 5,
+  "no_rerank": false,
+  "include_image_base64": false
 }
 ```
 
@@ -384,8 +396,25 @@ MCP 工具一：`query_knowledge_hub`
 
 `content` 只由最终排序后的 chunk 文本按 `[1]`、`[2]` 编号格式化，不直接序列化
 Dense/Sparse 分数、向量、Provider 返回、过滤报告或内部 tool result。`citations` 和
-`images` 使用独立公共契约；没有检索命中时返回 `ok=true`、`is_empty=true`、空
-`content`、空引用和空图片列表。
+`images` 使用独立公共契约；默认只返回图片 metadata 与受管 `file_path`，不默认返回
+base64，避免 stdio tool payload 过大。若调用方明确传入 `include_image_base64=true`，
+后续工具实现可以附加受限大小的 `base64_content` 字段。没有检索命中时返回
+`ok=true`、`is_empty=true`、空 `content`、空引用和空图片列表。
+
+业务可恢复错误不直接抛出给 Agent，而是返回结构化错误：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "empty_collection",
+    "message": "当前知识库暂无可检索内容"
+  }
+}
+```
+
+配置错误、数据库不可用、MCP server 启动失败等系统级错误可以抛出异常并写入
+`src/logs/app.log`。
 
 MCP 工具二：`list_collections`
 
@@ -1870,7 +1899,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [✔] |
-| Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [ ] |
+| Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [~] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [ ] |
 | Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、策略对比和评估趋势 | [ ] |
 | Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调和端到端测试 | [ ] |
@@ -2103,7 +2132,7 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| E1 | 搭建 MCP Server | [ ] |  |  |
+| E1 | 搭建 MCP Server | [✔] | 2026-06-07 | 已实现 FastMCP server 工厂、stdio 启动入口、`.env` 加载、app.log 文件日志、配置驱动 tool 注册、未知工具 fail fast、E1 placeholder tool 错误边界和 SDK ToolError 包装契约；5 个 MCP 单元测试通过 |
 | E2 | 暴露 `query_knowledge_hub` | [ ] |  |  |
 | E3 | 暴露 `list_collections` 和 `get_document_summary` | [ ] |  |  |
 | E4 | 完成 MCP tools 测试 | [ ] |  |  |
@@ -2154,11 +2183,11 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 14 | 100% |
-| Phase E | 4 | 0 | 0% |
+| Phase E | 4 | 1 | 25% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **43** | **61%** |
+| **总计** | **70** | **44** | **63%** |
 
 ### 6.5 阶段实施明细
 
@@ -3049,8 +3078,18 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 实现类/函数：
 
 - `create_mcp_server()`：创建服务实例
+- `parse_args()`：解析 MCP server 启动参数，首版仅支持 `--transport stdio`
+- `run_stdio_server()`：加载 `.env`、配置 app.log、创建 FastMCP server 并启动 stdio transport
+- `main()`：提供 `python -m src.mcp_server.server --transport stdio` 入口
+- `_load_local_environment()`：从 RAG 根目录或项目根目录加载 `.env`
+- `_configure_stdio_logging()`：把普通运行日志写入 `src/logs/app.log`，避免污染 stdout
+- `_validate_tool_names()`：校验 settings 中声明的 tool 都属于当前支持集合
+- `_register_placeholder_tool()`：按配置注册 E1 placeholder tool 处理函数
+- `_query_knowledge_hub_placeholder()`：保留查询工具 schema，并在 E2 前返回明确未实现错误
+- `_list_collections_placeholder()`：保留 collection 列表工具 schema，并在 E3 前返回明确未实现错误
+- `_get_document_summary_placeholder()`：保留文档摘要工具 schema，并在 E3 前返回明确未实现错误
 
-验收标准：server 可启动并注册 tools。
+验收标准：`create_mcp_server(settings=...)` 返回官方 `FastMCP` 实例；server 名称稳定为 `aimodel-rag`；当 `settings.mcp.enabled=true` 时只注册 `settings.mcp.tools` 中声明且当前支持的工具；未知 tool 名称必须在 server 创建阶段抛出 `McpError`，避免外部客户端看到静默缺失能力；E1 placeholder tool 通过官方 `call_tool()` 调用时会被 MCP SDK 包装为 `ToolError`，错误信息必须明确说明当前工具尚未实现；首版 MCP 传输协议固定为 stdio，`main()` 支持 `--transport stdio` 并拒绝其它 transport；stdio 模式下 stdout/stdin 只允许 MCP 协议使用，普通日志必须写入 `src/logs/app.log`；server 启动时应加载 `.env`，以支持 AImodel 后端长期拉起 RAG MCP 子进程；E1 不得打开数据库连接、创建 LLM/Embedding/Reranker provider 或执行 Retrieval。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 
@@ -3064,7 +3103,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 - `query_knowledge_hub`：暴露对外工具能力
 
-验收标准：返回 content、citations、trace_id。
+验收标准：返回 content、citations、trace_id；默认返回图片 metadata 和受管 file_path，不默认返回 base64；可预留 `include_image_base64=false` 参数，仅在显式请求时附加受限大小的 `base64_content`；业务可恢复错误返回 `{"ok": false, "error": {"code": "...", "message": "..."}}`，不直接把内部异常或 tool result 暴露给 Agent。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 
@@ -3093,7 +3132,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 - schema 测试
 
-验收标准：tools schema 与文档一致，不泄漏内部 JSON。
+验收标准：tools schema 与文档一致，不泄漏内部 JSON；E4 聚焦 MCP schema 和 tool contract，AImodel 连接后的完整 E2E 验收放在 H1 执行。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 
@@ -3351,7 +3390,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 ##### H1：执行 AImodel 集成前验收门禁
 
-目标：在接入 AImodel 前确认 RAG 独立模块已经完成 Dashboard 六大页面测试和全链路 E2E 验收。
+目标：在接入 AImodel 前确认 RAG 独立模块已经完成 Dashboard 六大页面测试、RAG 全链路 E2E 和 MCP stdio 可连接验收。
 
 修改文件：`tests/integration/test_dashboard_pages.py`、`tests/e2e/test_full_rag_flow.py`
 
@@ -3359,8 +3398,9 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 - `test_dashboard_six_pages_render()`：验证对应行为
 - `test_full_rag_flow_before_aimodel_integration()`：验证对应行为
+- `test_rag_mcp_stdio_before_aimodel_integration()`：启动 stdio MCP server 子进程并验证 MCP client 可 `list_tools` 和调用核心 tool 契约
 
-验收标准：Dashboard 六大页面测试通过；全链路 E2E 覆盖离线摄取、Indexing Pipeline、Hybrid Query、Trace 写入、Dashboard 可读和引用结果构造。
+验收标准：Dashboard 六大页面测试通过；全链路 E2E 覆盖离线摄取、Indexing Pipeline、Hybrid Query、Trace 写入、Dashboard 可读和引用结果构造；stdio MCP 子进程可由测试 client 启动、列出 `query_knowledge_hub`、`list_collections`、`get_document_summary`，并能按 tool contract 返回结构化结果或结构化业务错误。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`
 
