@@ -977,3 +977,199 @@ def test_query_trace_page_builds_and_renders_retrieval_comparisons() -> None:
     assert call_names.count("dataframe") >= 3
     assert "bar_chart" in call_names
     assert "metric" in call_names
+
+
+@pytest.mark.integration
+def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
+    """Require Ingestion Trace page to show history, timing, and processing stats."""
+
+    from datetime import datetime
+
+    from src.observability.pages.ingestion_trace import (
+        build_ingestion_trace_page_model,
+        render_ingestion_trace_page,
+    )
+    from src.observability.services import (
+        TraceDetail,
+        TraceHistoryItem,
+        TraceStageWaterfallItem,
+    )
+
+    history = TraceHistoryItem(
+        trace_id="ingestion-page",
+        trace_type="ingestion",
+        collection_id="shopping_guides",
+        status="success",
+        display_input="data/raw/wireless.md",
+        started_at=datetime(2026, 1, 1, 7, 0, tzinfo=UTC),
+        finished_at=None,
+        duration_ms=420.0,
+        stage_count=3,
+        fallback_used=False,
+    )
+    detail = TraceDetail(
+        trace_id="ingestion-page",
+        trace_type="ingestion",
+        collection_id="shopping_guides",
+        status="success",
+        display_input="data/raw/wireless.md",
+        started_at=history.started_at,
+        finished_at=None,
+        duration_ms=420.0,
+        waterfall=(
+            TraceStageWaterfallItem(stage="load", duration_ms=40.0, status="success"),
+            TraceStageWaterfallItem(stage="split", duration_ms=35.0, status="success"),
+            TraceStageWaterfallItem(stage="upsert", duration_ms=120.0, status="success"),
+        ),
+        summary_metrics={
+            "document_status": "success",
+            "chunk_count": 4,
+            "embedded_count": 4,
+            "skipped_count": 0,
+        },
+        evaluation_metrics={"embedding_coverage": 1.0, "index_ready": True},
+    )
+
+    class _TraceReader:
+        """Return fixed Ingestion Trace DTOs for page builder tests."""
+
+        def list_ingestion_traces(self, collection_id: str) -> list[TraceHistoryItem]:
+            """Return ingestion trace history for the requested collection."""
+
+            assert collection_id == "shopping_guides"
+            return [history]
+
+        def get_ingestion_trace_detail(self, trace_id: str) -> TraceDetail | None:
+            """Return selected ingestion trace detail."""
+
+            assert trace_id == "ingestion-page"
+            return detail
+
+    model = build_ingestion_trace_page_model(
+        trace_reader=_TraceReader(),
+        collection_id="shopping_guides",
+    )
+    fake_ui = _FakeStreamlit()
+    selected_trace_id = render_ingestion_trace_page(model, ui=fake_ui)
+
+    assert model.history == (history,)
+    assert model.selected_trace == detail
+    assert selected_trace_id == "ingestion-page"
+    call_names = [name for name, _, _ in fake_ui.calls]
+    assert "title" in call_names
+    assert call_names.count("dataframe") >= 2
+    assert "bar_chart" in call_names
+    assert "metric" in call_names
+    assert "write" in call_names
+
+
+@pytest.mark.integration
+def test_evaluation_page_builds_and_renders_metric_trends() -> None:
+    """Require Evaluation page to show runs, metric details, and trends."""
+
+    from datetime import datetime
+
+    from src.observability.pages.evaluation import (
+        build_evaluation_page_model,
+        render_evaluation_page,
+    )
+    from src.observability.services import (
+        EvaluationMetricTrendPoint,
+        EvaluationRunDetail,
+        EvaluationRunSummary,
+    )
+
+    run = EvaluationRunSummary(
+        run_id="eval-page",
+        collection_id="shopping_guides",
+        evaluator="fake",
+        dataset_name="golden",
+        status="success",
+        started_at=datetime(2026, 1, 1, 9, 0, tzinfo=UTC),
+        finished_at=None,
+        created_at=datetime(2026, 1, 1, 9, 0, tzinfo=UTC),
+        metric_count=2,
+        metrics={"hit_rate_at_k": 0.95, "mrr": 0.88},
+        summary={"sample_count": 10},
+    )
+    detail = EvaluationRunDetail(
+        run_id="eval-page",
+        collection_id="shopping_guides",
+        evaluator="fake",
+        dataset_name="golden",
+        status="success",
+        started_at=run.started_at,
+        finished_at=None,
+        created_at=run.created_at,
+        metrics=run.metrics,
+        metric_details={"mrr": {"sample_count": 10}},
+        settings_snapshot={"retrieval": "hybrid"},
+        summary=run.summary,
+    )
+    trends = {
+        "hit_rate_at_k": (
+            EvaluationMetricTrendPoint(
+                run_id="eval-page",
+                metric_name="hit_rate_at_k",
+                metric_value=0.95,
+                evaluator="fake",
+                dataset_name="golden",
+                status="success",
+                created_at=run.created_at,
+            ),
+        ),
+        "mrr": (
+            EvaluationMetricTrendPoint(
+                run_id="eval-page",
+                metric_name="mrr",
+                metric_value=0.88,
+                evaluator="fake",
+                dataset_name="golden",
+                status="success",
+                created_at=run.created_at,
+            ),
+        ),
+    }
+
+    class _EvaluationService:
+        """Return fixed evaluation DTOs for page builder tests."""
+
+        def list_runs(self, collection_id: str) -> list[EvaluationRunSummary]:
+            """Return evaluation runs for the requested collection."""
+
+            assert collection_id == "shopping_guides"
+            return [run]
+
+        def get_run_detail(self, run_id: str) -> EvaluationRunDetail | None:
+            """Return selected evaluation run detail."""
+
+            assert run_id == "eval-page"
+            return detail
+
+        def metric_trends(
+            self,
+            collection_id: str,
+        ) -> dict[str, tuple[EvaluationMetricTrendPoint, ...]]:
+            """Return metric trends for the requested collection."""
+
+            assert collection_id == "shopping_guides"
+            return trends
+
+    model = build_evaluation_page_model(
+        evaluation_service=_EvaluationService(),
+        collection_id="shopping_guides",
+    )
+    fake_ui = _FakeStreamlit()
+    fake_ui.button_value = True
+    selection = render_evaluation_page(model, ui=fake_ui)
+
+    assert model.runs == (run,)
+    assert model.selected_run == detail
+    assert model.metric_trends == trends
+    assert selection.run_id == "eval-page"
+    assert selection.request_run is True
+    call_names = [name for name, _, _ in fake_ui.calls]
+    assert "title" in call_names
+    assert call_names.count("dataframe") >= 3
+    assert "bar_chart" in call_names
+    assert "metric" in call_names

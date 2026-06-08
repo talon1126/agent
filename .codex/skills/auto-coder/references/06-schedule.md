@@ -291,7 +291,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | 已实现 Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
 | F8 | 实现系统总览与 Ingestion 管理页面 | [✔] | 2026-06-08 | 已实现系统总览和 Ingestion 管理页面的可启动渲染函数、页面模型和 fake Streamlit 集成测试；7 个 Dashboard service/page 集成测试和 ruff 通过 |
 | F9 | 实现数据浏览器与 Query Trace 页面 | [✔] | 2026-06-08 | 已实现数据浏览器和 Query Trace 页面的可启动渲染函数、页面模型、文档/chunk/图片展示、召回候选对比和 rerank delta 展示；9 个 Dashboard service/page 集成测试和 ruff 通过 |
-| F10 | 实现 Ingestion Trace 与评估面板页面 | [ ] |  | 阶段耗时、评估趋势 |
+| F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-08 | 已实现 Ingestion Trace 和评估面板页面的可启动渲染函数、页面模型、阶段耗时瀑布图、处理统计、评估 run 历史、指标详情和趋势展示；11 个 Dashboard service/page 集成测试和 ruff 通过 |
 | F11 | 实现 Dashboard 启动脚本和冒烟测试 | [ ] |  | `src/scripts/run_dashboard.py` |
 | F12 | 完成 Dashboard 六大页面测试 | [ ] |  | 系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板 |
 
@@ -1475,11 +1475,14 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- 页面渲染函数
+- `build_ingestion_trace_page_model()`：读取 Ingestion Trace 历史和选中 trace 详情，生成摄取追踪页面模型
+- `render_ingestion_trace_page()`：渲染摄取 trace 历史、阶段耗时瀑布图、处理统计、质量指标和错误详情
+- `build_evaluation_page_model()`：读取 evaluation run 历史、选中 run detail 和 metric trends，生成评估页面模型
+- `render_evaluation_page()`：渲染评估运行入口、run 历史、指标详情、settings snapshot 和趋势图，并返回运行评估意图 DTO
 
 验收标准：可展示阶段耗时和评估趋势。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ##### F11：实现 Dashboard 启动脚本
 
