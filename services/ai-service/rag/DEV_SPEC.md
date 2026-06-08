@@ -2133,7 +2133,7 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | E1 | 搭建 MCP Server | [✔] | 2026-06-07 | 已实现 FastMCP server 工厂、stdio 启动入口、`.env` 加载、app.log 文件日志、配置驱动 tool 注册、未知工具 fail fast、E1 placeholder tool 错误边界和 SDK ToolError 包装契约；5 个 MCP 单元测试通过 |
-| E2 | 暴露 `query_knowledge_hub` | [ ] |  |  |
+| E2 | 暴露 `query_knowledge_hub` | [✔] | 2026-06-08 | 已实现 QueryKnowledgeHubTool、QueryRuntime 适配、请求原语校验先于 settings 加载、默认 collection/top_k、no_rerank、结构化业务错误、默认不返回图片 base64、显式 include_image_base64 支持、PostgreSQL pool 打开失败也能释放资源和 FastMCP 真实 query tool 注册；12 个 MCP 单元测试通过 |
 | E3 | 暴露 `list_collections` 和 `get_document_summary` | [ ] |  |  |
 | E4 | 完成 MCP tools 测试 | [ ] |  |  |
 
@@ -2183,11 +2183,11 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 | Phase B | 11 | 11 | 100% |
 | Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 14 | 100% |
-| Phase E | 4 | 1 | 25% |
+| Phase E | 4 | 2 | 50% |
 | Phase F | 12 | 0 | 0% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **44** | **63%** |
+| **总计** | **70** | **45** | **64%** |
 
 ### 6.5 阶段实施明细
 
@@ -3101,7 +3101,12 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- `query_knowledge_hub`：暴露对外工具能力
+- `QueryKnowledgeHubTool.query_knowledge_hub()`：执行 MCP 查询工具入口，返回公共 RAG response 或结构化业务错误
+- `QueryKnowledgeHubTool._validate_request()`：在打开数据库前校验 query、collection、top_k、no_rerank 和 include_image_base64
+- `QueryKnowledgeHubTool._attach_image_base64()`：仅在显式请求时为受管图片附加受限大小的 base64 内容
+- `_business_error()`：构建 `ok=false` 的可恢复业务错误 envelope
+- `_default_runtime_builder()`：复用阶段 D QueryRuntime 组合路径
+- `create_mcp_server(query_knowledge_hub=...)`：把 E2 的真实 query tool 注册到 FastMCP，E3 工具继续保持 placeholder
 
 验收标准：返回 content、citations、trace_id；默认返回图片 metadata 和受管 file_path，不默认返回 base64；可预留 `include_image_base64=false` 参数，仅在显式请求时附加受限大小的 `base64_content`；业务可恢复错误返回 `{"ok": false, "error": {"code": "...", "message": "..."}}`，不直接把内部异常或 tool result 暴露给 Agent。
 

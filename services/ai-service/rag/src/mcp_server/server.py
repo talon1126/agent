@@ -26,6 +26,7 @@ from mcp.server.fastmcp import FastMCP
 
 from src.core.config import RagSettings, load_settings
 from src.core.errors import McpError
+from src.mcp_server.tools import QueryKnowledgeHubTool
 
 RAG_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 DEFAULT_APP_LOG_PATH: Final[Path] = RAG_ROOT / "src" / "logs" / "app.log"
@@ -42,6 +43,7 @@ SUPPORTED_TOOLS: Final[set[str]] = {
 }
 McpSettingsLoader = Callable[[], RagSettings]
 StdioRunner = Callable[[FastMCP], Awaitable[None]]
+McpToolHandler = Callable[..., Awaitable[dict[str, Any]]]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -132,12 +134,19 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def create_mcp_server(*, settings: RagSettings) -> FastMCP:
+def create_mcp_server(
+    *,
+    settings: RagSettings,
+    query_knowledge_hub: McpToolHandler | None = None,
+) -> FastMCP:
     """Create a configured MCP server and register enabled RAG tool names.
 
     Args:
         settings: Validated RAG settings. The ``mcp.tools`` list is treated as
             the single source of truth for which tool names should be exposed.
+        query_knowledge_hub: Optional E2 query tool handler. Tests and AImodel
+            integration can inject a preconfigured handler; ``None`` creates
+            the default ``QueryKnowledgeHubTool`` without opening resources.
 
     Returns:
         A ``FastMCP`` server with E1 placeholder handlers registered for every
@@ -153,8 +162,9 @@ def create_mcp_server(*, settings: RagSettings) -> FastMCP:
     tool_names = tuple(settings.mcp.tools if settings.mcp.enabled else ())
     _validate_tool_names(tool_names)
     server = FastMCP(name=SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
+    query_tool = query_knowledge_hub or QueryKnowledgeHubTool().query_knowledge_hub
     for tool_name in tool_names:
-        _register_placeholder_tool(server, tool_name)
+        _register_tool(server, tool_name, query_knowledge_hub=query_tool)
     return server
 
 
@@ -177,22 +187,27 @@ def _validate_tool_names(tool_names: Iterable[str]) -> None:
         )
 
 
-def _register_placeholder_tool(server: FastMCP, tool_name: str) -> None:
-    """Attach the E1 placeholder handler for one configured tool.
+def _register_tool(
+    server: FastMCP,
+    tool_name: str,
+    *,
+    query_knowledge_hub: McpToolHandler,
+) -> None:
+    """Attach the current Phase E handler for one configured tool.
 
     Args:
         server: ``FastMCP`` instance receiving the tool registration.
         tool_name: Stable external tool identifier.
+        query_knowledge_hub: E2 knowledge query handler.
 
     Notes:
-        E2 and E3 will replace these placeholders with concrete tool functions.
-        Keeping placeholders in E1 proves server bootstrap and schema exposure
-        without accidentally claiming Retrieval behavior is ready.
+        E2 replaces ``query_knowledge_hub`` with a concrete Retrieval adapter.
+        E3 will replace the collection and document-summary placeholders.
     """
 
     if tool_name == "query_knowledge_hub":
         server.add_tool(
-            _query_knowledge_hub_placeholder,
+            query_knowledge_hub,
             name=tool_name,
             description="Query the configured RAG knowledge hub.",
         )
@@ -289,29 +304,6 @@ def _configure_stdio_logging(log_path: str | Path) -> logging.Logger:
     )
     logger.addHandler(file_handler)
     return logger
-
-
-async def _query_knowledge_hub_placeholder(
-    query: str,
-    collection: str | None = None,
-    top_k: int | None = None,
-) -> dict[str, Any]:
-    """Reserve the query tool schema until E2 wires the Retrieval pipeline.
-
-    Args:
-        query: User question that E2 will pass to ``QueryRuntime``.
-        collection: Optional collection override.
-        top_k: Optional result limit.
-
-    Raises:
-        McpError: Always in E1, because no Retrieval execution is registered
-            yet.
-    """
-
-    raise McpError(
-        "MCP tool query_knowledge_hub is not implemented until task E2",
-        context={"tool": "query_knowledge_hub"},
-    )
 
 
 async def _list_collections_placeholder() -> dict[str, Any]:
