@@ -363,7 +363,7 @@ services/ai-service/rag/
 | `src/cache/embedding/` | 缓存 embedding 结果 | content_hash 差量计算和重复请求复用 |
 | `src/cache/captions/` | 缓存图片描述 | image_hash 命中后跳过 Vision LLM |
 | `src/cache/processing/` | 缓存摄取中间状态 | PDF 转换、临时图片、失败恢复 |
-| `src/scripts/run_dashboard.py` | 启动 Dashboard | 本地 Streamlit 启动脚本 |
+| `src/scripts/run_dashboard.py` | 启动 Dashboard | 加载本地 `.env`、校验 Streamlit app 可导入、构建无 shell 的 `streamlit run` 命令，支持 dry-run 和注入命令执行器，测试不真实打开浏览器 |
 | `src/scripts/run_evaluation.py` | 运行评估任务 | 读取 golden_set.json，输出指标并写库 |
 | `src/scripts/query.py` | 本地查询调试 | 配置驱动组装 QueryProcessor、Dense、持久化 BM25 Sparse、RRF、Filter、可选 Rerank 和 Response Builder；支持安全 verbose 输出、schema 初始化和 PostgreSQL pool 生命周期管理 |
 | `src/scripts/ingest.py` | 本地离线摄取 CLI | 自动发现父目录 `.env` 且不覆盖系统注入变量；递归发现 Markdown/PDF；将运行时相对路径固定解析到 RAG 根目录；读取默认 collection；配置驱动组装完整 Pipeline；转发 force；输出 JSON 结果并管理 PostgreSQL pool 生命周期 |
@@ -383,7 +383,7 @@ services/ai-service/rag/
 | `src/observability/pages/ingestion_manage.py` | Ingestion 管理页面 | 文件选择、摄取进度、文档删除 |
 | `src/observability/pages/data_browser.py` | 数据浏览器页面 | 文档列表、chunk 详情、图片引用 |
 | `src/observability/pages/evaluation.py` | 评估面板页面 | 指标展示、历史趋势、策略对比 |
-| `src/observability/dashboard/app.py` | Streamlit 入口 | 页面路由和启动入口 |
+| `src/observability/dashboard/app.py` | Streamlit 入口 | 轻量 Dashboard shell，导入六大页面模块并暴露稳定 app target；不在 import 阶段打开数据库或调用外部 Provider |
 | `src/observability/dashboard/layout.py` | Dashboard 公共布局 | 导航、筛选器、通用图表容器 |
 | `src/observability/evaluation/runner.py` | 评估任务运行器 | 读取黄金测试集、执行检索和生成评估 |
 | `src/observability/evaluation/metrics.py` | 自定义指标 | Hit Rate、MRR、NDCG、citation_hit_rate |

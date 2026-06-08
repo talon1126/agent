@@ -8,6 +8,7 @@ counts must match the same durable rows created by ingestion and retrieval.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import UTC, datetime, timedelta
@@ -1173,3 +1174,87 @@ def test_evaluation_page_builds_and_renders_metric_trends() -> None:
     assert call_names.count("dataframe") >= 3
     assert "bar_chart" in call_names
     assert "metric" in call_names
+
+
+@pytest.mark.integration
+def test_dashboard_app_loads_all_configured_page_modules() -> None:
+    """Require the Streamlit app entry to import every Dashboard page module.
+
+    F11 protects the executable app boundary instead of a single page. A
+    failure here means the local Dashboard script could start Streamlit but
+    break before operators can reach one of the six required pages.
+    """
+
+    from src.observability.dashboard.app import DASHBOARD_PAGE_MODULES, main
+
+    fake_ui = _FakeStreamlit()
+
+    loaded_pages = main(ui=fake_ui)
+
+    assert loaded_pages == DASHBOARD_PAGE_MODULES
+    assert DASHBOARD_PAGE_MODULES == (
+        "overview",
+        "ingestion_manage",
+        "data_browser",
+        "query_trace",
+        "ingestion_trace",
+        "evaluation",
+    )
+    call_names = [name for name, _, _ in fake_ui.calls]
+    assert "title" in call_names
+    assert "caption" in call_names
+
+
+@pytest.mark.integration
+def test_run_dashboard_dry_run_loads_app_and_prints_streamlit_command() -> None:
+    """Require the launcher to verify the app and avoid browser startup in tests."""
+
+    from src.scripts.run_dashboard import run_dashboard
+
+    output: list[str] = []
+
+    exit_code = run_dashboard(["--dry-run", "--port", "8502"], output=output.append)
+
+    assert exit_code == 0
+    payload = json.loads(output[0])
+    assert payload["app_path"].endswith("src/observability/dashboard/app.py")
+    assert payload["loaded_pages"] == [
+        "overview",
+        "ingestion_manage",
+        "data_browser",
+        "query_trace",
+        "ingestion_trace",
+        "evaluation",
+    ]
+    assert payload["command"][:3] == [sys.executable, "-m", "streamlit"]
+    assert "--server.port" in payload["command"]
+    assert "8502" in payload["command"]
+    assert "--server.headless" in payload["command"]
+    assert "true" in payload["command"]
+
+
+@pytest.mark.integration
+def test_run_dashboard_invokes_injected_command_runner_without_opening_browser() -> None:
+    """Require non-dry launch mode to be testable without starting Streamlit."""
+
+    from src.scripts.run_dashboard import run_dashboard
+
+    commands: list[list[str]] = []
+
+    def _record_command(command: list[str]) -> int:
+        """Capture the generated Streamlit command instead of executing it."""
+
+        commands.append(command)
+        return 0
+
+    exit_code = run_dashboard(
+        ["--port", "8503"],
+        command_runner=_record_command,
+        output=lambda _message: None,
+    )
+
+    assert exit_code == 0
+    assert len(commands) == 1
+    assert commands[0][:3] == [sys.executable, "-m", "streamlit"]
+    assert "--server.port" in commands[0]
+    assert "8503" in commands[0]

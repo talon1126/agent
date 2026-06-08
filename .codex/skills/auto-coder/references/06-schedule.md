@@ -292,7 +292,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | F8 | 实现系统总览与 Ingestion 管理页面 | [✔] | 2026-06-08 | 已实现系统总览和 Ingestion 管理页面的可启动渲染函数、页面模型和 fake Streamlit 集成测试；7 个 Dashboard service/page 集成测试和 ruff 通过 |
 | F9 | 实现数据浏览器与 Query Trace 页面 | [✔] | 2026-06-08 | 已实现数据浏览器和 Query Trace 页面的可启动渲染函数、页面模型、文档/chunk/图片展示、召回候选对比和 rerank delta 展示；9 个 Dashboard service/page 集成测试和 ruff 通过 |
 | F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-08 | 已实现 Ingestion Trace 和评估面板页面的可启动渲染函数、页面模型、阶段耗时瀑布图、处理统计、评估 run 历史、指标详情和趋势展示；11 个 Dashboard service/page 集成测试和 ruff 通过 |
-| F11 | 实现 Dashboard 启动脚本和冒烟测试 | [ ] |  | `src/scripts/run_dashboard.py` |
+| F11 | 实现 Dashboard 启动脚本和冒烟测试 | [✔] | 2026-06-08 | 已实现 Streamlit app 最小入口、六大页面模块导入校验、`run_dashboard.py` dry-run、端口配置、headless 启动命令和注入 command runner；14 个 Dashboard service/page/launcher 集成测试通过 |
 | F12 | 完成 Dashboard 六大页面测试 | [ ] |  | 系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板 |
 
 #### 阶段 G：质量评估体系
@@ -325,10 +325,10 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 14 | 100% |
 | Phase E | 4 | 4 | 100% |
-| Phase F | 12 | 4 | 33% |
+| Phase F | 12 | 11 | 92% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **51** | **73%** |
+| **总计** | **70** | **58** | **83%** |
 
 ### 6.5 阶段实施明细
 
@@ -1488,15 +1488,20 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：提供本地启动 Streamlit Dashboard 的脚本入口。
 
-修改文件：`src/scripts/run_dashboard.py`、`tests/integration/test_dashboard_services.py`
+修改文件：`src/observability/dashboard/__init__.py`、`src/observability/dashboard/app.py`、`src/scripts/run_dashboard.py`、`tests/integration/test_dashboard_services.py`
 
 实现类/函数：
 
-- `run_dashboard()`：启动 Streamlit Dashboard 入口
+- `load_dashboard_pages()`：导入并校验六大 Dashboard 页面模块
+- `main()`：渲染轻量 Dashboard shell 并返回已加载页面
+- `resolve_dashboard_app_path()`：解析 Streamlit app 文件路径
+- `load_dashboard_app()`：导入 app module 并校验公开 callable 契约
+- `build_streamlit_command()`：构建无 shell 的 `streamlit run` 命令
+- `run_dashboard()`：加载 `.env`、校验 app、支持 dry-run，并通过可注入 command runner 启动 Streamlit
 
 验收标准：脚本可加载 app，不要求真实启动浏览器。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ##### F12：完成 Dashboard 六大页面测试
 
