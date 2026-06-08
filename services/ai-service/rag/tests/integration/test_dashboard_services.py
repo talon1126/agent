@@ -475,3 +475,306 @@ def test_evaluation_service_runs_evaluator_and_reads_metric_trends() -> None:
                 (collection_id,),
             )
         pool.close()
+
+
+class _FakeStreamlit:
+    """Record Streamlit-like calls made by Dashboard page render functions."""
+
+    def __init__(self) -> None:
+        """Create an empty call log and deterministic widget responses."""
+
+        self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+        self.text_input_value = ""
+        self.checkbox_value = False
+        self.button_value = False
+        self.selectbox_index = 0
+
+    def title(self, *args: object, **kwargs: object) -> None:
+        """Record a page title call."""
+
+        self.calls.append(("title", args, kwargs))
+
+    def subheader(self, *args: object, **kwargs: object) -> None:
+        """Record a section header call."""
+
+        self.calls.append(("subheader", args, kwargs))
+
+    def caption(self, *args: object, **kwargs: object) -> None:
+        """Record caption text used for operator context."""
+
+        self.calls.append(("caption", args, kwargs))
+
+    def metric(self, *args: object, **kwargs: object) -> None:
+        """Record a metric card call."""
+
+        self.calls.append(("metric", args, kwargs))
+
+    def dataframe(self, *args: object, **kwargs: object) -> None:
+        """Record a table rendering call."""
+
+        self.calls.append(("dataframe", args, kwargs))
+
+    def write(self, *args: object, **kwargs: object) -> None:
+        """Record generic structured output."""
+
+        self.calls.append(("write", args, kwargs))
+
+    def info(self, *args: object, **kwargs: object) -> None:
+        """Record informational state shown to an operator."""
+
+        self.calls.append(("info", args, kwargs))
+
+    def warning(self, *args: object, **kwargs: object) -> None:
+        """Record warning state shown to an operator."""
+
+        self.calls.append(("warning", args, kwargs))
+
+    def success(self, *args: object, **kwargs: object) -> None:
+        """Record success state shown to an operator."""
+
+        self.calls.append(("success", args, kwargs))
+
+    def text_input(self, *args: object, **kwargs: object) -> str:
+        """Record a text input and return the configured fake value."""
+
+        self.calls.append(("text_input", args, kwargs))
+        return self.text_input_value
+
+    def checkbox(self, *args: object, **kwargs: object) -> bool:
+        """Record a checkbox and return the configured fake value."""
+
+        self.calls.append(("checkbox", args, kwargs))
+        return self.checkbox_value
+
+    def button(self, *args: object, **kwargs: object) -> bool:
+        """Record a button and return the configured fake value."""
+
+        self.calls.append(("button", args, kwargs))
+        return self.button_value
+
+    def selectbox(
+        self,
+        *args: object,
+        options: list[str] | tuple[str, ...],
+        **kwargs: object,
+    ) -> str | None:
+        """Record a selectbox and return a deterministic selected option."""
+
+        self.calls.append(("selectbox", args, {"options": options, **kwargs}))
+        if not options:
+            return None
+        return options[self.selectbox_index]
+
+
+@pytest.mark.integration
+def test_overview_page_builds_and_renders_system_summary() -> None:
+    """Require the overview page to render config, assets, and health data."""
+
+    from datetime import datetime
+
+    from src.observability.pages.overview import (
+        DashboardHealthSnapshot,
+        OverviewPageModel,
+        render_overview_page,
+    )
+    from src.observability.services import CollectionStats, ConfigOverview
+
+    fake_ui = _FakeStreamlit()
+    model = OverviewPageModel(
+        config=ConfigOverview(
+            project_name="aimodel-rag",
+            default_collection="shopping_guides",
+            environment="test",
+            components=(),
+            dashboard_pages=("overview", "ingestion_manage"),
+            paths={"raw_data_dir": "data/raw"},
+        ),
+        collection_stats=CollectionStats(
+            collection_id="shopping_guides",
+            document_count=2,
+            chunk_count=8,
+            image_count=1,
+            dense_indexed_chunk_count=8,
+            bm25_indexed_chunk_count=8,
+        ),
+        latest_query=DashboardHealthSnapshot(
+            trace_id="query-1",
+            status="success",
+            duration_ms=120.0,
+            started_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+            error=None,
+        ),
+        latest_ingestion=DashboardHealthSnapshot(
+            trace_id="ingestion-1",
+            status="success",
+            duration_ms=450.0,
+            started_at=datetime(2026, 1, 1, 7, 55, tzinfo=UTC),
+            error=None,
+        ),
+    )
+
+    render_overview_page(model, ui=fake_ui)
+
+    call_names = [name for name, _, _ in fake_ui.calls]
+    assert call_names.count("title") == 1
+    assert call_names.count("metric") >= 6
+    assert "dataframe" in call_names
+    assert any("System Overview" in args for name, args, _ in fake_ui.calls if name == "title")
+
+
+@pytest.mark.integration
+def test_ingestion_manage_page_builds_and_renders_operator_controls() -> None:
+    """Require ingestion manage page to render controls without side effects."""
+
+    from src.observability.pages.ingestion_manage import (
+        IngestionManagePageModel,
+        render_ingestion_manage_page,
+    )
+    from src.observability.services import DocumentBrowserRow
+
+    fake_ui = _FakeStreamlit()
+    fake_ui.text_input_value = "data/raw/shopping_guides/wireless.md"
+    fake_ui.checkbox_value = True
+    fake_ui.button_value = True
+    model = IngestionManagePageModel(
+        collection_id="shopping_guides",
+        raw_data_dir="data/raw/shopping_guides",
+        documents=(
+            DocumentBrowserRow(
+                document_id="doc-1",
+                collection_id="shopping_guides",
+                title="Wireless guide",
+                source_path="data/raw/shopping_guides/wireless.md",
+                source_hash="a" * 64,
+                lifecycle_status="success",
+                chunk_count=3,
+                image_count=1,
+            ),
+        ),
+    )
+
+    selection = render_ingestion_manage_page(model, ui=fake_ui)
+
+    assert selection.collection_id == "shopping_guides"
+    assert selection.source_path == "data/raw/shopping_guides/wireless.md"
+    assert selection.force is True
+    assert selection.submit_ingest is True
+    assert selection.delete_document_id == "doc-1"
+    call_names = [name for name, _, _ in fake_ui.calls]
+    assert "text_input" in call_names
+    assert "checkbox" in call_names
+    assert call_names.count("button") == 2
+    assert "dataframe" in call_names
+
+
+@pytest.mark.integration
+def test_dashboard_page_model_builders_read_services_without_side_effects() -> None:
+    """Require F8 page model builders to use service DTOs as their data source."""
+
+    from datetime import datetime
+
+    from src.observability.pages.ingestion_manage import (
+        build_ingestion_manage_page_model,
+    )
+    from src.observability.pages.overview import build_overview_page_model
+    from src.observability.services import (
+        CollectionStats,
+        ConfigOverview,
+        DocumentBrowserRow,
+        TraceHistoryItem,
+    )
+
+    config = ConfigOverview(
+        project_name="aimodel-rag",
+        default_collection="shopping_guides",
+        environment="test",
+        components=(),
+        dashboard_pages=("overview", "ingestion_manage"),
+        paths={"raw_data_dir": "data/raw"},
+    )
+    stats = CollectionStats(
+        collection_id="shopping_guides",
+        document_count=1,
+        chunk_count=2,
+        image_count=0,
+        dense_indexed_chunk_count=2,
+        bm25_indexed_chunk_count=2,
+    )
+    document = DocumentBrowserRow(
+        document_id="doc-builder",
+        collection_id="shopping_guides",
+        title="Builder guide",
+        source_path="data/raw/builder.md",
+        source_hash="b" * 64,
+        lifecycle_status="success",
+        chunk_count=2,
+        image_count=0,
+    )
+    query_trace = TraceHistoryItem(
+        trace_id="query-builder",
+        trace_type="query",
+        collection_id="shopping_guides",
+        status="success",
+        display_input="builder query",
+        started_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+        finished_at=None,
+        duration_ms=42.0,
+        stage_count=2,
+        fallback_used=False,
+    )
+
+    class _ConfigReader:
+        """Return the fixed Dashboard configuration overview."""
+
+        def read_overview(self) -> ConfigOverview:
+            """Return a stable config DTO for page builder tests."""
+
+            return config
+
+    class _DataBrowser:
+        """Return fixed collection stats and document rows."""
+
+        def collection_stats(self, collection_id: str) -> CollectionStats:
+            """Return stats for the requested collection."""
+
+            assert collection_id == "shopping_guides"
+            return stats
+
+        def list_documents(self, collection_id: str) -> list[DocumentBrowserRow]:
+            """Return indexed documents for the requested collection."""
+
+            assert collection_id == "shopping_guides"
+            return [document]
+
+    class _TraceReader:
+        """Return fixed trace history rows for overview health cards."""
+
+        def list_query_traces(self, collection_id: str) -> list[TraceHistoryItem]:
+            """Return query traces for the requested collection."""
+
+            assert collection_id == "shopping_guides"
+            return [query_trace]
+
+        def list_ingestion_traces(self, collection_id: str) -> list[TraceHistoryItem]:
+            """Return an empty ingestion trace list for no-data health state."""
+
+            assert collection_id == "shopping_guides"
+            return []
+
+    overview_model = build_overview_page_model(
+        config_reader=_ConfigReader(),
+        data_browser=_DataBrowser(),
+        trace_reader=_TraceReader(),
+    )
+    ingestion_model = build_ingestion_manage_page_model(
+        config_reader=_ConfigReader(),
+        data_browser=_DataBrowser(),
+    )
+
+    assert overview_model.config == config
+    assert overview_model.collection_stats == stats
+    assert overview_model.latest_query.trace_id == "query-builder"
+    assert overview_model.latest_ingestion.status == "empty"
+    assert ingestion_model.collection_id == "shopping_guides"
+    assert ingestion_model.raw_data_dir == "data/raw"
+    assert ingestion_model.documents == (document,)

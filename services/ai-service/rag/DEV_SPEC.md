@@ -2175,7 +2175,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-08 | 已将 TraceContext/TraceController 注入 ingestion 和 query 主链路，CLI 默认写入 JSONL trace；8 个 ingestion/query 集成测试、15 个 trace 单元测试和 ruff 通过 |
 | F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | 已实现 Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
 | F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | 已实现 Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
-| F8 | 实现系统总览与 Ingestion 管理页面 | [ ] |  | Streamlit 页面可启动 |
+| F8 | 实现系统总览与 Ingestion 管理页面 | [✔] | 2026-06-08 | 已实现系统总览和 Ingestion 管理页面的可启动渲染函数、页面模型和 fake Streamlit 集成测试；7 个 Dashboard service/page 集成测试和 ruff 通过 |
 | F9 | 实现数据浏览器与 Query Trace 页面 | [ ] |  | 文档、chunk、召回对比、rerank 变化 |
 | F10 | 实现 Ingestion Trace 与评估面板页面 | [ ] |  | 阶段耗时、评估趋势 |
 | F11 | 实现 Dashboard 启动脚本和冒烟测试 | [ ] |  | `src/scripts/run_dashboard.py` |
@@ -3323,15 +3323,18 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：实现系统总览和 Ingestion 管理页面。
 
-修改文件：`src/observability/pages/overview.py`、`src/observability/pages/ingestion_manage.py`、`tests/integration/test_dashboard_services.py`
+修改文件：`src/observability/pages/__init__.py`、`src/observability/pages/overview.py`、`src/observability/pages/ingestion_manage.py`、`tests/integration/test_dashboard_services.py`
 
 实现类/函数：
 
-- 页面渲染函数
+- `build_overview_page_model()`：读取配置、collection 统计和最新 query/ingestion trace，生成系统总览页面模型
+- `render_overview_page()`：渲染组件配置、数据资产统计和系统健康指标
+- `build_ingestion_manage_page_model()`：读取默认 collection、raw data 路径和已索引文档列表
+- `render_ingestion_manage_page()`：渲染摄取参数、force 选项、已索引文档表格和删除选择控件，并返回操作意图 DTO
 
 验收标准：总览和摄取管理页面可启动。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ##### F9：实现数据浏览和 Query Trace 页面
 
