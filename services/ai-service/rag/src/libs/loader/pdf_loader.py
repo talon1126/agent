@@ -10,6 +10,7 @@ storage and ImageCaptioner stages.
 
 from __future__ import annotations
 
+import re
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,8 @@ from src.ingestion.pdf_to_markdown import (
 )
 from src.libs.loader.base_loader import BaseLoader
 from src.libs.loader.markdown_loader import extract_heading_hierarchy
+
+_PAGE_MARKER_PATTERN = re.compile(r"<!--\s*page:\s*(\d+)\s*-->")
 
 
 def _stable_pdf_document_id(path: Path, source_hash: str) -> str:
@@ -138,7 +141,7 @@ class PdfLoader(BaseLoader):
         document_id: str,
         conversion: PdfConversionResult,
     ) -> tuple[str, list[dict[str, Any]]]:
-        """Persist extracted images and append offset-addressable placeholders.
+        """Persist extracted images and insert offset-addressable placeholders.
 
         Args:
             source_path: Canonical PDF path used in stable image IDs.
@@ -159,12 +162,11 @@ class PdfLoader(BaseLoader):
 
         image_directory = self._image_output_dir / document_id
         image_directory.mkdir(parents=True, exist_ok=True)
-        content = conversion.markdown
-        metadata: list[dict[str, Any]] = []
+        entries: list[dict[str, Any]] = []
         written_targets: list[Path] = []
         active_temporary: Path | None = None
         try:
-            for image_index, image in enumerate(conversion.images):
+            for image_index, image in enumerate(_sort_images_by_source_position(conversion.images)):
                 image_id = _stable_pdf_image_id(
                     source_path,
                     image=image,
@@ -177,16 +179,13 @@ class PdfLoader(BaseLoader):
                 active_temporary = None
                 written_targets.append(target)
 
-                separator = "\n" if content.endswith("\n") else "\n\n"
                 placeholder = f"[[image:{image_id}]]"
-                text_offset = len(content) + len(separator)
-                content = f"{content}{separator}{placeholder}\n"
-                metadata.append(
+                entries.append(
                     {
                         "id": image_id,
                         "path": str(target),
                         "page": image.page,
-                        "text_offset": text_offset,
+                        "placeholder": placeholder,
                         "text_length": len(placeholder),
                         "position": dict(image.position),
                     }
@@ -201,4 +200,152 @@ class PdfLoader(BaseLoader):
             except OSError:
                 pass
             raise
+        content, metadata = _insert_placeholders_by_page(
+            conversion.markdown,
+            entries,
+        )
         return content, metadata
+
+
+def _sort_images_by_source_position(
+    images: tuple[ExtractedImage, ...],
+) -> tuple[ExtractedImage, ...]:
+    """Order extracted images by page, vertical position, and source sequence.
+
+    Args:
+        images: Raw image records returned by the PDF parser boundary.
+
+    Returns:
+        Images sorted in the same order readers normally encounter them in the
+        source document.
+    """
+
+    return tuple(
+        sorted(
+            images,
+            key=lambda image: (
+                image.page,
+                _numeric_position(image.position.get("y")),
+                _numeric_position(image.position.get("x")),
+                _numeric_position(image.position.get("sequence")),
+            ),
+        )
+    )
+
+
+def _insert_placeholders_by_page(
+    markdown: str,
+    entries: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Insert image placeholders into page-local text regions.
+
+    Args:
+        markdown: Canonical Markdown returned by the PDF text converter.
+        entries: Persisted image metadata entries containing page numbers and
+            placeholders but not final text offsets.
+
+    Returns:
+        Updated document text and metadata entries whose ``text_offset`` values
+        point at the inserted placeholders.
+
+    Notes:
+        MarkItDown output does not expose exact character offsets for PDF
+        image rectangles. When page markers such as ``<!-- page: 2 -->`` are
+        available, placeholders are inserted at the end of their page region
+        before the next marker. Without markers the function degrades to a
+        sorted append, which is still deterministic and preserves source order.
+    """
+
+    if not entries:
+        return markdown, []
+
+    page_ranges = _page_ranges(markdown)
+    insertions: list[tuple[int, dict[str, Any]]] = []
+    for entry in entries:
+        insertions.append((_insertion_offset(markdown, page_ranges, entry["page"]), entry))
+    insertions.sort(
+        key=lambda item: (
+            item[0],
+            int(item[1]["page"]),
+            _numeric_position(item[1]["position"].get("y")),
+            _numeric_position(item[1]["position"].get("x")),
+        )
+    )
+
+    content_parts: list[str] = []
+    metadata: list[dict[str, Any]] = []
+    cursor = 0
+    for offset, entry in insertions:
+        content_parts.append(markdown[cursor:offset])
+        prefix = _placeholder_prefix("".join(content_parts))
+        placeholder_text = f"{prefix}{entry['placeholder']}\n"
+        text_offset = len("".join(content_parts)) + len(prefix)
+        content_parts.append(placeholder_text)
+        cursor = offset
+        metadata_entry = dict(entry)
+        metadata_entry.pop("placeholder")
+        metadata_entry["text_offset"] = text_offset
+        metadata.append(metadata_entry)
+    content_parts.append(markdown[cursor:])
+    return "".join(content_parts), metadata
+
+
+def _page_ranges(markdown: str) -> dict[int, tuple[int, int]]:
+    """Return source page text ranges inferred from MarkItDown page markers."""
+
+    markers = [
+        (int(match.group(1)), match.start())
+        for match in _PAGE_MARKER_PATTERN.finditer(markdown)
+    ]
+    if not markers:
+        return {1: (0, len(markdown))}
+
+    ranges: dict[int, tuple[int, int]] = {}
+    first_marker_offset = markers[0][1]
+    if first_marker_offset > 0:
+        ranges[1] = (0, first_marker_offset)
+    for index, (page, start) in enumerate(markers):
+        end = markers[index + 1][1] if index + 1 < len(markers) else len(markdown)
+        ranges[page] = (start, end)
+    return ranges
+
+
+def _insertion_offset(
+    markdown: str,
+    page_ranges: dict[int, tuple[int, int]],
+    page: int,
+) -> int:
+    """Choose a stable placeholder insertion offset for one image page."""
+
+    if page in page_ranges:
+        _start, end = page_ranges[page]
+        return _trim_trailing_blank_space(markdown, end)
+    return _trim_trailing_blank_space(markdown, len(markdown))
+
+
+def _trim_trailing_blank_space(text: str, offset: int) -> int:
+    """Move an insertion offset before trailing whitespace in a page region."""
+
+    while offset > 0 and text[offset - 1].isspace():
+        offset -= 1
+    return offset
+
+
+def _placeholder_prefix(prefix_content: str) -> str:
+    """Return spacing needed before an inserted placeholder."""
+
+    if not prefix_content:
+        return ""
+    if prefix_content.endswith("\n\n"):
+        return ""
+    if prefix_content.endswith("\n"):
+        return "\n"
+    return "\n\n"
+
+
+def _numeric_position(value: Any) -> float:
+    """Convert optional geometry values into sortable numbers."""
+
+    if isinstance(value, int | float):
+        return float(value)
+    return 0.0

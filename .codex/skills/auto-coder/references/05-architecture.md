@@ -276,7 +276,7 @@ services/ai-service/rag/
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
 | `src/core/config.py` | 加载 settings 和 prompt 配置 | Pydantic/YAML 校验、环境变量覆盖、默认值处理 |
-| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`metadata.images[]`、`Citation`、`TraceRecord` |
+| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`metadata.images[]`、`Citation`、`TraceRecord` |
 | `src/core/errors.py` | 定义统一异常类型 | 配置错误、Provider 错误、检索错误、摄取错误、MCP 错误 |
 | `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用相同英文/数字 normalize、中文 full-span 与 2/3-gram 分词，避免分析漂移和 ingestion/storage 循环依赖 |
 | `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、意图识别 |
@@ -299,7 +299,7 @@ services/ai-service/rag/
 | `src/libs/loader/base_loader.py` | 定义 Loader 抽象接口 | `load(source) -> Document(id + text + summary + metadata)` |
 | `src/libs/loader/loader_factory.py` | 创建 Loader 实现 | 根据文件类型和配置选择 Markdown/PDF Loader |
 | `src/libs/loader/markdown_loader.py` | 加载 Markdown 文档 | 提取标题层级、metadata、图片引用 |
-| `src/libs/loader/pdf_loader.py` | 加载 PDF 文档 | PDF -> Markdown、图片提取、图片占位符写入 |
+| `src/libs/loader/pdf_loader.py` | 加载 PDF 文档 | PDF -> Markdown、图片提取、按页码和物理位置排序插入图片占位符，缺少页标记时稳定降级追加 |
 | `src/libs/llm/base_llm.py` | 定义 LLMClient 抽象接口 | `chat(messages) -> response` |
 | `src/libs/llm/llm_factory.py` | 创建 LLMClient | 根据 settings 选择 OpenAI/Azure/Ollama/DeepSeek |
 | `src/libs/llm/openai_client.py` | OpenAI Chat 实现 | OpenAI SDK、统一 messages 输入输出 |

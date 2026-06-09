@@ -879,6 +879,64 @@ def test_pdf_loader_persists_images_and_injects_valid_metadata(
     assert image_metadata["position"]["width"] == 50.0
 
 
+def test_pdf_loader_inserts_image_placeholders_near_source_page_text(
+    tmp_path: Path,
+) -> None:
+    """Require PDF placeholders to follow page/y order instead of appending."""
+
+    source = tmp_path / "positioned-images.pdf"
+    source.write_bytes(b"%PDF-positioned-images")
+    conversion = PdfConversionResult(
+        markdown=(
+            "# Shopping Guide\n\n"
+            "Page one introduction.\n\n"
+            "<!-- page: 2 -->\n\n"
+            "Page two comparison table.\n"
+        ),
+        images=(
+            ExtractedImage(
+                content=b"page-two-image",
+                suffix=".png",
+                page=2,
+                position={"x": 12.0, "y": 30.0, "width": 80.0, "height": 40.0},
+            ),
+            ExtractedImage(
+                content=b"page-one-image",
+                suffix=".png",
+                page=1,
+                position={"x": 10.0, "y": 20.0, "width": 50.0, "height": 40.0},
+            ),
+        ),
+    )
+    converter = Mock()
+    converter.convert.return_value = conversion
+
+    document = PdfLoader(
+        converter=converter,
+        image_output_dir=tmp_path / "images",
+    ).load(source)
+
+    first_image, second_image = document.metadata["images"]
+    first_placeholder = f"[[image:{first_image['id']}]]"
+    second_placeholder = f"[[image:{second_image['id']}]]"
+    page_two_marker = "<!-- page: 2 -->"
+
+    assert first_image["page"] == 1
+    assert second_image["page"] == 2
+    assert document.text.index("Page one introduction.") < document.text.index(
+        first_placeholder
+    )
+    assert document.text.index(first_placeholder) < document.text.index(
+        page_two_marker
+    )
+    assert document.text.index("Page two comparison table.") < document.text.index(
+        second_placeholder
+    )
+    assert document.text.index(second_placeholder) < len(document.text.rstrip())
+    assert first_image["text_offset"] == document.text.index(first_placeholder)
+    assert second_image["text_offset"] == document.text.index(second_placeholder)
+
+
 def test_pdf_loader_omits_images_metadata_when_pdf_has_no_images(
     tmp_path: Path,
 ) -> None:

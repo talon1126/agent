@@ -855,7 +855,8 @@ Loader 负责从 PDF、Markdown 或其他文档中抽取图片，并建立图片
 
 - **提取策略**：PDF 文本由 MarkItDown 转换，PDF 图片由 PyMuPDF 按页码和物理位置提取；Markdown 图片按本地图片语法解析。
 - **图片 ID**：为每张图片生成稳定 `image_id`，建议基于 `source_doc + page + image_index + image_hash`。
-- **引用标记**：在文档文本中写入图片占位符，例如 `[[image:image_xxx]]`，确保后续 splitter 能保留图片与上下文的关系。
+- **引用标记**：在文档文本中写入图片占位符，例如 `[[image:image_xxx]]`，确保后续 splitter 能保留图片与上下文的关系；PDF 图片应先按 `page + position.y + position.x` 排序，再插入到对应页文本区间末尾、下一页标记之前，避免所有图片占位符集中追加到文档末尾。
+- **页标记降级**：当 MarkItDown 输出包含 `<!-- page: N -->` 等页标记时，Loader 使用页区间定位；当转换结果没有页标记时，Loader 按源位置稳定排序后追加占位符，并保留 `metadata.images[].position` 供后续改进。
 - **原始图片存储**：原始图片保存到本地文件系统，数据库只保存索引和 metadata。
 
 #### 3.7.3 Splitter 技术要点
@@ -1551,7 +1552,7 @@ services/ai-service/rag/
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
 | `src/core/config.py` | 加载 settings 和 prompt 配置 | Pydantic/YAML 校验、环境变量覆盖、默认值处理 |
-| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`metadata.images[]`、`Citation`、`TraceRecord` |
+| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`metadata.images[]`、`Citation`、`TraceRecord` |
 | `src/core/errors.py` | 定义统一异常类型 | 配置错误、Provider 错误、检索错误、摄取错误、MCP 错误 |
 | `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用相同英文/数字 normalize、中文 full-span 与 2/3-gram 分词，避免分析漂移和 ingestion/storage 循环依赖 |
 | `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、意图识别 |
@@ -1574,7 +1575,7 @@ services/ai-service/rag/
 | `src/libs/loader/base_loader.py` | 定义 Loader 抽象接口 | `load(source) -> Document(id + text + summary + metadata)` |
 | `src/libs/loader/loader_factory.py` | 创建 Loader 实现 | 根据文件类型和配置选择 Markdown/PDF Loader |
 | `src/libs/loader/markdown_loader.py` | 加载 Markdown 文档 | 提取标题层级、metadata、图片引用 |
-| `src/libs/loader/pdf_loader.py` | 加载 PDF 文档 | PDF -> Markdown、图片提取、图片占位符写入 |
+| `src/libs/loader/pdf_loader.py` | 加载 PDF 文档 | PDF -> Markdown、图片提取、按页码和物理位置排序插入图片占位符，缺少页标记时稳定降级追加 |
 | `src/libs/llm/base_llm.py` | 定义 LLMClient 抽象接口 | `chat(messages) -> response` |
 | `src/libs/llm/llm_factory.py` | 创建 LLMClient | 根据 settings 选择 OpenAI/Azure/Ollama/DeepSeek |
 | `src/libs/llm/openai_client.py` | OpenAI Chat 实现 | OpenAI SDK、统一 messages 输入输出 |
@@ -2674,7 +2675,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `extract_images()`：使用 PyMuPDF 仅在 PDF 存在图片时抽取图片字节、页码与物理位置信息
 - `DocumentSummarizer.summarize()`：在 Loader 后为 Document 生成顶层摘要，作为后续 chunk rewrite 的全局上下文
 
-验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码和物理位置；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + summary + metadata)` 并提取标题层级，`summary` 是顶层字段且可为 `null`，不得写入 `metadata.summary`；`DocumentSummarizer` 作为 Loader 后的独立步骤生成 `Document.summary`，已有同版本摘要时保持幂等；fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
+验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码和物理位置；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置；PDF 图片占位符必须按 `page + position.y + position.x` 排序插入对应页文本区间，若存在下一页标记则必须插入到下一页标记之前，不能集中追加到文档末尾；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + summary + metadata)` 并提取标题层级，`summary` 是顶层字段且可为 `null`，不得写入 `metadata.summary`；`DocumentSummarizer` 作为 Loader 后的独立步骤生成 `Document.summary`，已有同版本摘要时保持幂等；fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
 
 测试方法：`uv run --project services/ai-service/rag pytest -p no:cacheprovider services\ai-service\rag\tests\unit\test_loader.py -v`；单元测试通过注入 fake MarkItDown converter 和 fake PyMuPDF module 验证转换与图片提取契约，不依赖真实外部解析环境。
 

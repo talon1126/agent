@@ -774,7 +774,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `extract_images()`：使用 PyMuPDF 仅在 PDF 存在图片时抽取图片字节、页码与物理位置信息
 - `DocumentSummarizer.summarize()`：在 Loader 后为 Document 生成顶层摘要，作为后续 chunk rewrite 的全局上下文
 
-验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码和物理位置；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + summary + metadata)` 并提取标题层级，`summary` 是顶层字段且可为 `null`，不得写入 `metadata.summary`；`DocumentSummarizer` 作为 Loader 后的独立步骤生成 `Document.summary`，已有同版本摘要时保持幂等；fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
+验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码和物理位置；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置；PDF 图片占位符必须按 `page + position.y + position.x` 排序插入对应页文本区间，若存在下一页标记则必须插入到下一页标记之前，不能集中追加到文档末尾；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + summary + metadata)` 并提取标题层级，`summary` 是顶层字段且可为 `null`，不得写入 `metadata.summary`；`DocumentSummarizer` 作为 Loader 后的独立步骤生成 `Document.summary`，已有同版本摘要时保持幂等；fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
 
 测试方法：`uv run --project services/ai-service/rag pytest -p no:cacheprovider services\ai-service\rag\tests\unit\test_loader.py -v`；单元测试通过注入 fake MarkItDown converter 和 fake PyMuPDF module 验证转换与图片提取契约，不依赖真实外部解析环境。
 

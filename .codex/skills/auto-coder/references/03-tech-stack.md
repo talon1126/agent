@@ -678,7 +678,8 @@ Loader 负责从 PDF、Markdown 或其他文档中抽取图片，并建立图片
 
 - **提取策略**：PDF 文本由 MarkItDown 转换，PDF 图片由 PyMuPDF 按页码和物理位置提取；Markdown 图片按本地图片语法解析。
 - **图片 ID**：为每张图片生成稳定 `image_id`，建议基于 `source_doc + page + image_index + image_hash`。
-- **引用标记**：在文档文本中写入图片占位符，例如 `[[image:image_xxx]]`，确保后续 splitter 能保留图片与上下文的关系。
+- **引用标记**：在文档文本中写入图片占位符，例如 `[[image:image_xxx]]`，确保后续 splitter 能保留图片与上下文的关系；PDF 图片应先按 `page + position.y + position.x` 排序，再插入到对应页文本区间末尾、下一页标记之前，避免所有图片占位符集中追加到文档末尾。
+- **页标记降级**：当 MarkItDown 输出包含 `<!-- page: N -->` 等页标记时，Loader 使用页区间定位；当转换结果没有页标记时，Loader 按源位置稳定排序后追加占位符，并保留 `metadata.images[].position` 供后续改进。
 - **原始图片存储**：原始图片保存到本地文件系统，数据库只保存索引和 metadata。
 
 #### 3.7.3 Splitter 技术要点
