@@ -62,8 +62,29 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
     on placeholder ranges, and return validated ``Chunk`` objects.
     """
 
-    document_text = "Alpha intro [image:one] details.\nBeta comparison details."
-    image_offset = document_text.index("[image:one]")
+    document_text = (
+        "Alpha intro [image:one] details.\n"
+        "Beta comparison details.\n"
+        "Gamma outro [image:two] details."
+    )
+    first_image_offset = document_text.index("[image:one]")
+    second_image_offset = document_text.index("[image:two]")
+    first_image = {
+        "id": "image-1",
+        "path": "data/images/shopping_guides/image-1.png",
+        "page": 1,
+        "text_offset": first_image_offset,
+        "text_length": len("[image:one]"),
+        "position": {"x": 10, "y": 20, "width": 300, "height": 200},
+    }
+    second_image = {
+        "id": "image-2",
+        "path": "data/images/shopping_guides/image-2.png",
+        "page": 2,
+        "text_offset": second_image_offset,
+        "text_length": len("[image:two]"),
+        "position": {"x": 15, "y": 25, "width": 320, "height": 220},
+    }
     document = Document(
         id="doc-shopping-guide",
         text=document_text,
@@ -71,16 +92,7 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
             "source_path": "shopping_guides/headphones.md",
             "heading_path": ["Guides", "Headphones"],
             "doc_type": "shopping_guide",
-            "images": [
-                {
-                    "id": "image-1",
-                    "path": "data/images/shopping_guides/image-1.png",
-                    "page": 1,
-                    "text_offset": image_offset,
-                    "text_length": len("[image:one]"),
-                    "position": {"x": 10, "y": 20, "width": 300, "height": 200},
-                }
-            ],
+            "images": [first_image, second_image],
         },
     )
     chunker = DocumentChunker(
@@ -88,6 +100,7 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
             chunks=[
                 "Alpha intro [image:one] details.",
                 "Beta comparison details.",
+                "Gamma outro [image:two] details.",
             ]
         )
     )
@@ -95,15 +108,21 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
     chunks = chunker.chunk(document)
     repeated_chunks = chunker.chunk(document)
 
-    assert [chunk.chunk_index for chunk in chunks] == [0, 1]
+    assert [chunk.chunk_index for chunk in chunks] == [0, 1, 2]
     assert all(isinstance(chunk, Chunk) for chunk in chunks)
     assert [chunk.id for chunk in chunks] == [chunk.id for chunk in repeated_chunks]
+    assert document.metadata["images"] == [first_image, second_image]
     assert chunks[0].metadata["doc_type"] == "shopping_guide"
     assert chunks[0].metadata["chunk_index"] == 0
     assert chunks[1].metadata["chunk_index"] == 1
+    assert chunks[2].metadata["chunk_index"] == 2
     assert chunks[0].metadata["section_path"] == ["Guides", "Headphones"]
     assert chunks[0].metadata["image_refs"] == ["image-1"]
+    assert [image["id"] for image in chunks[0].metadata["images"]] == ["image-1"]
     assert "image_refs" not in chunks[1].metadata
+    assert "images" not in chunks[1].metadata
+    assert chunks[2].metadata["image_refs"] == ["image-2"]
+    assert [image["id"] for image in chunks[2].metadata["images"]] == ["image-2"]
     assert chunks[0].source_ref == {
         "document_id": "doc-shopping-guide",
         "source_path": "shopping_guides/headphones.md",
@@ -112,7 +131,8 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
         "end_offset": len("Alpha intro [image:one] details."),
     }
     assert chunks[1].start_offset == document_text.index("Beta comparison details.")
-    assert chunks[1].end_offset == len(document_text)
+    assert chunks[2].start_offset == document_text.index("Gamma outro")
+    assert chunks[2].end_offset == len(document_text)
     assert document.metadata.get("image_refs") is None
 
 

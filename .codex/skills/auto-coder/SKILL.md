@@ -26,12 +26,36 @@ Run this workflow when the user wants one-shot automation from specification to 
 - Before implementation or verification, run
   `uv sync --project services/ai-service/rag --extra dev --frozen`.
 - Before editing code, update or create a short task plan.
+- When the user reports an optimization, fix, refactor, architecture correction,
+  or workflow rule, first update `DEV_SPEC.md` so the reusable decision is not
+  trapped in conversation context. Then re-sync references before continuing
+  implementation.
 - Match existing code style and architecture patterns.
 - Use values from `config/settings.yaml`; do not hardcode project configuration.
 - Write tests with implementation. Put tests under the path required by the spec, usually `tests/unit/` or `tests/integration/`.
 - Mock external dependencies in unit tests.
 - Do not ask for confirmation during the normal flow unless prerequisites are missing, the spec conflicts with the codebase, or the task is blocked.
 - Pause only at the final commit confirmation step.
+
+## Project Optimization and Fix Mode
+
+Use this mode when the user asks to correct an implemented task, refine a prior
+architecture decision, repair dirty data behavior, or improve the auto-coder
+workflow itself.
+
+- Split the request into reviewable fix/refactor tasks when it crosses module or
+  phase boundaries.
+- Ask for clarification before changing schema fields, data contracts, task
+  ownership, or model/Prompt behavior if the expected contract is ambiguous.
+- For each task, update `DEV_SPEC.md` and any relevant skill/workflow rules,
+  run `sync_spec.py --force`, write a failing test first, implement the smallest
+  change, run verification, review the diff, then commit before starting the
+  next task.
+- Use `fix(scope): ...` for behavior corrections and `refactor(scope): ...` for
+  structural changes that intentionally preserve behavior. Include the affected
+  task ID or optimization label in the commit subject and body.
+- Never batch unrelated fix and refactor changes into one commit just because
+  they came from the same user message.
 
 ## Core Workflow
 
