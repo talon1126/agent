@@ -489,6 +489,8 @@ class _FakeStreamlit:
         self.checkbox_value = False
         self.button_value = False
         self.selectbox_index = 0
+        self.radio_index = 0
+        self.sidebar = self
 
     def title(self, *args: object, **kwargs: object) -> None:
         """Record a page title call."""
@@ -570,6 +572,19 @@ class _FakeStreamlit:
         if not options:
             return None
         return options[self.selectbox_index]
+
+    def radio(
+        self,
+        *args: object,
+        options: list[str] | tuple[str, ...],
+        **kwargs: object,
+    ) -> str | None:
+        """Record a radio selector and return a deterministic page option."""
+
+        self.calls.append(("radio", args, {"options": options, **kwargs}))
+        if not options:
+            return None
+        return options[self.radio_index]
 
 
 @pytest.mark.integration
@@ -1203,6 +1218,38 @@ def test_dashboard_app_loads_all_configured_page_modules() -> None:
     call_names = [name for name, _, _ in fake_ui.calls]
     assert "title" in call_names
     assert "caption" in call_names
+
+
+@pytest.mark.integration
+def test_dashboard_app_renders_sidebar_navigation_and_selected_page() -> None:
+    """Require the app shell to expose all six pages in real navigation.
+
+    Loading page modules is not enough for operators. The Streamlit app must
+    present a sidebar page selector and dispatch the selected page renderer so
+    the browser can reach System Overview, Ingestion Management, Data Browser,
+    Query Trace, Ingestion Trace, and Evaluation.
+    """
+
+    from src.observability.dashboard.app import DASHBOARD_PAGE_LABELS, main
+
+    fake_ui = _FakeStreamlit()
+    rendered_pages: list[str] = []
+
+    loaded_pages = main(
+        ui=fake_ui,
+        page_renderer=lambda page_name, _ui: rendered_pages.append(page_name),
+    )
+
+    assert tuple(DASHBOARD_PAGE_LABELS) == loaded_pages
+    assert rendered_pages == ["overview"]
+    radio_args, radio_kwargs = next(
+        (args, kwargs)
+        for name, args, kwargs in fake_ui.calls
+        if name == "radio"
+    )
+    assert radio_args == ("Page",)
+    assert radio_kwargs["options"] == list(DASHBOARD_PAGE_LABELS)
+    assert radio_kwargs["format_func"]("query_trace") == "Query Trace"
 
 
 @pytest.mark.integration

@@ -1648,7 +1648,7 @@ services/ai-service/rag/
 | `src/observability/pages/ingestion_manage.py` | Ingestion 管理页面 | 文件选择、摄取进度、文档删除 |
 | `src/observability/pages/data_browser.py` | 数据浏览器页面 | 文档列表、chunk 详情、图片引用 |
 | `src/observability/pages/evaluation.py` | 评估面板页面 | 指标展示、历史趋势、策略对比 |
-| `src/observability/dashboard/app.py` | Streamlit 入口 | 轻量 Dashboard shell，导入六大页面模块并暴露稳定 app target；不在 import 阶段打开数据库或调用外部 Provider |
+| `src/observability/dashboard/app.py` | Streamlit 入口 | 导入六大页面模块、提供 sidebar 页面导航、按选中页面组装 service-backed page model 并渲染；不在 import 阶段打开数据库或调用外部 Provider |
 | `src/observability/dashboard/layout.py` | Dashboard 公共布局 | 导航、筛选器、通用图表容器 |
 | `src/observability/evaluation/runner.py` | 评估任务运行器 | 读取黄金测试集、执行检索和生成评估 |
 | `src/observability/evaluation/metrics.py` | 自定义指标 | Hit Rate、MRR、NDCG、citation_hit_rate |
@@ -1900,7 +1900,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [✔] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [✔] |
-| Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [~] |
+| Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [✔] |
 | Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、策略对比和评估趋势 | [ ] |
 | Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调和端到端测试 | [ ] |
 
@@ -1944,7 +1944,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase C | Ingestion & Indexing Pipeline | 离线摄取与索引主链路已完成，可通过 CLI 将 Markdown/PDF 文件或目录写入 PostgreSQL、pgvector、BM25 和图片索引 | SHA256 去重、Loader、智能分块、Transform、图片 caption 降级、差量 Dense 编码、BM25、事务 upsert、生命周期管理和 `ingest.py` CLI | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.ingest --help` | 2026-06-07 |
 | Phase D | Retrieval | 在线查询主链路已完成，可基于已摄取知识库执行 Query Processor、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Response Builder 和 CLI 查询 | QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
 | Phase E | MCP 工具服务 | MCP stdio 工具服务已完成，可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
-| Phase F | 可观测与管理平台 | 未完成 | 暂无 | 暂无 |  |
+| Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services 和六大页面验收已完成，可进入质量评估体系开发 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-08 |
 | Phase G | 质量评估体系 | 未完成 | 暂无 | 暂无 |  |
 | Phase H | AImodel 联调集成 | 未完成 | 暂无 | 暂无 |  |
 
@@ -2084,6 +2084,34 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 
 阶段 F 在 MCP 工具服务已稳定的基础上补齐可观测能力。后续任务需要把 Ingestion 和 Query 链路接入 TraceContext/TraceController，写入结构化日志，并为 Dashboard 六大页面提供 trace、配置、数据浏览和评估读取能力。
 
+#### 阶段 F 交付里程碑：可观测与管理平台
+
+完成日期：2026-06-08
+
+项目当前位置：
+
+RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路已经注入 TraceContext/TraceController，运行过程可以写入结构化 JSON Lines 日志，并把关键 trace、文档、chunk、图片、collection 和评估记录投影给 Dashboard 读取。Streamlit Dashboard 已提供 sidebar 六页导航，并能按选中页面渲染对应 service-backed 页面，后续阶段可以在此基础上继续实现质量评估体系和 AImodel 集成前验收门禁。
+
+可用功能：
+
+- 通过 `TraceContext` 和 `TraceController` 记录 ingestion/query 基础信息、阶段详情、汇总指标、评估指标、fallback 和错误信息。
+- 通过 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter` 写入结构化日志和 `traces.jsonl`。
+- Ingestion Pipeline 和 Query Runtime 已接入 trace 打点，Dashboard 可读取历史 trace 和单次 trace 详情。
+- Dashboard service 层可读取组件配置、collection 统计、文档列表、chunk 详情、图片索引、query trace、ingestion trace、evaluation run 和指标趋势。
+- 六大 Streamlit 页面已实现并挂入 sidebar 导航：系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板。
+- `run_dashboard.py` 可校验 app、构建 Streamlit 启动命令并支持 dry-run，测试不需要真实打开浏览器。
+- `test_dashboard_pages.py` 使用真实 PostgreSQL 测试数据验证六大页面都能读取配置、数据库记录、trace 和 evaluation 数据并完成渲染入口调用；`test_dashboard_services.py` 覆盖 app sidebar 导航和默认页面分发。
+
+验证方式：
+
+- `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py -v`
+- `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`
+- `uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504`
+
+下一阶段入口：
+
+阶段 G 直接复用 PostgreSQL 中的 evaluation run/result 结构和 Dashboard 评估面板，继续实现黄金测试集、自定义检索指标、Ragas adapter、策略对比和评估趋势输出。
+
 ### 6.3 阶段任务跟踪表
 
 任务拆分原则：
@@ -2179,7 +2207,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | F9 | 实现数据浏览器与 Query Trace 页面 | [✔] | 2026-06-08 | 已实现数据浏览器和 Query Trace 页面的可启动渲染函数、页面模型、文档/chunk/图片展示、召回候选对比和 rerank delta 展示；9 个 Dashboard service/page 集成测试和 ruff 通过 |
 | F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-08 | 已实现 Ingestion Trace 和评估面板页面的可启动渲染函数、页面模型、阶段耗时瀑布图、处理统计、评估 run 历史、指标详情和趋势展示；11 个 Dashboard service/page 集成测试和 ruff 通过 |
 | F11 | 实现 Dashboard 启动脚本和冒烟测试 | [✔] | 2026-06-08 | 已实现 Streamlit app 最小入口、六大页面模块导入校验、`run_dashboard.py` dry-run、端口配置、headless 启动命令和注入 command runner；14 个 Dashboard service/page/launcher 集成测试通过 |
-| F12 | 完成 Dashboard 六大页面测试 | [ ] |  | 系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板 |
+| F12 | 完成 Dashboard 六大页面测试 | [✔] | 2026-06-08 | 已新增 `test_dashboard_pages.py` 并修复 Dashboard app 导航，真实 PostgreSQL 测试数据验证六大页面均可读取配置、数据库记录、trace 和 evaluation 数据并完成渲染入口调用；app 入口测试覆盖 sidebar 六页导航和默认页面分发；16 个 Dashboard 集成测试和 ruff 通过 |
 
 #### 阶段 G：质量评估体系
 
@@ -2211,10 +2239,10 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 | Phase C | 11 | 11 | 100% |
 | Phase D | 14 | 14 | 100% |
 | Phase E | 4 | 4 | 100% |
-| Phase F | 12 | 11 | 92% |
+| Phase F | 12 | 12 | 100% |
 | Phase G | 5 | 0 | 0% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **58** | **83%** |
+| **总计** | **70** | **59** | **84%** |
 
 ### 6.5 阶段实施明细
 
@@ -3393,15 +3421,20 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：在进入 AImodel 集成前，验证六大 Dashboard 页面都能基于测试数据正常渲染。
 
-修改文件：`tests/integration/test_dashboard_pages.py`、`src/observability/pages/overview.py`、`src/observability/pages/ingestion_manage.py`、`src/observability/pages/data_browser.py`、`src/observability/pages/query_trace.py`、`src/observability/pages/ingestion_trace.py`、`src/observability/pages/evaluation.py`
+修改文件：`tests/integration/test_dashboard_pages.py`、`tests/integration/test_dashboard_services.py`、`src/observability/dashboard/app.py`。六个页面模块已在 F8-F10 完成，F12 新增跨页面验收测试，并修复 app 入口缺少 sidebar 六页导航的问题。
 
 实现类/函数：
 
-- 六个页面的 `render_*()` 函数测试夹具
+- `test_dashboard_six_pages_render_from_services_and_test_database()`：用真实 PostgreSQL 测试数据验证六大页面都能读取服务 DTO 并完成渲染
+- `FakeStreamlit`：记录六大页面的 Streamlit 调用，避免测试启动浏览器
+- `_seed_dashboard_fixture()`：写入文档、chunk、图片、query trace、ingestion trace 和 evaluation run 测试数据
+- `DASHBOARD_PAGE_LABELS`：定义六大页面在 sidebar 中展示的稳定名称
+- `select_dashboard_page()`：渲染 sidebar radio 导航并返回选中页面
+- `render_dashboard_page()`：按选中页面构建 service-backed model 并调用对应页面 renderer
 
 验收标准：系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板都可以读取测试配置、测试数据库记录和测试 trace，并完成页面渲染入口调用。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 #### 阶段 G：质量评估体系
 

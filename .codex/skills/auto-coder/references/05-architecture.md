@@ -383,7 +383,7 @@ services/ai-service/rag/
 | `src/observability/pages/ingestion_manage.py` | Ingestion 管理页面 | 文件选择、摄取进度、文档删除 |
 | `src/observability/pages/data_browser.py` | 数据浏览器页面 | 文档列表、chunk 详情、图片引用 |
 | `src/observability/pages/evaluation.py` | 评估面板页面 | 指标展示、历史趋势、策略对比 |
-| `src/observability/dashboard/app.py` | Streamlit 入口 | 轻量 Dashboard shell，导入六大页面模块并暴露稳定 app target；不在 import 阶段打开数据库或调用外部 Provider |
+| `src/observability/dashboard/app.py` | Streamlit 入口 | 导入六大页面模块、提供 sidebar 页面导航、按选中页面组装 service-backed page model 并渲染；不在 import 阶段打开数据库或调用外部 Provider |
 | `src/observability/dashboard/layout.py` | Dashboard 公共布局 | 导航、筛选器、通用图表容器 |
 | `src/observability/evaluation/runner.py` | 评估任务运行器 | 读取黄金测试集、执行检索和生成评估 |
 | `src/observability/evaluation/metrics.py` | 自定义指标 | Hit Rate、MRR、NDCG、citation_hit_rate |
