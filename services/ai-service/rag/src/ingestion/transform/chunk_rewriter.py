@@ -56,14 +56,19 @@ class ChunkRewriter(BaseTransform):
             IngestionError: If the LLM request fails or returns unusable text.
         """
 
-        del context
-        return [self._rewrite_chunk(chunk) for chunk in chunks]
+        document_summary = _document_summary_from_context(context)
+        return [
+            self._rewrite_chunk(chunk, document_summary=document_summary)
+            for chunk in chunks
+        ]
 
-    def _rewrite_chunk(self, chunk: Chunk) -> Chunk:
+    def _rewrite_chunk(self, chunk: Chunk, *, document_summary: str) -> Chunk:
         """Rewrite one chunk unless its provenance proves idempotent output.
 
         Args:
             chunk: Source-addressable chunk to enhance.
+            document_summary: Optional document-level semantic summary used to
+                restore global context that may be absent from the chunk text.
 
         Returns:
             A rewritten chunk with regenerated ID and provider provenance, or a
@@ -94,6 +99,7 @@ class ChunkRewriter(BaseTransform):
                         role="user",
                         content=self._prompt.user_prompt.format(
                             chunk_text=chunk.text,
+                            document_summary=document_summary,
                             metadata=json.dumps(
                                 chunk.metadata,
                                 ensure_ascii=False,
@@ -174,3 +180,22 @@ def _content_hash(text: str) -> str:
     """
 
     return sha256(text.encode("utf-8")).hexdigest()
+
+
+def _document_summary_from_context(context: dict[str, Any] | None) -> str:
+    """Extract a safe document summary string from transform runtime context.
+
+    Args:
+        context: Optional context supplied by ``IngestionPipeline``.
+
+    Returns:
+        A stripped summary string, or an empty string when summary generation is
+        disabled or unavailable.
+    """
+
+    if not isinstance(context, dict):
+        return ""
+    value = context.get("document_summary")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return ""

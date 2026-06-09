@@ -31,6 +31,7 @@ from src.core.trace import TraceContext, TraceController
 from src.core.trace.trace_controller import TraceSink
 from src.core.types import Chunk, Document
 from src.ingestion.chunk import SplitterStep
+from src.ingestion.document_summarizer import DocumentSummarizer
 from src.ingestion.embedding import EmbeddingBatchResult, EmbeddingStep
 from src.ingestion.storage import UpsertResult, UpsertStep
 from src.ingestion.transform import TransformPipeline
@@ -173,6 +174,7 @@ class IngestionPipeline:
         chunk_repository: ChunkRepository | None = None,
         trace_repository: TraceRepository,
         trace_sink: TraceSink | None = None,
+        document_summarizer: DocumentSummarizer | None = None,
         splitter_step: SplitterStep | None = None,
         transform_pipeline: TransformPipeline | None = None,
         embedding_step: EmbeddingStep | None = None,
@@ -190,6 +192,8 @@ class IngestionPipeline:
             trace_repository: Durable ingestion trace persistence.
             trace_sink: Optional storage-independent trace sink receiving one
                 finished JSON-compatible snapshot per run.
+            document_summarizer: Optional independent LLM-backed summary step
+                executed after Loader and before Splitter.
             splitter_step: Optional Document-to-Chunk business adapter.
             transform_pipeline: Optional ordered transform chain.
             embedding_step: Optional Dense/BM25 batch indexing orchestrator.
@@ -222,6 +226,7 @@ class IngestionPipeline:
         self._chunk_repository = chunk_repository
         self._trace_repository = trace_repository
         self._trace_sink = trace_sink
+        self._document_summarizer = document_summarizer
         self._splitter_step = splitter_step
         self._transform_pipeline = transform_pipeline
         self._embedding_step = embedding_step
@@ -383,6 +388,30 @@ class IngestionPipeline:
                 method="load",
                 provider=type(self._loader).__name__,
             )
+            if self._document_summarizer is not None:
+                summary_started = perf_counter()
+                document = self._document_summarizer.summarize(
+                    document,
+                    context={
+                        "collection": collection_id,
+                        "source_uri": source_uri,
+                        "source_hash": source_hash,
+                    },
+                )
+                trace_controller.record_stage(
+                    "document_summary",
+                    duration_ms=(perf_counter() - summary_started) * 1000,
+                    input_summary={
+                        "document_id": document.id,
+                        "text_length": len(document.text),
+                    },
+                    output_summary={
+                        "summary_present": document.summary is not None,
+                        "summary_length": len(document.summary or ""),
+                    },
+                    method="llm_document_summary",
+                    provider=type(self._document_summarizer).__name__,
+                )
 
             if not self._complete_mode:
                 trace_controller.flush_ingestion(
@@ -430,6 +459,7 @@ class IngestionPipeline:
                 "document_id": document.id,
                 "source_path": source_uri,
                 "title": document.metadata.get("title"),
+                "document_summary": document.summary,
                 "document_context": document.text,
             }
             transform_started = perf_counter()

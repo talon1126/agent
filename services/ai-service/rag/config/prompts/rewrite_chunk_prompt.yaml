@@ -1,8 +1,9 @@
 name: rewrite_chunk
-version: 1
+version: 2
 description: Refine noisy chunks while preserving source facts and references.
 input_variables:
   - chunk_text
+  - document_summary
   - metadata
   - image_refs
 system_prompt: |
@@ -12,6 +13,9 @@ system_prompt: |
   Preserve every source fact, number, unit, brand, model, constraint, and
   section-level meaning. Do not invent information that is absent from the
   source chunk.
+  Use document_summary only as global context for resolving abbreviated wording
+  and restoring the chunk's topic. Do not add facts that appear only in
+  document_summary unless the chunk itself supports them.
   Preserve every entry in image_refs and its relationship to the surrounding
   context. Do not delete, rewrite, or fabricate image_refs entries.
   Produce a semantically complete, self-contained chunk suitable for Dense
@@ -19,6 +23,9 @@ system_prompt: |
 user_prompt: |
   Source chunk:
   {chunk_text}
+
+  Document summary:
+  {document_summary}
 
   Metadata:
   {metadata}

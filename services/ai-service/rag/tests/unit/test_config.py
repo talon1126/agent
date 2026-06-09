@@ -228,6 +228,7 @@ def test_prompt_definitions_share_a_stable_contract() -> None:
     template, preventing runtime rendering calls from accepting unused inputs.
     """
     prompt_files = (
+        "document_summary_prompt.yaml",
         "rerank_prompt.yaml",
         "rewrite_chunk_prompt.yaml",
         "semantic_merge_prompt.yaml",
@@ -246,7 +247,8 @@ def test_prompt_definitions_share_a_stable_contract() -> None:
             "user_prompt",
             "output_schema",
         } <= prompt.keys()
-        assert prompt["version"] == 1
+        assert isinstance(prompt["version"], int)
+        assert prompt["version"] >= 1
         assert prompt["input_variables"]
         assert all(
             f"{{{variable}}}" in prompt["user_prompt"] for variable in prompt["input_variables"]
@@ -266,6 +268,7 @@ def test_prompt_instruction_content_is_written_in_english() -> None:
     Prompt can be versioned and evaluated.
     """
     prompt_files = (
+        "document_summary_prompt.yaml",
         "rerank_prompt.yaml",
         "rewrite_chunk_prompt.yaml",
         "semantic_merge_prompt.yaml",
@@ -297,6 +300,17 @@ def test_rerank_prompt_requires_structured_ranking_output() -> None:
     assert {"candidate_id", "score", "reason"} <= set(prompt["output_schema"]["item_fields"])
 
 
+def test_document_summary_prompt_defines_short_semantic_summary() -> None:
+    """Protect the document-level summary prompt used before chunk rewrite."""
+
+    prompt = load_prompt_document("document_summary_prompt.yaml")
+
+    assert prompt["input_variables"] == ["document_text", "metadata"]
+    assert "concise document-level summary" in prompt["system_prompt"]
+    assert "Do not copy the full document" in prompt["system_prompt"]
+    assert prompt["output_schema"]["fields"]["summary"] == "string"
+
+
 def test_rewrite_prompt_preserves_facts_and_image_references() -> None:
     """Ensure chunk rewriting cannot discard source facts or image linkage.
 
@@ -307,9 +321,15 @@ def test_rewrite_prompt_preserves_facts_and_image_references() -> None:
     """
     prompt = load_prompt_document("rewrite_chunk_prompt.yaml")
 
-    assert prompt["input_variables"] == ["chunk_text", "metadata", "image_refs"]
+    assert prompt["input_variables"] == [
+        "chunk_text",
+        "document_summary",
+        "metadata",
+        "image_refs",
+    ]
     assert "Do not invent" in prompt["system_prompt"]
     assert "image_refs" in prompt["system_prompt"]
+    assert "document_summary" in prompt["user_prompt"]
 
 
 def test_image_prompt_defines_quality_fallback_and_type_strategies() -> None:

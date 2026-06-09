@@ -133,6 +133,10 @@ ingestion:
   raw_data_dir: data/raw
   markdown_dir: data/markdown
   image_dir: data/images
+  document_summary:
+    enabled: true
+    prompt_path: config/prompts/document_summary_prompt.yaml
+    max_document_chars: 12000
   dedup:
     document_hash: sha256
     chunk_hash: sha256

@@ -9,6 +9,7 @@ Provider-specific parsing, embedding, and storage behavior belongs to
 the business sequence and data flow between those components.
 """
 
+from src.ingestion.document_summarizer import DocumentSummarizer
 from src.ingestion.pipeline import (
     IngestionPipeline,
     IngestionPipelineResult,
@@ -18,6 +19,7 @@ from src.ingestion.pipeline import (
 )
 
 __all__ = (
+    "DocumentSummarizer",
     "IngestionPipeline",
     "IngestionPipelineResult",
     "IngestionRunResult",

@@ -366,6 +366,36 @@ def test_ingest_runtime_paths_resolve_relative_to_rag_root(
     assert ingest_module._resolve_runtime_path(absolute_path) == absolute_path.resolve()
 
 
+def test_ingest_builds_document_summarizer_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require CLI composition to enable the independent summary step."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    config_module = importlib.import_module("src.core.config")
+    llm_module = importlib.import_module("src.libs.llm")
+    settings = config_module.load_settings(
+        RAG_ROOT / "config" / "settings.example.yaml",
+        environ={},
+        validate_environment=False,
+    )
+    fake_llm = Mock()
+    fake_llm.chat.return_value = llm_module.LLMResponse(
+        content="A generated document summary.",
+        provider="fake",
+        model="fake-summary",
+    )
+    monkeypatch.setattr(
+        ingest_module.LLMFactory,
+        "create",
+        lambda *, settings: fake_llm,
+    )
+
+    summarizer = ingest_module._build_document_summarizer(settings)
+
+    assert type(summarizer).__name__ == "DocumentSummarizer"
+
+
 def test_calculate_sha256_hashes_original_file_bytes(tmp_path: Path) -> None:
     """Require byte-stable hashing before parsing or Markdown conversion."""
 
@@ -498,6 +528,51 @@ def test_ingestion_pipeline_calls_loader_when_source_changed_or_forced(
     loader.load.assert_called_with(source.resolve())
     documents.has_successful_source_hash.assert_called_once()
     traces.upsert_ingestion_trace.assert_not_called()
+
+
+def test_ingestion_pipeline_summarizes_loaded_document_when_configured(
+    tmp_path: Path,
+) -> None:
+    """Require the independent summary step to run after Loader succeeds."""
+
+    source = tmp_path / "summary-guide.md"
+    source.write_text("# Summary guide", encoding="utf-8")
+    loaded_document = Document(
+        id="doc-summary",
+        text="# Summary guide",
+        metadata={"source_path": str(source.resolve())},
+    )
+    summarized_document = loaded_document.model_copy(
+        update={"summary": "A short guide summary."},
+        deep=True,
+    )
+    loader = Mock()
+    loader.load.return_value = loaded_document
+    summarizer = Mock()
+    summarizer.summarize.return_value = summarized_document
+    documents = Mock()
+    documents.has_successful_source_hash.return_value = False
+    traces = Mock()
+    pipeline = IngestionPipeline(
+        loader=loader,
+        document_repository=documents,
+        trace_repository=traces,
+        document_summarizer=summarizer,
+        trace_id_factory=lambda: "trace-c2-summary",
+    )
+
+    result = pipeline.run(source, collection_id="shopping_guides")
+
+    assert result.status == "loaded"
+    assert result.document == summarized_document
+    summarizer.summarize.assert_called_once_with(
+        loaded_document,
+        context={
+            "collection": "shopping_guides",
+            "source_uri": str(source.resolve()),
+            "source_hash": calculate_sha256(source),
+        },
+    )
 
 
 def test_markdown_loader_normalizes_text_and_extracts_heading_hierarchy(

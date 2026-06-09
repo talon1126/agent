@@ -27,12 +27,15 @@ errors_module = importlib.import_module("src.core.errors")
 types_module = importlib.import_module("src.core.types")
 llm_module = importlib.import_module("src.libs.llm")
 transform_contract_module = importlib.import_module("src.libs.transform")
+document_summarizer_module = importlib.import_module("src.ingestion.document_summarizer")
 transform_module = importlib.import_module("src.ingestion.transform")
 
 Chunk = types_module.Chunk
+Document = types_module.Document
 IngestionError = errors_module.IngestionError
 LLMResponse = llm_module.LLMResponse
 BaseTransform = transform_contract_module.BaseTransform
+DocumentSummarizer = document_summarizer_module.DocumentSummarizer
 ChunkRewriter = transform_module.ChunkRewriter
 DenoiseTransform = transform_module.DenoiseTransform
 ImageCaptioner = transform_module.ImageCaptioner
@@ -87,6 +90,35 @@ def make_chunk(
             "end_offset": start_offset + len(text),
         },
     )
+
+
+def test_document_summarizer_generates_top_level_summary_and_is_idempotent() -> None:
+    """Require document summaries to be generated once before chunk rewrite."""
+
+    source = Document(
+        id="doc-stress-toys",
+        text="# Stress Toy Guide\n\nSoft silicone toys are quiet office tools.",
+        metadata={"title": "Stress Toy Guide", "collection": "shopping_guides"},
+    )
+    llm = Mock()
+    llm.chat.return_value = LLMResponse(
+        content="A buying guide for quiet silicone stress toys used in offices.",
+        provider="fake",
+        model="fake-summary",
+    )
+    prompt = config_module.load_prompt("config/prompts/document_summary_prompt.yaml")
+    summarizer = DocumentSummarizer(llm=llm, prompt=prompt)
+
+    summarized = summarizer.summarize(source)
+    repeated = summarizer.summarize(summarized)
+
+    assert summarized.summary == (
+        "A buying guide for quiet silicone stress toys used in offices."
+    )
+    assert summarized.metadata["summary_generation"]["provider"] == "fake"
+    assert source.summary is None
+    assert repeated == summarized
+    llm.chat.assert_called_once()
 
 
 def test_transform_pipeline_builds_enabled_steps_from_settings_order() -> None:
@@ -176,7 +208,7 @@ def test_metadata_enricher_adds_context_without_mutating_input() -> None:
 
 
 def test_chunk_rewriter_uses_llm_and_is_idempotent() -> None:
-    """Require one LLM rewrite per unchanged chunk and regenerate its ID."""
+    """Require chunk rewrite to use document summaries as added context."""
 
     source = make_chunk()
     llm = Mock()
@@ -188,7 +220,14 @@ def test_chunk_rewriter_uses_llm_and_is_idempotent() -> None:
     prompt = config_module.load_prompt("config/prompts/rewrite_chunk_prompt.yaml")
     transform = ChunkRewriter(llm=llm, prompt=prompt)
 
-    rewritten = transform.transform([source])
+    rewritten = transform.transform(
+        [source],
+        context={
+            "document_summary": (
+                "The source document explains quiet stress-relief products for offices."
+            ),
+        },
+    )
     repeated = transform.transform(rewritten)
 
     assert rewritten[0].text == (
@@ -200,6 +239,9 @@ def test_chunk_rewriter_uses_llm_and_is_idempotent() -> None:
     assert rewritten[0].metadata["rewrite"]["provider"] == "fake"
     assert repeated == rewritten
     llm.chat.assert_called_once()
+    user_message = llm.chat.call_args.args[0][1].content
+    assert "Document summary:" in user_message
+    assert "quiet stress-relief products" in user_message
 
 
 def test_semantic_merge_combines_adjacent_chunks_and_is_idempotent() -> None:
