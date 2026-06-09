@@ -136,6 +136,32 @@ def test_document_validates_and_normalizes_image_metadata() -> None:
     assert isinstance(document.metadata["images"][0], dict)
 
 
+def test_document_summary_is_a_top_level_optional_field() -> None:
+    """Verify document summaries stay outside extensible source metadata.
+
+    Chunk rewrite, MCP summary tools, and Dashboard views need a document-level
+    semantic summary without overloading ``metadata``. Blank summaries normalize
+    to ``None`` so disabled or degraded summarization has one stable shape.
+    """
+
+    document = Document(
+        id="doc-1",
+        text="A guide about quiet office stress toys.",
+        summary="Quiet office stress toy buying guidance.",
+        metadata={"summary": "legacy metadata value"},
+    )
+    without_summary = Document(
+        id="doc-2",
+        text="A guide about wireless headphones.",
+        summary="  ",
+        metadata={},
+    )
+
+    assert document.summary == "Quiet office stress toy buying guidance."
+    assert document.metadata["summary"] == "legacy metadata value"
+    assert without_summary.summary is None
+
+
 def test_document_rejects_image_placeholder_outside_text() -> None:
     """Verify an image placeholder range cannot exceed document text bounds.
 

@@ -44,6 +44,7 @@ class DocumentBrowserRow:
     chunk_count: int
     image_count: int
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    summary: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +168,7 @@ class DataBrowserService:
                 document.id,
                 document.collection_id,
                 document.title,
+                document.summary,
                 document.source_path,
                 document.source_hash,
                 document.lifecycle_status,
@@ -185,6 +187,7 @@ class DataBrowserService:
                 document.id,
                 document.collection_id,
                 document.title,
+                document.summary,
                 document.source_path,
                 document.source_hash,
                 document.lifecycle_status,
@@ -333,12 +336,13 @@ class DataBrowserService:
             document_id=row[0],
             collection_id=row[1],
             title=row[2],
-            source_path=row[3],
-            source_hash=row[4],
-            lifecycle_status=row[5],
-            metadata=dict(row[6] or {}),
-            chunk_count=int(row[7]),
-            image_count=int(row[8]),
+            summary=row[3],
+            source_path=row[4],
+            source_hash=row[5],
+            lifecycle_status=row[6],
+            metadata=dict(row[7] or {}),
+            chunk_count=int(row[8]),
+            image_count=int(row[9]),
         )
 
     @staticmethod

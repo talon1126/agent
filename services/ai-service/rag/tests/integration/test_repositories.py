@@ -380,6 +380,23 @@ def test_core_schema_enables_pgvector_and_preserves_domain_fields() -> None:
 
 
 @pytest.mark.integration
+def test_document_schema_exposes_summary_as_first_class_field() -> None:
+    """Require document summaries to live outside metadata JSON.
+
+    Document summaries are consumed by rewrite prompts, MCP metadata tools, and
+    Dashboard browsing. Keeping them in a first-class column avoids parsing
+    arbitrary metadata and lets repositories reconstruct ``Document.summary``
+    directly.
+    """
+
+    sql = _schema_sql()
+    documents = _table_definition(sql, "rag_documents")
+
+    assert re.search(r"\bsummary\s+TEXT\b", documents, re.IGNORECASE)
+    assert "metadata->'summary'" not in sql
+
+
+@pytest.mark.integration
 def test_document_schema_exposes_lifecycle_status_for_filtering() -> None:
     """Require a first-class lifecycle field for retrieval-visible filtering.
 
@@ -688,6 +705,7 @@ def test_document_and_chunk_repositories_round_trip_and_replace_content() -> Non
         document = Document(
             id=document_id,
             text="Alpha section. Beta section.",
+            summary="Repository fixture summary for chunking and document tools.",
             metadata={"doc_type": "shopping_guide", "language": "en"},
         )
 

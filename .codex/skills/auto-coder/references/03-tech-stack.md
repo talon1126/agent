@@ -43,12 +43,12 @@ Dedup -> Loader -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25I
 
 #### 3.2.2 数据摄取流水线
 
-数据摄取的目标是先识别原始资料是否发生变化，再把 PDF、Markdown、文档说明等资料转换为统一的 `Document(id + text + metadata)` 对象，随后逐步加工为 chunk、embedding 和可追踪的索引记录。
+数据摄取的目标是先识别原始资料是否发生变化，再把 PDF、Markdown、文档说明等资料转换为统一的 `Document(id + text + summary + metadata)` 对象，随后逐步加工为 chunk、embedding 和可追踪的索引记录。
 
 | 层级 | 职责 | 关键实现要素 |
 | --- | --- | --- |
 | `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹；若 `rag_documents` 中同一 collection、canonical source_path 和 source_hash 的文档状态为 `success`，则写入 skipped ingestion trace 并直接结束，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
-| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；只处理去重判断后确认需要摄取的文档 |
+| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + summary + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；`summary` 为顶层字段，后续由独立摘要步骤生成或更新，不放入 `metadata.summary`；只处理去重判断后确认需要摄取的文档 |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
 | `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、继承非图片类 `document.metadata`、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并按图片占位符位置分发 `image_refs`；`Document.metadata.images[]` 保留完整文档图片清单，`Chunk.metadata.images[]` 只保留当前 chunk 通过 `image_refs` 命中的图片子集 |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
@@ -76,7 +76,7 @@ Indexing Pipeline 首版必须并入统一摄取入口：`IngestionPipeline.run(
 
 #### 3.2.3 核心数据对象设计
 
-RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象。Loader 只负责生成 `Document`，Splitter 和 Transform 负责把 `Document` 加工为 `Chunk`，Embedding 和 Storage 只面向稳定的 `Chunk` 写入索引。
+RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象。Loader 负责生成基础 `Document`，文档摘要步骤负责补充 `Document.summary`，Splitter 和 Transform 负责把 `Document` 加工为 `Chunk`，Embedding 和 Storage 只面向稳定的 `Chunk` 写入索引。
 
 `Document` 字段：
 
@@ -84,6 +84,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | --- | --- | --- |
 | `id` | `str` | 文档稳定 ID，建议由 `collection + source_path + source_hash` 生成 |
 | `text` | `str` | 文档统一文本内容，PDF 先转 Markdown，图片位置写入占位符 |
+| `summary` | `str/null` | 文档级语义摘要，供 chunk rewrite、文档摘要工具和 Dashboard 使用；空值表示摘要步骤未启用或摘要生成降级 |
 | `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息 |
 
 `Chunk` 字段：
@@ -586,7 +587,7 @@ PostgreSQL 是唯一持久化层，不使用 SQLite。
 | 表名 | 用途 |
 | --- | --- |
 | `rag_collections` | collection 元数据 |
-| `rag_documents` | 文档元数据、SHA256、摄取状态 |
+| `rag_documents` | 文档正文、文档级摘要、元数据、SHA256、摄取状态 |
 | `rag_chunks` | chunk 文本、metadata、embedding vector |
 | `rag_bm25_terms` | BM25 词项统计 |
 | `image_index` | 图片文件路径和来源索引 |
@@ -646,7 +647,7 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
 文档
   -> Loader 提取图片并生成 image_id
   -> 在文档文本中写入图片占位符
-  -> 输出 Document(id + text + metadata.images[])
+  -> 输出 Document(id + text + summary + metadata.images[])
   -> Splitter 保留图片引用标记到对应 chunk
   -> ImageCaptioner 判断 vision_llm 和 image_refs
   -> 满足条件时生成 caption 并写入 chunk metadata
@@ -657,7 +658,7 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
 
 | 阶段 | 输出 |
 | --- | --- |
-| Loader | `Document(id + text + metadata.images[])`，其中 `text` 包含图片占位符，`metadata.images[]` 保存图片基础信息 |
+| Loader | `Document(id + text + summary + metadata.images[])`，其中 `summary` 是顶层可空字段，`text` 包含图片占位符，`metadata.images[]` 保存图片基础信息 |
 | Splitter | chunk 文本保留图片引用标记，chunk metadata 增加 `image_refs: List[image_id]`；`Chunk.metadata.images[]` 只保留当前 chunk 命中的图片子集 |
 | ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption，并写入 chunk metadata |
 | Storage | 向量库存储增强后的 chunk，文件系统保存原始图片，PostgreSQL `image_index` 表保存图片索引信息 |
@@ -792,7 +793,7 @@ Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各�
 | 阶段 | 记录内容 |
 | --- | --- |
 | `dedup` | 原始文件 SHA256、`rag_documents` success 文档命中结果、是否跳过摄取、跳过原因、耗时、失败详情 |
-| `load` | Loader 类型、原始文件类型、转换后的 `Document(id + text + metadata)` 摘要、图片提取数量、耗时、失败详情 |
+| `load` | Loader 类型、原始文件类型、转换后的 `Document(id + text + summary + metadata)` 摘要、图片提取数量、耗时、失败详情 |
 | `split` | Splitter 类型、粗切分 chunk 数量、标题层级识别结果、平均 chunk 长度、耗时、失败详情 |
 | `transform` | Transform 方法、LLM Provider、合并的 chunk 数量、去噪内容摘要、图片描述注入数量、上下文增强摘要、耗时、失败详情 |
 | `embed` | Embedding Provider、`content_hash` 命中数量、新增 embedding 数量、Dense 编码批次数、Sparse/BM25 编码批次数、耗时、失败详情 |

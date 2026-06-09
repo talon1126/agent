@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS rag_documents (
     source_hash TEXT NOT NULL,
     title TEXT,
     content TEXT NOT NULL,
+    summary TEXT,
     lifecycle_status TEXT NOT NULL DEFAULT 'pending',
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -78,6 +79,9 @@ CREATE TABLE IF NOT EXISTS rag_documents (
 -- init_schema() is executed repeatedly.
 ALTER TABLE rag_documents
     ADD COLUMN IF NOT EXISTS lifecycle_status TEXT NOT NULL DEFAULT 'pending';
+
+ALTER TABLE rag_documents
+    ADD COLUMN IF NOT EXISTS summary TEXT;
 
 DO $$
 BEGIN

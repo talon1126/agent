@@ -251,15 +251,17 @@ class DocumentRepository:
                 source_hash,
                 title,
                 content,
+                summary,
                 metadata
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 collection_id = EXCLUDED.collection_id,
                 source_path = EXCLUDED.source_path,
                 source_hash = EXCLUDED.source_hash,
                 title = EXCLUDED.title,
                 content = EXCLUDED.content,
+                summary = EXCLUDED.summary,
                 metadata = EXCLUDED.metadata,
                 updated_at = CURRENT_TIMESTAMP
             """,
@@ -270,6 +272,7 @@ class DocumentRepository:
                 source_hash,
                 title,
                 document.text,
+                document.summary,
                 Jsonb(document.metadata),
             ),
         )
@@ -292,7 +295,7 @@ class DocumentRepository:
             self._pool,
             operation="document_get",
             query="""
-            SELECT id, content, metadata
+            SELECT id, content, summary, metadata
             FROM rag_documents
             WHERE id = %s
             """,
@@ -319,7 +322,7 @@ class DocumentRepository:
             self._pool,
             operation="document_list_by_collection",
             query="""
-            SELECT id, content, metadata
+            SELECT id, content, summary, metadata
             FROM rag_documents
             WHERE collection_id = %s
             ORDER BY source_path ASC, id ASC
@@ -348,7 +351,7 @@ class DocumentRepository:
             self._pool,
             operation="document_list_retrievable_by_collection",
             query="""
-            SELECT id, content, metadata
+            SELECT id, content, summary, metadata
             FROM rag_documents
             WHERE collection_id = %s
               AND lifecycle_status = 'success'
@@ -628,7 +631,7 @@ class DocumentRepository:
         """Convert one positional psycopg row into the shared domain contract.
 
         Args:
-            row: ``(id, content, metadata)`` returned by PostgreSQL.
+            row: ``(id, content, summary, metadata)`` returned by PostgreSQL.
 
         Returns:
             Validated ``Document`` or ``None`` for a missing row.
@@ -636,8 +639,8 @@ class DocumentRepository:
 
         if row is None:
             return None
-        document_id, content, metadata = row
-        return Document(id=document_id, text=content, metadata=metadata)
+        document_id, content, summary, metadata = row
+        return Document(id=document_id, text=content, summary=summary, metadata=metadata)
 
 
 class ChunkRepository:

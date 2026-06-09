@@ -495,6 +495,7 @@ class PostgresMetadataReader:
             source_path,
             title,
             content,
+            summary,
             lifecycle_status,
             metadata,
             updated_at,
@@ -506,7 +507,11 @@ class PostgresMetadataReader:
             "collection": collection_id,
             "source_uri": source_path,
             "title": title or _title_from_source_uri(source_path),
-            "summary": _summary_from_metadata_or_content(metadata, content),
+            "summary": _summary_from_column_or_metadata_or_content(
+                summary,
+                metadata,
+                content,
+            ),
             "lifecycle_status": lifecycle_status,
             "chunk_count": int(chunk_count),
             "sections": sections,
@@ -534,8 +539,8 @@ class PostgresMetadataReader:
 
         Returns:
             Positional PostgreSQL rows containing the document identity, source
-            fields, lifecycle status, metadata, updated timestamp, and chunk
-            count required by ``get_document_summary``.
+            fields, first-class summary, lifecycle status, metadata, updated
+            timestamp, and chunk count required by ``get_document_summary``.
         """
 
         if document_id is not None:
@@ -548,6 +553,7 @@ class PostgresMetadataReader:
                     document.source_path,
                     document.title,
                     document.content,
+                    document.summary,
                     document.lifecycle_status,
                     document.metadata,
                     document.updated_at,
@@ -571,6 +577,7 @@ class PostgresMetadataReader:
                 document.source_path,
                 document.title,
                 document.content,
+                document.summary,
                 document.lifecycle_status,
                 document.metadata,
                 document.updated_at,
@@ -671,12 +678,20 @@ class PostgresMetadataReader:
             ) from error
 
 
-def _summary_from_metadata_or_content(metadata: Any, content: str) -> str:
-    """Derive a concise public document summary without exposing full content.
+def _summary_from_column_or_metadata_or_content(
+    summary: Any,
+    metadata: Any,
+    content: str,
+) -> str:
+    """Choose the best public document summary for MCP metadata tools.
 
     Args:
+        summary: First-class ``rag_documents.summary`` value. This is the
+            preferred source because document summaries are no longer stored in
+            arbitrary metadata.
         metadata: Document metadata loaded from PostgreSQL JSONB. Supported
-            summary-like keys are preferred when present.
+            summary-like keys are retained only as a backward-compatible
+            fallback for rows created before the first-class column existed.
         content: Canonical document text used only as a short fallback excerpt.
 
     Returns:
@@ -684,6 +699,8 @@ def _summary_from_metadata_or_content(metadata: Any, content: str) -> str:
         metadata tool never becomes a full document export path.
     """
 
+    if isinstance(summary, str) and summary.strip():
+        return summary.strip()
     if isinstance(metadata, dict):
         for key in ("summary", "description", "abstract"):
             value = metadata.get(key)

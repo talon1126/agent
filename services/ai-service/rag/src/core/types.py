@@ -103,6 +103,7 @@ class Document(DomainModel):
 
     id: str = Field(min_length=1)
     text: str
+    summary: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("id")
@@ -142,6 +143,30 @@ class Document(DomainModel):
         if not value.strip():
             raise ValueError("Document text must not be blank")
         return value
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def normalize_summary(cls, value: Any) -> str | None:
+        """Normalize an optional document-level semantic summary.
+
+        Args:
+            value: Candidate summary produced by a summarization step, loader
+                fallback, or legacy storage row.
+
+        Returns:
+            A stripped summary string, or ``None`` when the value is absent or
+            blank.
+
+        Raises:
+            ValueError: If the summary is not a string-like value.
+        """
+
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("Document summary must be a string or null")
+        normalized = value.strip()
+        return normalized or None
 
     @field_validator("metadata", mode="before")
     @classmethod
