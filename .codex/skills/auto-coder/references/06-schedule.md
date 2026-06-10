@@ -59,7 +59,7 @@
 | Phase D | Retrieval | 在线查询主链路已完成，可基于已摄取知识库执行 Query Processor、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Response Builder 和 CLI 查询 | QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
 | Phase E | MCP 工具服务 | MCP stdio 工具服务已完成，可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
 | Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作已完成，可进入质量评估体系开发 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
-| Phase G | 质量评估体系 | 质量评估体系已启动，黄金测试集字段契约、检索指标和 Ragas 生成质量适配已就绪，可进入策略对比评估 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、Ragas faithfulness、Ragas answer_relevancy adapter | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v` |  |
+| Phase G | 质量评估体系 | 质量评估体系已启动，黄金测试集字段契约、检索指标、Ragas 生成质量适配和策略对比 runner 已就绪，可进入评估结果保存 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、Ragas faithfulness、Ragas answer_relevancy adapter、hybrid/dense_only/sparse_only/rerank 策略对比 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v` |  |
 | Phase H | AImodel 联调集成 | 未完成 | 暂无 | 暂无 |  |
 
 #### 阶段 A 交付里程碑：配置与项目骨架
@@ -330,7 +330,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | G1 | 准备黄金测试集格式 | [✔] | 2026-06-10 | 已新增 `tests/fixtures/golden_set.json`，定义 `id/collection/question/golden_answer/expected_sources/expected_keywords` 字段，并覆盖无线耳机、人体工学键盘和解压玩具三类购物指南问题；2 个单元测试通过 |
 | G2 | 实现自定义检索指标 | [✔] | 2026-06-10 | 已新增 `src/observability/evaluation/metrics.py`，实现无 LLM 依赖的 Hit Rate@K、MRR 和 NDCG@K；指标支持字符串来源和 mapping 候选输入，校验 dataset/predictions 对齐、top_k 和 expected_sources 契约；5 个 evaluation 单元测试通过 |
 | G3 | 接入 Ragas 生成指标 | [✔] | 2026-06-10 | 已新增 `src/observability/evaluation/ragas_adapter.py`，封装 faithfulness 和 answer_relevancy 生成质量指标；真实 Ragas 依赖采用懒加载，普通单测使用 fake backend，真实 import 测试使用 external marker 隔离；adapter 在真实 backend 边界将项目内部 `question/answer/contexts/ground_truth` 行转换为 Ragas 0.2 的 `user_input/response/retrieved_contexts/reference` 列，并对空 `metric_names` fail fast；7 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
-| G4 | 实现策略对比评估 | [ ] |  | Hybrid、Dense-only、Sparse-only、Rerank 对比 |
+| G4 | 实现策略对比评估 | [✔] | 2026-06-10 | 已新增 `src/observability/evaluation/runner.py`，通过可注入 retrieval callable 对比 hybrid、dense_only、sparse_only、rerank 四种策略，并复用 Hit Rate@K、MRR@K、NDCG@K 计算指标；runner 不直接打开数据库或构造 QueryRuntime，便于单元测试和后续 Dashboard/CLI 适配；包入口导出 `RetrievalStrategy` 以支持外部自定义策略，空 metrics 配置 fail fast；9 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 | G5 | 实现评估历史趋势展示 | [ ] |  | Dashboard 评估面板 |
 
 #### 阶段 H：AImodel 联调集成
@@ -354,9 +354,9 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | Phase D | 14 | 14 | 100% |
 | Phase E | 4 | 4 | 100% |
 | Phase F | 12 | 12 | 100% |
-| Phase G | 5 | 3 | 60% |
+| Phase G | 5 | 4 | 80% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **62** | **89%** |
+| **总计** | **70** | **63** | **90%** |
 
 ### 6.5 阶段实施明细
 
@@ -1635,13 +1635,17 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：支持 Hybrid、Dense-only、Sparse-only、Rerank 等策略对比。
 
-修改文件：`src/observability/evaluation/runner.py`、`tests/unit/test_evaluation.py`
+修改文件：`src/observability/evaluation/__init__.py`、`src/observability/evaluation/runner.py`、`tests/unit/test_evaluation.py`
 
 实现类/函数：
 
-- `EvaluationRunner.compare_strategies()`：对比不同检索策略
+- `RetrievalStrategy`：描述一次评估中的检索模式和是否启用 rerank
+- `StrategyComparisonResult`：保存单个策略的预测记录和指标结果
+- `StrategyRetrievalFn`：定义可注入的检索执行 callable，隔离真实 QueryRuntime/数据库依赖
+- `EvaluationRunner.compare_strategies()`：按 hybrid、dense_only、sparse_only、rerank 等策略逐一执行检索并计算指标
+- `EvaluationRunner._score()`：复用 Hit Rate@K、MRR@K、NDCG@K 计算每个策略得分
 
-验收标准：可对比 Hybrid、Dense-only、Sparse-only、Rerank。
+验收标准：可对比 Hybrid、Dense-only、Sparse-only、Rerank；包入口应导出 `RetrievalStrategy` 以支持外部自定义策略；空 metrics 配置必须 fail fast；单元测试不得依赖真实 PostgreSQL、Embedding 或 QueryRuntime；策略输出需保留 predictions，便于后续 Dashboard 展示和 G5 保存。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
 

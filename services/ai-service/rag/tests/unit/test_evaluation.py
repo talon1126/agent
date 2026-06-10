@@ -17,8 +17,10 @@ from typing import Any
 
 import pytest
 
+from src.observability.evaluation import RetrievalStrategy as ExportedRetrievalStrategy
 from src.observability.evaluation.metrics import HitRateMetric, MRRMetric, NDCGMetric
 from src.observability.evaluation.ragas_adapter import RagasEvaluator
+from src.observability.evaluation.runner import EvaluationRunner, RetrievalStrategy
 
 RAG_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_SET_PATH = RAG_ROOT / "tests" / "fixtures" / "golden_set.json"
@@ -238,6 +240,112 @@ def test_ragas_evaluator_real_backend_import_is_external_only() -> None:
     evaluator = RagasEvaluator()
 
     assert evaluator.metric_names == ("faithfulness", "answer_relevancy")
+
+
+@pytest.mark.unit
+def test_evaluation_runner_compares_default_retrieval_strategies() -> None:
+    """Compare hybrid, dense-only, sparse-only, and rerank strategies deterministically."""
+
+    calls: list[tuple[str, str, int]] = []
+    dataset = [
+        {
+            "id": "sample-1",
+            "question": "如何挑选通勤无线耳机？",
+            "expected_sources": ["shopping_guides/headphones.md#wireless"],
+        },
+        {
+            "id": "sample-2",
+            "question": "人体工学键盘看什么？",
+            "expected_sources": ["shopping_guides/keyboards.md#ergonomic"],
+        },
+    ]
+
+    def fake_retrieval(sample: dict[str, Any], *, strategy: Any, top_k: int) -> list[str]:
+        """Return ranked source IDs that make each strategy's score distinct."""
+
+        calls.append((str(sample["id"]), strategy.name, top_k))
+        results = {
+            "hybrid": {
+                "sample-1": ["shopping_guides/headphones.md#wireless"],
+                "sample-2": ["shopping_guides/noise.md#wrong"],
+            },
+            "dense_only": {
+                "sample-1": ["shopping_guides/noise.md#wrong"],
+                "sample-2": ["shopping_guides/noise.md#wrong"],
+            },
+            "sparse_only": {
+                "sample-1": ["shopping_guides/noise.md#wrong"],
+                "sample-2": ["shopping_guides/keyboards.md#ergonomic"],
+            },
+            "rerank": {
+                "sample-1": [
+                    "shopping_guides/noise.md#wrong",
+                    "shopping_guides/headphones.md#wireless",
+                ],
+                "sample-2": [
+                    "shopping_guides/keyboards.md#ergonomic",
+                    "shopping_guides/noise.md#wrong",
+                ],
+            },
+        }
+        return results[strategy.name][str(sample["id"])]
+
+    comparison = EvaluationRunner(top_k=2).compare_strategies(
+        dataset,
+        retrieval_fn=fake_retrieval,
+    )
+
+    assert list(comparison) == ["hybrid", "dense_only", "sparse_only", "rerank"]
+    assert comparison["hybrid"].metrics["hit_rate_at_2"] == pytest.approx(0.5)
+    assert comparison["dense_only"].metrics["hit_rate_at_2"] == pytest.approx(0.0)
+    assert comparison["sparse_only"].metrics["hit_rate_at_2"] == pytest.approx(0.5)
+    assert comparison["rerank"].metrics["hit_rate_at_2"] == pytest.approx(1.0)
+    assert comparison["rerank"].metrics["mrr_at_2"] == pytest.approx((0.5 + 1.0) / 2)
+    assert comparison["rerank"].predictions[0]["retrieval_mode"] == "hybrid"
+    assert comparison["rerank"].predictions[0]["use_rerank"] is True
+    assert calls == [
+        ("sample-1", "hybrid", 2),
+        ("sample-2", "hybrid", 2),
+        ("sample-1", "dense_only", 2),
+        ("sample-2", "dense_only", 2),
+        ("sample-1", "sparse_only", 2),
+        ("sample-2", "sparse_only", 2),
+        ("sample-1", "rerank", 2),
+        ("sample-2", "rerank", 2),
+    ]
+
+
+@pytest.mark.unit
+def test_evaluation_runner_validates_strategy_inputs() -> None:
+    """Reject invalid comparison input before invoking a retrieval backend."""
+
+    runner = EvaluationRunner(top_k=2)
+
+    with pytest.raises(ValueError, match="metrics"):
+        EvaluationRunner(metrics=[])
+
+    with pytest.raises(ValueError, match="dataset"):
+        runner.compare_strategies([], retrieval_fn=lambda sample, *, strategy, top_k: [])
+
+    with pytest.raises(ValueError, match="question"):
+        runner.compare_strategies(
+            [{"id": "sample-1", "expected_sources": ["shopping_guides/a.md#x"]}],
+            retrieval_fn=lambda sample, *, strategy, top_k: [],
+        )
+
+    with pytest.raises(ValueError, match="strategies"):
+        runner.compare_strategies(
+            [
+                {
+                    "question": "q",
+                    "expected_sources": ["shopping_guides/a.md#x"],
+                }
+            ],
+            retrieval_fn=lambda sample, *, strategy, top_k: [],
+            strategies=[],
+        )
+
+    assert ExportedRetrievalStrategy is RetrievalStrategy
 
 
 def _load_golden_set() -> list[dict[str, Any]]:

@@ -9,5 +9,22 @@ tracking workflow, while the actual retrieval pipeline remains under
 
 from src.observability.evaluation.metrics import HitRateMetric, MRRMetric, NDCGMetric
 from src.observability.evaluation.ragas_adapter import RagasEvaluator
+from src.observability.evaluation.runner import (
+    DEFAULT_RETRIEVAL_STRATEGIES,
+    EvaluationRunner,
+    RetrievalStrategy,
+    StrategyComparisonResult,
+    StrategyRetrievalFn,
+)
 
-__all__ = ["HitRateMetric", "MRRMetric", "NDCGMetric", "RagasEvaluator"]
+__all__ = [
+    "DEFAULT_RETRIEVAL_STRATEGIES",
+    "EvaluationRunner",
+    "HitRateMetric",
+    "MRRMetric",
+    "NDCGMetric",
+    "RagasEvaluator",
+    "RetrievalStrategy",
+    "StrategyComparisonResult",
+    "StrategyRetrievalFn",
+]
