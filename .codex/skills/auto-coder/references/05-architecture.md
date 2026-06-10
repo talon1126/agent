@@ -83,7 +83,7 @@ services/ai-service/rag/
 │   ├── db/                                        # 本地开发数据库数据和索引文件
 │   │   ├── postgres/                              # PostgreSQL 本地数据、dump 或初始化辅助文件
 │   │   └── bm25/                                  # BM25 倒排索引和词项统计缓存
-│   └── eval/                                      # 黄金测试集和评估数据
+│   └── eval/                                      # 评估运行输出和临时对比数据；黄金测试集固定放在 tests/fixtures/
 ├── src/
 │   ├── core/
 │   │   ├── config.py                              # 读取 settings.yaml 和 prompt 配置
@@ -270,7 +270,7 @@ services/ai-service/rag/
 | `data/raw/shopping_guides/` | 存放 shopping_guides collection 原始文档 | 按 collection 分类，便于离线摄取和回归测试 |
 | `data/db/postgres/` | 存放 PostgreSQL 本地开发辅助数据 | 保存初始化辅助文件、dump 或本地持久化数据 |
 | `data/db/bm25/` | 存放 BM25 本地索引辅助数据 | 保存倒排索引和词项统计缓存 |
-| `data/eval/golden_set.json` | 存放黄金测试集 | JSON 格式，包含问题、标准答案、来源文档和关键词 |
+| `tests/fixtures/golden_set.json` | 存放黄金测试集 | JSON 格式，包含问题、标准答案、来源文档和关键词；与 `evaluation.golden_set_path` 保持一致 |
 
 #### 5.3.2 Core 层
 

@@ -1,0 +1,53 @@
+[
+  {
+    "id": "shopping_guides_wireless_earbuds_001",
+    "collection": "shopping_guides",
+    "question": "经常坐地铁，预算有限，应该怎样选无线耳机？",
+    "golden_answer": "预算有限且经常坐地铁时，无线耳机应优先关注佩戴稳定性、主动降噪、通透模式和续航表现。不必追求最高编码规格，应选择基础降噪可靠、连接稳定且售后稳定的型号。",
+    "expected_sources": [
+      "shopping_guides/购物指南.pdf#无线耳机选购"
+    ],
+    "expected_keywords": [
+      "无线耳机",
+      "主动降噪",
+      "佩戴稳定性",
+      "通透模式",
+      "续航",
+      "售后"
+    ]
+  },
+  {
+    "id": "shopping_guides_ergonomic_keyboard_001",
+    "collection": "shopping_guides",
+    "question": "程序员每天打字八小时，普通键盘和人体工学键盘怎么选？",
+    "golden_answer": "每天长时间输入时，应重点比较人体工学键盘的布局类型、低前高或可调负倾角、按键触发压力、键程、噪声、稳定性和桌面尺寸兼容性。如果已经出现手腕外翻或肩颈疲劳，可以考虑分体式或可调倾角设计，但需要预留适应成本。",
+    "expected_sources": [
+      "shopping_guides/购物指南.pdf#人体工学键盘选购"
+    ],
+    "expected_keywords": [
+      "人体工学键盘",
+      "分体式",
+      "负倾角",
+      "触发压力",
+      "键程",
+      "桌面尺寸"
+    ]
+  },
+  {
+    "id": "shopping_guides_stress_relief_toy_001",
+    "collection": "shopping_guides",
+    "question": "办公室里有什么安静的解压玩具推荐？",
+    "golden_answer": "办公室解压玩具应优先选择静音按压或揉捏类产品，避免金属碰撞和高速旋转结构。还应关注材质气味、掉色、耐撕裂性、可清洁性和小零件安全，不建议购买来源不明或气味刺鼻的产品。",
+    "expected_sources": [
+      "shopping_guides/购物指南.pdf#解压玩具选购"
+    ],
+    "expected_keywords": [
+      "解压玩具",
+      "静音按压",
+      "揉捏",
+      "材质安全",
+      "可清洁",
+      "小零件"
+    ]
+  }
+]

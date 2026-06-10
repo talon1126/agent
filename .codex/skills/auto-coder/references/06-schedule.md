@@ -15,7 +15,7 @@
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [✔] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [✔] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [✔] |
-| Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、策略对比和评估趋势 | [ ] |
+| Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、策略对比和评估趋势 | [~] |
 | Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调和端到端测试 | [ ] |
 
 ### 6.2 交付里程碑
@@ -59,7 +59,7 @@
 | Phase D | Retrieval | 在线查询主链路已完成，可基于已摄取知识库执行 Query Processor、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Response Builder 和 CLI 查询 | QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
 | Phase E | MCP 工具服务 | MCP stdio 工具服务已完成，可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
 | Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作已完成，可进入质量评估体系开发 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
-| Phase G | 质量评估体系 | 未完成 | 暂无 | 暂无 |  |
+| Phase G | 质量评估体系 | 质量评估体系已启动，黄金测试集字段契约和首批购物指南样例已就绪，可进入自定义检索指标实现 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、无线耳机/人体工学键盘/解压玩具三类代表性问题 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v` |  |
 | Phase H | AImodel 联调集成 | 未完成 | 暂无 | 暂无 |  |
 
 #### 阶段 A 交付里程碑：配置与项目骨架
@@ -327,7 +327,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| G1 | 准备黄金测试集格式 | [ ] |  |  |
+| G1 | 准备黄金测试集格式 | [✔] | 2026-06-10 | 已新增 `tests/fixtures/golden_set.json`，定义 `id/collection/question/golden_answer/expected_sources/expected_keywords` 字段，并覆盖无线耳机、人体工学键盘和解压玩具三类购物指南问题；2 个单元测试通过 |
 | G2 | 实现自定义检索指标 | [ ] |  | Hit Rate@K、MRR、NDCG |
 | G3 | 接入 Ragas 生成指标 | [ ] |  | Faithfulness、Answer Relevancy |
 | G4 | 实现策略对比评估 | [ ] |  | Hybrid、Dense-only、Sparse-only、Rerank 对比 |
@@ -354,9 +354,9 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | Phase D | 14 | 14 | 100% |
 | Phase E | 4 | 4 | 100% |
 | Phase F | 12 | 12 | 100% |
-| Phase G | 5 | 0 | 0% |
+| Phase G | 5 | 1 | 20% |
 | Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **59** | **84%** |
+| **总计** | **70** | **60** | **86%** |
 
 ### 6.5 阶段实施明细
 
@@ -1586,9 +1586,11 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- fixture schema
+- `tests/fixtures/golden_set.json`：保存 JSON 数组格式的黄金测试集，每条样本包含问题、标准答案、来源文档和关键词
+- `test_golden_set_fixture_exists_and_contains_representative_cases()`：验证 fixture 存在并覆盖购物指南核心品类
+- `test_golden_set_samples_follow_required_schema()`：验证样本 ID 唯一、字段非空、来源文档和关键词完整
 
-验收标准：问题、答案、来源文档字段完整。
+验收标准：问题、答案、来源文档字段完整；样本 ID 唯一；每条样本声明 collection、expected_sources 和 expected_keywords；首批样例覆盖无线耳机、人体工学键盘和解压玩具。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
 
