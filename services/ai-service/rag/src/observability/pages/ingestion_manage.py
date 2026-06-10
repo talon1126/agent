@@ -305,6 +305,8 @@ def _document_table_row(document: DocumentBrowserRow) -> dict[str, object]:
         "title": document.title,
         "source_path": document.source_path,
         "lifecycle_status": document.lifecycle_status,
+        "created_at": document.created_at,
+        "updated_at": document.updated_at,
         "chunks": document.chunk_count,
         "images": document.image_count,
     }

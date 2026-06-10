@@ -23,6 +23,14 @@ from src.storage.repositories import (
 )
 
 TraceKind = Literal["query", "ingestion"]
+TRANSFORM_STEP_COLORS = {
+    "metadata_enrich": "#2563EB",
+    "rewrite_chunk": "#8B5CF6",
+    "semantic_merge": "#F97316",
+    "denoise": "#16A34A",
+    "image_to_text": "#0EA5E9",
+}
+DEFAULT_TRANSFORM_STEP_COLOR = "#64748B"
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +54,27 @@ class TraceStageWaterfallItem:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceTransformSnapshotItem:
+    """Represent one before/after chunk preview for a Transform step.
+
+    The Dashboard uses this DTO to explain what changed without exposing full
+    chunk bodies in trace tables. ``step_color`` is derived from the configured
+    step name so every transform implementation can be visually distinguished
+    in the diff view.
+    """
+
+    step_name: str
+    step_color: str
+    chunk_id: str
+    chunk_index: int
+    change_type: str
+    before_preview: str
+    after_preview: str
+    before_truncated: bool
+    after_truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
 class TraceTransformStepItem:
     """Represent one concrete Transform implementation execution.
 
@@ -63,6 +92,7 @@ class TraceTransformStepItem:
     method: str | None = None
     provider: str | None = None
     error: Mapping[str, Any] | None = None
+    snapshots: tuple[TraceTransformSnapshotItem, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,8 +369,56 @@ def _transform_steps(
                         if isinstance(child.get("error"), Mapping)
                         else None
                     ),
+                    snapshots=_transform_snapshots(
+                        step_name=name,
+                        snapshots=child.get("snapshots"),
+                    ),
                 )
             )
+    return tuple(items)
+
+
+def _transform_snapshots(
+    *,
+    step_name: str,
+    snapshots: Any,
+) -> tuple[TraceTransformSnapshotItem, ...]:
+    """Project raw Transform snapshot dictionaries into Dashboard DTOs.
+
+    Args:
+        step_name: Parent transform implementation name.
+        snapshots: Optional raw list stored in trace JSON.
+
+    Returns:
+        Snapshot DTOs with a deterministic color assigned to the parent step.
+        Malformed historical rows are ignored to keep Dashboard reads robust.
+    """
+
+    if not isinstance(snapshots, list | tuple):
+        return ()
+    color = TRANSFORM_STEP_COLORS.get(step_name, DEFAULT_TRANSFORM_STEP_COLOR)
+    items: list[TraceTransformSnapshotItem] = []
+    for snapshot in snapshots:
+        if not isinstance(snapshot, Mapping):
+            continue
+        chunk_id = _optional_str(snapshot.get("chunk_id"))
+        chunk_index = _optional_int(snapshot.get("chunk_index"))
+        change_type = _optional_str(snapshot.get("change_type"))
+        if chunk_id is None or chunk_index is None or change_type is None:
+            continue
+        items.append(
+            TraceTransformSnapshotItem(
+                step_name=step_name,
+                step_color=color,
+                chunk_id=chunk_id,
+                chunk_index=chunk_index,
+                change_type=change_type,
+                before_preview=str(snapshot.get("before_preview") or ""),
+                after_preview=str(snapshot.get("after_preview") or ""),
+                before_truncated=bool(snapshot.get("before_truncated", False)),
+                after_truncated=bool(snapshot.get("after_truncated", False)),
+            )
+        )
     return tuple(items)
 
 

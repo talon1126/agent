@@ -162,6 +162,9 @@ def _run_row(run: EvaluationRunSummary) -> dict[str, object]:
         "evaluator": run.evaluator,
         "dataset_name": run.dataset_name,
         "status": run.status,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "created_at": run.created_at,
         "metric_count": run.metric_count,
         "metrics": dict(run.metrics),
     }

@@ -68,6 +68,37 @@ def test_config_reader_service_returns_dashboard_component_overview() -> None:
     assert embedding.provider == settings.embedding.default
     assert embedding.model == settings.embedding.selected_provider.model
     assert embedding.enabled is True
+    reranker = next(
+        component
+        for component in overview.components
+        if component.component == "reranker"
+    )
+    assert reranker.provider == settings.rerank.default
+    assert reranker.model == settings.llm.providers["deepseek"].model
+    assert reranker.details["llm_provider"] == "deepseek"
+
+    transform = next(
+        component
+        for component in overview.components
+        if component.component == "transform"
+    )
+    transform_steps = transform.details["steps"]
+    rewrite_step = next(step for step in transform_steps if step["name"] == "rewrite_chunk")
+    semantic_merge_step = next(
+        step for step in transform_steps if step["name"] == "semantic_merge"
+    )
+    image_to_text_step = next(
+        step for step in transform_steps if step["name"] == "image_to_text"
+    )
+    assert rewrite_step["provider"] == settings.llm.default
+    assert rewrite_step["model"] == settings.llm.selected_provider.model
+    assert rewrite_step["model_source"] == "llm.default"
+    assert semantic_merge_step["provider"] == settings.llm.default
+    assert semantic_merge_step["model"] == settings.llm.selected_provider.model
+    assert semantic_merge_step["model_source"] == "llm.default"
+    assert image_to_text_step["provider"] == settings.vision_llm.default
+    assert image_to_text_step["model"] == settings.vision_llm.selected_provider.model
+    assert image_to_text_step["model_source"] == "vision_llm.default"
     assert overview.dashboard_pages == tuple(settings.dashboard.pages)
     assert overview.paths["trace_jsonl_path"] == settings.observability.trace_jsonl_path
 
@@ -360,6 +391,17 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
                                 "method": "transform",
                                 "provider": "ChunkRewriter",
                                 "error": None,
+                                "snapshots": [
+                                    {
+                                        "chunk_id": "chunk-1",
+                                        "chunk_index": 0,
+                                        "change_type": "changed",
+                                        "before_preview": "Original buying guide.",
+                                        "after_preview": "Rewritten buying guide.",
+                                        "before_truncated": False,
+                                        "after_truncated": False,
+                                    }
+                                ],
                             },
                         ],
                     },
@@ -420,6 +462,10 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
         ]
         assert ingestion_detail.transform_steps[1].duration_ms == 115.0
         assert ingestion_detail.transform_steps[1].provider == "ChunkRewriter"
+        assert ingestion_detail.transform_steps[1].snapshots[0].step_color == "#8B5CF6"
+        assert ingestion_detail.transform_steps[1].snapshots[0].before_preview == (
+            "Original buying guide."
+        )
         assert ingestion_detail.summary_metrics["chunk_count"] == 3
         assert ingestion_detail.evaluation_metrics["index_ready"] is True
         assert service.get_query_trace_detail("missing-query-trace") is None
@@ -565,6 +611,11 @@ class _FakeStreamlit:
 
         self.calls.append(("write", args, kwargs))
 
+    def markdown(self, *args: object, **kwargs: object) -> None:
+        """Record Markdown/HTML output used by visual legends."""
+
+        self.calls.append(("markdown", args, kwargs))
+
     def info(self, *args: object, **kwargs: object) -> None:
         """Record informational state shown to an operator."""
 
@@ -632,6 +683,29 @@ class _FakeStreamlit:
             return None
         return options[self.radio_index]
 
+    def expander(self, *args: object, **kwargs: object) -> _FakeStreamlit:
+        """Record an expander and return a context-manager-compatible fake."""
+
+        self.calls.append(("expander", args, kwargs))
+        return self
+
+    def __enter__(self) -> _FakeStreamlit:
+        """Return the fake renderer for Streamlit expander context blocks."""
+
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        """Close a fake Streamlit context block without suppressing errors."""
+
+        return None
+
+
+def _dataframe_payload(fake_ui: _FakeStreamlit, index: int) -> object:
+    """Return the payload passed to one recorded fake dataframe call."""
+
+    dataframes = [args[0] for name, args, _kwargs in fake_ui.calls if name == "dataframe"]
+    return dataframes[index]
+
 
 @pytest.mark.integration
 def test_overview_page_builds_and_renders_system_summary() -> None:
@@ -644,7 +718,11 @@ def test_overview_page_builds_and_renders_system_summary() -> None:
         OverviewPageModel,
         render_overview_page,
     )
-    from src.observability.services import CollectionStats, ConfigOverview
+    from src.observability.services import (
+        CollectionStats,
+        ComponentConfig,
+        ConfigOverview,
+    )
 
     fake_ui = _FakeStreamlit()
     model = OverviewPageModel(
@@ -652,7 +730,39 @@ def test_overview_page_builds_and_renders_system_summary() -> None:
             project_name="aimodel-rag",
             default_collection="shopping_guides",
             environment="test",
-            components=(),
+            components=(
+                ComponentConfig(
+                    component="llm",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    enabled=True,
+                ),
+                ComponentConfig(
+                    component="transform",
+                    provider="serial_pipeline",
+                    enabled=True,
+                    details={
+                        "steps": [
+                            {
+                                "name": "rewrite_chunk",
+                                "enabled": True,
+                                "provider": "deepseek",
+                                "model": "deepseek-v4-flash",
+                                "model_source": "llm.default",
+                                "prompt_path": "config/prompts/rewrite_chunk_prompt.yaml",
+                            },
+                            {
+                                "name": "denoise",
+                                "enabled": True,
+                                "provider": "deterministic",
+                                "model": "n/a",
+                                "model_source": "deterministic",
+                                "prompt_path": None,
+                            },
+                        ]
+                    },
+                ),
+            ),
             dashboard_pages=("overview", "ingestion_manage"),
             paths={"raw_data_dir": "data/raw"},
         ),
@@ -686,6 +796,17 @@ def test_overview_page_builds_and_renders_system_summary() -> None:
     assert call_names.count("title") == 1
     assert call_names.count("metric") >= 6
     assert "dataframe" in call_names
+    assert "expander" in call_names
+    assert any(
+        args == ("sub_transform",)
+        for name, args, _kwargs in fake_ui.calls
+        if name == "expander"
+    )
+    transform_rows = _dataframe_payload(fake_ui, 1)
+    assert transform_rows[0]["sub_transform"] == "rewrite_chunk"
+    assert transform_rows[0]["provider"] == "deepseek"
+    assert transform_rows[0]["model"] == "deepseek-v4-flash"
+    assert transform_rows[0]["model_source"] == "llm.default"
     assert any("System Overview" in args for name, args, _ in fake_ui.calls if name == "title")
 
 
@@ -770,6 +891,9 @@ def test_ingestion_manage_page_builds_and_renders_operator_controls() -> None:
     assert call_names.count("button") == 2
     assert "success" in call_names
     assert "dataframe" in call_names
+    document_rows = _dataframe_payload(fake_ui, -1)
+    assert document_rows[0]["created_at"] is None
+    assert document_rows[0]["updated_at"] is None
 
 
 @pytest.mark.integration
@@ -1292,6 +1416,12 @@ def test_data_browser_page_builds_and_renders_document_chunk_details() -> None:
     assert model.images == (image,)
     assert selection.document_id == "doc-data"
     assert selection.chunk_id == "chunk-data"
+    document_rows = _dataframe_payload(fake_ui, 0)
+    image_rows = _dataframe_payload(fake_ui, 2)
+    assert document_rows[0]["created_at"] is None
+    assert document_rows[0]["updated_at"] is None
+    assert image_rows[0]["created_at"] is None
+    assert image_rows[0]["updated_at"] is None
     call_names = [name for name, _, _ in fake_ui.calls]
     assert "title" in call_names
     assert call_names.count("dataframe") >= 3
@@ -1391,6 +1521,9 @@ def test_query_trace_page_builds_and_renders_retrieval_comparisons() -> None:
     assert call_names.count("dataframe") >= 3
     assert "bar_chart" in call_names
     assert "metric" in call_names
+    history_rows = _dataframe_payload(fake_ui, 0)
+    assert history_rows[0]["started_at"] == history.started_at
+    assert history_rows[0]["finished_at"] is None
     _args, selectbox_kwargs = next(
         (args, kwargs)
         for name, args, kwargs in fake_ui.calls
@@ -1414,6 +1547,7 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
         TraceDetail,
         TraceHistoryItem,
         TraceStageWaterfallItem,
+        TraceTransformSnapshotItem,
         TraceTransformStepItem,
     )
 
@@ -1465,6 +1599,19 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
                 output_count=4,
                 method="transform",
                 provider="ChunkRewriter",
+                snapshots=(
+                    TraceTransformSnapshotItem(
+                        step_name="rewrite_chunk",
+                        step_color="#8B5CF6",
+                        chunk_id="chunk-1",
+                        chunk_index=0,
+                        change_type="changed",
+                        before_preview="Original buying guide.",
+                        after_preview="Rewritten buying guide.",
+                        before_truncated=False,
+                        after_truncated=False,
+                    ),
+                ),
             ),
         ),
         summary_metrics={
@@ -1510,6 +1657,26 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
         for name, args, _kwargs in fake_ui.calls
         if name == "subheader"
     )
+    assert any(
+        args == ("Transform Result Diff",)
+        for name, args, _kwargs in fake_ui.calls
+        if name == "subheader"
+    )
+    diff_markdown = "\n".join(
+        str(args[0])
+        for name, args, _kwargs in fake_ui.calls
+        if name == "markdown"
+    )
+    assert "transform-diff-card" in diff_markdown
+    assert "border-left:6px solid #8B5CF6" in diff_markdown
+    assert "transform-diff-removed" in diff_markdown
+    assert "transform-diff-added" in diff_markdown
+    assert "Original" in diff_markdown
+    assert "Rewritten" in diff_markdown
+    assert "buying guide." in diff_markdown
+    history_rows = _dataframe_payload(fake_ui, 0)
+    assert history_rows[0]["started_at"] == history.started_at
+    assert history_rows[0]["finished_at"] is None
     assert "metric" in call_names
     assert "write" in call_names
     _args, selectbox_kwargs = next(
@@ -1519,6 +1686,25 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
     )
     assert selectbox_kwargs["key"] == "ingestion_trace_id"
     assert selectbox_kwargs["index"] == 0
+
+
+@pytest.mark.integration
+def test_transform_result_diff_highlights_chinese_changes_without_strikethrough() -> None:
+    """Require readable Chinese diff highlights without crossing out paragraphs."""
+
+    from src.observability.pages.ingestion_trace import _highlight_preview_diff
+
+    before_html, after_html = _highlight_preview_diff(
+        before="无线耳机选购核心不是参数越高越好，应关注音质和降噪。",
+        after="无线耳机选购应关注佩戴、连接稳定性和降噪。",
+    )
+
+    assert before_html.startswith("无线耳机选购")
+    assert after_html.startswith("无线耳机选购")
+    assert "transform-diff-removed" in before_html
+    assert "transform-diff-added" in after_html
+    assert "text-decoration:line-through" not in before_html
+    assert "text-decoration:line-through" not in after_html
 
 
 @pytest.mark.integration
@@ -1737,6 +1923,11 @@ def test_evaluation_page_builds_and_renders_metric_trends() -> None:
     assert model.metric_trends == trends
     assert selection.run_id == "eval-page"
     assert selection.request_run is True
+    run_rows = _dataframe_payload(fake_ui, 0)
+    trend_rows = _dataframe_payload(fake_ui, 2)
+    assert run_rows[0]["started_at"] == run.started_at
+    assert run_rows[0]["created_at"] == run.created_at
+    assert trend_rows[0]["created_at"] == run.created_at
     call_names = [name for name, _, _ in fake_ui.calls]
     assert "title" in call_names
     assert call_names.count("dataframe") >= 3

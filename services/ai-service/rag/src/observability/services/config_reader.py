@@ -103,27 +103,19 @@ class ConfigReaderService:
                 ComponentConfig(
                     component="reranker",
                     provider=settings.rerank.default,
-                    model=_provider_model(
-                        settings.rerank.providers.get(settings.rerank.default)
-                    ),
+                    model=_reranker_model(settings),
                     enabled=settings.rerank.enabled,
                     details={
                         "fallback": settings.rerank.fallback,
                         "top_k": settings.rerank.top_k,
+                        **_reranker_details(settings),
                     },
                 ),
                 ComponentConfig(
                     component="transform",
                     provider="serial_pipeline",
                     details={
-                        "steps": [
-                            {
-                                "name": step.name,
-                                "enabled": step.enabled,
-                                "prompt_path": step.prompt_path,
-                            }
-                            for step in settings.transform.steps
-                        ]
+                        "steps": _transform_step_details(settings)
                     },
                 ),
             ),
@@ -164,3 +156,124 @@ def _provider_model(provider: Any | None) -> str | None:
     """Return a provider model identifier without assuming a concrete type."""
 
     return getattr(provider, "model", None) if provider is not None else None
+
+
+def _reranker_model(settings: RagSettings) -> str | None:
+    """Resolve the concrete model used by the selected reranker.
+
+    Args:
+        settings: Validated runtime settings containing reranker and LLM
+            provider groups.
+
+    Returns:
+        The direct reranker model when configured, or the model of the LLM
+        provider referenced by an LLM-backed reranker.
+    """
+
+    provider = settings.rerank.providers.get(settings.rerank.default)
+    direct_model = _provider_model(provider)
+    if direct_model:
+        return direct_model
+    llm_provider = _extra_value(provider, "llm_provider")
+    if isinstance(llm_provider, str):
+        return _provider_model(settings.llm.providers.get(llm_provider))
+    return None
+
+
+def _reranker_details(settings: RagSettings) -> dict[str, Any]:
+    """Return reranker details that clarify indirect model selection.
+
+    Args:
+        settings: Validated runtime settings.
+
+    Returns:
+        JSON-safe detail fields for Dashboard display.
+    """
+
+    provider = settings.rerank.providers.get(settings.rerank.default)
+    llm_provider = _extra_value(provider, "llm_provider")
+    if isinstance(llm_provider, str):
+        return {
+            "llm_provider": llm_provider,
+            "model_source": f"llm.providers.{llm_provider}",
+        }
+    return {}
+
+
+def _transform_step_details(settings: RagSettings) -> list[dict[str, Any]]:
+    """Build Dashboard rows for configured sub-transform model usage.
+
+    Args:
+        settings: Validated runtime settings.
+
+    Returns:
+        Ordered step details preserving settings order. Model-backed steps show
+        their resolved provider/model, while deterministic steps explicitly
+        report ``n/a`` so operators do not mistake blank cells for missing
+        configuration.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for step in settings.transform.steps:
+        provider, model, model_source = _transform_model_contract(settings, step.name)
+        rows.append(
+            {
+                "name": step.name,
+                "enabled": step.enabled,
+                "provider": provider,
+                "model": model,
+                "model_source": model_source,
+                "prompt_path": step.prompt_path,
+            }
+        )
+    return rows
+
+
+def _transform_model_contract(
+    settings: RagSettings,
+    step_name: str,
+) -> tuple[str, str, str]:
+    """Resolve provider/model labels for one transform step.
+
+    Args:
+        settings: Validated runtime settings.
+        step_name: Transform step name from ``settings.transform.steps``.
+
+    Returns:
+        ``(provider, model, model_source)`` suitable for the Overview expander.
+    """
+
+    if step_name in {"rewrite_chunk", "semantic_merge"}:
+        provider = settings.llm.default
+        return (
+            provider,
+            settings.llm.selected_provider.model or "n/a",
+            "llm.default",
+        )
+    if step_name == "image_to_text":
+        provider = settings.vision_llm.default
+        return (
+            provider,
+            settings.vision_llm.selected_provider.model or "n/a",
+            "vision_llm.default",
+        )
+    return ("deterministic", "n/a", "deterministic")
+
+
+def _extra_value(provider: Any | None, key: str) -> Any:
+    """Read one provider-specific extra field from a Pydantic settings object.
+
+    Args:
+        provider: Provider settings object, or ``None``.
+        key: Extra field name such as ``llm_provider``.
+
+    Returns:
+        The configured value when present; otherwise ``None``.
+    """
+
+    if provider is None:
+        return None
+    extra = getattr(provider, "__pydantic_extra__", None)
+    if isinstance(extra, Mapping) and key in extra:
+        return extra[key]
+    return getattr(provider, key, None)

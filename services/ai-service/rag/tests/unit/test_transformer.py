@@ -207,6 +207,12 @@ def test_transform_pipeline_reports_each_implementation_timing() -> None:
     result = pipeline.run(
         [make_chunk(chunk_id="chunk-1"), make_chunk(chunk_id="chunk-2")],
         step_observer=records.append,
+        snapshot_options={
+            "enabled": True,
+            "max_chunks_per_step": 10,
+            "max_chars_per_chunk": 12,
+            "include_unchanged_chunks": False,
+        },
     )
 
     assert len(result) == 1
@@ -221,6 +227,37 @@ def test_transform_pipeline_reports_each_implementation_timing() -> None:
     assert [(record["input_count"], record["output_count"]) for record in records] == [
         (2, 2),
         (2, 1),
+    ]
+    assert records[0]["snapshots"] == [
+        {
+            "chunk_id": "chunk-1",
+            "chunk_index": 0,
+            "change_type": "changed",
+            "before_preview": "Soft silicon",
+            "after_preview": "Soft silicon",
+            "before_truncated": True,
+            "after_truncated": True,
+        },
+        {
+            "chunk_id": "chunk-2",
+            "chunk_index": 0,
+            "change_type": "changed",
+            "before_preview": "Soft silicon",
+            "after_preview": "Soft silicon",
+            "before_truncated": True,
+            "after_truncated": True,
+        },
+    ]
+    assert records[1]["snapshots"] == [
+        {
+            "chunk_id": "chunk-2",
+            "chunk_index": 0,
+            "change_type": "removed",
+            "before_preview": "Soft silicon",
+            "after_preview": "",
+            "before_truncated": True,
+            "after_truncated": False,
+        }
     ]
     assert all(record["status"] == "success" for record in records)
     assert all(float(record["duration_ms"]) >= 0 for record in records)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
@@ -45,6 +46,8 @@ class DocumentBrowserRow:
     image_count: int
     metadata: Mapping[str, Any] = field(default_factory=dict)
     summary: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +85,8 @@ class ImageBrowserRow:
     mime_type: str | None
     quality_status: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class DataBrowserService:
@@ -173,6 +178,8 @@ class DataBrowserService:
                 document.source_hash,
                 document.lifecycle_status,
                 document.metadata,
+                document.created_at,
+                document.updated_at,
                 COUNT(DISTINCT chunk.id) AS chunk_count,
                 COUNT(DISTINCT image.image_id) AS image_count
             FROM rag_documents AS document
@@ -191,8 +198,10 @@ class DataBrowserService:
                 document.source_path,
                 document.source_hash,
                 document.lifecycle_status,
-                document.metadata
-            ORDER BY document.source_path ASC, document.id ASC
+                document.metadata,
+                document.created_at,
+                document.updated_at
+            ORDER BY document.updated_at DESC, document.created_at DESC, document.id ASC
             """,
             params=(collection_id,),
         )
@@ -245,8 +254,14 @@ class DataBrowserService:
                 mime_type=record.mime_type,
                 quality_status=record.quality_status,
                 metadata=dict(record.metadata),
+                created_at=record.created_at,
+                updated_at=record.updated_at,
             )
-            for record in self._image_storage.find_by_collection(collection_id)
+            for record in sorted(
+                self._image_storage.find_by_collection(collection_id),
+                key=lambda item: _optional_timestamp(item.updated_at, item.created_at),
+                reverse=True,
+            )
         ]
 
     def _fetch_one(
@@ -341,8 +356,10 @@ class DataBrowserService:
             source_hash=row[5],
             lifecycle_status=row[6],
             metadata=dict(row[7] or {}),
-            chunk_count=int(row[8]),
-            image_count=int(row[9]),
+            created_at=row[8],
+            updated_at=row[9],
+            chunk_count=int(row[10]),
+            image_count=int(row[11]),
         )
 
     @staticmethod
@@ -398,3 +415,20 @@ def _image_refs(metadata: Mapping[str, Any]) -> tuple[str, ...]:
         if normalized_ref:
             normalized_refs.append(normalized_ref)
     return tuple(normalized_refs)
+
+
+def _optional_timestamp(*values: datetime | None) -> datetime:
+    """Return the first available timestamp for deterministic newest-first sort.
+
+    Args:
+        *values: Candidate timestamps ordered by preference.
+
+    Returns:
+        The first non-``None`` value, or an aware minimum timestamp so rows with
+        missing time data sort last instead of raising a comparison error.
+    """
+
+    for value in values:
+        if value is not None:
+            return value
+    return datetime.min.replace(tzinfo=UTC)

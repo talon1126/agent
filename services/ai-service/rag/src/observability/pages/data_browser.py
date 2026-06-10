@@ -146,6 +146,8 @@ def _document_row(document: DocumentBrowserRow) -> dict[str, object]:
         "title": document.title,
         "source_path": document.source_path,
         "status": document.lifecycle_status,
+        "created_at": document.created_at,
+        "updated_at": document.updated_at,
         "chunks": document.chunk_count,
         "images": document.image_count,
     }
@@ -174,6 +176,8 @@ def _image_row(image: ImageBrowserRow) -> dict[str, object]:
         "page_num": image.page_num,
         "size": _image_size(image),
         "quality_status": image.quality_status,
+        "created_at": image.created_at,
+        "updated_at": image.updated_at,
     }
 
 

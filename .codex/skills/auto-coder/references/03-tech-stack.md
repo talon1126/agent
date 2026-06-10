@@ -544,6 +544,11 @@ observability:
   trace_jsonl_path: src/logs/traces.jsonl
   persist_to_postgresql: true
   json_formatter: true
+  transform_snapshots:
+    enabled: true
+    max_chunks_per_step: 20
+    max_chars_per_chunk: 800
+    include_unchanged_chunks: false
 
 dashboard:
   enabled: true
@@ -811,7 +816,7 @@ Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各�
 | `load` | Loader 类型、原始文件类型、转换后的 `Document(id + text + summary + metadata)` 摘要、图片提取数量、耗时、失败详情 |
 | `document_summary` | 摘要 Prompt 版本、LLM Provider、是否生成摘要、摘要长度、是否复用已有摘要、耗时、失败详情 |
 | `split` | Splitter 类型、粗切分 chunk 数量、标题层级识别结果、平均 chunk 长度、耗时、失败详情 |
-| `transform` | Transform Pipeline 总耗时、输入输出 chunk 数量，以及按配置顺序记录的 `sub_stages`；每个子阶段包含配置步骤名、具体实现类、耗时、输入输出 chunk 数量、状态和失败详情 |
+| `transform` | Transform Pipeline 总耗时、输入输出 chunk 数量，以及按配置顺序记录的 `sub_stages`；每个子阶段包含配置步骤名、具体实现类、耗时、输入输出 chunk 数量、状态、失败详情和受限 `snapshots` 预览 |
 | `embed` | Embedding Provider、`content_hash` 命中数量、新增 embedding 数量、Dense 编码批次数、Sparse/BM25 编码批次数、耗时、失败详情 |
 | `upsert` | VectorStore Provider、写入 chunk 数量、更新 chunk 数量、跳过 chunk 数量、删除旧版本数量、耗时、失败详情 |
 
@@ -908,7 +913,7 @@ Dashboard 使用 Streamlit 实现，面向开发者、面试官和项目演示�
 
 | 模块 | 功能 |
 | --- | --- |
-| 组件配置 | 读取 `settings.yaml`，展示当前可插拔组件，包括 LLM、Embedding、Splitter、Reranker、VectorStore、Evaluator |
+| 组件配置 | 读取 `settings.yaml`，展示当前可插拔组件，包括 LLM、Embedding、Splitter、Reranker、VectorStore、Evaluator；Reranker 如果通过 `llm_provider` 间接调用 LLM，必须展示最终 LLM Provider 和模型；Transform 主行下使用展开/收起区域展示 `sub_transform` 的 provider、model、model_source 和 prompt_path |
 | 数据资产统计 | 展示各 collection 的文档数量、chunk 数量、Dense 向量状态、Sparse 索引状态 |
 | 系统健康指标 | 展示最近一次 Ingestion 和 Query 的耗时、状态、错误摘要和最近 Trace 时间 |
 

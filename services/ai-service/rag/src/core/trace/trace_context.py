@@ -46,6 +46,7 @@ _INGESTION_STAGES = {
     "upsert",
 }
 _DOCUMENT_STATUSES = {"success", "skipped", "failed"}
+_TRANSFORM_SNAPSHOT_CHANGE_TYPES = {"changed", "unchanged", "added", "removed"}
 _SHA256_HEX_LENGTH = 64
 
 
@@ -157,25 +158,81 @@ def _normalize_sub_stages(
             item.get("output_count"),
             field_name="sub_stages output_count",
         )
+        child_record = {
+            "name": name,
+            "duration_ms": float(duration_ms),
+            "status": status,
+            "input_count": input_count,
+            "output_count": output_count,
+            "method": (
+                str(item["method"]) if item.get("method") is not None else None
+            ),
+            "provider": (
+                str(item["provider"])
+                if item.get("provider") is not None
+                else None
+            ),
+            "error": (
+                _json_safe_copy(item.get("error"))
+                if item.get("error") is not None
+                else None
+            ),
+        }
+        if item.get("snapshots") is not None:
+            child_record["snapshots"] = _normalize_transform_snapshots(
+                item.get("snapshots")
+            )
+        normalized.append(child_record)
+    return normalized
+
+
+def _normalize_transform_snapshots(value: Any) -> list[dict[str, Any]]:
+    """Validate bounded before/after chunk previews for a Transform step.
+
+    Args:
+        value: Snapshot list supplied by ``TransformPipeline`` after one
+            concrete implementation runs.
+
+    Returns:
+        JSON-safe snapshots preserving order and boolean truncation flags.
+
+    Raises:
+        ValueError: If the snapshot list or one of its stable fields violates
+            the trace contract.
+    """
+
+    if not isinstance(value, list | tuple):
+        raise ValueError("transform snapshots must be a list")
+    normalized: list[dict[str, Any]] = []
+    for snapshot in value:
+        if not isinstance(snapshot, dict):
+            raise ValueError("transform snapshot items must be dictionaries")
+        change_type = str(snapshot.get("change_type") or "")
+        if change_type not in _TRANSFORM_SNAPSHOT_CHANGE_TYPES:
+            raise ValueError(
+                "snapshot change_type must be one of "
+                f"{sorted(_TRANSFORM_SNAPSHOT_CHANGE_TYPES)}"
+            )
         normalized.append(
             {
-                "name": name,
-                "duration_ms": float(duration_ms),
-                "status": status,
-                "input_count": input_count,
-                "output_count": output_count,
-                "method": (
-                    str(item["method"]) if item.get("method") is not None else None
+                "chunk_id": _validate_non_blank(
+                    str(snapshot.get("chunk_id") or ""),
+                    field_name="snapshot chunk_id",
                 ),
-                "provider": (
-                    str(item["provider"])
-                    if item.get("provider") is not None
-                    else None
+                "chunk_index": _validate_non_negative_int(
+                    snapshot.get("chunk_index"),
+                    field_name="snapshot chunk_index",
                 ),
-                "error": (
-                    _json_safe_copy(item.get("error"))
-                    if item.get("error") is not None
-                    else None
+                "change_type": change_type,
+                "before_preview": str(snapshot.get("before_preview") or ""),
+                "after_preview": str(snapshot.get("after_preview") or ""),
+                "before_truncated": _validate_bool(
+                    snapshot.get("before_truncated"),
+                    field_name="snapshot before_truncated",
+                ),
+                "after_truncated": _validate_bool(
+                    snapshot.get("after_truncated"),
+                    field_name="snapshot after_truncated",
                 ),
             }
         )

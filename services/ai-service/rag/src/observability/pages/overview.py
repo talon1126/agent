@@ -108,17 +108,11 @@ def render_overview_page(
     )
 
     streamlit.subheader("Components")
-    streamlit.dataframe(
-        [
-            {
-                "component": component.component,
-                "provider": component.provider,
-                "model": component.model,
-                "enabled": component.enabled,
-            }
-            for component in model.config.components
-        ]
-    )
+    streamlit.dataframe([_component_row(component) for component in model.config.components])
+    transform_component = _find_component(model.config.components, "transform")
+    if transform_component is not None:
+        with streamlit.expander("sub_transform"):
+            streamlit.dataframe(_transform_step_rows(transform_component))
 
     streamlit.subheader("Data Assets")
     streamlit.metric("Documents", model.collection_stats.document_count)
@@ -151,6 +145,74 @@ def _latest_health(history: list[TraceHistoryItem]) -> DashboardHealthSnapshot:
         started_at=latest.started_at,
         error=latest.error,
     )
+
+
+def _component_row(component: Any) -> dict[str, object]:
+    """Convert one component DTO into the main Overview component table.
+
+    Args:
+        component: ``ComponentConfig``-compatible DTO from ``ConfigReaderService``.
+
+    Returns:
+        A compact table row. Detailed transform step rows are rendered in the
+        adjacent expander instead of being embedded inside the main row.
+    """
+
+    return {
+        "component": component.component,
+        "provider": component.provider,
+        "model": component.model,
+        "enabled": component.enabled,
+    }
+
+
+def _find_component(components: tuple[Any, ...], component_name: str) -> Any | None:
+    """Return one component DTO by stable component name.
+
+    Args:
+        components: Overview component DTOs.
+        component_name: Stable component identifier to find.
+
+    Returns:
+        The matching component, or ``None`` when absent.
+    """
+
+    for component in components:
+        if component.component == component_name:
+            return component
+    return None
+
+
+def _transform_step_rows(component: Any) -> list[dict[str, object]]:
+    """Build rows for the transform component expander.
+
+    Args:
+        component: Transform ``ComponentConfig`` whose ``details.steps`` value
+            contains settings-order sub-transform dictionaries.
+
+    Returns:
+        Rows showing each sub-transform, provider, resolved model, model source,
+        prompt path, and enabled state.
+    """
+
+    raw_steps = component.details.get("steps", [])
+    if not isinstance(raw_steps, list | tuple):
+        return []
+    rows: list[dict[str, object]] = []
+    for step in raw_steps:
+        if not isinstance(step, dict):
+            continue
+        rows.append(
+            {
+                "sub_transform": step.get("name"),
+                "provider": step.get("provider"),
+                "model": step.get("model"),
+                "model_source": step.get("model_source"),
+                "prompt_path": step.get("prompt_path"),
+                "enabled": step.get("enabled"),
+            }
+        )
+    return rows
 
 
 def _render_health_metric(

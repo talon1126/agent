@@ -173,6 +173,7 @@ class IngestionPipeline:
         document_summarizer: DocumentSummarizer | None = None,
         splitter_step: SplitterStep | None = None,
         transform_pipeline: TransformPipeline | None = None,
+        transform_snapshot_options: Mapping[str, Any] | None = None,
         embedding_step: EmbeddingStep | None = None,
         upsert_step: UpsertStep | None = None,
         trace_id_factory: Callable[[], str] | None = None,
@@ -191,6 +192,8 @@ class IngestionPipeline:
                 executed after Loader and before Splitter.
             splitter_step: Optional Document-to-Chunk business adapter.
             transform_pipeline: Optional ordered transform chain.
+            transform_snapshot_options: Optional bounded before/after preview
+                policy passed to ``TransformPipeline`` for trace snapshots.
             embedding_step: Optional Dense/BM25 batch indexing orchestrator.
             upsert_step: Optional transactional persistence orchestrator.
             trace_id_factory: Optional stable-ID factory for deterministic tests.
@@ -223,6 +226,11 @@ class IngestionPipeline:
         self._document_summarizer = document_summarizer
         self._splitter_step = splitter_step
         self._transform_pipeline = transform_pipeline
+        self._transform_snapshot_options = (
+            dict(transform_snapshot_options)
+            if transform_snapshot_options is not None
+            else None
+        )
         self._embedding_step = embedding_step
         self._upsert_step = upsert_step
         self._trace_id_factory = trace_id_factory or (
@@ -436,6 +444,7 @@ class IngestionPipeline:
                     chunks,
                     context=transform_context,
                     step_observer=transform_sub_stages.append,
+                    snapshot_options=self._transform_snapshot_options,
                 )
             except Exception as error:
                 trace_controller.record_stage(

@@ -485,6 +485,17 @@ def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
             "method": "transform",
             "provider": "MetadataEnricher",
             "error": None,
+            "snapshots": [
+                {
+                    "chunk_id": "chunk-1",
+                    "chunk_index": 0,
+                    "change_type": "changed",
+                    "before_preview": "Original chunk text.",
+                    "after_preview": "Rewritten chunk text.",
+                    "before_truncated": False,
+                    "after_truncated": False,
+                }
+            ],
         },
         {
             "name": "rewrite_chunk",
@@ -510,6 +521,8 @@ def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
 
     stored = context.to_dict()["stages"][0]["sub_stages"]
     assert stored[0]["provider"] == "MetadataEnricher"
+    assert stored[0]["snapshots"][0]["before_preview"] == "Original chunk text."
+    assert stored[0]["snapshots"][0]["after_preview"] == "Rewritten chunk text."
     assert stored[1]["error"] == {
         "error_type": "ProviderError",
         "message": "rewrite unavailable",
@@ -525,6 +538,31 @@ def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
                     "status": "success",
                     "input_count": 1,
                     "output_count": 1,
+                }
+            ],
+        )
+
+    with pytest.raises(ValueError, match="snapshot change_type"):
+        context.record_ingestion_stage(
+            "transform",
+            sub_stages=[
+                {
+                    "name": "rewrite_chunk",
+                    "duration_ms": 1,
+                    "status": "success",
+                    "input_count": 1,
+                    "output_count": 1,
+                    "snapshots": [
+                        {
+                            "chunk_id": "chunk-1",
+                            "chunk_index": 0,
+                            "change_type": "unexpected",
+                            "before_preview": "before",
+                            "after_preview": "after",
+                            "before_truncated": False,
+                            "after_truncated": False,
+                        }
+                    ],
                 }
             ],
         )

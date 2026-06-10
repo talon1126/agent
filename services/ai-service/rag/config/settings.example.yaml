@@ -160,6 +160,11 @@ observability:
   trace_jsonl_path: src/logs/traces.jsonl
   persist_to_postgresql: true
   json_formatter: true
+  transform_snapshots:
+    enabled: true
+    max_chunks_per_step: 20
+    max_chars_per_chunk: 800
+    include_unchanged_chunks: false
 
 # Dashboard navigation exposes the six management and inspection pages.
 dashboard:

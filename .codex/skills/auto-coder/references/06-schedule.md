@@ -311,15 +311,15 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | F1 | 实现 TraceContext 和 TraceController | [✔] | 2026-06-08 | 已实现 `src/core/trace` 包导出、内存 TraceContext、TraceController、阶段耗时/输入输出摘要记录、flush sink、错误/fallback 详情和防御性快照；4 个 TraceContext 单元测试通过 |
-| F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-10 | 已实现 `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、摄取阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；顶层阶段支持结构化 `sub_stages`，用于保存 Transform Pipeline 内每个具体实现的独立耗时和状态 |
+| F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-10 | 已实现 `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、摄取阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；顶层阶段支持结构化 `sub_stages`，用于保存 Transform Pipeline 内每个具体实现的独立耗时、状态和受限 snapshots |
 | F3 | 实现 query trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.query()`、raw_query/request_source 基础信息校验、query_processing/dense/sparse/fusion/filter/rerank 阶段 allowlist、query summary/evaluation 指标和检索候选计数校验；12 个 TraceContext 单元测试通过 |
 | F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | 已实现 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；已保留 `src/logs/.gitkeep`，运行时 `*.log/*.jsonl` 仍不提交；15 个 TraceContext/TraceWriter 单元测试通过 |
-| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-10 | 已修复生产组合根仅写入 JSONL 的缺口并实现 JSONL/PostgreSQL 双写；Transform Pipeline 对每个启用实现单独计时，将结果作为顶层 `transform` 的 `sub_stages` 注入 trace，保留总耗时并记录失败实现 |
+| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-10 | 已修复生产组合根仅写入 JSONL 的缺口并实现 JSONL/PostgreSQL 双写；Transform Pipeline 对每个启用实现单独计时，将结果作为顶层 `transform` 的 `sub_stages` 注入 trace，保留总耗时并记录失败实现；可按配置记录变化 chunk 的 before/after 预览快照 |
 | F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | 已实现 Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
 | F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | 已实现 Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
 | F8 | 实现系统总览、Ingestion 管理页面和摄取操作 | [✔] | 2026-06-10 | 已新增 `IngestionOperationService`，点击 Run ingestion 会复用 `run_ingest_cli()` 触发真实摄取并展示 success/skipped/failed 结果；支持多文件选择、目录上传、服务器文件夹候选发现和单文件取消摄入；22 个 Dashboard 集成测试和 ruff 通过 |
 | F9 | 实现数据浏览器与 Query Trace 页面 | [✔] | 2026-06-10 | 已实现数据浏览器和 Query Trace 页面，并修复 Trace 下拉框选择未驱动详情切换的问题；Query Trace 使用固定 session_state key，Dashboard 重跑时加载已选详情，跨 collection 的过期选择自动回退最新记录 |
-| F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-10 | 已实现 Ingestion Trace 和评估面板页面，并修复 Trace 下拉框选择未驱动详情切换的问题；Ingestion Trace 保留主阶段瀑布图，并新增 Transform Breakdown 表格和柱状图展示每个 Transform 实现的独立耗时、输入输出数量、状态与错误 |
+| F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-10 | 已实现 Ingestion Trace 和评估面板页面，并修复 Trace 下拉框选择未驱动详情切换的问题；Ingestion Trace 保留主阶段瀑布图，并新增 Transform Breakdown 表格、柱状图和按 Transform 类型着色、按红绿标注文本变更的 Result Diff |
 | F11 | 实现 Dashboard 启动脚本和冒烟测试 | [✔] | 2026-06-08 | 已实现 Streamlit app 最小入口、六大页面模块导入校验、`run_dashboard.py` dry-run、端口配置、headless 启动命令和注入 command runner；14 个 Dashboard service/page/launcher 集成测试通过 |
 | F12 | 完成 Dashboard 六大页面测试 | [✔] | 2026-06-08 | 已新增 `test_dashboard_pages.py` 并修复 Dashboard app 导航，真实 PostgreSQL 测试数据验证六大页面均可读取配置、数据库记录、trace 和 evaluation 数据并完成渲染入口调用；app 入口测试覆盖 sidebar 六页导航和默认页面分发；16 个 Dashboard 集成测试和 ruff 通过 |
 
@@ -1352,14 +1352,15 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 - `TraceContext.ingestion()`：构建标准 ingestion trace，上线前校验 `collection`、`source_uri` 和 SHA256 `source_hash`
 - `TraceContext.record_ingestion_stage()`：仅允许记录约定的摄取主阶段，并允许主阶段携带结构化 `sub_stages`
-- `_normalize_sub_stages()`：校验并防御性复制子阶段名称、实现类、耗时、输入输出数量、状态和错误
+- `_normalize_sub_stages()`：校验并防御性复制子阶段名称、实现类、耗时、输入输出数量、状态、错误和 snapshots
+- `_normalize_transform_snapshots()`：校验每个快照只包含受限预览、chunk 标识、变化类型和截断标记
 - `TraceContext.finish_ingestion()`：写入 ingestion 汇总指标和评估指标，并生成完整结构化快照
 - `_validate_sha256()`：校验摄取源哈希纹
 - `_validate_non_negative_int()`：校验 chunk、embedding、skip 等计数指标
 - `_validate_optional_ratio()`：校验质量分数和 embedding 覆盖率
 - `_json_section()`：区分“缺省 section”与“嵌套 None 值”，避免破坏 skip_reason/error 语义
 
-验收标准：包含 ingestion 基础信息、阶段详情、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=ingestion`、`started_at`、`collection`、`source_uri`、`source_hash`；阶段详情必须限制在约定的摄取主阶段；主阶段可选携带 `sub_stages`，每项必须包含 `name`、`duration_ms`、`status`、`input_count`、`output_count`，并可包含 `method`、`provider` 和结构化 `error`；汇总指标必须包含 `document_status`、`chunk_count`、`embedded_count`、`skipped_count`、`error`、`total_duration_ms`；评估指标支持 `chunk_quality_score`、`noise_reduction_summary`、`embedding_coverage`、`index_ready`。
+验收标准：包含 ingestion 基础信息、阶段详情、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=ingestion`、`started_at`、`collection`、`source_uri`、`source_hash`；阶段详情必须限制在约定的摄取主阶段；主阶段可选携带 `sub_stages`，每项必须包含 `name`、`duration_ms`、`status`、`input_count`、`output_count`，并可包含 `method`、`provider`、结构化 `error` 和受限 `snapshots`；snapshot 只能保存 `chunk_id`、`chunk_index`、`change_type`、`before_preview`、`after_preview`、`before_truncated`、`after_truncated`，不得保存完整正文；汇总指标必须包含 `document_status`、`chunk_count`、`embedded_count`、`skipped_count`、`error`、`total_duration_ms`；评估指标支持 `chunk_quality_score`、`noise_reduction_summary`、`embedding_coverage`、`index_ready`。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
@@ -1412,7 +1413,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `TraceController.flush_ingestion()`：按 ingestion trace 契约 flush 汇总指标
 - `TraceController.flush_query()`：按 query trace 契约 flush 汇总指标
 - `IngestionPipeline.run()` trace 打点：注入链路追踪点
-- `TransformPipeline.run()` trace observer：按配置顺序测量每个具体 Transform 实现，成功和失败都生成子阶段记录
+- `TransformPipeline.run()` trace observer：按配置顺序测量每个具体 Transform 实现，成功和失败都生成子阶段记录；开启 `observability.transform_snapshots.enabled` 时记录变化 chunk 的受限 before/after 预览
 - `IngestionPipeline.run_indexing()` trace 打点：注入索引子链路追踪点
 - `HybridSearch.search()` trace 打点：将 RRF 阶段统一记录为 `fusion`
 - `QueryRuntime.execute()` trace 打点：注入 query_processing、rerank 跳过、response 和最终 flush
@@ -1421,7 +1422,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - Trace writer CLI 注入：`ingest.py` 和 `query.py` 默认使用 `settings.observability.trace_jsonl_path`；当 `settings.observability.persist_to_postgresql=true` 时同时写入 PostgreSQL
 - Trace 状态约束迁移：Query/Ingestion trace 表接受 `degraded`，且 `init_schema()` 可幂等升级已存在的本地数据库约束
 
-验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；顶层 `transform.duration_ms` 保留整个 Transform Pipeline 总耗时，`transform.sub_stages` 按实际执行顺序记录每个启用实现的名称、具体类、耗时、输入输出 chunk 数和状态；某个实现失败时必须先记录该失败子阶段，再让主链路按原错误语义失败；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
+验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；顶层 `transform.duration_ms` 保留整个 Transform Pipeline 总耗时，`transform.sub_stages` 按实际执行顺序记录每个启用实现的名称、具体类、耗时、输入输出 chunk 数和状态；某个实现失败时必须先记录该失败子阶段，再让主链路按原错误语义失败；Transform snapshots 必须由配置控制，默认只记录变化 chunk、每步最多 20 个、每段预览最多 800 字，不额外调用 LLM 或数据库；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
@@ -1435,7 +1436,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 - `ConfigReaderService`：读取 settings 并展示当前组件配置
 - `DataBrowserService`：查询文档、chunk、图片和索引状态
-- `ConfigReaderService.read_overview()`：输出项目身份、组件配置、Dashboard 页面和关键路径
+- `ConfigReaderService.read_overview()`：输出项目身份、组件配置、Dashboard 页面和关键路径；Reranker 需要解析 `llm_provider` 对应的真实 LLM 模型，Transform 需要输出每个 `sub_transform` 的 provider/model/model_source/prompt_path
 - `DataBrowserService.collection_stats()`：统计 collection 的文档、chunk、图片、Dense 和 BM25 索引数量
 - `DataBrowserService.list_documents()`：返回文档列表、生命周期、来源和子资源数量
 - `DataBrowserService.list_chunks()`：返回 chunk 明细、Dense/BM25 状态和 image_refs
@@ -1459,7 +1460,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `TraceReaderService.list_query_traces()`：返回 Query Trace 历史列表，包含耗时、阶段数量、fallback 状态和输入摘要
 - `TraceReaderService.list_ingestion_traces()`：返回 Ingestion Trace 历史列表，包含耗时、阶段数量和来源文件摘要
 - `TraceReaderService.get_query_trace_detail()`：返回 Query Trace 阶段瀑布图、候选数量、summary/evaluation metrics 和 rerank delta
-- `TraceReaderService.get_ingestion_trace_detail()`：返回 Ingestion Trace 主阶段瀑布图、Transform 子阶段明细、summary/evaluation metrics 和错误详情
+- `TraceReaderService.get_ingestion_trace_detail()`：返回 Ingestion Trace 主阶段瀑布图、Transform 子阶段明细、Transform snapshot diff、summary/evaluation metrics 和错误详情
 - `EvaluationService.run_evaluation()`：通过 EvaluatorFactory 同步运行评估并持久化 run/results
 - `EvaluationService.list_runs()`：返回 evaluation run 历史和指标摘要
 - `EvaluationService.get_run_detail()`：按 run_id 返回评估详情、指标明细和 settings snapshot
@@ -1478,7 +1479,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 实现类/函数：
 
 - `build_overview_page_model()`：读取配置、collection 统计和最新 query/ingestion trace，生成系统总览页面模型
-- `render_overview_page()`：渲染组件配置、数据资产统计和系统健康指标
+- `render_overview_page()`：渲染组件配置、Transform 行下的 `sub_transform` 展开明细、数据资产统计和系统健康指标
 - `build_ingestion_manage_page_model()`：读取默认 collection、raw data 路径和已索引文档列表
 - `render_ingestion_manage_page()`：渲染摄取参数、force 选项、文件/目录选择控件、批量候选确认表、已索引文档表格和删除选择控件；当用户点击 `Run ingestion` 时展示真实摄取结果或错误信息
 - `IngestionOperationRequest`：保存 Dashboard 摄取请求参数，包括 collection、source_path/source_paths、force 和可选 uploaded_files
@@ -1527,12 +1528,12 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 实现类/函数：
 
 - `build_ingestion_trace_page_model()`：读取 Ingestion Trace 历史和选中 trace 详情，生成摄取追踪页面模型
-- `render_ingestion_trace_page()`：渲染摄取 trace 历史、主阶段耗时瀑布图、Transform Breakdown 表格和柱状图、处理统计、质量指标和错误详情；Trace 下拉框使用固定 widget key 持久化选择
+- `render_ingestion_trace_page()`：渲染摄取 trace 历史、主阶段耗时瀑布图、Transform Breakdown 表格和柱状图、Transform Result Diff 红绿内容差异卡片、处理统计、质量指标和错误详情；Trace 下拉框使用固定 widget key 持久化选择
 - Dashboard Ingestion Trace 分发：每次 Streamlit 重跑从 `session_state` 读取已选 Ingestion Trace ID，并传入 `build_ingestion_trace_page_model()`
 - `build_evaluation_page_model()`：读取 evaluation run 历史、选中 run detail 和 metric trends，生成评估页面模型
 - `render_evaluation_page()`：渲染评估运行入口、run 历史、指标详情、settings snapshot 和趋势图，并返回运行评估意图 DTO
 
-验收标准：可展示阶段耗时和评估趋势；Transform 主阶段存在 `sub_stages` 时，页面必须按执行顺序展示每个 Transform 实现的名称、实现类、耗时、输入输出 chunk 数、状态和错误；旧 trace 不包含 `sub_stages` 时页面保持兼容且不显示空明细区；选择任意 Ingestion Trace 后阶段耗时、Transform Breakdown、处理统计和错误详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
+验收标准：可展示阶段耗时和评估趋势；Transform 主阶段存在 `sub_stages` 时，页面必须按执行顺序展示每个 Transform 实现的名称、实现类、耗时、输入输出 chunk 数、状态和错误；存在 snapshots 时展示 Transform Result Diff，用专属颜色区分 `metadata_enrich`、`rewrite_chunk`、`semantic_merge`、`denoise` 和 `image_to_text`，并以浅红背景标注 before 中被删除或替换的内容、以浅绿背景标注 after 中新增或替换的内容；Diff 必须采用兼容中英文混排的细粒度 token 对比，不能将无空格的整段中文直接判定为单个替换块，也不能使用影响长文本可读性的整段删除线；同时展示 before/after 预览、变化类型和截断标记；旧 trace 不包含 `sub_stages/snapshots` 时页面保持兼容且不显示空明细区；选择任意 Ingestion Trace 后阶段耗时、Transform Breakdown、Result Diff、处理统计和错误详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 

@@ -143,6 +143,8 @@ def _history_row(trace: TraceHistoryItem) -> dict[str, object]:
         "trace_id": trace.trace_id,
         "query": trace.display_input,
         "status": trace.status,
+        "started_at": trace.started_at,
+        "finished_at": trace.finished_at,
         "duration_ms": trace.duration_ms,
         "stage_count": trace.stage_count,
         "fallback_used": trace.fallback_used,

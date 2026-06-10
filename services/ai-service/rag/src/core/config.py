@@ -319,6 +319,21 @@ class StorageSettings(ConfigSection):
     processing_cache_dir: str
 
 
+class TransformSnapshotSettings(ConfigSection):
+    """Control lightweight before/after Transform evidence stored in traces.
+
+    The ingestion Dashboard uses these settings to compare raw chunks with the
+    output of each concrete Transform implementation. The trace stores bounded
+    text previews instead of full chunk content so observability remains useful
+    without turning trace logs into another document store.
+    """
+
+    enabled: bool = True
+    max_chunks_per_step: int = Field(default=20, gt=0)
+    max_chars_per_chunk: int = Field(default=800, gt=0)
+    include_unchanged_chunks: bool = False
+
+
 class ObservabilitySettings(ConfigSection):
     """Describe structured application and trace persistence behavior."""
 
@@ -326,6 +341,9 @@ class ObservabilitySettings(ConfigSection):
     trace_jsonl_path: str
     persist_to_postgresql: bool = True
     json_formatter: bool = True
+    transform_snapshots: TransformSnapshotSettings = Field(
+        default_factory=TransformSnapshotSettings
+    )
 
 
 class DashboardSettings(ConfigSection):

@@ -35,6 +35,7 @@ from src.observability.services.trace_reader_service import (
     TraceHistoryItem,
     TraceReaderService,
     TraceStageWaterfallItem,
+    TraceTransformSnapshotItem,
     TraceTransformStepItem,
 )
 
@@ -58,6 +59,7 @@ __all__ = [
     "TraceHistoryItem",
     "TraceReaderService",
     "TraceStageWaterfallItem",
+    "TraceTransformSnapshotItem",
     "TraceTransformStepItem",
     "UploadedIngestionFile",
 ]

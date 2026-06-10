@@ -194,6 +194,19 @@ def test_dashboard_lists_all_six_management_pages() -> None:
     ]
 
 
+def test_observability_transform_snapshot_defaults_are_bounded() -> None:
+    """Trace snapshots should be enabled with explicit size boundaries."""
+
+    settings = load_settings_document()
+
+    assert settings["observability"]["transform_snapshots"] == {
+        "enabled": True,
+        "max_chunks_per_step": 20,
+        "max_chars_per_chunk": 800,
+        "include_unchanged_chunks": False,
+    }
+
+
 def test_retrieval_and_transform_defaults_are_complete() -> None:
     """Verify defaults can support the initial ingestion and retrieval flows.
 

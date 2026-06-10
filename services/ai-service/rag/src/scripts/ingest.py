@@ -281,6 +281,7 @@ def _build_pipeline(
             DocumentChunker(splitter=SplitterFactory.create(settings=settings))
         ),
         transform_pipeline=TransformPipeline.from_settings(settings),
+        transform_snapshot_options=settings.observability.transform_snapshots.model_dump(),
         embedding_step=EmbeddingStep(
             dense_encoder=DenseEncoder(embedding=embedding),
             bm25_indexer=BM25Indexer(),
