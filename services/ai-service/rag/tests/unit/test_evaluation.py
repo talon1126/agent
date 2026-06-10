@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,12 @@ import pytest
 from src.observability.evaluation import RetrievalStrategy as ExportedRetrievalStrategy
 from src.observability.evaluation.metrics import HitRateMetric, MRRMetric, NDCGMetric
 from src.observability.evaluation.ragas_adapter import RagasEvaluator
-from src.observability.evaluation.runner import EvaluationRunner, RetrievalStrategy
+from src.observability.evaluation.runner import (
+    EvaluationRunner,
+    RetrievalStrategy,
+    StrategyComparisonResult,
+)
+from src.storage.repositories import EvaluationResultRecord, EvaluationRunRecord
 
 RAG_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_SET_PATH = RAG_ROOT / "tests" / "fixtures" / "golden_set.json"
@@ -346,6 +352,145 @@ def test_evaluation_runner_validates_strategy_inputs() -> None:
         )
 
     assert ExportedRetrievalStrategy is RetrievalStrategy
+
+
+@pytest.mark.unit
+def test_evaluation_runner_saves_strategy_results_for_dashboard_trends() -> None:
+    """Persist strategy comparison results through the repository boundary."""
+
+    repository = _FakeEvaluationRepository()
+    runner = EvaluationRunner(top_k=2)
+    comparison = runner.compare_strategies(
+        [
+            {
+                "id": "sample-1",
+                "question": "如何挑选通勤无线耳机？",
+                "expected_sources": ["shopping_guides/headphones.md#wireless"],
+            }
+        ],
+        retrieval_fn=lambda sample, *, strategy, top_k: [
+            "shopping_guides/headphones.md#wireless"
+        ],
+    )
+
+    saved = runner.save_results(
+        comparison,
+        repository=repository,
+        collection_id="shopping_guides",
+        dataset_name="golden_set",
+        run_id="eval-run-test",
+        now=datetime(2026, 6, 10, 12, 0, tzinfo=UTC),
+        settings_snapshot={"top_k": 2},
+    )
+
+    assert saved.run.id == "eval-run-test"
+    assert saved.run.status == "success"
+    assert saved.run.collection_id == "shopping_guides"
+    assert saved.run.dataset_name == "golden_set"
+    assert saved.run.summary["strategy_count"] == 4
+    assert saved.run.summary["metric_count"] == 12
+    assert saved.run.summary["sample_count"] == 1
+    assert saved.results == tuple(repository.result_batches[0][1])
+    assert [result.metric_name for result in saved.results][:3] == [
+        "hybrid.hit_rate_at_2",
+        "hybrid.mrr_at_2",
+        "hybrid.ndcg_at_2",
+    ]
+    assert saved.results[0].details["strategy"] == "hybrid"
+    assert saved.results[0].details["raw_metric_name"] == "hit_rate_at_2"
+    assert saved.results[0].details["predictions"][0]["sample_id"] == "sample-1"
+    assert repository.run_records == [saved.run]
+    assert repository.result_batches[0][0] == "eval-run-test"
+
+
+@pytest.mark.unit
+def test_evaluation_runner_save_results_validates_persistence_inputs() -> None:
+    """Reject invalid save requests before writing evaluation history."""
+
+    runner = EvaluationRunner(top_k=2)
+    repository = _FakeEvaluationRepository()
+
+    with pytest.raises(ValueError, match="comparison"):
+        runner.save_results(
+            {},
+            repository=repository,
+            collection_id="shopping_guides",
+            dataset_name="golden_set",
+        )
+
+    with pytest.raises(ValueError, match="collection_id"):
+        runner.save_results(
+            {
+                "hybrid": runner.compare_strategies(
+                    [
+                        {
+                            "question": "q",
+                            "expected_sources": ["shopping_guides/a.md#x"],
+                        }
+                    ],
+                    retrieval_fn=lambda sample, *, strategy, top_k: [
+                        "shopping_guides/a.md#x"
+                    ],
+                    strategies=[RetrievalStrategy(name="hybrid", retrieval_mode="hybrid")],
+                )["hybrid"]
+            },
+            repository=repository,
+            collection_id=" ",
+            dataset_name="golden_set",
+        )
+
+    with pytest.raises(ValueError, match="prediction counts"):
+        runner.save_results(
+            {
+                "hybrid": StrategyComparisonResult(
+                    strategy=RetrievalStrategy(name="hybrid", retrieval_mode="hybrid"),
+                    metrics={"hit_rate_at_2": 1.0},
+                    predictions=(
+                        {
+                            "question": "q1",
+                            "retrieved_sources": ["shopping_guides/a.md#x"],
+                        },
+                    ),
+                ),
+                "dense_only": StrategyComparisonResult(
+                    strategy=RetrievalStrategy(
+                        name="dense_only",
+                        retrieval_mode="dense_only",
+                    ),
+                    metrics={"hit_rate_at_2": 1.0},
+                    predictions=(),
+                ),
+            },
+            repository=repository,
+            collection_id="shopping_guides",
+            dataset_name="golden_set",
+        )
+
+
+class _FakeEvaluationRepository:
+    """Capture evaluation writes without opening PostgreSQL in unit tests."""
+
+    def __init__(self) -> None:
+        """Initialize in-memory lists that mirror repository write calls."""
+
+        self.run_records: list[EvaluationRunRecord] = []
+        self.result_batches: list[tuple[str, list[EvaluationResultRecord]]] = []
+
+    def upsert_run(self, run: EvaluationRunRecord) -> EvaluationRunRecord:
+        """Store one run record and return it like ``EvaluationRepository``."""
+
+        self.run_records.append(run)
+        return run
+
+    def upsert_results(
+        self,
+        run_id: str,
+        results: list[EvaluationResultRecord],
+    ) -> list[EvaluationResultRecord]:
+        """Store one metric batch and return it in caller order."""
+
+        self.result_batches.append((run_id, results))
+        return results
 
 
 def _load_golden_set() -> list[dict[str, Any]]:
