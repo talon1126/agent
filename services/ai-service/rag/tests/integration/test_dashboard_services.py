@@ -491,6 +491,8 @@ class _FakeStreamlit:
         self.selectbox_index = 0
         self.radio_index = 0
         self.sidebar = self
+        self.checkbox_values: dict[str, bool] = {}
+        self.uploaded_files: dict[str, list[object]] = {}
 
     def title(self, *args: object, **kwargs: object) -> None:
         """Record a page title call."""
@@ -552,13 +554,21 @@ class _FakeStreamlit:
         """Record a checkbox and return the configured fake value."""
 
         self.calls.append(("checkbox", args, kwargs))
-        return self.checkbox_value
+        label = str(args[0]) if args else ""
+        return self.checkbox_values.get(label, self.checkbox_value)
 
     def button(self, *args: object, **kwargs: object) -> bool:
         """Record a button and return the configured fake value."""
 
         self.calls.append(("button", args, kwargs))
         return self.button_value
+
+    def file_uploader(self, *args: object, **kwargs: object) -> list[object]:
+        """Record file uploader calls and return configured uploaded files."""
+
+        self.calls.append(("file_uploader", args, kwargs))
+        label = str(args[0]) if args else ""
+        return self.uploaded_files.get(label, [])
 
     def selectbox(
         self,
@@ -645,18 +655,46 @@ def test_overview_page_builds_and_renders_system_summary() -> None:
 
 @pytest.mark.integration
 def test_ingestion_manage_page_builds_and_renders_operator_controls() -> None:
-    """Require ingestion manage page to render controls without side effects."""
+    """Require ingestion manage page to submit ingestion through a service."""
 
     from src.observability.pages.ingestion_manage import (
         IngestionManagePageModel,
         render_ingestion_manage_page,
     )
-    from src.observability.services import DocumentBrowserRow
+    from src.observability.services import (
+        DocumentBrowserRow,
+        IngestionOperationResult,
+    )
+
+    class FakeIngestionService:
+        """Capture Dashboard ingestion requests without running a pipeline."""
+
+        def __init__(self) -> None:
+            """Create an empty request log for assertions."""
+
+            self.requests: list[object] = []
+
+        def run_ingestion(self, request: object) -> IngestionOperationResult:
+            """Record the request and return a successful fake result."""
+
+            self.requests.append(request)
+            return IngestionOperationResult(
+                status="success",
+                collection="shopping_guides",
+                source_path="data/raw/shopping_guides/wireless.md",
+                force=True,
+                exit_code=0,
+                processed=1,
+                trace_ids=("trace-dashboard-ingest",),
+                source_paths=("data/raw/shopping_guides/wireless.md",),
+                summary={"chunk_count": 3},
+            )
 
     fake_ui = _FakeStreamlit()
     fake_ui.text_input_value = "data/raw/shopping_guides/wireless.md"
     fake_ui.checkbox_value = True
     fake_ui.button_value = True
+    fake_service = FakeIngestionService()
     model = IngestionManagePageModel(
         collection_id="shopping_guides",
         raw_data_dir="data/raw/shopping_guides",
@@ -674,18 +712,342 @@ def test_ingestion_manage_page_builds_and_renders_operator_controls() -> None:
         ),
     )
 
-    selection = render_ingestion_manage_page(model, ui=fake_ui)
+    selection = render_ingestion_manage_page(
+        model,
+        ui=fake_ui,
+        ingestion_service=fake_service,
+    )
 
     assert selection.collection_id == "shopping_guides"
     assert selection.source_path == "data/raw/shopping_guides/wireless.md"
     assert selection.force is True
     assert selection.submit_ingest is True
     assert selection.delete_document_id == "doc-1"
+    assert len(fake_service.requests) == 1
+    request = fake_service.requests[0]
+    assert request.collection == "shopping_guides"
+    assert request.source_path == "data/raw/shopping_guides/wireless.md"
+    assert request.force is True
     call_names = [name for name, _, _ in fake_ui.calls]
     assert "text_input" in call_names
     assert "checkbox" in call_names
     assert call_names.count("button") == 2
+    assert "success" in call_names
     assert "dataframe" in call_names
+
+
+@pytest.mark.integration
+def test_ingestion_manage_page_submits_selected_uploaded_files_only() -> None:
+    """Require multi-file and directory uploads to support candidate deselection."""
+
+    from src.observability.pages.ingestion_manage import (
+        IngestionManagePageModel,
+        render_ingestion_manage_page,
+    )
+    from src.observability.services import IngestionOperationResult
+
+    class FakeUploadedFile:
+        """Minimal Streamlit UploadedFile double for Dashboard page tests."""
+
+        def __init__(self, name: str, content: bytes) -> None:
+            """Store a fake uploaded file name and bytes."""
+
+            self.name = name
+            self._content = content
+
+        def getvalue(self) -> bytes:
+            """Return uploaded file bytes as Streamlit does."""
+
+            return self._content
+
+    class FakeIngestionService:
+        """Capture the batch request submitted by the page."""
+
+        def __init__(self) -> None:
+            """Create an empty request log."""
+
+            self.requests: list[object] = []
+
+        def discover_source_candidates(self, source_path: str) -> tuple[str, ...]:
+            """Return no server-side candidates for this upload-only test."""
+
+            return ()
+
+        def run_ingestion(self, request: object) -> IngestionOperationResult:
+            """Capture selected uploaded files and return a fake success."""
+
+            self.requests.append(request)
+            return IngestionOperationResult(
+                status="success",
+                collection="shopping_guides",
+                source_path="",
+                force=False,
+                exit_code=0,
+                processed=2,
+                trace_ids=("trace-1", "trace-2"),
+                source_paths=("keep.md", "folder/guide.pdf"),
+                summary={"processed": 2},
+            )
+
+    fake_ui = _FakeStreamlit()
+    fake_ui.button_value = True
+    fake_ui.uploaded_files = {
+        "Choose files": [
+            FakeUploadedFile("keep.md", b"# keep"),
+            FakeUploadedFile("drop.md", b"# drop"),
+        ],
+        "Choose folder": [
+            FakeUploadedFile("folder/guide.pdf", b"%PDF-1.4"),
+        ],
+    }
+    fake_ui.checkbox_values = {
+        "Force rebuild": False,
+        "Ingest upload: keep.md": True,
+        "Ingest upload: drop.md": False,
+        "Ingest upload: folder/guide.pdf": True,
+    }
+    fake_service = FakeIngestionService()
+
+    render_ingestion_manage_page(
+        IngestionManagePageModel(
+            collection_id="shopping_guides",
+            raw_data_dir="data/raw/shopping_guides",
+            documents=(),
+        ),
+        ui=fake_ui,
+        ingestion_service=fake_service,
+    )
+
+    assert len(fake_service.requests) == 1
+    request = fake_service.requests[0]
+    assert [uploaded.filename for uploaded in request.uploaded_files] == [
+        "keep.md",
+        "folder/guide.pdf",
+    ]
+    assert request.source_paths == ()
+    call_names = [name for name, _, _ in fake_ui.calls]
+    assert call_names.count("file_uploader") == 2
+    assert "success" in call_names
+
+
+@pytest.mark.integration
+def test_ingestion_operation_service_invokes_ingest_runner_with_dashboard_request(
+    tmp_path: Path,
+) -> None:
+    """Require Dashboard ingestion service to call the real ingest entry contract."""
+
+    from src.observability.services import (
+        IngestionOperationRequest,
+        IngestionOperationService,
+    )
+
+    source = tmp_path / "wireless.md"
+    source.write_text("# Wireless\nChoose stable Bluetooth.", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        output: object,
+        error_output: object,
+    ) -> int:
+        """Record CLI arguments and emit the same JSON shape as ingest.py."""
+
+        calls.append(argv)
+        output(
+            json.dumps(
+                {
+                    "collection": "shopping_guides",
+                    "force": True,
+                    "processed": 1,
+                    "results": [
+                        {
+                            "source": str(source),
+                            "status": "success",
+                            "trace_id": "trace-dashboard-ingest",
+                            "summary": {"chunk_count": 1},
+                        }
+                    ],
+                }
+            )
+        )
+        return 0
+
+    service = IngestionOperationService(runner=fake_runner)
+    result = service.run_ingestion(
+        IngestionOperationRequest(
+            collection="shopping_guides",
+            source_path=str(source),
+            force=True,
+        )
+    )
+
+    assert calls == [
+        [
+            "--path",
+            str(source.resolve()),
+            "--collection",
+            "shopping_guides",
+            "--force",
+        ]
+    ]
+    assert result.status == "success"
+    assert result.collection == "shopping_guides"
+    assert result.processed == 1
+    assert result.trace_ids == ("trace-dashboard-ingest",)
+    assert result.source_paths == (str(source),)
+    assert result.summary == {"chunk_count": 1}
+
+
+@pytest.mark.integration
+def test_ingestion_operation_service_returns_failed_result_for_blank_source() -> None:
+    """Require invalid Dashboard ingestion input to return a renderable failure."""
+
+    from src.observability.services import (
+        IngestionOperationRequest,
+        IngestionOperationService,
+    )
+
+    service = IngestionOperationService(runner=lambda *args, **kwargs: 0)
+
+    result = service.run_ingestion(
+        IngestionOperationRequest(
+            collection="shopping_guides",
+            source_path=" ",
+            force=False,
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.exit_code == 2
+    assert result.error == "source_path must not be blank"
+
+
+@pytest.mark.integration
+def test_ingestion_operation_service_returns_failed_result_for_empty_folder(
+    tmp_path: Path,
+) -> None:
+    """Require empty folder ingestion requests to explain there are no candidates."""
+
+    from src.observability.services import (
+        IngestionOperationRequest,
+        IngestionOperationService,
+    )
+
+    service = IngestionOperationService(runner=lambda *args, **kwargs: 0)
+
+    result = service.run_ingestion(
+        IngestionOperationRequest(
+            collection="shopping_guides",
+            source_path=str(tmp_path),
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.exit_code == 2
+    assert result.error == "No supported ingestion sources selected."
+
+
+@pytest.mark.integration
+def test_ingestion_operation_service_saves_uploads_and_runs_each_selected_source(
+    tmp_path: Path,
+) -> None:
+    """Require uploaded files and selected local paths to be ingested as a batch."""
+
+    from src.observability.services import (
+        IngestionOperationRequest,
+        IngestionOperationService,
+        UploadedIngestionFile,
+    )
+
+    local_source = tmp_path / "local.md"
+    local_source.write_text("# Local", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        output: object,
+        error_output: object,
+    ) -> int:
+        """Record each source-specific CLI call and emit an ingest result."""
+
+        calls.append(argv)
+        source = argv[argv.index("--path") + 1]
+        output(
+            json.dumps(
+                {
+                    "collection": "shopping_guides",
+                    "force": False,
+                    "processed": 1,
+                    "results": [
+                        {
+                            "source": source,
+                            "status": "success",
+                            "trace_id": f"trace-{len(calls)}",
+                            "summary": {"chunk_count": 1},
+                        }
+                    ],
+                }
+            )
+        )
+        return 0
+
+    service = IngestionOperationService(
+        runner=fake_runner,
+        upload_root=tmp_path / "uploads",
+    )
+
+    result = service.run_ingestion(
+        IngestionOperationRequest(
+            collection="shopping_guides",
+            source_paths=(str(local_source),),
+            uploaded_files=(
+                UploadedIngestionFile(filename="folder/upload.md", content=b"# Upload"),
+            ),
+        )
+    )
+
+    saved_upload = (
+        tmp_path
+        / "uploads"
+        / "shopping_guides"
+        / "dashboard_uploads"
+        / "folder"
+        / "upload.md"
+    )
+    assert saved_upload.read_bytes() == b"# Upload"
+    assert [call[call.index("--path") + 1] for call in calls] == [
+        str(local_source.resolve()),
+        str(saved_upload.resolve()),
+    ]
+    assert result.status == "success"
+    assert result.processed == 2
+    assert result.trace_ids == ("trace-1", "trace-2")
+
+
+@pytest.mark.integration
+def test_ingestion_operation_service_discovers_supported_files_in_folder(
+    tmp_path: Path,
+) -> None:
+    """Require folder paths to expand into supported ingestion candidates."""
+
+    from src.observability.services import IngestionOperationService
+
+    (tmp_path / "a.md").write_text("# A", encoding="utf-8")
+    (tmp_path / "b.pdf").write_bytes(b"%PDF-1.4")
+    (tmp_path / "ignore.txt").write_text("ignore", encoding="utf-8")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "c.markdown").write_text("# C", encoding="utf-8")
+
+    service = IngestionOperationService(runner=lambda *args, **kwargs: 0)
+
+    assert service.discover_source_candidates(str(tmp_path)) == (
+        str((tmp_path / "a.md").resolve()),
+        str((tmp_path / "b.pdf").resolve()),
+        str((nested / "c.markdown").resolve()),
+    )
 
 
 @pytest.mark.integration

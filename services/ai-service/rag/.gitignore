@@ -27,6 +27,7 @@ htmlcov/
 Thumbs.db
 
 # RAG runtime data
+data/raw/
 data/db/
 data/images/
 data/markdown/

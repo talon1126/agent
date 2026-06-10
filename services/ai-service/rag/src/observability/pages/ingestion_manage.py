@@ -1,10 +1,9 @@
 """Render the Ingestion Management page for the local Streamlit Dashboard.
 
 This page gathers operator intent for offline ingestion and document lifecycle
-management, but it deliberately does not run those side effects inside the
-renderer. Later Dashboard composition code can pass the returned selection to a
-safe orchestration service that invokes ``ingest.py`` or document deletion
-workflows with trace recording.
+management. When an ingestion operation service is supplied by the Dashboard
+application, the page submits the request through that service so the operator
+sees a real ingestion result instead of a placeholder status.
 """
 
 from __future__ import annotations
@@ -17,6 +16,10 @@ from src.observability.services import (
     ConfigReaderService,
     DataBrowserService,
     DocumentBrowserRow,
+    IngestionOperationRequest,
+    IngestionOperationResult,
+    IngestionOperationService,
+    UploadedIngestionFile,
 )
 
 
@@ -45,6 +48,14 @@ class IngestionManageSelection:
     submit_ingest: bool
     delete_document_id: str | None
     submit_delete: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _UploadCandidate:
+    """Represent one uploaded file displayed for operator confirmation."""
+
+    filename: str
+    content: bytes
 
 
 def build_ingestion_manage_page_model(
@@ -81,13 +92,17 @@ def render_ingestion_manage_page(
     model: IngestionManagePageModel,
     *,
     ui: Any | None = None,
+    ingestion_service: IngestionOperationService | None = None,
 ) -> IngestionManageSelection:
-    """Render ingestion controls and return the collected operator intent.
+    """Render ingestion controls and optionally run a submitted ingestion.
 
     Args:
         model: Render-ready management data.
         ui: Optional Streamlit-like module. ``None`` imports ``streamlit`` at
             call time for real Dashboard usage.
+        ingestion_service: Optional service that executes real ingestion when
+            the operator clicks ``Run ingestion``. Tests may pass a fake service
+            to verify submission without model or database side effects.
 
     Returns:
         Selection DTO containing the requested source path, force flag,
@@ -109,16 +124,54 @@ def render_ingestion_manage_page(
         help="Markdown or PDF file path, or a directory supported by ingest.py.",
     )
     force = bool(streamlit.checkbox("Force rebuild", value=False))
+    uploaded_files = _read_uploaded_files(
+        streamlit.file_uploader(
+            "Choose files",
+            type=("md", "markdown", "pdf"),
+            accept_multiple_files=True,
+        )
+    )
+    uploaded_folder_files = _read_uploaded_files(
+        streamlit.file_uploader(
+            "Choose folder",
+            type=("md", "markdown", "pdf"),
+            accept_multiple_files="directory",
+        )
+    )
+    path_candidates = _discover_path_candidates(
+        ingestion_service,
+        source_path,
+    )
+    selected_source_paths, selected_uploads = _render_candidate_selection(
+        streamlit,
+        path_candidates=path_candidates,
+        uploaded_files=(*uploaded_files, *uploaded_folder_files),
+    )
     submit_ingest = bool(streamlit.button("Run ingestion"))
     if submit_ingest:
-        streamlit.info(
-            {
-                "collection": model.collection_id,
-                "source_path": source_path,
-                "force": force,
-                "status": "pending orchestration",
-            }
-        )
+        if ingestion_service is None:
+            streamlit.warning(
+                {
+                    "collection": model.collection_id,
+                    "source_path": source_path,
+                    "force": force,
+                    "status": "service_unavailable",
+                    "error": "Ingestion operation service is not configured.",
+                }
+            )
+        else:
+            _render_ingestion_result(
+                streamlit,
+                ingestion_service.run_ingestion(
+                    IngestionOperationRequest(
+                        collection=model.collection_id,
+                        source_path=source_path,
+                        force=force,
+                        source_paths=selected_source_paths,
+                        uploaded_files=selected_uploads,
+                    )
+                ),
+            )
 
     streamlit.subheader("Indexed Documents")
     streamlit.dataframe([_document_table_row(document) for document in model.documents])
@@ -142,6 +195,106 @@ def render_ingestion_manage_page(
         delete_document_id=selected_document,
         submit_delete=submit_delete,
     )
+
+
+def _read_uploaded_files(uploaded: Any) -> tuple[_UploadCandidate, ...]:
+    """Convert Streamlit uploaded files into page-local upload candidates."""
+
+    if uploaded is None:
+        return ()
+    uploaded_items = uploaded if isinstance(uploaded, list | tuple) else (uploaded,)
+    candidates: list[_UploadCandidate] = []
+    for item in uploaded_items:
+        name = str(getattr(item, "name", "")).strip()
+        if not name:
+            continue
+        content = item.getvalue() if hasattr(item, "getvalue") else b""
+        candidates.append(_UploadCandidate(filename=name, content=bytes(content)))
+    return tuple(candidates)
+
+
+def _discover_path_candidates(
+    ingestion_service: IngestionOperationService | None,
+    source_path: str,
+) -> tuple[str, ...]:
+    """Discover local file candidates through the ingestion operation service."""
+
+    if (
+        ingestion_service is None
+        or not hasattr(ingestion_service, "discover_source_candidates")
+        or not source_path.strip()
+    ):
+        return (source_path,) if source_path.strip() else ()
+    return tuple(ingestion_service.discover_source_candidates(source_path))
+
+
+def _render_candidate_selection(
+    streamlit: Any,
+    *,
+    path_candidates: tuple[str, ...],
+    uploaded_files: tuple[_UploadCandidate, ...],
+) -> tuple[tuple[str, ...], tuple[UploadedIngestionFile, ...]]:
+    """Render selectable ingestion candidates and return only checked items."""
+
+    if not path_candidates and not uploaded_files:
+        streamlit.info("No ingestion candidates selected.")
+        return (), ()
+
+    streamlit.subheader("Ingestion Candidates")
+    selected_paths = tuple(
+        candidate
+        for candidate in path_candidates
+        if streamlit.checkbox(f"Ingest path: {candidate}", value=True)
+    )
+    selected_uploads = tuple(
+        UploadedIngestionFile(filename=candidate.filename, content=candidate.content)
+        for candidate in uploaded_files
+        if streamlit.checkbox(f"Ingest upload: {candidate.filename}", value=True)
+    )
+    streamlit.dataframe(
+        [
+            {"type": "path", "source": candidate, "selected": candidate in selected_paths}
+            for candidate in path_candidates
+        ]
+        + [
+            {
+                "type": "upload",
+                "source": candidate.filename,
+                "selected": any(
+                    upload.filename == candidate.filename for upload in selected_uploads
+                ),
+            }
+            for candidate in uploaded_files
+        ]
+    )
+    return selected_paths, selected_uploads
+
+
+def _render_ingestion_result(
+    streamlit: Any,
+    result: IngestionOperationResult,
+) -> None:
+    """Render a real Dashboard ingestion operation result."""
+
+    payload = {
+        "collection": result.collection,
+        "source_path": result.source_path,
+        "force": result.force,
+        "status": result.status,
+        "processed": result.processed,
+        "trace_ids": list(result.trace_ids),
+        "sources": list(result.source_paths),
+        "summary": dict(result.summary),
+    }
+    if result.error:
+        payload["error"] = result.error
+
+    if result.status == "success":
+        streamlit.success(payload)
+    elif result.status == "skipped":
+        streamlit.info(payload)
+    else:
+        streamlit.warning(payload)
 
 
 def _document_table_row(document: DocumentBrowserRow) -> dict[str, object]:

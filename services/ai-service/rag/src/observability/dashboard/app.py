@@ -46,6 +46,7 @@ from src.observability.services import (
     ConfigReaderService,
     DataBrowserService,
     EvaluationService,
+    IngestionOperationService,
     TraceReaderService,
 )
 from src.storage.postgres import PostgresPool, init_schema
@@ -197,6 +198,7 @@ def render_dashboard_page(page_name: str, ui: Any) -> None:
         data_browser = DataBrowserService(pool)
         trace_reader = TraceReaderService(pool)
         evaluation_service = EvaluationService(pool)
+        ingestion_operation_service = IngestionOperationService()
 
         if page_name == "overview":
             render_overview_page(
@@ -217,6 +219,7 @@ def render_dashboard_page(page_name: str, ui: Any) -> None:
                     collection_id=collection_id,
                 ),
                 ui=ui,
+                ingestion_service=ingestion_operation_service,
             )
             return
         if page_name == "data_browser":

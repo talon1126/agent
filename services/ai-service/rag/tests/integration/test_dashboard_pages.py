@@ -53,6 +53,7 @@ class FakeStreamlit:
         self.text_input_value = ""
         self.checkbox_value = False
         self.button_value = False
+        self.uploaded_files: dict[str, list[object]] = {}
 
     def title(self, *args: object, **kwargs: object) -> None:
         """Record a page title call."""
@@ -116,6 +117,13 @@ class FakeStreamlit:
 
         self.calls.append(("button", args, kwargs))
         return self.button_value
+
+    def file_uploader(self, *args: object, **kwargs: object) -> list[object]:
+        """Record file uploader calls and return configured uploaded files."""
+
+        self.calls.append(("file_uploader", args, kwargs))
+        label = str(args[0]) if args else ""
+        return self.uploaded_files.get(label, [])
 
     def selectbox(self, *args: object, **kwargs: object) -> object | None:
         """Record a selector and return the first available option."""

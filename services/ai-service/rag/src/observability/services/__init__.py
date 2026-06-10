@@ -24,6 +24,12 @@ from src.observability.services.evaluation_service import (
     EvaluationRunSummary,
     EvaluationService,
 )
+from src.observability.services.ingestion_operation_service import (
+    IngestionOperationRequest,
+    IngestionOperationResult,
+    IngestionOperationService,
+    UploadedIngestionFile,
+)
 from src.observability.services.trace_reader_service import (
     TraceDetail,
     TraceHistoryItem,
@@ -44,8 +50,12 @@ __all__ = [
     "EvaluationRunSummary",
     "EvaluationService",
     "ImageBrowserRow",
+    "IngestionOperationRequest",
+    "IngestionOperationResult",
+    "IngestionOperationService",
     "TraceDetail",
     "TraceHistoryItem",
     "TraceReaderService",
     "TraceStageWaterfallItem",
+    "UploadedIngestionFile",
 ]
