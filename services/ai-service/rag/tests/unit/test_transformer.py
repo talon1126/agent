@@ -242,6 +242,98 @@ def test_chunk_rewriter_uses_llm_and_is_idempotent() -> None:
     user_message = llm.chat.call_args.args[0][1].content
     assert "Document summary:" in user_message
     assert "quiet stress-relief products" in user_message
+    assert "Metadata:" not in user_message
+    assert "Image references:" not in user_message
+    assert "shopping_guides/stress-toys.md" not in user_message
+    assert "image_refs" not in user_message
+
+
+def test_chunk_rewriter_extracts_text_from_structured_llm_response() -> None:
+    """Require rewrite JSON payloads to keep metadata out of chunk text."""
+
+    source = make_chunk(metadata={"collection": "shopping_guides"})
+    llm = Mock()
+    llm.chat.return_value = LLMResponse(
+        content=json.dumps(
+            {
+                "text": "Soft silicone stress toys provide quiet tactile feedback.",
+                "metadata": {"collection": "shopping_guides"},
+                "image_refs": [],
+            },
+            ensure_ascii=False,
+        ),
+        provider="fake",
+        model="fake-rewriter",
+    )
+    transform = ChunkRewriter(
+        llm=llm,
+        prompt=config_module.load_prompt("config/prompts/rewrite_chunk_prompt.yaml"),
+    )
+
+    rewritten = transform.transform([source])
+
+    assert rewritten[0].text == (
+        "Soft silicone stress toys provide quiet tactile feedback."
+    )
+    assert "metadata" not in rewritten[0].text.lower()
+    assert rewritten[0].metadata["collection"] == "shopping_guides"
+
+
+def test_chunk_rewriter_rejects_structured_response_with_blank_text() -> None:
+    """Reject valid JSON responses that do not contain searchable chunk text.
+
+    Falling back to the raw JSON object would persist ``{"text": ""}`` as the
+    chunk body and pollute Dense/BM25 indexes. The provider response must fail
+    the transform instead.
+    """
+
+    source = make_chunk()
+    llm = Mock()
+    llm.chat.return_value = LLMResponse(
+        content='{"text": ""}',
+        provider="fake",
+        model="fake-rewriter",
+    )
+    transform = ChunkRewriter(
+        llm=llm,
+        prompt=config_module.load_prompt("config/prompts/rewrite_chunk_prompt.yaml"),
+    )
+
+    with pytest.raises(IngestionError, match="Unable to rewrite chunk"):
+        transform.transform([source])
+
+
+def test_chunk_rewriter_strips_markdown_metadata_sections_from_llm_response() -> None:
+    """Require non-JSON provider replies to drop preserved metadata sections."""
+
+    source = make_chunk(metadata={"collection": "shopping_guides"})
+    llm = Mock()
+    llm.chat.return_value = LLMResponse(
+        content=(
+            "### Rewritten Chunk\n"
+            "Soft silicone stress toys provide quiet tactile feedback.\n\n"
+            "### Metadata\n"
+            "```json\n"
+            '{"collection": "shopping_guides"}\n'
+            "```\n\n"
+            "### Image References\n"
+            "[]"
+        ),
+        provider="fake",
+        model="fake-rewriter",
+    )
+    transform = ChunkRewriter(
+        llm=llm,
+        prompt=config_module.load_prompt("config/prompts/rewrite_chunk_prompt.yaml"),
+    )
+
+    rewritten = transform.transform([source])
+
+    assert rewritten[0].text == (
+        "Soft silicone stress toys provide quiet tactile feedback."
+    )
+    assert "Metadata" not in rewritten[0].text
+    assert "Image References" not in rewritten[0].text
 
 
 def test_semantic_merge_combines_adjacent_chunks_and_is_idempotent() -> None:

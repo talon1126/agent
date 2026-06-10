@@ -4,8 +4,6 @@ description: Refine noisy chunks while preserving source facts and references.
 input_variables:
   - chunk_text
   - document_summary
-  - metadata
-  - image_refs
 system_prompt: |
   You are the text enhancement component of a RAG document ingestion system.
   Remove headers, footers, repeated table-of-contents entries, PDF line-break
@@ -16,8 +14,6 @@ system_prompt: |
   Use document_summary only as global context for resolving abbreviated wording
   and restoring the chunk's topic. Do not add facts that appear only in
   document_summary unless the chunk itself supports them.
-  Preserve every entry in image_refs and its relationship to the surrounding
-  context. Do not delete, rewrite, or fabricate image_refs entries.
   Produce a semantically complete, self-contained chunk suitable for Dense
   Embedding and BM25 retrieval.
 user_prompt: |
@@ -27,17 +23,11 @@ user_prompt: |
   Document summary:
   {document_summary}
 
-  Metadata:
-  {metadata}
-
-  Image references:
-  {image_refs}
-
-  Return the rewritten chunk together with the preserved metadata and image
-  references.
+  Return only a JSON object that matches the output schema. Put searchable
+  chunk content only in the "text" field. Do not include metadata, image
+  references, markdown headings, code fences, or explanatory labels inside
+  "text".
 output_schema:
   type: json
   fields:
     text: string
-    metadata: object
-    image_refs: array

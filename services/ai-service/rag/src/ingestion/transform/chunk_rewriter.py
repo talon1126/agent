@@ -100,20 +100,11 @@ class ChunkRewriter(BaseTransform):
                         content=self._prompt.user_prompt.format(
                             chunk_text=chunk.text,
                             document_summary=document_summary,
-                            metadata=json.dumps(
-                                chunk.metadata,
-                                ensure_ascii=False,
-                                sort_keys=True,
-                            ),
-                            image_refs=json.dumps(
-                                chunk.metadata.get("image_refs", []),
-                                ensure_ascii=False,
-                            ),
                         ),
                     ),
                 ]
             )
-            rewritten_text = response.content.strip()
+            rewritten_text = _extract_rewritten_text(response.content)
             if not rewritten_text:
                 raise ValueError("Rewrite provider returned blank content")
         except Exception as error:
@@ -180,6 +171,86 @@ def _content_hash(text: str) -> str:
     """
 
     return sha256(text.encode("utf-8")).hexdigest()
+
+
+def _extract_rewritten_text(content: str) -> str:
+    """Extract searchable chunk text from structured or markdown LLM replies.
+
+    Args:
+        content: Raw provider response. Providers may obey the JSON schema or
+            return a markdown explanation that includes preserved metadata.
+
+    Returns:
+        Clean chunk text without metadata or image reference report sections.
+    """
+
+    stripped = content.strip()
+    parsed_json, parsed_text = _text_from_json_payload(stripped)
+    if parsed_json:
+        return parsed_text
+    return _strip_non_content_sections(stripped)
+
+
+def _text_from_json_payload(content: str) -> tuple[bool, str]:
+    """Parse a JSON rewrite payload without falling back on invalid text.
+
+    Args:
+        content: Raw provider response that may contain plain or fenced JSON.
+
+    Returns:
+        A pair of ``(parsed_json, text)``. ``parsed_json`` remains ``True`` when
+        a valid JSON value lacks a non-empty text field so callers can reject
+        the provider response instead of storing the raw JSON structure.
+    """
+
+    candidates = [content]
+    if content.startswith("```"):
+        lines = content.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            candidates.append("\n".join(lines[1:-1]))
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            return True, ""
+        for key in ("text", "chunk", "rewritten_chunk", "rewritten_text"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return True, value.strip()
+        return True, ""
+    return False, ""
+
+
+def _strip_non_content_sections(content: str) -> str:
+    """Remove common metadata/report sections from markdown rewrite replies."""
+
+    lines = content.splitlines()
+    kept: list[str] = []
+    for line in lines:
+        normalized = line.strip().strip("*#:- ").lower()
+        if normalized in {
+            "metadata",
+            "preserved metadata",
+            "image references",
+            "image refs",
+        }:
+            break
+        kept.append(line)
+    text = "\n".join(kept).strip()
+    for prefix in (
+        "### Rewritten Chunk",
+        "## Rewritten Chunk",
+        "# Rewritten Chunk",
+        "**Rewritten chunk:**",
+        "Rewritten chunk:",
+        "Rewritten Chunk:",
+    ):
+        if text.startswith(prefix):
+            text = text[len(prefix) :].strip()
+            break
+    return text
 
 
 def _document_summary_from_context(context: dict[str, Any] | None) -> str:

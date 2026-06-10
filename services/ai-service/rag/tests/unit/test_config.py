@@ -148,6 +148,7 @@ def test_default_component_selection_matches_the_spec() -> None:
     assert settings["vector_store"]["provider"] == "pgvector"
     assert settings["splitter"]["default"] == "recursive_character"
     assert settings["rerank"]["fallback"] == "rrf"
+    assert settings["ingestion"]["document_summary"]["llm_provider"] == "deepseek"
 
 
 def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:
@@ -162,6 +163,7 @@ def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:
     serialized = SETTINGS_PATH.read_text(encoding="utf-8")
 
     assert settings["database"]["url_env"] == "DATABASE_URL"
+    assert settings["database"]["timezone"] == "Asia/Shanghai"
     assert settings["llm"]["providers"]["deepseek"]["api_key_env"] == ("DASHSCOPE_API_KEY")
     assert settings["embedding"]["providers"]["dashscope"]["api_key_env"] == (
         "DASHSCOPE_API_KEY"
@@ -311,25 +313,25 @@ def test_document_summary_prompt_defines_short_semantic_summary() -> None:
     assert prompt["output_schema"]["fields"]["summary"] == "string"
 
 
-def test_rewrite_prompt_preserves_facts_and_image_references() -> None:
-    """Ensure chunk rewriting cannot discard source facts or image linkage.
+def test_rewrite_prompt_uses_only_chunk_text_and_document_summary() -> None:
+    """Ensure chunk rewriting keeps provider input limited to semantic context.
 
-    The prompt receives text, metadata, and image references as separate inputs
-    and explicitly prohibits fabrication. A failure means ingestion transforms
-    could produce cleaner text at the cost of citation fidelity or multimodal
-    context.
+    Metadata and image references are maintained by Python objects instead of
+    being sent back to the LLM. A failure means rewrite prompts may leak
+    structured ingestion metadata into provider calls or chunk content.
     """
     prompt = load_prompt_document("rewrite_chunk_prompt.yaml")
 
     assert prompt["input_variables"] == [
         "chunk_text",
         "document_summary",
-        "metadata",
-        "image_refs",
     ]
     assert "Do not invent" in prompt["system_prompt"]
-    assert "image_refs" in prompt["system_prompt"]
+    assert "metadata" not in prompt["system_prompt"].lower()
+    assert "image_refs" not in prompt["system_prompt"]
     assert "document_summary" in prompt["user_prompt"]
+    assert "Metadata:" not in prompt["user_prompt"]
+    assert "Image references:" not in prompt["user_prompt"]
 
 
 def test_image_prompt_defines_quality_fallback_and_type_strategies() -> None:

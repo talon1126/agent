@@ -23,7 +23,9 @@ RAG_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(RAG_ROOT))
 
 errors_module = importlib.import_module("src.core.errors")
+config_module = importlib.import_module("src.core.config")
 types_module = importlib.import_module("src.core.types")
+llm_module = importlib.import_module("src.libs.llm")
 pipeline_module = importlib.import_module("src.ingestion.pipeline")
 pdf_conversion_module = importlib.import_module("src.ingestion.pdf_to_markdown")
 markdown_loader_module = importlib.import_module("src.libs.loader.markdown_loader")
@@ -31,6 +33,9 @@ pdf_loader_module = importlib.import_module("src.libs.loader.pdf_loader")
 
 Document = types_module.Document
 IngestionError = errors_module.IngestionError
+LLMResponse = llm_module.LLMResponse
+SETTINGS_PATH = RAG_ROOT / "config" / "settings.example.yaml"
+load_settings = config_module.load_settings
 IngestionPipeline = pipeline_module.IngestionPipeline
 calculate_sha256 = pipeline_module.calculate_sha256
 should_skip_document = pipeline_module.should_skip_document
@@ -385,15 +390,19 @@ def test_ingest_builds_document_summarizer_from_settings(
         provider="fake",
         model="fake-summary",
     )
-    monkeypatch.setattr(
-        ingest_module.LLMFactory,
-        "create",
-        lambda *, settings: fake_llm,
-    )
+    captured: dict[str, object] = {}
+
+    def fake_create(**kwargs: object) -> Mock:
+        captured.update(kwargs)
+        return fake_llm
+
+    monkeypatch.setattr(ingest_module.LLMFactory, "create", fake_create)
 
     summarizer = ingest_module._build_document_summarizer(settings)
 
     assert type(summarizer).__name__ == "DocumentSummarizer"
+    assert captured["settings"] is settings
+    assert captured["provider"] == "deepseek"
 
 
 def test_calculate_sha256_hashes_original_file_bytes(tmp_path: Path) -> None:
@@ -572,6 +581,66 @@ def test_ingestion_pipeline_summarizes_loaded_document_when_configured(
             "source_uri": str(source.resolve()),
             "source_hash": calculate_sha256(source),
         },
+    )
+
+
+def test_ingest_builder_enables_document_summarizer_when_config_is_absent() -> None:
+    """Require stale local settings to still enable the default summary step."""
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    settings.ingestion.__pydantic_extra__.pop("document_summary", None)
+    fake_llm = Mock()
+    fake_llm.chat.return_value = LLMResponse(
+        content="A short document summary.",
+        provider="fake",
+        model="fake",
+    )
+
+    summarizer = ingest_module._build_document_summarizer(
+        settings,
+        llm=fake_llm,
+    )
+
+    assert summarizer is not None
+    document = Document(id="doc-1", text="# Guide", metadata={})
+    assert summarizer.summarize(document).summary == "A short document summary."
+
+
+def test_ingest_builder_uses_configured_document_summary_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require document summaries to use the configured LLM provider.
+
+    The summary step can intentionally use a provider that is different from
+    other LLM-backed stages. This test protects the configuration contract so
+    ``ingestion.document_summary.llm_provider`` is passed to ``LLMFactory``.
+    """
+
+    ingest_module = importlib.import_module("src.scripts.ingest")
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    captured: dict[str, object] = {}
+    fake_llm = Mock()
+    fake_llm.chat.return_value = LLMResponse(
+        content="A DeepSeek generated document summary.",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+    )
+
+    def fake_create(**kwargs: object) -> Mock:
+        captured.update(kwargs)
+        return fake_llm
+
+    monkeypatch.setattr(ingest_module.LLMFactory, "create", fake_create)
+
+    summarizer = ingest_module._build_document_summarizer(settings)
+
+    assert summarizer is not None
+    assert captured["settings"] is settings
+    assert captured["provider"] == "deepseek"
+    document = Document(id="doc-1", text="# Guide", metadata={})
+    assert summarizer.summarize(document).summary == (
+        "A DeepSeek generated document summary."
     )
 
 

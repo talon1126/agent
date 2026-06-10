@@ -293,27 +293,41 @@ def _build_pipeline(
     )
 
 
-def _build_document_summarizer(settings: RagSettings) -> DocumentSummarizer | None:
+def _build_document_summarizer(
+    settings: RagSettings,
+    *,
+    llm: Any | None = None,
+) -> DocumentSummarizer | None:
     """Create the optional document-summary step from ingestion settings.
 
     Args:
         settings: Validated RAG settings. The ``ingestion.document_summary``
             mapping is intentionally read as an extension field so older config
             files can keep running without a migration.
+        llm: Optional injected LLM client used by tests. ``None`` uses the
+            configured ``LLMFactory`` provider.
 
     Returns:
         A configured ``DocumentSummarizer`` when enabled, otherwise ``None``.
     """
 
     config = getattr(settings.ingestion, "document_summary", None)
+    if config is None:
+        config = {
+            "enabled": True,
+            "llm_provider": "deepseek",
+            "prompt_path": "config/prompts/document_summary_prompt.yaml",
+            "max_document_chars": 12000,
+        }
     if not isinstance(config, dict) or not config.get("enabled", False):
         return None
     prompt_path = str(
         config.get("prompt_path", "config/prompts/document_summary_prompt.yaml")
     )
+    llm_provider = str(config.get("llm_provider", settings.llm.default))
     max_document_chars = int(config.get("max_document_chars", 12000))
     return DocumentSummarizer(
-        llm=LLMFactory.create(settings=settings),
+        llm=llm or LLMFactory.create(settings=settings, provider=llm_provider),
         prompt=load_prompt(prompt_path),
         max_document_chars=max_document_chars,
     )

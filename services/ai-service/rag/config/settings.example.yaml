@@ -9,6 +9,7 @@ database:
   provider: postgresql
   url_env: DATABASE_URL
   pool_size: 5
+  timezone: Asia/Shanghai
   echo_sql: false
 
 # Chat model providers share one selection and fallback contract.
@@ -135,6 +136,7 @@ ingestion:
   image_dir: data/images
   document_summary:
     enabled: true
+    llm_provider: deepseek
     prompt_path: config/prompts/document_summary_prompt.yaml
     max_document_chars: 12000
   dedup:
