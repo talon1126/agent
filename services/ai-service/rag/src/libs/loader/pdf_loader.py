@@ -261,8 +261,18 @@ def _insert_placeholders_by_page(
 
     page_ranges = _page_ranges(markdown)
     insertions: list[tuple[int, dict[str, Any]]] = []
+    anchor_search_start = 0
     for entry in entries:
-        insertions.append((_insertion_offset(markdown, page_ranges, entry["page"]), entry))
+        anchored = _anchor_insertion_offset(
+            markdown,
+            position=entry["position"],
+            search_start=anchor_search_start,
+        )
+        if anchored is not None:
+            offset, anchor_search_start = anchored
+        else:
+            offset = _insertion_offset(markdown, page_ranges, entry["page"])
+        insertions.append((offset, entry))
     insertions.sort(
         key=lambda item: (
             item[0],
@@ -288,6 +298,42 @@ def _insert_placeholders_by_page(
         metadata.append(metadata_entry)
     content_parts.append(markdown[cursor:])
     return "".join(content_parts), metadata
+
+
+def _anchor_insertion_offset(
+    markdown: str,
+    *,
+    position: dict[str, Any],
+    search_start: int,
+) -> tuple[int, int] | None:
+    """Locate an image insertion point from a nearby physical text anchor.
+
+    Args:
+        markdown: Canonical MarkItDown text.
+        position: Image geometry enriched by ``extract_images`` with optional
+            ``anchor_text`` and ``anchor_relation`` fields.
+        search_start: Lower bound for matching repeated anchors. Images are
+            processed in page order, so advancing this cursor maps repeated
+            section labels to their corresponding later pages.
+
+    Returns:
+        A pair containing the insertion offset and the next anchor search
+        cursor, or ``None`` when the anchor is absent from Markdown.
+    """
+
+    anchor_text = str(position.get("anchor_text") or "").strip()
+    relation = str(position.get("anchor_relation") or "")
+    if not anchor_text or relation not in {"before", "after"}:
+        return None
+    tokens = anchor_text.split()
+    if not tokens:
+        return None
+    pattern = re.compile(r"\s+".join(re.escape(token) for token in tokens))
+    match = pattern.search(markdown, pos=max(search_start, 0))
+    if match is None:
+        return None
+    offset = match.start() if relation == "before" else match.end()
+    return _trim_trailing_blank_space(markdown, offset), match.end()
 
 
 def _page_ranges(markdown: str) -> dict[int, tuple[int, int]]:

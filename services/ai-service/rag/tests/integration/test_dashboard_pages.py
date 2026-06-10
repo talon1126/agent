@@ -75,6 +75,25 @@ class FakeStreamlit:
 
         self.calls.append(("dataframe", args, kwargs))
 
+    def expander(self, *args: object, **kwargs: object) -> FakeStreamlit:
+        """Record an expandable section and return its context manager."""
+
+        self.calls.append(("expander", args, kwargs))
+        return self
+
+    def __enter__(self) -> FakeStreamlit:
+        """Enter a Streamlit-compatible context manager."""
+
+        return self
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> None:
+        """Exit a Streamlit-compatible context manager without suppressing errors."""
+
     def metric(self, *args: object, **kwargs: object) -> None:
         """Record a metric display call."""
 

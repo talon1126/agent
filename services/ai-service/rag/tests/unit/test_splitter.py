@@ -136,6 +136,45 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
     assert document.metadata.get("image_refs") is None
 
 
+def test_document_chunker_merges_trailing_image_only_chunk_into_previous_text() -> None:
+    """Require extracted images to remain attached to retrievable text chunks."""
+
+    placeholder = "[[image:image-headphones]]"
+    document_text = f"Wireless headphone buying guide.\n\n{placeholder}"
+    document = Document(
+        id="doc-image-tail",
+        text=document_text,
+        metadata={
+            "source_path": "shopping_guides/headphones.pdf",
+            "images": [
+                {
+                    "id": "image-headphones",
+                    "path": "data/images/image-headphones.png",
+                    "page": 1,
+                    "text_offset": document_text.index(placeholder),
+                    "text_length": len(placeholder),
+                    "position": {"x": 10, "y": 20, "width": 300, "height": 200},
+                }
+            ],
+        },
+    )
+    chunker = DocumentChunker(
+        splitter=FakeSplitter(
+            chunks=[
+                "Wireless headphone buying guide.",
+                placeholder,
+            ]
+        )
+    )
+
+    chunks = chunker.chunk(document)
+
+    assert len(chunks) == 1
+    assert chunks[0].text == document_text
+    assert chunks[0].metadata["image_refs"] == ["image-headphones"]
+    assert chunks[0].end_offset == len(document_text)
+
+
 def test_build_chunk_id_changes_for_each_identity_component() -> None:
     """Protect the source, section, and content inputs of stable chunk IDs.
 

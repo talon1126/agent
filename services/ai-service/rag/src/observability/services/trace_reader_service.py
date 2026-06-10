@@ -89,6 +89,8 @@ class TraceTransformStepItem:
     status: str
     input_count: int
     output_count: int
+    changed_count: int | None = None
+    unchanged_count: int | None = None
     method: str | None = None
     provider: str | None = None
     error: Mapping[str, Any] | None = None
@@ -362,6 +364,8 @@ def _transform_steps(
                     status=str(child.get("status") or "success"),
                     input_count=input_count,
                     output_count=output_count,
+                    changed_count=_optional_int(child.get("changed_count")),
+                    unchanged_count=_optional_int(child.get("unchanged_count")),
                     method=_optional_str(child.get("method")),
                     provider=_optional_str(child.get("provider")),
                     error=(

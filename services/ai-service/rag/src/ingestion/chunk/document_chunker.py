@@ -8,6 +8,7 @@ source references, ordering, and image-reference distribution.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -20,6 +21,17 @@ from src.ingestion.chunk.splitter_step import (
     distribute_image_refs,
 )
 from src.libs.splitter import BaseSplitter
+
+_IMAGE_PLACEHOLDER_ONLY = re.compile(r"(?:\s*\[\[image:[^\]]+\]\]\s*)+")
+
+
+@dataclass(frozen=True, slots=True)
+class _LocatedPart:
+    """Represent one splitter segment and its canonical document coordinates."""
+
+    text: str
+    start_offset: int
+    end_offset: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,32 +66,14 @@ class DocumentChunker:
                 out-of-order, or non-locatable text segments.
         """
 
-        parts = self.splitter.split(document.text)
+        parts = _merge_image_only_parts(
+            document.text,
+            _locate_parts(document, self.splitter.split(document.text)),
+        )
         chunks: list[Chunk] = []
-        search_start = 0
         for chunk_index, part in enumerate(parts):
-            if not isinstance(part, str) or not part.strip():
-                raise IngestionError(
-                    "Splitter returned an invalid text segment",
-                    context={"document_id": document.id, "chunk_index": chunk_index},
-                )
-
-            start_offset = document.text.find(part, search_start)
-            if start_offset < 0:
-                raise IngestionError(
-                    "Unable to locate splitter segment in source document",
-                    context={
-                        "document_id": document.id,
-                        "chunk_index": chunk_index,
-                        "search_start": search_start,
-                    },
-                )
-            end_offset = start_offset + len(part)
-            # Recursive splitters can produce overlapping segments. Advancing
-            # from the previous start, rather than the previous end, preserves
-            # ordering while still allowing the next segment to begin inside the
-            # previous source range.
-            search_start = start_offset + 1
+            start_offset = part.start_offset
+            end_offset = part.end_offset
 
             metadata = deepcopy(document.metadata)
             metadata["chunk_index"] = chunk_index
@@ -107,9 +101,9 @@ class DocumentChunker:
                             document.metadata.get("source_path", document.id)
                         ),
                         section_path=section_path,
-                        text=part,
+                        text=part.text,
                     ),
-                    text=part,
+                    text=part.text,
                     metadata=metadata,
                     chunk_index=chunk_index,
                     start_offset=start_offset,
@@ -118,3 +112,86 @@ class DocumentChunker:
                 )
             )
         return chunks
+
+
+def _locate_parts(document: Document, parts: list[str]) -> list[_LocatedPart]:
+    """Validate splitter output and locate every segment in canonical text."""
+
+    located: list[_LocatedPart] = []
+    search_start = 0
+    for chunk_index, part in enumerate(parts):
+        if not isinstance(part, str) or not part.strip():
+            raise IngestionError(
+                "Splitter returned an invalid text segment",
+                context={"document_id": document.id, "chunk_index": chunk_index},
+            )
+        start_offset = document.text.find(part, search_start)
+        if start_offset < 0:
+            raise IngestionError(
+                "Unable to locate splitter segment in source document",
+                context={
+                    "document_id": document.id,
+                    "chunk_index": chunk_index,
+                    "search_start": search_start,
+                },
+            )
+        end_offset = start_offset + len(part)
+        located.append(
+            _LocatedPart(
+                text=part,
+                start_offset=start_offset,
+                end_offset=end_offset,
+            )
+        )
+        # Recursive splitters may overlap. Advancing from the previous start
+        # preserves ordering while still allowing the next segment to overlap.
+        search_start = start_offset + 1
+    return located
+
+
+def _merge_image_only_parts(
+    document_text: str,
+    parts: list[_LocatedPart],
+) -> list[_LocatedPart]:
+    """Attach image-only splitter output to adjacent retrievable source text.
+
+    Trailing image-only segments extend the previous text part. Leading
+    image-only segments extend the next text part. Rebuilding from the
+    canonical source range preserves exact placeholder order and whitespace.
+    """
+
+    merged: list[_LocatedPart] = []
+    leading_images: _LocatedPart | None = None
+    for part in parts:
+        if _IMAGE_PLACEHOLDER_ONLY.fullmatch(part.text):
+            if merged:
+                previous = merged[-1]
+                end_offset = max(previous.end_offset, part.end_offset)
+                merged[-1] = _LocatedPart(
+                    text=document_text[previous.start_offset:end_offset],
+                    start_offset=previous.start_offset,
+                    end_offset=end_offset,
+                )
+            elif leading_images is None:
+                leading_images = part
+            else:
+                leading_images = _LocatedPart(
+                    text=document_text[leading_images.start_offset:part.end_offset],
+                    start_offset=leading_images.start_offset,
+                    end_offset=part.end_offset,
+                )
+            continue
+
+        if leading_images is not None:
+            start_offset = min(leading_images.start_offset, part.start_offset)
+            end_offset = max(leading_images.end_offset, part.end_offset)
+            part = _LocatedPart(
+                text=document_text[start_offset:end_offset],
+                start_offset=start_offset,
+                end_offset=end_offset,
+            )
+            leading_images = None
+        merged.append(part)
+    if leading_images is not None:
+        merged.append(leading_images)
+    return merged

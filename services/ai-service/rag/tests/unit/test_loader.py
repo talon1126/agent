@@ -852,6 +852,10 @@ def test_extract_images_reads_page_position_and_original_bytes(
             assert xref == 7
             return [FakeRect()]
 
+        def get_text(self, kind: str) -> list[tuple[float, float, float, float, str]]:
+            assert kind == "blocks"
+            return [(0.0, 40.0, 100.0, 60.0, "Following product details")]
+
     class FakeDocument:
         """Provide the subset of the PyMuPDF document API used by extraction."""
 
@@ -892,9 +896,68 @@ def test_extract_images_reads_page_position_and_original_bytes(
                 "pixel_width": 20,
                 "pixel_height": 30,
                 "sequence": 0,
+                "anchor_text": "Following product details",
+                "anchor_relation": "before",
             },
         ),
     )
+
+
+def test_extract_images_degrades_when_text_anchor_extraction_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require optional text-anchor failure to preserve image extraction."""
+
+    source = tmp_path / "anchor-failure.pdf"
+    source.write_bytes(b"%PDF-image")
+
+    class FakeRect:
+        """Expose one physical image rectangle."""
+
+        x0 = 1.0
+        y0 = 2.0
+        x1 = 21.0
+        y1 = 32.0
+
+    class FakePage:
+        """Return one image while rejecting optional text-block extraction."""
+
+        def get_images(self, *, full: bool) -> list[tuple[int]]:
+            assert full is True
+            return [(7,)]
+
+        def get_image_rects(self, xref: int) -> list[FakeRect]:
+            assert xref == 7
+            return [FakeRect()]
+
+        def get_text(self, kind: str) -> object:
+            assert kind == "blocks"
+            raise RuntimeError("text blocks unavailable")
+
+    class FakeDocument:
+        """Provide the minimal PyMuPDF document API used by extraction."""
+
+        def __enter__(self) -> FakeDocument:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def __iter__(self) -> object:
+            return iter([FakePage()])
+
+        def extract_image(self, xref: int) -> dict[str, object]:
+            assert xref == 7
+            return {"image": b"raw-image", "ext": "png", "width": 20, "height": 30}
+
+    monkeypatch.setitem(sys.modules, "fitz", SimpleNamespace(open=lambda path: FakeDocument()))
+
+    images = extract_images(source)
+
+    assert len(images) == 1
+    assert "anchor_text" not in images[0].position
+    assert images[0].content == b"raw-image"
 
 
 def test_pdf_loader_persists_images_and_injects_valid_metadata(
@@ -1003,6 +1066,74 @@ def test_pdf_loader_inserts_image_placeholders_near_source_page_text(
     assert document.text.index(second_placeholder) < len(document.text.rstrip())
     assert first_image["text_offset"] == document.text.index(first_placeholder)
     assert second_image["text_offset"] == document.text.index(second_placeholder)
+
+
+def test_pdf_loader_uses_image_text_anchors_when_markdown_has_no_page_markers(
+    tmp_path: Path,
+) -> None:
+    """Require physical image anchors to prevent fallback appends at document end."""
+
+    source = tmp_path / "anchored-images.pdf"
+    source.write_bytes(b"%PDF-anchored-images")
+    conversion = PdfConversionResult(
+        markdown=(
+            "# Headphones\n\n"
+            "Introduction.\n\n"
+            "Key buying dimensions\n\n"
+            "# Keyboards\n\n"
+            "Introduction.\n\n"
+            "Key buying dimensions\n\n"
+            "# Stress Toys\n\n"
+            "Introduction.\n\n"
+            "Key buying dimensions\n"
+        ),
+        images=(
+            ExtractedImage(
+                content=b"headphones-image",
+                suffix=".png",
+                page=1,
+                position={
+                    "x": 10.0,
+                    "y": 100.0,
+                    "width": 80.0,
+                    "height": 40.0,
+                    "anchor_text": "Key buying dimensions",
+                    "anchor_relation": "before",
+                },
+            ),
+            ExtractedImage(
+                content=b"keyboard-image",
+                suffix=".png",
+                page=2,
+                position={
+                    "x": 10.0,
+                    "y": 100.0,
+                    "width": 80.0,
+                    "height": 40.0,
+                    "anchor_text": "Key buying dimensions",
+                    "anchor_relation": "before",
+                },
+            ),
+        ),
+    )
+    converter = Mock()
+    converter.convert.return_value = conversion
+
+    document = PdfLoader(
+        converter=converter,
+        image_output_dir=tmp_path / "images",
+    ).load(source)
+
+    first_image, second_image = document.metadata["images"]
+    first_placeholder = f"[[image:{first_image['id']}]]"
+    second_placeholder = f"[[image:{second_image['id']}]]"
+    first_heading = document.text.index("Key buying dimensions")
+    second_heading = document.text.index("Key buying dimensions", first_heading + 1)
+
+    assert document.text.index(first_placeholder) < first_heading
+    assert document.text.index(second_placeholder) < second_heading
+    assert document.text.index(second_placeholder) > first_heading
+    assert not document.text.rstrip().endswith(second_placeholder)
 
 
 def test_pdf_loader_omits_images_metadata_when_pdf_has_no_images(

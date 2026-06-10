@@ -197,6 +197,8 @@ def _transform_step_row(step: TraceTransformStepItem) -> dict[str, object]:
         "status": step.status,
         "input_count": step.input_count,
         "output_count": step.output_count,
+        "changed_count": step.changed_count,
+        "unchanged_count": step.unchanged_count,
         "method": step.method,
         "provider": step.provider,
         "error": step.error,
@@ -393,8 +395,8 @@ def _highlight_preview_diff(*, before: str, after: str) -> tuple[str, str]:
         before_segment = "".join(before_tokens[before_start:before_end])
         after_segment = "".join(after_tokens[after_start:after_end])
         if tag == "equal":
-            before_parts.append(escape(before_segment))
-            after_parts.append(escape(after_segment))
+            before_parts.append(_equal_diff_span(before_segment))
+            after_parts.append(_equal_diff_span(after_segment))
         elif tag == "delete":
             before_parts.append(_diff_span(before_segment, kind="removed"))
         elif tag == "insert":
@@ -404,6 +406,29 @@ def _highlight_preview_diff(*, before: str, after: str) -> tuple[str, str]:
             after_parts.append(_diff_span(after_segment, kind="added"))
 
     return "".join(before_parts), "".join(after_parts)
+
+
+def _equal_diff_span(text: str) -> str:
+    """Render unchanged diff context with a theme-independent text color.
+
+    Streamlit applies syntax-highlighting colors to text inside ``pre`` blocks.
+    Those theme colors can make unwrapped context nearly white on the diff
+    card's light background. An explicit span keeps unchanged text readable in
+    both Streamlit light and dark themes while changed spans retain their own
+    red or green emphasis.
+
+    Args:
+        text: Unchanged token segment shared by before and after previews.
+
+    Returns:
+        Escaped HTML span with a stable class and explicit dark foreground.
+    """
+
+    return (
+        "<span class='transform-diff-equal' "
+        "style='color:#0F172A;'>"
+        f"{escape(text)}</span>"
+    )
 
 
 def _split_diff_tokens(text: str) -> list[str]:

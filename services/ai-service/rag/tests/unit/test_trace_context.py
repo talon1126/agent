@@ -482,6 +482,8 @@ def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
             "status": "success",
             "input_count": 3,
             "output_count": 3,
+            "changed_count": 1,
+            "unchanged_count": 2,
             "method": "transform",
             "provider": "MetadataEnricher",
             "error": None,
@@ -521,6 +523,8 @@ def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
 
     stored = context.to_dict()["stages"][0]["sub_stages"]
     assert stored[0]["provider"] == "MetadataEnricher"
+    assert stored[0]["changed_count"] == 1
+    assert stored[0]["unchanged_count"] == 2
     assert stored[0]["snapshots"][0]["before_preview"] == "Original chunk text."
     assert stored[0]["snapshots"][0]["after_preview"] == "Rewritten chunk text."
     assert stored[1]["error"] == {

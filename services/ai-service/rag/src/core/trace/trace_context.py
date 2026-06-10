@@ -178,6 +178,12 @@ def _normalize_sub_stages(
                 else None
             ),
         }
+        for count_name in ("changed_count", "unchanged_count"):
+            if item.get(count_name) is not None:
+                child_record[count_name] = _validate_non_negative_int(
+                    item.get(count_name),
+                    field_name=f"sub_stages {count_name}",
+                )
         if item.get("snapshots") is not None:
             child_record["snapshots"] = _normalize_transform_snapshots(
                 item.get("snapshots")

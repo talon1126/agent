@@ -151,8 +151,9 @@ class TransformPipeline:
         """
 
         output = [chunk.model_copy(deep=True) for chunk in chunks]
+        tracking_enabled = step_observer is not None
         snapshots_enabled = (
-            step_observer is not None
+            tracking_enabled
             and _snapshot_options_enabled(snapshot_options)
         )
         for step_name, transform in zip(
@@ -164,7 +165,7 @@ class TransformPipeline:
             started_at = perf_counter()
             step_input = (
                 [chunk.model_copy(deep=True) for chunk in output]
-                if snapshots_enabled
+                if tracking_enabled
                 else []
             )
             try:
@@ -178,6 +179,8 @@ class TransformPipeline:
                         "status": "failed",
                         "input_count": input_count,
                         "output_count": 0,
+                        "changed_count": 0,
+                        "unchanged_count": 0,
                         "method": "transform",
                         "provider": type(transform).__name__,
                         "error": {
@@ -198,6 +201,10 @@ class TransformPipeline:
                 if snapshots_enabled
                 else []
             )
+            changed_count, unchanged_count = _transform_change_counts(
+                step_input,
+                output,
+            )
             _notify_step_observer(
                 step_observer,
                 {
@@ -206,6 +213,8 @@ class TransformPipeline:
                     "status": "success",
                     "input_count": input_count,
                     "output_count": len(output),
+                    "changed_count": changed_count,
+                    "unchanged_count": unchanged_count,
                     "method": "transform",
                     "provider": type(transform).__name__,
                     "error": None,
@@ -332,6 +341,29 @@ def _build_transform_snapshots(
         if len(snapshots) >= max_chunks:
             break
     return snapshots
+
+
+def _transform_change_counts(
+    before_chunks: list[Chunk],
+    after_chunks: list[Chunk],
+) -> tuple[int, int]:
+    """Count changed and unchanged chunk identities for one Transform step.
+
+    Added and removed chunks count as changed. Chunks matched through stable
+    source coordinates count as unchanged only when their text is identical.
+    The summary remains available even when bounded snapshot capture is off.
+    """
+
+    before_by_key, after_by_key = _snapshot_lookups(before_chunks, after_chunks)
+    keys = set(before_by_key) | set(after_by_key)
+    unchanged_count = sum(
+        1
+        for key in keys
+        if key in before_by_key
+        and key in after_by_key
+        and before_by_key[key].text == after_by_key[key].text
+    )
+    return len(keys) - unchanged_count, unchanged_count
 
 
 def _snapshot_options_enabled(options: Mapping[str, Any] | None) -> bool:

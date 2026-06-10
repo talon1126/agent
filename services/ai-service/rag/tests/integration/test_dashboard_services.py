@@ -378,6 +378,8 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
                                 "status": "success",
                                 "input_count": 3,
                                 "output_count": 3,
+                                "changed_count": 2,
+                                "unchanged_count": 1,
                                 "method": "transform",
                                 "provider": "MetadataEnricher",
                                 "error": None,
@@ -388,6 +390,8 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
                                 "status": "success",
                                 "input_count": 3,
                                 "output_count": 3,
+                                "changed_count": 2,
+                                "unchanged_count": 1,
                                 "method": "transform",
                                 "provider": "ChunkRewriter",
                                 "error": None,
@@ -462,6 +466,8 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
         ]
         assert ingestion_detail.transform_steps[1].duration_ms == 115.0
         assert ingestion_detail.transform_steps[1].provider == "ChunkRewriter"
+        assert ingestion_detail.transform_steps[1].changed_count == 2
+        assert ingestion_detail.transform_steps[1].unchanged_count == 1
         assert ingestion_detail.transform_steps[1].snapshots[0].step_color == "#8B5CF6"
         assert ingestion_detail.transform_steps[1].snapshots[0].before_preview == (
             "Original buying guide."
@@ -1588,6 +1594,8 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
                 status="success",
                 input_count=4,
                 output_count=4,
+                changed_count=3,
+                unchanged_count=1,
                 method="transform",
                 provider="MetadataEnricher",
             ),
@@ -1597,6 +1605,8 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
                 status="success",
                 input_count=4,
                 output_count=4,
+                changed_count=3,
+                unchanged_count=1,
                 method="transform",
                 provider="ChunkRewriter",
                 snapshots=(
@@ -1675,8 +1685,11 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
     assert "Rewritten" in diff_markdown
     assert "buying guide." in diff_markdown
     history_rows = _dataframe_payload(fake_ui, 0)
+    transform_rows = _dataframe_payload(fake_ui, 2)
     assert history_rows[0]["started_at"] == history.started_at
     assert history_rows[0]["finished_at"] is None
+    assert transform_rows[1]["changed_count"] == 3
+    assert transform_rows[1]["unchanged_count"] == 1
     assert "metric" in call_names
     assert "write" in call_names
     _args, selectbox_kwargs = next(
@@ -1699,8 +1712,14 @@ def test_transform_result_diff_highlights_chinese_changes_without_strikethrough(
         after="无线耳机选购应关注佩戴、连接稳定性和降噪。",
     )
 
-    assert before_html.startswith("无线耳机选购")
-    assert after_html.startswith("无线耳机选购")
+    assert "无线耳机选购" in before_html
+    assert "无线耳机选购" in after_html
+    assert "transform-diff-equal" in before_html
+    assert "transform-diff-equal" in after_html
+    assert "style='color:#0F172A;'" in before_html
+    assert "style='color:#0F172A;'" in after_html
+    assert "!important" not in before_html
+    assert "-webkit-text-fill-color" not in before_html
     assert "transform-diff-removed" in before_html
     assert "transform-diff-added" in after_html
     assert "text-decoration:line-through" not in before_html

@@ -267,9 +267,9 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 已实现流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
-| C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-06 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；11 个新增单元测试及真实文本/图片 PDF 冒烟测试通过 |
-| C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-06 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；24 个相关单元测试、111 个全量测试通过 |
-| C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；已修复 ChunkRewriter 只基于 chunk 正文和 Document.summary 调用 LLM，不发送 metadata/image_refs，只保存 LLM JSON/text 正文，不把 metadata/image_refs 报告写入 chunk content；普通文本的合法 JSON text 为空或缺失时直接失败，纯图片占位符 chunk 跳过文本 rewrite 并保留给 Image-to-Text；真实 PDF 摄取成功且数据库正文无 JSON wrapper，trace_id=`ingestion-bd65aa552faa4f038af94baa90b094e7` |
+| C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-10 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；PyMuPDF 图片矩形绑定邻近文本锚点，MarkItDown 无页标记时仍能将图片插入对应章节附近；真实购物指南 PDF 冒烟验证通过 |
+| C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-10 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；纯图片占位符片段会合并到相邻正文 chunk，真实购物指南 PDF 不再生成独立图片 chunk |
+| C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；ChunkRewriter 只基于文本节点和 Document.summary 调用 LLM，不发送 metadata/image_refs/图片节点，改写后按原顺序恢复图片占位符；普通文本节点的合法 JSON text 为空或缺失时直接失败，纯图片占位符 chunk 跳过文本 rewrite 并保留给 Image-to-Text |
 | C5 | 实现 ImageCaptioner | [✔] | 2026-06-06 | 已实现 ImageCaptioner、ImageToTextTransform、image_to_text transform step、skipped/failed/low_quality 状态和 caption metadata；34 个相关测试、125 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C6 | 实现 DenseEncoder | [✔] | 2026-06-06 | 已实现 DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C7 | 实现 BM25Indexer | [✔] | 2026-06-07 | 已实现 BM25Candidate、BM25IndexResult、BM25Indexer.index/query、词频统计、倒排索引、关键词 Top-k 排序、中文连续文本 n-gram fallback 和重复 index 状态重建；6 个相关测试、137 个全量测试通过，2 个 external smoke test 默认跳过 |
@@ -314,12 +314,12 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-10 | 已实现 `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、摄取阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；顶层阶段支持结构化 `sub_stages`，用于保存 Transform Pipeline 内每个具体实现的独立耗时、状态和受限 snapshots |
 | F3 | 实现 query trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.query()`、raw_query/request_source 基础信息校验、query_processing/dense/sparse/fusion/filter/rerank 阶段 allowlist、query summary/evaluation 指标和检索候选计数校验；12 个 TraceContext 单元测试通过 |
 | F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | 已实现 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；已保留 `src/logs/.gitkeep`，运行时 `*.log/*.jsonl` 仍不提交；15 个 TraceContext/TraceWriter 单元测试通过 |
-| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-10 | 已修复生产组合根仅写入 JSONL 的缺口并实现 JSONL/PostgreSQL 双写；Transform Pipeline 对每个启用实现单独计时，将结果作为顶层 `transform` 的 `sub_stages` 注入 trace，保留总耗时并记录失败实现；可按配置记录变化 chunk 的 before/after 预览快照 |
+| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-10 | 已修复生产组合根仅写入 JSONL 的缺口并实现 JSONL/PostgreSQL 双写；Transform Pipeline 对每个启用实现单独计时，将结果作为顶层 `transform` 的 `sub_stages` 注入 trace，保留总耗时、失败实现、changed/unchanged 数量，并可按配置记录变化 chunk 的 before/after 预览快照 |
 | F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | 已实现 Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
 | F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | 已实现 Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
 | F8 | 实现系统总览、Ingestion 管理页面和摄取操作 | [✔] | 2026-06-10 | 已新增 `IngestionOperationService`，点击 Run ingestion 会复用 `run_ingest_cli()` 触发真实摄取并展示 success/skipped/failed 结果；支持多文件选择、目录上传、服务器文件夹候选发现和单文件取消摄入；22 个 Dashboard 集成测试和 ruff 通过 |
 | F9 | 实现数据浏览器与 Query Trace 页面 | [✔] | 2026-06-10 | 已实现数据浏览器和 Query Trace 页面，并修复 Trace 下拉框选择未驱动详情切换的问题；Query Trace 使用固定 session_state key，Dashboard 重跑时加载已选详情，跨 collection 的过期选择自动回退最新记录 |
-| F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-10 | 已实现 Ingestion Trace 和评估面板页面，并修复 Trace 下拉框选择未驱动详情切换的问题；Ingestion Trace 保留主阶段瀑布图，并新增 Transform Breakdown 表格、柱状图和按 Transform 类型着色、按红绿标注文本变更的 Result Diff |
+| F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-10 | 已实现 Ingestion Trace 和评估面板页面，并修复 Trace 下拉框选择未驱动详情切换的问题；Ingestion Trace 保留主阶段瀑布图，并新增带 changed/unchanged 数量的 Transform Breakdown、柱状图和按 Transform 类型着色、按红绿标注文本变更的 Result Diff；未变化文本使用独立显式深色样式，避免受 Streamlit 代码块主题影响而不可见 |
 | F11 | 实现 Dashboard 启动脚本和冒烟测试 | [✔] | 2026-06-08 | 已实现 Streamlit app 最小入口、六大页面模块导入校验、`run_dashboard.py` dry-run、端口配置、headless 启动命令和注入 command runner；14 个 Dashboard service/page/launcher 集成测试通过 |
 | F12 | 完成 Dashboard 六大页面测试 | [✔] | 2026-06-08 | 已新增 `test_dashboard_pages.py` 并修复 Dashboard app 导航，真实 PostgreSQL 测试数据验证六大页面均可读取配置、数据库记录、trace 和 evaluation 数据并完成渲染入口调用；app 入口测试覆盖 sidebar 六页导航和默认页面分发；16 个 Dashboard 集成测试和 ruff 通过 |
 
@@ -773,10 +773,10 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `MarkItDownConverter`：将 PDF 转换为 canonical Markdown
 - `MarkdownLoader.load()`：加载 Markdown 并提取标题层级与 metadata
 - `PdfLoader.load()`：加载 PDF 并输出标准 Document
-- `extract_images()`：使用 PyMuPDF 仅在 PDF 存在图片时抽取图片字节、页码与物理位置信息
+- `extract_images()`：使用 PyMuPDF 仅在 PDF 存在图片时抽取图片字节、页码与物理位置信息，并根据图片矩形选择最近的后续或前置文本块作为 Markdown 插入锚点
 - `DocumentSummarizer.summarize()`：在 Loader 后为 Document 生成顶层摘要，作为后续 chunk rewrite 的全局上下文
 
-验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码和物理位置；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置；PDF 图片占位符必须按 `page + position.y + position.x` 排序插入对应页文本区间，若存在下一页标记则必须插入到下一页标记之前，不能集中追加到文档末尾；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + summary + metadata)` 并提取标题层级，`summary` 是顶层字段且可为 `null`，不得写入 `metadata.summary`；`DocumentSummarizer` 作为 Loader 后的独立步骤生成 `Document.summary`，已有同版本摘要时保持幂等；fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
+验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码、物理位置和邻近文本锚点；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置；PDF 图片占位符必须优先根据按页顺序解析的邻近文本锚点插入对应正文附近，重复锚点使用顺序游标映射到后续页面；锚点不可用或文本块提取异常时必须优雅回退到页标记区间或确定性文末追加，不能导致图片提取或整个 PDF 摄取失败，正常可定位图片不能集中追加到文档末尾；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + summary + metadata)` 并提取标题层级，`summary` 是顶层字段且可为 `null`，不得写入 `metadata.summary`；`DocumentSummarizer` 作为 Loader 后的独立步骤生成 `Document.summary`，已有同版本摘要时保持幂等；fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
 
 测试方法：`uv run --project services/ai-service/rag pytest -p no:cacheprovider services\ai-service\rag\tests\unit\test_loader.py -v`；单元测试通过注入 fake MarkItDown converter 和 fake PyMuPDF module 验证转换与图片提取契约，不依赖真实外部解析环境。
 
@@ -794,8 +794,9 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `extract_heading_hierarchy()`：为标题层级 metadata 补充源文本 `text_offset`
 - `attach_section_path()`：根据标题 offset 将当前标题层级写入 chunk metadata
 - `distribute_image_refs()`：根据图片占位符 offset 分发图片引用
+- `_merge_image_only_parts()`：将 splitter 产生的纯图片占位符片段合并到相邻正文 chunk，保留源文本顺序和 offset
 
-验收标准：Loader 的每个 heading metadata 包含 canonical `Document.text` 中的起始 offset；同来源、同章节、同内容生成相同 `chunk_id`，来源、章节或内容变化时 ID 发生变化；每个 chunk 都通过独立 `build_chunk_id()` 规则生成 ID；`Document.metadata` 的非图片字段被复制到 `Chunk.metadata`；`Document.metadata.images[]` 保留完整文档图片清单，`Chunk.metadata.images[]` 只保留当前 chunk 命中的图片子集；按顺序添加 `chunk_index`；根据文档来源建立 `source_ref`；chunk metadata 根据 heading offset 包含当前 chunk 对应的 `section_path` 和按需分发的 `image_refs`；没有图片的 chunk 不添加无效 `image_refs`，也不保留文档级 `images[]`；完成 `List[str] -> List[Chunk]` 类型转换。
+验收标准：Loader 的每个 heading metadata 包含 canonical `Document.text` 中的起始 offset；同来源、同章节、同内容生成相同 `chunk_id`，来源、章节或内容变化时 ID 发生变化；每个 chunk 都通过独立 `build_chunk_id()` 规则生成 ID；`Document.metadata` 的非图片字段被复制到 `Chunk.metadata`；`Document.metadata.images[]` 保留完整文档图片清单，`Chunk.metadata.images[]` 只保留当前 chunk 命中的图片子集；按顺序添加 `chunk_index`；根据文档来源建立 `source_ref`；chunk metadata 根据 heading offset 包含当前 chunk 对应的 `section_path` 和按需分发的 `image_refs`；没有图片的 chunk 不添加无效 `image_refs`，也不保留文档级 `images[]`；splitter 产生的纯图片占位符 chunk 必须合并到相邻正文，不能作为缺少文本语义的独立检索单元；完成 `List[str] -> List[Chunk]` 类型转换。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 
@@ -811,11 +812,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `TransformPipeline.from_settings()`：从 `settings.transform.steps` 构建 enabled step 链路
 - `TransformPipeline.run()`：按配置顺序串行执行 Transform
 - `MetadataEnricher.transform()`：注入标题路径、来源、文档主题等上下文 metadata
-- `ChunkRewriter.transform()`：读取 `document_summary` 作为全局上下文，利用 LLM 重写 chunk，使片段语义更完整；发送给 LLM 的输入只能包含 chunk 正文和文档摘要，不发送 `Chunk.metadata` 或 `image_refs`；必须解析 JSON schema 或清理 Markdown 分段回复，只把正文写入 `Chunk.text`，不得把 metadata、image_refs、Prompt 标签或代码块写入 chunk content；仅包含图片占位符的 chunk 必须跳过文本 LLM rewrite 并保留给后续 Image-to-Text；普通文本 chunk 的合法 JSON 响应缺少非空 `text` 时必须作为 provider 无效响应失败，不得把原始 JSON 写入正文
+- `ChunkRewriter.transform()`：读取 `document_summary` 作为全局上下文，利用 LLM 重写 chunk，使片段语义更完整；改写前将 chunk 拆分为文本节点和图片占位符节点，只把文本节点与文档摘要发送给 LLM，完成后按原节点顺序重组图片占位符；不发送 `Chunk.metadata`、`image_refs` 或图片节点；必须解析 JSON schema 或清理 Markdown 分段回复，只把正文写入 `Chunk.text`，不得把 metadata、image_refs、Prompt 标签或代码块写入 chunk content；仅包含图片占位符的 chunk 必须跳过文本 LLM rewrite 并保留给后续 Image-to-Text；普通文本节点的合法 JSON 响应缺少非空 `text` 时必须作为 provider 无效响应失败，不得把原始 JSON 写入正文
 - `SemanticMergeTransform.transform()`：合并逻辑相关但被物理切开的相邻 chunk
 - `DenoiseTransform.transform()`：清理空白、页眉页脚、目录和解析残留噪声
 
-验收标准：运行时 `config/settings.yaml` 被 Git 忽略，仓库提交 `config/settings.example.yaml` 作为完整模板；`ingestion.document_summary.llm_provider` 显式配置为 `deepseek`，运行时摘要步骤必须按该 provider 构建 LLM；`settings.transform.steps` 只描述步骤顺序、启用状态和 prompt_path，不包含 provider；`src.libs.transform` 只暴露 `BaseTransform`；具体 Transform 位于 `src/ingestion/transform/`；chunk 包含标题、来源、主题上下文；`ChunkRewriter` 必须接收 `document_summary` 并只把它作为语义背景，不得凭摘要补造 chunk 中不存在的事实；`ChunkRewriter` 不得把 `Chunk.metadata` 或 `image_refs` 发送给大模型，metadata/image_refs 只能在 Python 对象层面继承和维护；仅包含图片占位符的 chunk 跳过文本 rewrite，metadata 记录 `rewrite.status=skipped` 和 `reason=image_placeholder_only`；fake LLM 下可 rewrite；LLM 返回 JSON 或 Markdown 分段时，最终 `Chunk.text` 只能包含可检索正文，metadata 和 image_refs 只能保留在 `Chunk.metadata`；普通文本 chunk 的合法 JSON `text` 为空或缺失时摄取必须失败，不得把 `{ "text": ... }` JSON 结构作为 chunk 正文写入；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
+验收标准：运行时 `config/settings.yaml` 被 Git 忽略，仓库提交 `config/settings.example.yaml` 作为完整模板；`ingestion.document_summary.llm_provider` 显式配置为 `deepseek`，运行时摘要步骤必须按该 provider 构建 LLM；`settings.transform.steps` 只描述步骤顺序、启用状态和 prompt_path，不包含 provider；`src.libs.transform` 只暴露 `BaseTransform`；具体 Transform 位于 `src/ingestion/transform/`；chunk 包含标题、来源、主题上下文；`ChunkRewriter` 必须接收 `document_summary` 并只把它作为语义背景，不得凭摘要补造 chunk 中不存在的事实；`ChunkRewriter` 不得把 `Chunk.metadata`、`image_refs` 或图片占位符节点发送给大模型，metadata/image_refs 只能在 Python 对象层面继承和维护；含正文和图片的 chunk 必须分别改写各文本节点并按原顺序恢复每个图片占位符，图片不得被删除、复制或移动；仅包含图片占位符的 chunk 跳过文本 rewrite，metadata 记录 `rewrite.status=skipped` 和 `reason=image_placeholder_only`；fake LLM 下可 rewrite；LLM 返回 JSON 或 Markdown 分段时，最终 `Chunk.text` 只能包含可检索正文和原有图片占位符，metadata 和 image_refs 只能保留在 `Chunk.metadata`；普通文本节点的合法 JSON `text` 为空或缺失时摄取必须失败，不得把 `{ "text": ... }` JSON 结构作为 chunk 正文写入；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
 
 补充要求：执行该任务时必须在 `settings.example.yaml` 和本地 `settings.yaml` 中配置真实启用的 Transform steps 链路，测试不能只依赖 fake transform；需要创建典型噪声场景 fixture，例如连续空白、页眉页脚、重复目录、页码水印、PDF 解析断行、无意义符号残留和图片占位符附近噪声。
 
@@ -1413,7 +1414,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `TraceController.flush_ingestion()`：按 ingestion trace 契约 flush 汇总指标
 - `TraceController.flush_query()`：按 query trace 契约 flush 汇总指标
 - `IngestionPipeline.run()` trace 打点：注入链路追踪点
-- `TransformPipeline.run()` trace observer：按配置顺序测量每个具体 Transform 实现，成功和失败都生成子阶段记录；开启 `observability.transform_snapshots.enabled` 时记录变化 chunk 的受限 before/after 预览
+- `TransformPipeline.run()` trace observer：按配置顺序测量每个具体 Transform 实现，成功和失败都生成子阶段记录；记录 `changed_count/unchanged_count` 解释实际处理结果；开启 `observability.transform_snapshots.enabled` 时记录变化 chunk 的受限 before/after 预览
 - `IngestionPipeline.run_indexing()` trace 打点：注入索引子链路追踪点
 - `HybridSearch.search()` trace 打点：将 RRF 阶段统一记录为 `fusion`
 - `QueryRuntime.execute()` trace 打点：注入 query_processing、rerank 跳过、response 和最终 flush
@@ -1422,7 +1423,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - Trace writer CLI 注入：`ingest.py` 和 `query.py` 默认使用 `settings.observability.trace_jsonl_path`；当 `settings.observability.persist_to_postgresql=true` 时同时写入 PostgreSQL
 - Trace 状态约束迁移：Query/Ingestion trace 表接受 `degraded`，且 `init_schema()` 可幂等升级已存在的本地数据库约束
 
-验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；顶层 `transform.duration_ms` 保留整个 Transform Pipeline 总耗时，`transform.sub_stages` 按实际执行顺序记录每个启用实现的名称、具体类、耗时、输入输出 chunk 数和状态；某个实现失败时必须先记录该失败子阶段，再让主链路按原错误语义失败；Transform snapshots 必须由配置控制，默认只记录变化 chunk、每步最多 20 个、每段预览最多 800 字，不额外调用 LLM 或数据库；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
+验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；顶层 `transform.duration_ms` 保留整个 Transform Pipeline 总耗时，`transform.sub_stages` 按实际执行顺序记录每个启用实现的名称、具体类、耗时、输入输出 chunk 数、`changed_count`、`unchanged_count` 和状态，使 Dashboard 能区分“执行但未改变”与“未执行”；某个实现失败时必须先记录该失败子阶段，再让主链路按原错误语义失败；Transform snapshots 必须由配置控制，默认只记录变化 chunk、每步最多 20 个、每段预览最多 800 字，不额外调用 LLM 或数据库；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
@@ -1528,12 +1529,12 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 实现类/函数：
 
 - `build_ingestion_trace_page_model()`：读取 Ingestion Trace 历史和选中 trace 详情，生成摄取追踪页面模型
-- `render_ingestion_trace_page()`：渲染摄取 trace 历史、主阶段耗时瀑布图、Transform Breakdown 表格和柱状图、Transform Result Diff 红绿内容差异卡片、处理统计、质量指标和错误详情；Trace 下拉框使用固定 widget key 持久化选择
+- `render_ingestion_trace_page()`：渲染摄取 trace 历史、主阶段耗时瀑布图、包含 changed/unchanged 数量的 Transform Breakdown 表格和柱状图、Transform Result Diff 红绿内容差异卡片、处理统计、质量指标和错误详情；Trace 下拉框使用固定 widget key 持久化选择
 - Dashboard Ingestion Trace 分发：每次 Streamlit 重跑从 `session_state` 读取已选 Ingestion Trace ID，并传入 `build_ingestion_trace_page_model()`
 - `build_evaluation_page_model()`：读取 evaluation run 历史、选中 run detail 和 metric trends，生成评估页面模型
 - `render_evaluation_page()`：渲染评估运行入口、run 历史、指标详情、settings snapshot 和趋势图，并返回运行评估意图 DTO
 
-验收标准：可展示阶段耗时和评估趋势；Transform 主阶段存在 `sub_stages` 时，页面必须按执行顺序展示每个 Transform 实现的名称、实现类、耗时、输入输出 chunk 数、状态和错误；存在 snapshots 时展示 Transform Result Diff，用专属颜色区分 `metadata_enrich`、`rewrite_chunk`、`semantic_merge`、`denoise` 和 `image_to_text`，并以浅红背景标注 before 中被删除或替换的内容、以浅绿背景标注 after 中新增或替换的内容；Diff 必须采用兼容中英文混排的细粒度 token 对比，不能将无空格的整段中文直接判定为单个替换块，也不能使用影响长文本可读性的整段删除线；同时展示 before/after 预览、变化类型和截断标记；旧 trace 不包含 `sub_stages/snapshots` 时页面保持兼容且不显示空明细区；选择任意 Ingestion Trace 后阶段耗时、Transform Breakdown、Result Diff、处理统计和错误详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
+验收标准：可展示阶段耗时和评估趋势；Transform 主阶段存在 `sub_stages` 时，页面必须按执行顺序展示每个 Transform 实现的名称、实现类、耗时、输入输出 chunk 数、变化数量、未变化数量、状态和错误，避免将“没有 diff”误解为“没有执行”；存在 snapshots 时展示 Transform Result Diff，用专属颜色区分 `metadata_enrich`、`rewrite_chunk`、`semantic_merge`、`denoise` 和 `image_to_text`，并以浅红背景标注 before 中被删除或替换的内容、以浅绿背景标注 after 中新增或替换的内容；Diff 必须采用兼容中英文混排的细粒度 token 对比，不能将无空格的整段中文直接判定为单个替换块，也不能使用影响长文本可读性的整段删除线；未变化文本必须使用独立的显式深色前景样式，不能依赖 Streamlit `pre`/代码块主题继承，确保浅色和深色主题下都可读；同时展示 before/after 预览、变化类型和截断标记；旧 trace 不包含 `sub_stages/snapshots` 或变化计数时页面保持兼容且不显示空明细区；选择任意 Ingestion Trace 后阶段耗时、Transform Breakdown、Result Diff、处理统计和错误详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 

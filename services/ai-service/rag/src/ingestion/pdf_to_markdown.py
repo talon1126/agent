@@ -190,17 +190,19 @@ def extract_images(source: str | Path) -> tuple[ExtractedImage, ...]:
                     suffix = f".{payload.get('ext') or 'bin'}"
                     rectangles: Sequence[Any] = page.get_image_rects(xref) or (None,)
                     for rectangle in rectangles:
+                        position = _rectangle_position(
+                            rectangle,
+                            pixel_width=payload.get("width"),
+                            pixel_height=payload.get("height"),
+                            sequence=sequence,
+                        )
+                        position.update(_image_text_anchor(page, rectangle))
                         images.append(
                             ExtractedImage(
                                 content=content,
                                 suffix=suffix,
                                 page=page_number,
-                                position=_rectangle_position(
-                                    rectangle,
-                                    pixel_width=payload.get("width"),
-                                    pixel_height=payload.get("height"),
-                                    sequence=sequence,
-                                ),
+                                position=position,
                             )
                         )
     except IngestionError:
@@ -212,6 +214,58 @@ def extract_images(source: str | Path) -> tuple[ExtractedImage, ...]:
             cause=error,
         ) from error
     return tuple(images)
+
+
+def _image_text_anchor(page: Any, rectangle: Any | None) -> dict[str, str]:
+    """Find a nearby page text block that can anchor one image in Markdown.
+
+    Args:
+        page: PyMuPDF page exposing ``get_text("blocks")``.
+        rectangle: Physical image rectangle on the page.
+
+    Returns:
+        ``anchor_text`` and ``anchor_relation`` when a meaningful nearby text
+        block exists. A following block is preferred and receives relation
+        ``before`` so the placeholder appears before that text. When no
+        following block exists, the nearest preceding block receives relation
+        ``after``. Empty mappings preserve the existing deterministic fallback.
+    """
+
+    if rectangle is None:
+        return {}
+    try:
+        blocks = page.get_text("blocks")
+    except Exception:
+        # Text anchors improve placement but are not required to extract an
+        # image. Unsupported or malformed page text must preserve the Loader's
+        # deterministic page-marker/document-end fallback.
+        return {}
+    candidates: list[tuple[float, float, str]] = []
+    for block in blocks:
+        if len(block) < 5:
+            continue
+        try:
+            top = float(block[1])
+            bottom = float(block[3])
+            text = " ".join(str(block[4]).replace("\x00", " ").split())
+        except (IndexError, TypeError, ValueError):
+            continue
+        if len(text) < 3:
+            continue
+        candidates.append((top, bottom, text))
+    if not candidates:
+        return {}
+
+    following = [candidate for candidate in candidates if candidate[0] >= float(rectangle.y1)]
+    if following:
+        _top, _bottom, text = min(following, key=lambda candidate: candidate[0])
+        return {"anchor_text": text, "anchor_relation": "before"}
+
+    preceding = [candidate for candidate in candidates if candidate[1] <= float(rectangle.y0)]
+    if preceding:
+        _top, _bottom, text = max(preceding, key=lambda candidate: candidate[1])
+        return {"anchor_text": text, "anchor_relation": "after"}
+    return {}
 
 
 class MarkItDownConverter:

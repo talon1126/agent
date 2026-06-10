@@ -259,6 +259,10 @@ def test_transform_pipeline_reports_each_implementation_timing() -> None:
             "after_truncated": False,
         }
     ]
+    assert records[0]["changed_count"] == 2
+    assert records[0]["unchanged_count"] == 0
+    assert records[1]["changed_count"] == 1
+    assert records[1]["unchanged_count"] == 1
     assert all(record["status"] == "success" for record in records)
     assert all(float(record["duration_ms"]) >= 0 for record in records)
 
@@ -460,6 +464,45 @@ def test_chunk_rewriter_skips_image_placeholder_only_chunk() -> None:
     assert rewritten[0].metadata["rewrite"]["status"] == "skipped"
     assert rewritten[0].metadata["rewrite"]["reason"] == "image_placeholder_only"
     llm.chat.assert_not_called()
+
+
+def test_chunk_rewriter_rewrites_text_segments_and_restores_image_placeholders() -> None:
+    """Require rewrite to preserve image nodes without sending them to the LLM."""
+
+    placeholder = "[[image:image-headphones]]"
+    source = make_chunk(
+        text=f"Original introduction.\n\n{placeholder}\n\nOriginal conclusion.",
+        metadata={"image_refs": ["image-headphones"]},
+    )
+    llm = Mock()
+    llm.chat.side_effect = [
+        LLMResponse(
+            content='{"text": "Improved introduction."}',
+            provider="fake",
+            model="fake-rewriter",
+        ),
+        LLMResponse(
+            content='{"text": "Improved conclusion."}',
+            provider="fake",
+            model="fake-rewriter",
+        ),
+    ]
+    transform = ChunkRewriter(
+        llm=llm,
+        prompt=config_module.load_prompt("config/prompts/rewrite_chunk_prompt.yaml"),
+    )
+
+    rewritten = transform.transform([source])
+
+    assert rewritten[0].text == (
+        f"Improved introduction.\n\n{placeholder}\n\nImproved conclusion."
+    )
+    assert rewritten[0].text.count(placeholder) == 1
+    assert rewritten[0].metadata["image_refs"] == ["image-headphones"]
+    assert llm.chat.call_count == 2
+    for call in llm.chat.call_args_list:
+        user_message = call.args[0][1].content
+        assert placeholder not in user_message
 
 
 def test_chunk_rewriter_strips_markdown_metadata_sections_from_llm_response() -> None:

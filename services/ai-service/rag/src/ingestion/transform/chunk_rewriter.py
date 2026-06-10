@@ -102,24 +102,10 @@ class ChunkRewriter(BaseTransform):
             return chunk.model_copy(update={"metadata": metadata}, deep=True)
 
         try:
-            response = self._llm.chat(
-                [
-                    ChatMessage(
-                        role="system",
-                        content=self._prompt.system_prompt,
-                    ),
-                    ChatMessage(
-                        role="user",
-                        content=self._prompt.user_prompt.format(
-                            chunk_text=chunk.text,
-                            document_summary=document_summary,
-                        ),
-                    ),
-                ]
+            rewritten_text, responses = self._rewrite_text_nodes(
+                chunk.text,
+                document_summary=document_summary,
             )
-            rewritten_text = _extract_rewritten_text(response.content)
-            if not rewritten_text:
-                raise ValueError("Rewrite provider returned blank content")
         except Exception as error:
             raise IngestionError(
                 "Unable to rewrite chunk",
@@ -131,11 +117,13 @@ class ChunkRewriter(BaseTransform):
                 cause=error,
             ) from error
 
+        response = responses[-1]
         metadata = deepcopy(chunk.metadata)
         metadata["rewrite"] = {
             "version": self._version,
             "provider": response.provider,
             "model": response.model,
+            "segment_count": len(responses),
             "input_hash": current_hash,
             "output_hash": _content_hash(rewritten_text),
         }
@@ -147,6 +135,63 @@ class ChunkRewriter(BaseTransform):
             },
             deep=True,
         )
+
+    def _rewrite_text_nodes(
+        self,
+        text: str,
+        *,
+        document_summary: str,
+    ) -> tuple[str, list[Any]]:
+        """Rewrite text nodes while preserving image nodes in their exact order.
+
+        Args:
+            text: Source chunk text containing zero or more image placeholders.
+            document_summary: Document-level semantic context.
+
+        Returns:
+            Reassembled searchable text and provider responses for provenance.
+            Image placeholders and their surrounding whitespace never enter the
+            LLM request, so the provider cannot delete, duplicate, or move them.
+
+        Raises:
+            ValueError: If a provider returns blank content for a text node.
+        """
+
+        nodes = re.split(f"({_IMAGE_PLACEHOLDER.pattern})", text)
+        output: list[str] = []
+        responses: list[Any] = []
+        for node in nodes:
+            if not node:
+                continue
+            if _IMAGE_PLACEHOLDER.fullmatch(node):
+                output.append(node)
+                continue
+            leading = node[: len(node) - len(node.lstrip())]
+            trailing = node[len(node.rstrip()) :]
+            source_text = node.strip()
+            if not source_text:
+                output.append(node)
+                continue
+            response = self._llm.chat(
+                [
+                    ChatMessage(role="system", content=self._prompt.system_prompt),
+                    ChatMessage(
+                        role="user",
+                        content=self._prompt.user_prompt.format(
+                            chunk_text=source_text,
+                            document_summary=document_summary,
+                        ),
+                    ),
+                ]
+            )
+            rewritten = _extract_rewritten_text(response.content)
+            if not rewritten:
+                raise ValueError("Rewrite provider returned blank content")
+            output.append(f"{leading}{rewritten}{trailing}")
+            responses.append(response)
+        if not responses:
+            raise ValueError("Rewrite provider received no searchable text nodes")
+        return "".join(output), responses
 
 
 def _chunk_id_for_text(chunk: Chunk, text: str) -> str:
