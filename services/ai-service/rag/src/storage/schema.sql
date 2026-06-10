@@ -291,7 +291,7 @@ CREATE TABLE IF NOT EXISTS rag_query_traces (
     CONSTRAINT chk_rag_query_traces_finished_at
         CHECK (finished_at IS NULL OR finished_at >= started_at),
     CONSTRAINT chk_rag_query_traces_status
-        CHECK (status IN ('running', 'success', 'failed')),
+        CHECK (status IN ('running', 'success', 'failed', 'degraded')),
     CONSTRAINT chk_rag_query_traces_basic_info_object
         CHECK (jsonb_typeof(basic_info) = 'object'),
     CONSTRAINT chk_rag_query_traces_stages_array
@@ -340,7 +340,7 @@ CREATE TABLE IF NOT EXISTS rag_ingestion_traces (
     CONSTRAINT chk_rag_ingestion_traces_finished_at
         CHECK (finished_at IS NULL OR finished_at >= started_at),
     CONSTRAINT chk_rag_ingestion_traces_status
-        CHECK (status IN ('running', 'success', 'skipped', 'failed')),
+        CHECK (status IN ('running', 'success', 'skipped', 'failed', 'degraded')),
     CONSTRAINT chk_rag_ingestion_traces_basic_info_object
         CHECK (jsonb_typeof(basic_info) = 'object'),
     CONSTRAINT chk_rag_ingestion_traces_stages_array
@@ -359,6 +359,44 @@ CREATE INDEX IF NOT EXISTS idx_rag_ingestion_traces_status_started_at
     ON rag_ingestion_traces (status, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_ingestion_traces_source_hash
     ON rag_ingestion_traces (source_hash);
+
+-- Upgrade trace constraints created before F5 dual persistence. Pipelines use
+-- ``degraded`` for successful fallback execution, so PostgreSQL must preserve
+-- that final outcome instead of rejecting the trace snapshot. The definition
+-- check avoids repeatedly rebuilding constraints on every application start.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'chk_rag_query_traces_status'
+          AND conrelid = 'rag_query_traces'::regclass
+          AND pg_get_constraintdef(oid) NOT LIKE '%degraded%'
+    ) THEN
+        ALTER TABLE rag_query_traces
+            DROP CONSTRAINT IF EXISTS chk_rag_query_traces_status;
+        ALTER TABLE rag_query_traces
+            ADD CONSTRAINT chk_rag_query_traces_status
+            CHECK (status IN ('running', 'success', 'failed', 'degraded'));
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'chk_rag_ingestion_traces_status'
+          AND conrelid = 'rag_ingestion_traces'::regclass
+          AND pg_get_constraintdef(oid) NOT LIKE '%degraded%'
+    ) THEN
+        ALTER TABLE rag_ingestion_traces
+            DROP CONSTRAINT IF EXISTS chk_rag_ingestion_traces_status;
+        ALTER TABLE rag_ingestion_traces
+            ADD CONSTRAINT chk_rag_ingestion_traces_status
+            CHECK (status IN ('running', 'success', 'skipped', 'failed', 'degraded'));
+    END IF;
+END $$;
 
 -- Represent one execution of an evaluation backend. The settings snapshot
 -- records the exact retrieval, rerank, model, and dataset configuration needed

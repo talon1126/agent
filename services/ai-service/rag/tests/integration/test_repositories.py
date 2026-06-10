@@ -703,6 +703,28 @@ def test_chunk_collection_must_match_its_document_collection() -> None:
 
 
 @pytest.mark.integration
+def test_trace_schema_accepts_degraded_status_and_upgrades_existing_constraints() -> None:
+    """Trace tables must persist fallback-success outcomes used by pipelines."""
+
+    sql = _schema_sql()
+    query_traces = _table_definition(sql, "rag_query_traces")
+    ingestion_traces = _table_definition(sql, "rag_ingestion_traces")
+
+    assert re.search(
+        r"CHECK\s*\(\s*status\s+IN\s*\([^)]*'degraded'",
+        query_traces,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert re.search(
+        r"CHECK\s*\(\s*status\s+IN\s*\([^)]*'degraded'",
+        ingestion_traces,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert "DROP CONSTRAINT IF EXISTS chk_rag_query_traces_status" in sql
+    assert "DROP CONSTRAINT IF EXISTS chk_rag_ingestion_traces_status" in sql
+
+
+@pytest.mark.integration
 def test_core_schema_executes_twice_when_database_is_available() -> None:
     """Execute the schema twice against an explicitly configured PostgreSQL.
 
@@ -1232,7 +1254,7 @@ def test_trace_repository_upserts_and_lists_query_and_ingestion_traces() -> None
             replace(
                 query_trace,
                 finished_at=started_at + timedelta(seconds=2),
-                status="success",
+                status="degraded",
                 summary_metrics={"duration_ms": 2000, "top_k_results": 5},
                 evaluation_metrics={"query_document_relevance": 0.91},
             )
@@ -1241,11 +1263,13 @@ def test_trace_repository_upserts_and_lists_query_and_ingestion_traces() -> None
             replace(
                 ingestion_trace,
                 finished_at=started_at + timedelta(seconds=3),
-                status="success",
+                status="degraded",
                 summary_metrics={"duration_ms": 2000, "chunk_count": 12},
                 evaluation_metrics={"chunk_quality": 0.88},
             )
         )
+        assert completed_query.status == "degraded"
+        assert completed_ingestion.status == "degraded"
         newer_query = repository.upsert_query_trace(
             replace(
                 query_trace,

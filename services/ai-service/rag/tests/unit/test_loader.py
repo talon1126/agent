@@ -39,6 +39,9 @@ load_settings = config_module.load_settings
 IngestionPipeline = pipeline_module.IngestionPipeline
 calculate_sha256 = pipeline_module.calculate_sha256
 should_skip_document = pipeline_module.should_skip_document
+PostgresTraceWriter = importlib.import_module(
+    "src.storage.trace_log_storage"
+).PostgresTraceWriter
 ExtractedImage = pdf_conversion_module.ExtractedImage
 MarkItDownConverter = pdf_conversion_module.MarkItDownConverter
 PdfConversionResult = pdf_conversion_module.PdfConversionResult
@@ -476,7 +479,7 @@ def test_ingestion_pipeline_skips_before_loader_and_persists_trace(
     pipeline = IngestionPipeline(
         loader=loader,
         document_repository=documents,
-        trace_repository=traces,
+        trace_sink=PostgresTraceWriter(traces),
         trace_id_factory=lambda: "trace-c1-skip",
     )
 
@@ -493,8 +496,9 @@ def test_ingestion_pipeline_skips_before_loader_and_persists_trace(
     assert stored_trace.source_hash == calculate_sha256(source)
     assert stored_trace.basic_info["trace_type"] == "ingestion"
     assert stored_trace.stages[0]["stage"] == "dedup"
-    assert stored_trace.stages[0]["matched"] is True
-    assert stored_trace.summary_metrics["skipped"] is True
+    assert stored_trace.stages[0]["details"]["successful_hash_hit"] is True
+    assert stored_trace.summary_metrics["document_status"] == "skipped"
+    assert stored_trace.summary_metrics["skipped_count"] == 1
     assert stored_trace.finished_at is not None
 
 
@@ -514,11 +518,9 @@ def test_ingestion_pipeline_calls_loader_when_source_changed_or_forced(
     loader.load.return_value = loaded_document
     documents = Mock()
     documents.has_successful_source_hash.return_value = False
-    traces = Mock()
     pipeline = IngestionPipeline(
         loader=loader,
         document_repository=documents,
-        trace_repository=traces,
         trace_id_factory=lambda: "trace-c1-load",
     )
 
@@ -536,7 +538,6 @@ def test_ingestion_pipeline_calls_loader_when_source_changed_or_forced(
     assert loader.load.call_count == 2
     loader.load.assert_called_with(source.resolve())
     documents.has_successful_source_hash.assert_called_once()
-    traces.upsert_ingestion_trace.assert_not_called()
 
 
 def test_ingestion_pipeline_summarizes_loaded_document_when_configured(
@@ -561,11 +562,9 @@ def test_ingestion_pipeline_summarizes_loaded_document_when_configured(
     summarizer.summarize.return_value = summarized_document
     documents = Mock()
     documents.has_successful_source_hash.return_value = False
-    traces = Mock()
     pipeline = IngestionPipeline(
         loader=loader,
         document_repository=documents,
-        trace_repository=traces,
         document_summarizer=summarizer,
         trace_id_factory=lambda: "trace-c2-summary",
     )

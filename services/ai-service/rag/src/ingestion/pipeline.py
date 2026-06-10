@@ -7,11 +7,10 @@ optional so focused C1 unit tests and lightweight callers can still exercise the
 legacy ``loaded`` boundary; production composition injects the complete C10
 component set and receives an ``indexed`` result.
 
-Skipped runs still persist their completed ingestion trace through the legacy
-TraceRepository path. Phase F also injects a storage-independent TraceContext
-through every complete ingestion stage so JSON Lines logging and Dashboard
-readers can observe the full offline pipeline without coupling business logic
-to a concrete trace writer.
+Phase F injects a storage-independent TraceContext through every complete
+ingestion stage. The final snapshot is sent to one composition-root-provided
+trace sink so JSON Lines and PostgreSQL persistence observe identical data
+without storage-specific branches inside the business pipeline.
 """
 
 from __future__ import annotations
@@ -39,8 +38,6 @@ from src.libs.loader.base_loader import BaseLoader
 from src.storage.repositories import (
     ChunkRepository,
     DocumentRepository,
-    IngestionTraceRecord,
-    TraceRepository,
 )
 
 DEFAULT_HASH_BLOCK_SIZE = 1024 * 1024
@@ -172,7 +169,6 @@ class IngestionPipeline:
         loader: BaseLoader,
         document_repository: DocumentRepository,
         chunk_repository: ChunkRepository | None = None,
-        trace_repository: TraceRepository,
         trace_sink: TraceSink | None = None,
         document_summarizer: DocumentSummarizer | None = None,
         splitter_step: SplitterStep | None = None,
@@ -189,7 +185,6 @@ class IngestionPipeline:
             document_repository: Durable successful-source lookup.
             chunk_repository: Durable chunk-vector lookup used for differential
                 embedding in complete mode.
-            trace_repository: Durable ingestion trace persistence.
             trace_sink: Optional storage-independent trace sink receiving one
                 finished JSON-compatible snapshot per run.
             document_summarizer: Optional independent LLM-backed summary step
@@ -224,7 +219,6 @@ class IngestionPipeline:
         self._loader = loader
         self._document_repository = document_repository
         self._chunk_repository = chunk_repository
-        self._trace_repository = trace_repository
         self._trace_sink = trace_sink
         self._document_summarizer = document_summarizer
         self._splitter_step = splitter_step
@@ -328,33 +322,6 @@ class IngestionPipeline:
                 "loaded_documents": 0,
                 "total_duration_ms": total_duration_ms,
             }
-            trace = IngestionTraceRecord(
-                trace_id=trace_id,
-                collection_id=collection_id,
-                source_uri=source_uri,
-                source_hash=source_hash,
-                started_at=started_at,
-                finished_at=finished_at,
-                status="skipped",
-                basic_info={
-                    "trace_type": "ingestion",
-                    "collection": collection_id,
-                    "source_uri": source_uri,
-                },
-                stages=(
-                    {
-                        "stage": "dedup",
-                        "method": "sha256",
-                        "source_hash": source_hash,
-                        "matched": True,
-                        "skipped": True,
-                        "reason": "successful_source_hash_match",
-                        "duration_ms": dedup_duration_ms,
-                    },
-                ),
-                summary_metrics=summary,
-            )
-            self._trace_repository.upsert_ingestion_trace(trace)
             trace_controller.flush_ingestion(
                 status="skipped",
                 document_status="skipped",

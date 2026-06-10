@@ -2179,7 +2179,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 已实现流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-06 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；11 个新增单元测试及真实文本/图片 PDF 冒烟测试通过 |
 | C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-06 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；24 个相关单元测试、111 个全量测试通过 |
-| C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；已修复 ChunkRewriter 只基于 chunk 正文和 Document.summary 调用 LLM，不发送 metadata/image_refs，只保存 LLM JSON/text 正文，不把 metadata/image_refs 报告写入 chunk content；合法 JSON 的 text 为空或缺失时直接失败，禁止原始 JSON 入库；78 个相关回归测试通过 |
+| C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；已修复 ChunkRewriter 只基于 chunk 正文和 Document.summary 调用 LLM，不发送 metadata/image_refs，只保存 LLM JSON/text 正文，不把 metadata/image_refs 报告写入 chunk content；普通文本的合法 JSON text 为空或缺失时直接失败，纯图片占位符 chunk 跳过文本 rewrite 并保留给 Image-to-Text；真实 PDF 摄取成功且数据库正文无 JSON wrapper，trace_id=`ingestion-bd65aa552faa4f038af94baa90b094e7` |
 | C5 | 实现 ImageCaptioner | [✔] | 2026-06-06 | 已实现 ImageCaptioner、ImageToTextTransform、image_to_text transform step、skipped/failed/low_quality 状态和 caption metadata；34 个相关测试、125 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C6 | 实现 DenseEncoder | [✔] | 2026-06-06 | 已实现 DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C7 | 实现 BM25Indexer | [✔] | 2026-06-07 | 已实现 BM25Candidate、BM25IndexResult、BM25Indexer.index/query、词频统计、倒排索引、关键词 Top-k 排序、中文连续文本 n-gram fallback 和重复 index 状态重建；6 个相关测试、137 个全量测试通过，2 个 external smoke test 默认跳过 |
@@ -2224,7 +2224,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、dedup/load/split/transform/embed/upsert 阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；8 个 TraceContext 单元测试通过 |
 | F3 | 实现 query trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.query()`、raw_query/request_source 基础信息校验、query_processing/dense/sparse/fusion/filter/rerank 阶段 allowlist、query summary/evaluation 指标和检索候选计数校验；12 个 TraceContext 单元测试通过 |
 | F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | 已实现 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；已保留 `src/logs/.gitkeep`，运行时 `*.log/*.jsonl` 仍不提交；15 个 TraceContext/TraceWriter 单元测试通过 |
-| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-08 | 已将 TraceContext/TraceController 注入 ingestion 和 query 主链路，CLI 默认写入 JSONL trace；8 个 ingestion/query 集成测试、15 个 trace 单元测试和 ruff 通过 |
+| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-10 | 已修复生产组合根仅写入 JSONL 的缺口；新增统一 Trace Writer，将最终 snapshot 按配置双写 JSONL/PostgreSQL，移除 ingestion 特殊分支持久化，升级 trace 表状态约束以接受 fallback 的 `degraded` 最终状态，并将 6 条现有 ingestion JSONL trace 幂等回填至 PostgreSQL；相关单元/集成测试和 ruff 已验证 |
 | F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | 已实现 Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
 | F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | 已实现 Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
 | F8 | 实现系统总览、Ingestion 管理页面和摄取操作 | [✔] | 2026-06-10 | 已新增 `IngestionOperationService`，点击 Run ingestion 会复用 `run_ingest_cli()` 触发真实摄取并展示 success/skipped/failed 结果；支持多文件选择、目录上传、服务器文件夹候选发现和单文件取消摄入；22 个 Dashboard 集成测试和 ruff 通过 |
@@ -2721,11 +2721,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `TransformPipeline.from_settings()`：从 `settings.transform.steps` 构建 enabled step 链路
 - `TransformPipeline.run()`：按配置顺序串行执行 Transform
 - `MetadataEnricher.transform()`：注入标题路径、来源、文档主题等上下文 metadata
-- `ChunkRewriter.transform()`：读取 `document_summary` 作为全局上下文，利用 LLM 重写 chunk，使片段语义更完整；发送给 LLM 的输入只能包含 chunk 正文和文档摘要，不发送 `Chunk.metadata` 或 `image_refs`；必须解析 JSON schema 或清理 Markdown 分段回复，只把正文写入 `Chunk.text`，不得把 metadata、image_refs、Prompt 标签或代码块写入 chunk content；合法 JSON 响应缺少非空 `text` 时必须作为 provider 无效响应失败，不得把原始 JSON 写入正文
+- `ChunkRewriter.transform()`：读取 `document_summary` 作为全局上下文，利用 LLM 重写 chunk，使片段语义更完整；发送给 LLM 的输入只能包含 chunk 正文和文档摘要，不发送 `Chunk.metadata` 或 `image_refs`；必须解析 JSON schema 或清理 Markdown 分段回复，只把正文写入 `Chunk.text`，不得把 metadata、image_refs、Prompt 标签或代码块写入 chunk content；仅包含图片占位符的 chunk 必须跳过文本 LLM rewrite 并保留给后续 Image-to-Text；普通文本 chunk 的合法 JSON 响应缺少非空 `text` 时必须作为 provider 无效响应失败，不得把原始 JSON 写入正文
 - `SemanticMergeTransform.transform()`：合并逻辑相关但被物理切开的相邻 chunk
 - `DenoiseTransform.transform()`：清理空白、页眉页脚、目录和解析残留噪声
 
-验收标准：运行时 `config/settings.yaml` 被 Git 忽略，仓库提交 `config/settings.example.yaml` 作为完整模板；`ingestion.document_summary.llm_provider` 显式配置为 `deepseek`，运行时摘要步骤必须按该 provider 构建 LLM；`settings.transform.steps` 只描述步骤顺序、启用状态和 prompt_path，不包含 provider；`src.libs.transform` 只暴露 `BaseTransform`；具体 Transform 位于 `src/ingestion/transform/`；chunk 包含标题、来源、主题上下文；`ChunkRewriter` 必须接收 `document_summary` 并只把它作为语义背景，不得凭摘要补造 chunk 中不存在的事实；`ChunkRewriter` 不得把 `Chunk.metadata` 或 `image_refs` 发送给大模型，metadata/image_refs 只能在 Python 对象层面继承和维护；fake LLM 下可 rewrite；LLM 返回 JSON 或 Markdown 分段时，最终 `Chunk.text` 只能包含可检索正文，metadata 和 image_refs 只能保留在 `Chunk.metadata`；合法 JSON 的 `text` 为空或缺失时摄取必须失败，不得把 `{ "text": ... }` JSON 结构作为 chunk 正文写入；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
+验收标准：运行时 `config/settings.yaml` 被 Git 忽略，仓库提交 `config/settings.example.yaml` 作为完整模板；`ingestion.document_summary.llm_provider` 显式配置为 `deepseek`，运行时摘要步骤必须按该 provider 构建 LLM；`settings.transform.steps` 只描述步骤顺序、启用状态和 prompt_path，不包含 provider；`src.libs.transform` 只暴露 `BaseTransform`；具体 Transform 位于 `src/ingestion/transform/`；chunk 包含标题、来源、主题上下文；`ChunkRewriter` 必须接收 `document_summary` 并只把它作为语义背景，不得凭摘要补造 chunk 中不存在的事实；`ChunkRewriter` 不得把 `Chunk.metadata` 或 `image_refs` 发送给大模型，metadata/image_refs 只能在 Python 对象层面继承和维护；仅包含图片占位符的 chunk 跳过文本 rewrite，metadata 记录 `rewrite.status=skipped` 和 `reason=image_placeholder_only`；fake LLM 下可 rewrite；LLM 返回 JSON 或 Markdown 分段时，最终 `Chunk.text` 只能包含可检索正文，metadata 和 image_refs 只能保留在 `Chunk.metadata`；普通文本 chunk 的合法 JSON `text` 为空或缺失时摄取必须失败，不得把 `{ "text": ... }` JSON 结构作为 chunk 正文写入；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
 
 补充要求：执行该任务时必须在 `settings.example.yaml` 和本地 `settings.yaml` 中配置真实启用的 Transform steps 链路，测试不能只依赖 fake transform；需要创建典型噪声场景 fixture，例如连续空白、页眉页脚、重复目录、页码水印、PDF 解析断行、无意义符号残留和图片占位符附近噪声。
 
@@ -3313,7 +3313,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：让 Trace 不停留在独立工具层，而是真正进入 ingestion 和 query 的运行主链路。
 
-修改文件：`src/ingestion/pipeline.py`、`src/scripts/ingest.py`、`src/scripts/query.py`、`src/core/query_engine/hybrid_engine.py`、`src/core/trace/trace_context.py`、`src/core/trace/trace_controller.py`、`tests/integration/test_ingestion_pipeline.py`、`tests/integration/test_query_pipeline.py`
+修改文件：`src/ingestion/pipeline.py`、`src/scripts/ingest.py`、`src/scripts/query.py`、`src/core/query_engine/hybrid_engine.py`、`src/core/trace/trace_context.py`、`src/core/trace/trace_controller.py`、`src/storage/trace_log_storage.py`、`src/storage/schema.sql`、`tests/unit/test_trace_context.py`、`tests/integration/test_ingestion_pipeline.py`、`tests/integration/test_query_pipeline.py`、`tests/integration/test_repositories.py`
 
 实现类/函数：
 
@@ -3324,9 +3324,12 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `IngestionPipeline.run_indexing()` trace 打点：注入索引子链路追踪点
 - `HybridSearch.search()` trace 打点：将 RRF 阶段统一记录为 `fusion`
 - `QueryRuntime.execute()` trace 打点：注入 query_processing、rerank 跳过、response 和最终 flush
-- `JsonlTraceWriter` CLI 注入：`ingest.py` 和 `query.py` 默认使用 `settings.observability.trace_jsonl_path`
+- `PostgresTraceWriter`：将 TraceController 完成后的统一 snapshot 转换为 Query/Ingestion Trace Record，并按 `trace_id` 幂等写入 PostgreSQL
+- `CompositeTraceWriter`：将同一最终 snapshot 分发至 JSONL 和 PostgreSQL writer，避免业务链路为不同存储编写特殊分支
+- Trace writer CLI 注入：`ingest.py` 和 `query.py` 默认使用 `settings.observability.trace_jsonl_path`；当 `settings.observability.persist_to_postgresql=true` 时同时写入 PostgreSQL
+- Trace 状态约束迁移：Query/Ingestion trace 表接受 `degraded`，且 `init_schema()` 可幂等升级已存在的本地数据库约束
 
-验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常结束和异常 fallback 都会 flush trace。
+验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 

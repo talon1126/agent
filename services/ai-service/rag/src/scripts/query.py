@@ -55,7 +55,8 @@ from src.libs.vector_store import VectorStoreFactory
 from src.storage.bm25_storage import BM25Storage
 from src.storage.image_storage import ImageStorage
 from src.storage.postgres import PostgresPool, init_schema
-from src.storage.trace_log_storage import JsonlTraceWriter
+from src.storage.repositories import TraceRepository
+from src.storage.trace_log_storage import build_trace_writer
 
 SettingsLoader = Callable[[], RagSettings]
 PoolFactory = Callable[[DatabaseSettings], PostgresPool]
@@ -516,7 +517,7 @@ def _build_runtime(
                 )
             )
         ),
-        trace_sink=_trace_sink_from_settings(settings),
+        trace_sink=_trace_sink_from_settings(settings, pool),
     )
 
 
@@ -598,23 +599,31 @@ def _candidate_counts(
     }
 
 
-def _trace_sink_from_settings(settings: RagSettings) -> TraceSink | None:
+def _trace_sink_from_settings(
+    settings: RagSettings,
+    pool: PostgresPool,
+) -> TraceSink | None:
     """Create the configured query trace sink when observability is available.
 
     Args:
         settings: Runtime settings. Unit tests may pass minimal settings
             doubles that omit the observability section.
+        pool: Open PostgreSQL pool used when trace persistence is enabled.
 
     Returns:
-        A JSON Lines trace writer for production settings, or ``None`` for
-        minimal test settings and intentionally storage-free composition roots.
+        A configured JSON Lines/PostgreSQL writer, or ``None`` for minimal test
+        settings and intentionally storage-free composition roots.
     """
 
     observability = getattr(settings, "observability", None)
     trace_path = getattr(observability, "trace_jsonl_path", None)
-    if not trace_path:
-        return None
-    return JsonlTraceWriter(_resolve_runtime_path(trace_path))
+    persist_to_postgresql = bool(
+        getattr(observability, "persist_to_postgresql", False)
+    )
+    return build_trace_writer(
+        jsonl_path=_resolve_runtime_path(trace_path) if trace_path else None,
+        repository=TraceRepository(pool) if persist_to_postgresql else None,
+    )
 
 
 def _create_pool(settings: DatabaseSettings) -> PostgresPool:

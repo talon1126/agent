@@ -10,12 +10,18 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 
 from src.core.trace import TraceContext, TraceController
 from src.observability.structured_log import JsonFormatter
-from src.storage.trace_log_storage import JsonlTraceWriter
+from src.storage.trace_log_storage import (
+    CompositeTraceWriter,
+    JsonlTraceWriter,
+    PostgresTraceWriter,
+    build_trace_writer,
+)
 
 
 def test_query_trace_requires_raw_query_and_basic_info() -> None:
@@ -146,6 +152,112 @@ def test_trace_controller_flush_can_use_jsonl_trace_writer(tmp_path) -> None:
     assert parsed["trace_id"] == "trace-query-controller-jsonl"
     assert parsed["summary_metrics"] == flushed["summary_metrics"]
     assert parsed["evaluation_metrics"] == {"empty_result": True}
+
+
+def test_composite_trace_writer_dispatches_the_same_snapshot_to_all_writers() -> None:
+    """A completed trace must reach every configured persistence boundary."""
+
+    first_writer = Mock()
+    second_writer = Mock()
+    snapshot = {"trace_id": "trace-composite", "trace_type": "query"}
+
+    CompositeTraceWriter(first_writer, second_writer)(snapshot)
+
+    first_writer.assert_called_once_with(snapshot)
+    second_writer.assert_called_once_with(snapshot)
+
+
+def test_postgres_trace_writer_converts_query_snapshot_to_repository_record() -> None:
+    """Query snapshots should be persisted through the typed repository API."""
+
+    repository = Mock()
+    snapshot = TraceContext.query(
+        trace_id="trace-query-postgres",
+        collection="shopping_guides",
+        raw_query="无线耳机怎么选",
+        request_source="dashboard",
+        started_at=datetime(2026, 6, 10, 8, 0, tzinfo=UTC),
+    ).finish_query(
+        status="success",
+        finished_at=datetime(2026, 6, 10, 8, 0, 1, tzinfo=UTC),
+        top_k_results=[{"chunk_id": "chunk-1", "score": 0.9}],
+        candidate_count_by_stage={"dense": 1, "sparse": 1, "fusion": 1},
+        fallback_used=False,
+        empty_result=False,
+    )
+
+    PostgresTraceWriter(repository)(snapshot)
+
+    record = repository.upsert_query_trace.call_args.args[0]
+    assert record.trace_id == "trace-query-postgres"
+    assert record.collection_id == "shopping_guides"
+    assert record.raw_query == "无线耳机怎么选"
+    assert record.request_source == "dashboard"
+    assert record.started_at == datetime(2026, 6, 10, 8, 0, tzinfo=UTC)
+    assert record.finished_at == datetime(2026, 6, 10, 8, 0, 1, tzinfo=UTC)
+    assert record.status == "success"
+    assert record.summary_metrics["fallback_used"] is False
+    repository.upsert_ingestion_trace.assert_not_called()
+
+
+def test_postgres_trace_writer_converts_ingestion_snapshot_to_repository_record() -> None:
+    """Ingestion snapshots should persist every final lifecycle status."""
+
+    repository = Mock()
+    snapshot = TraceContext.ingestion(
+        trace_id="trace-ingestion-postgres",
+        collection="shopping_guides",
+        source_uri="data/raw/shopping_guides/guide.pdf",
+        source_hash="a" * 64,
+        started_at=datetime(2026, 6, 10, 8, 0, tzinfo=UTC),
+    ).finish_ingestion(
+        status="skipped",
+        finished_at=datetime(2026, 6, 10, 8, 0, 1, tzinfo=UTC),
+        document_status="skipped",
+        chunk_count=0,
+        embedded_count=0,
+        skipped_count=1,
+        index_ready=True,
+    )
+
+    PostgresTraceWriter(repository).write(snapshot)
+
+    record = repository.upsert_ingestion_trace.call_args.args[0]
+    assert record.trace_id == "trace-ingestion-postgres"
+    assert record.collection_id == "shopping_guides"
+    assert record.source_uri == "data/raw/shopping_guides/guide.pdf"
+    assert record.source_hash == "a" * 64
+    assert record.status == "skipped"
+    assert record.summary_metrics["skipped_count"] == 1
+    repository.upsert_query_trace.assert_not_called()
+
+
+def test_build_trace_writer_combines_jsonl_and_postgres_boundaries(tmp_path) -> None:
+    """Production composition should dual-write when both stores are enabled."""
+
+    repository = Mock()
+    log_path = tmp_path / "traces.jsonl"
+    snapshot = TraceContext.ingestion(
+        trace_id="trace-ingestion-dual-write",
+        collection="shopping_guides",
+        source_uri="data/raw/guide.pdf",
+        source_hash="b" * 64,
+    ).finish_ingestion(
+        status="success",
+        document_status="success",
+        chunk_count=2,
+        embedded_count=2,
+        skipped_count=0,
+    )
+
+    writer = build_trace_writer(jsonl_path=log_path, repository=repository)
+
+    assert writer is not None
+    writer(snapshot)
+    assert json.loads(log_path.read_text(encoding="utf-8"))["trace_id"] == (
+        "trace-ingestion-dual-write"
+    )
+    repository.upsert_ingestion_trace.assert_called_once()
 
 
 def test_query_trace_records_only_documented_stages() -> None:

@@ -421,7 +421,6 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
     from src.storage.repositories import (
         ChunkRepository,
         DocumentRepository,
-        TraceRepository,
     )
 
     class FakeImageTransform:
@@ -472,7 +471,6 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
             loader=MarkdownLoader(),
             document_repository=documents,
             chunk_repository=chunks,
-            trace_repository=TraceRepository(pool),
             trace_sink=trace_payloads.append,
             splitter_step=SplitterStep(
                 DocumentChunker(splitter=FakeSplitter())
@@ -628,7 +626,6 @@ def test_ingestion_pipeline_reuses_dense_vectors_for_unchanged_chunks(
     from src.storage.repositories import (
         ChunkRepository,
         DocumentRepository,
-        TraceRepository,
     )
 
     class ParagraphSplitter(BaseSplitter):
@@ -660,7 +657,6 @@ def test_ingestion_pipeline_reuses_dense_vectors_for_unchanged_chunks(
             loader=MarkdownLoader(),
             document_repository=documents,
             chunk_repository=chunks,
-            trace_repository=TraceRepository(pool),
             splitter_step=SplitterStep(
                 DocumentChunker(splitter=ParagraphSplitter())
             ),
@@ -729,7 +725,6 @@ def test_ingestion_pipeline_rejects_partial_complete_mode_configuration() -> Non
         IngestionPipeline(
             loader=Mock(),
             document_repository=Mock(),
-            trace_repository=Mock(),
             splitter_step=Mock(),
         )
 
@@ -747,7 +742,6 @@ def test_ingestion_pipeline_rejects_empty_indexing_snapshot() -> None:
         loader=Mock(),
         document_repository=Mock(),
         chunk_repository=Mock(),
-        trace_repository=Mock(),
         splitter_step=Mock(),
         transform_pipeline=Mock(),
         embedding_step=embedding_step,
