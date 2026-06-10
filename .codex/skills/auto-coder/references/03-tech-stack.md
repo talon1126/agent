@@ -811,7 +811,7 @@ Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各�
 | `load` | Loader 类型、原始文件类型、转换后的 `Document(id + text + summary + metadata)` 摘要、图片提取数量、耗时、失败详情 |
 | `document_summary` | 摘要 Prompt 版本、LLM Provider、是否生成摘要、摘要长度、是否复用已有摘要、耗时、失败详情 |
 | `split` | Splitter 类型、粗切分 chunk 数量、标题层级识别结果、平均 chunk 长度、耗时、失败详情 |
-| `transform` | Transform 方法、LLM Provider、合并的 chunk 数量、去噪内容摘要、图片描述注入数量、上下文增强摘要、耗时、失败详情 |
+| `transform` | Transform Pipeline 总耗时、输入输出 chunk 数量，以及按配置顺序记录的 `sub_stages`；每个子阶段包含配置步骤名、具体实现类、耗时、输入输出 chunk 数量、状态和失败详情 |
 | `embed` | Embedding Provider、`content_hash` 命中数量、新增 embedding 数量、Dense 编码批次数、Sparse/BM25 编码批次数、耗时、失败详情 |
 | `upsert` | VectorStore Provider、写入 chunk 数量、更新 chunk 数量、跳过 chunk 数量、删除旧版本数量、耗时、失败详情 |
 

@@ -9,6 +9,8 @@ steps serially to ordered ``Chunk`` objects.
 from __future__ import annotations
 
 from collections.abc import Callable
+from re import sub
+from time import perf_counter
 from typing import Any
 
 from src.core.config import RagSettings, TransformStepSettings, load_prompt
@@ -32,15 +34,33 @@ class TransformPipeline:
         Callable[[TransformStepSettings, BaseLLM | None, BaseLLM | None], BaseTransform],
     ]
 
-    def __init__(self, transforms: list[BaseTransform]) -> None:
+    def __init__(
+        self,
+        transforms: list[BaseTransform],
+        *,
+        step_names: list[str] | None = None,
+    ) -> None:
         """Store the concrete transform chain in execution order.
 
         Args:
             transforms: Already constructed transform implementations. The
                 order of this list is the order used during ingestion.
+            step_names: Optional settings names aligned with ``transforms``.
+                Directly constructed pipelines derive snake-case names from
+                implementation classes.
+
+        Raises:
+            ValueError: If explicit names do not align with the transform list.
         """
 
         self._transforms = list(transforms)
+        if step_names is not None and len(step_names) != len(transforms):
+            raise ValueError("step_names must align with transforms")
+        self._step_names = (
+            list(step_names)
+            if step_names is not None
+            else [_default_step_name(transform) for transform in transforms]
+        )
 
     @property
     def transforms(self) -> tuple[BaseTransform, ...]:
@@ -83,6 +103,7 @@ class TransformPipeline:
 
         shared_llm = llm
         transforms: list[BaseTransform] = []
+        step_names: list[str] = []
         for step in settings.transform.steps:
             if not step.enabled:
                 continue
@@ -99,13 +120,15 @@ class TransformPipeline:
                 shared_llm = LLMFactory.create(settings=settings)
             active_vision_llm = vision_llm if settings.vision_llm.enabled else None
             transforms.append(builder(step, shared_llm, active_vision_llm))
-        return cls(transforms)
+            step_names.append(step.name)
+        return cls(transforms, step_names=step_names)
 
     def run(
         self,
         chunks: list[Chunk],
         *,
         context: dict[str, Any] | None = None,
+        step_observer: Callable[[dict[str, Any]], None] | None = None,
     ) -> list[Chunk]:
         """Apply every configured transform in order.
 
@@ -113,14 +136,56 @@ class TransformPipeline:
             chunks: Ordered chunks produced by ``DocumentChunker``.
             context: Trace-safe runtime metadata passed unchanged to every
                 transform implementation.
+            step_observer: Optional best-effort callback receiving one
+                trace-safe execution record after each implementation succeeds
+                or fails.
 
         Returns:
             The final ordered chunk list after all enabled transforms complete.
         """
 
         output = [chunk.model_copy(deep=True) for chunk in chunks]
-        for transform in self.transforms:
-            output = transform.transform(output, context=context)
+        for step_name, transform in zip(
+            self._step_names,
+            self.transforms,
+            strict=True,
+        ):
+            input_count = len(output)
+            started_at = perf_counter()
+            try:
+                next_output = transform.transform(output, context=context)
+            except Exception as error:
+                _notify_step_observer(
+                    step_observer,
+                    {
+                        "name": step_name,
+                        "duration_ms": (perf_counter() - started_at) * 1000,
+                        "status": "failed",
+                        "input_count": input_count,
+                        "output_count": 0,
+                        "method": "transform",
+                        "provider": type(transform).__name__,
+                        "error": {
+                            "error_type": type(error).__name__,
+                            "message": str(error),
+                        },
+                    },
+                )
+                raise
+            output = next_output
+            _notify_step_observer(
+                step_observer,
+                {
+                    "name": step_name,
+                    "duration_ms": (perf_counter() - started_at) * 1000,
+                    "status": "success",
+                    "input_count": input_count,
+                    "output_count": len(output),
+                    "method": "transform",
+                    "provider": type(transform).__name__,
+                    "error": None,
+                },
+            )
         return output
 
     @staticmethod
@@ -143,6 +208,55 @@ class TransformPipeline:
             "denoise": _build_denoise_transform,
             "image_to_text": _build_image_captioner,
         }
+
+
+def _default_step_name(transform: BaseTransform) -> str:
+    """Derive a stable trace name for a directly constructed transform.
+
+    Args:
+        transform: Concrete transform without an explicit settings step name.
+
+    Returns:
+        The settings vocabulary for built-in implementations, or a snake-case
+        class name for custom injected transforms.
+    """
+
+    class_name = type(transform).__name__
+    built_in_names = {
+        "MetadataEnricher": "metadata_enrich",
+        "ChunkRewriter": "rewrite_chunk",
+        "SemanticMergeTransform": "semantic_merge",
+        "DenoiseTransform": "denoise",
+        "ImageCaptioner": "image_to_text",
+    }
+    return built_in_names.get(
+        class_name,
+        sub(r"(?<!^)(?=[A-Z])", "_", class_name).lower(),
+    )
+
+
+def _notify_step_observer(
+    observer: Callable[[dict[str, Any]], None] | None,
+    record: dict[str, Any],
+) -> None:
+    """Publish one child execution record without changing business behavior.
+
+    Args:
+        observer: Optional callback owned by the ingestion trace adapter.
+        record: Trace-safe timing, count, identity, status, and error fields.
+
+    Notes:
+        Observer errors are intentionally ignored. Observability must not turn
+        a successful Transform into a failed ingestion or replace the original
+        Transform exception.
+    """
+
+    if observer is None:
+        return
+    try:
+        observer(record)
+    except Exception:
+        return
 
 
 def _build_metadata_enricher(

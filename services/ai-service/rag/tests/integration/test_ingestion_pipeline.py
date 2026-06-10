@@ -549,6 +549,21 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
         assert indexed_summary["chunk_count"] == 1
         assert indexed_summary["embedded_count"] == 1
         assert indexed_evaluation["index_ready"] is True
+        transform_stage = next(
+            stage
+            for stage in indexed_trace["stages"]  # type: ignore[index]
+            if stage["stage"] == "transform"
+        )
+        assert [
+            step["name"] for step in transform_stage["sub_stages"]
+        ] == ["metadata_enrich", "image_to_text"]
+        assert [
+            step["provider"] for step in transform_stage["sub_stages"]
+        ] == ["MetadataEnricher", "ImageCaptioner"]
+        assert all(
+            step["status"] == "success"
+            for step in transform_stage["sub_stages"]
+        )
 
         assert skipped_trace["trace_type"] == "ingestion"
         assert skipped_trace["trace_id"] == second.trace_id

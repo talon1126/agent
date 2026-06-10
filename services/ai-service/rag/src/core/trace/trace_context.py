@@ -109,6 +109,79 @@ def _validate_status(value: str, *, field_name: str, allowed: set[str]) -> str:
     return value
 
 
+def _normalize_sub_stages(
+    sub_stages: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Validate and defensively copy nested implementation timing records.
+
+    Args:
+        sub_stages: Ordered child records produced inside one documented
+            pipeline stage. ``None`` means no implementation breakdown exists.
+
+    Returns:
+        JSON-safe child records, or ``None`` when the caller supplied no
+        breakdown.
+
+    Raises:
+        ValueError: If required identity, duration, status, or count fields are
+            missing or invalid.
+    """
+
+    if sub_stages is None:
+        return None
+    normalized: list[dict[str, Any]] = []
+    for item in sub_stages:
+        if not isinstance(item, dict):
+            raise ValueError("sub_stages items must be dictionaries")
+        name = _validate_non_blank(
+            str(item.get("name") or ""),
+            field_name="sub_stages name",
+        )
+        duration_ms = item.get("duration_ms")
+        if (
+            isinstance(duration_ms, bool)
+            or not isinstance(duration_ms, int | float)
+            or duration_ms < 0
+        ):
+            raise ValueError("sub_stages duration_ms must be a non-negative number")
+        status = _validate_status(
+            str(item.get("status") or ""),
+            field_name="sub_stages status",
+            allowed=_VALID_STAGE_STATUSES,
+        )
+        input_count = _validate_non_negative_int(
+            item.get("input_count"),
+            field_name="sub_stages input_count",
+        )
+        output_count = _validate_non_negative_int(
+            item.get("output_count"),
+            field_name="sub_stages output_count",
+        )
+        normalized.append(
+            {
+                "name": name,
+                "duration_ms": float(duration_ms),
+                "status": status,
+                "input_count": input_count,
+                "output_count": output_count,
+                "method": (
+                    str(item["method"]) if item.get("method") is not None else None
+                ),
+                "provider": (
+                    str(item["provider"])
+                    if item.get("provider") is not None
+                    else None
+                ),
+                "error": (
+                    _json_safe_copy(item.get("error"))
+                    if item.get("error") is not None
+                    else None
+                ),
+            }
+        )
+    return normalized
+
+
 def _validate_sha256(value: str, *, field_name: str) -> str:
     """Validate a SHA256 hex digest used by ingestion trace identity."""
 
@@ -384,6 +457,7 @@ class TraceContext:
         method: str | None = None,
         provider: str | None = None,
         details: dict[str, Any] | None = None,
+        sub_stages: list[dict[str, Any]] | None = None,
         candidate_count: int | None = None,
         status: StageStatus = "success",
         error: dict[str, Any] | None = None,
@@ -404,6 +478,8 @@ class TraceContext:
             provider: Concrete component/provider name.
             details: Extra JSON-safe method/provider details, including
                 fallback reasons or route parameters.
+            sub_stages: Optional implementation-level records executed inside
+                this documented top-level stage.
             candidate_count: Optional candidate count used by query stages.
             status: Stage outcome.
             error: Optional structured failure details.
@@ -440,6 +516,9 @@ class TraceContext:
             "details": _json_section(details),
             "error": _json_safe_copy(error) if error is not None else None,
         }
+        normalized_sub_stages = _normalize_sub_stages(sub_stages)
+        if normalized_sub_stages is not None:
+            stage_record["sub_stages"] = normalized_sub_stages
         if candidate_count is not None:
             stage_record["candidate_count"] = int(candidate_count)
         self.stages.append(stage_record)
@@ -512,6 +591,7 @@ class TraceContext:
         method: str | None = None,
         provider: str | None = None,
         details: dict[str, Any] | None = None,
+        sub_stages: list[dict[str, Any]] | None = None,
         status: StageStatus = "success",
         error: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -527,6 +607,8 @@ class TraceContext:
             provider: Concrete component/provider name.
             details: Stage-specific diagnostics, such as skip reasons,
                 generated counts, or failure context.
+            sub_stages: Optional ordered implementation records nested under
+                the top-level ingestion stage.
             status: Stage status.
             error: Optional structured stage failure.
 
@@ -553,6 +635,7 @@ class TraceContext:
             method=method,
             provider=provider,
             details=details,
+            sub_stages=sub_stages,
             status=status,
             error=error,
         )

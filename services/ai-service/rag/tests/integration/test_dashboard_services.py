@@ -14,6 +14,8 @@ import sys
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -335,6 +337,33 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
                         "status": "success",
                     },
                     {
+                        "stage": "transform",
+                        "duration_ms": 120.0,
+                        "status": "success",
+                        "sub_stages": [
+                            {
+                                "name": "metadata_enrich",
+                                "duration_ms": 5.0,
+                                "status": "success",
+                                "input_count": 3,
+                                "output_count": 3,
+                                "method": "transform",
+                                "provider": "MetadataEnricher",
+                                "error": None,
+                            },
+                            {
+                                "name": "rewrite_chunk",
+                                "duration_ms": 115.0,
+                                "status": "success",
+                                "input_count": 3,
+                                "output_count": 3,
+                                "method": "transform",
+                                "provider": "ChunkRewriter",
+                                "error": None,
+                            },
+                        ],
+                    },
+                    {
                         "stage": "upsert",
                         "duration_ms": 55.0,
                         "status": "success",
@@ -382,8 +411,15 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
         assert ingestion_detail is not None
         assert [stage.stage for stage in ingestion_detail.waterfall] == [
             "load",
+            "transform",
             "upsert",
         ]
+        assert [step.name for step in ingestion_detail.transform_steps] == [
+            "metadata_enrich",
+            "rewrite_chunk",
+        ]
+        assert ingestion_detail.transform_steps[1].duration_ms == 115.0
+        assert ingestion_detail.transform_steps[1].provider == "ChunkRewriter"
         assert ingestion_detail.summary_metrics["chunk_count"] == 3
         assert ingestion_detail.evaluation_metrics["index_ready"] is True
         assert service.get_query_trace_detail("missing-query-trace") is None
@@ -1355,6 +1391,13 @@ def test_query_trace_page_builds_and_renders_retrieval_comparisons() -> None:
     assert call_names.count("dataframe") >= 3
     assert "bar_chart" in call_names
     assert "metric" in call_names
+    _args, selectbox_kwargs = next(
+        (args, kwargs)
+        for name, args, kwargs in fake_ui.calls
+        if name == "selectbox"
+    )
+    assert selectbox_kwargs["key"] == "query_trace_id"
+    assert selectbox_kwargs["index"] == 0
 
 
 @pytest.mark.integration
@@ -1371,6 +1414,7 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
         TraceDetail,
         TraceHistoryItem,
         TraceStageWaterfallItem,
+        TraceTransformStepItem,
     )
 
     history = TraceHistoryItem(
@@ -1396,8 +1440,32 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
         duration_ms=420.0,
         waterfall=(
             TraceStageWaterfallItem(stage="load", duration_ms=40.0, status="success"),
-            TraceStageWaterfallItem(stage="split", duration_ms=35.0, status="success"),
+            TraceStageWaterfallItem(
+                stage="transform",
+                duration_ms=235.0,
+                status="success",
+            ),
             TraceStageWaterfallItem(stage="upsert", duration_ms=120.0, status="success"),
+        ),
+        transform_steps=(
+            TraceTransformStepItem(
+                name="metadata_enrich",
+                duration_ms=5.0,
+                status="success",
+                input_count=4,
+                output_count=4,
+                method="transform",
+                provider="MetadataEnricher",
+            ),
+            TraceTransformStepItem(
+                name="rewrite_chunk",
+                duration_ms=230.0,
+                status="success",
+                input_count=4,
+                output_count=4,
+                method="transform",
+                provider="ChunkRewriter",
+            ),
         ),
         summary_metrics={
             "document_status": "success",
@@ -1435,10 +1503,133 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
     assert selected_trace_id == "ingestion-page"
     call_names = [name for name, _, _ in fake_ui.calls]
     assert "title" in call_names
-    assert call_names.count("dataframe") >= 2
-    assert "bar_chart" in call_names
+    assert call_names.count("dataframe") >= 3
+    assert call_names.count("bar_chart") == 2
+    assert any(
+        args == ("Transform Breakdown",)
+        for name, args, _kwargs in fake_ui.calls
+        if name == "subheader"
+    )
     assert "metric" in call_names
     assert "write" in call_names
+    _args, selectbox_kwargs = next(
+        (args, kwargs)
+        for name, args, kwargs in fake_ui.calls
+        if name == "selectbox"
+    )
+    assert selectbox_kwargs["key"] == "ingestion_trace_id"
+    assert selectbox_kwargs["index"] == 0
+
+
+@pytest.mark.integration
+def test_trace_page_models_honor_current_collection_selection_and_reject_stale_ids() -> None:
+    """Trace builders should load valid selections and reject stale state."""
+
+    from src.observability.pages.ingestion_trace import (
+        build_ingestion_trace_page_model,
+    )
+    from src.observability.pages.query_trace import build_query_trace_page_model
+    from src.observability.services import TraceHistoryItem
+
+    newest_query = TraceHistoryItem(
+        trace_id="query-newest",
+        trace_type="query",
+        collection_id="shopping_guides",
+        status="success",
+        display_input="newest query",
+        started_at=datetime(2026, 1, 2, tzinfo=UTC),
+        finished_at=None,
+        duration_ms=1.0,
+        stage_count=1,
+        fallback_used=False,
+    )
+    selected_query = TraceHistoryItem(
+        trace_id="query-selected",
+        trace_type="query",
+        collection_id="shopping_guides",
+        status="success",
+        display_input="selected query",
+        started_at=datetime(2026, 1, 1, tzinfo=UTC),
+        finished_at=None,
+        duration_ms=2.0,
+        stage_count=1,
+        fallback_used=False,
+    )
+    newest_ingestion = TraceHistoryItem(
+        trace_id="ingestion-newest",
+        trace_type="ingestion",
+        collection_id="shopping_guides",
+        status="success",
+        display_input="newest.pdf",
+        started_at=datetime(2026, 1, 2, tzinfo=UTC),
+        finished_at=None,
+        duration_ms=3.0,
+        stage_count=1,
+        fallback_used=False,
+    )
+    selected_ingestion = TraceHistoryItem(
+        trace_id="ingestion-selected",
+        trace_type="ingestion",
+        collection_id="shopping_guides",
+        status="success",
+        display_input="selected.pdf",
+        started_at=datetime(2026, 1, 1, tzinfo=UTC),
+        finished_at=None,
+        duration_ms=4.0,
+        stage_count=1,
+        fallback_used=False,
+    )
+
+    class _TraceReader:
+        """Return two records per trace type and record requested details."""
+
+        def list_query_traces(self, _collection_id: str) -> list[TraceHistoryItem]:
+            """Return newest-first Query Trace history."""
+
+            return [newest_query, selected_query]
+
+        def list_ingestion_traces(self, _collection_id: str) -> list[TraceHistoryItem]:
+            """Return newest-first Ingestion Trace history."""
+
+            return [newest_ingestion, selected_ingestion]
+
+        def get_query_trace_detail(self, trace_id: str) -> Mock:
+            """Return a detail marker for the requested Query Trace."""
+
+            return Mock(trace_id=trace_id)
+
+        def get_ingestion_trace_detail(self, trace_id: str) -> Mock:
+            """Return a detail marker for the requested Ingestion Trace."""
+
+            return Mock(trace_id=trace_id)
+
+    reader = _TraceReader()
+
+    query_model = build_query_trace_page_model(
+        trace_reader=reader,
+        collection_id="shopping_guides",
+        trace_id="query-selected",
+    )
+    ingestion_model = build_ingestion_trace_page_model(
+        trace_reader=reader,
+        collection_id="shopping_guides",
+        trace_id="ingestion-selected",
+    )
+    stale_query_model = build_query_trace_page_model(
+        trace_reader=reader,
+        collection_id="shopping_guides",
+        trace_id="query-from-other-collection",
+    )
+    stale_ingestion_model = build_ingestion_trace_page_model(
+        trace_reader=reader,
+        collection_id="shopping_guides",
+        trace_id="ingestion-from-other-collection",
+    )
+
+    assert query_model.selected_trace.trace_id == "query-selected"
+    assert ingestion_model.selected_trace.trace_id == "ingestion-selected"
+    assert stale_query_model.selected_trace.trace_id == "query-newest"
+    assert stale_ingestion_model.selected_trace.trace_id == "ingestion-newest"
 
 
 @pytest.mark.integration
@@ -1612,6 +1803,82 @@ def test_dashboard_app_renders_sidebar_navigation_and_selected_page() -> None:
     assert radio_args == ("Page",)
     assert radio_kwargs["options"] == list(DASHBOARD_PAGE_LABELS)
     assert radio_kwargs["format_func"]("query_trace") == "Query Trace"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("page_name", "session_key", "selected_trace_id", "builder_name", "renderer_name"),
+    [
+        (
+            "query_trace",
+            "query_trace_id",
+            "query-selected",
+            "build_query_trace_page_model",
+            "render_query_trace_page",
+        ),
+        (
+            "ingestion_trace",
+            "ingestion_trace_id",
+            "ingestion-selected",
+            "build_ingestion_trace_page_model",
+            "render_ingestion_trace_page",
+        ),
+    ],
+)
+def test_dashboard_trace_dispatch_uses_session_state_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    page_name: str,
+    session_key: str,
+    selected_trace_id: str,
+    builder_name: str,
+    renderer_name: str,
+) -> None:
+    """Trace page reruns must rebuild detail for the selected widget value."""
+
+    from src.observability.dashboard import app as dashboard_app
+
+    settings = SimpleNamespace(
+        project=SimpleNamespace(default_collection="shopping_guides"),
+        database=object(),
+    )
+    pool = Mock()
+    trace_reader = Mock()
+    page_model = object()
+    builder = Mock(return_value=page_model)
+    renderer = Mock()
+    monkeypatch.setattr(
+        dashboard_app,
+        "load_settings",
+        lambda **_kwargs: settings,
+    )
+    monkeypatch.setattr(
+        dashboard_app.PostgresPool,
+        "from_settings",
+        lambda _settings: pool,
+    )
+    monkeypatch.setattr(dashboard_app, "init_schema", Mock())
+    monkeypatch.setattr(dashboard_app, "ConfigReaderService", Mock())
+    monkeypatch.setattr(dashboard_app, "DataBrowserService", Mock())
+    monkeypatch.setattr(
+        dashboard_app,
+        "TraceReaderService",
+        Mock(return_value=trace_reader),
+    )
+    monkeypatch.setattr(dashboard_app, "EvaluationService", Mock())
+    monkeypatch.setattr(dashboard_app, "IngestionOperationService", Mock())
+    monkeypatch.setattr(dashboard_app, builder_name, builder)
+    monkeypatch.setattr(dashboard_app, renderer_name, renderer)
+    ui = SimpleNamespace(session_state={session_key: selected_trace_id})
+
+    dashboard_app.render_dashboard_page(page_name, ui)
+
+    builder.assert_called_once_with(
+        trace_reader=trace_reader,
+        collection_id="shopping_guides",
+        trace_id=selected_trace_id,
+    )
+    renderer.assert_called_once_with(page_model, ui=ui)
+    pool.close.assert_called_once_with()
 
 
 @pytest.mark.integration

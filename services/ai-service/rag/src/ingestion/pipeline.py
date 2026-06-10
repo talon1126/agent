@@ -430,10 +430,29 @@ class IngestionPipeline:
                 "document_context": document.text,
             }
             transform_started = perf_counter()
-            transformed_chunks = self._transform_pipeline.run(
-                chunks,
-                context=transform_context,
-            )
+            transform_sub_stages: list[dict[str, Any]] = []
+            try:
+                transformed_chunks = self._transform_pipeline.run(
+                    chunks,
+                    context=transform_context,
+                    step_observer=transform_sub_stages.append,
+                )
+            except Exception as error:
+                trace_controller.record_stage(
+                    "transform",
+                    duration_ms=(perf_counter() - transform_started) * 1000,
+                    input_summary={"chunk_count": len(chunks)},
+                    output_summary={"chunk_count": 0, "chunk_ids": []},
+                    method="transform_pipeline",
+                    provider=type(self._transform_pipeline).__name__,
+                    sub_stages=transform_sub_stages,
+                    status="failed",
+                    error={
+                        "error_type": type(error).__name__,
+                        "message": str(error),
+                    },
+                )
+                raise
             trace_controller.record_stage(
                 "transform",
                 duration_ms=(perf_counter() - transform_started) * 1000,
@@ -444,6 +463,7 @@ class IngestionPipeline:
                 },
                 method="transform_pipeline",
                 provider=type(self._transform_pipeline).__name__,
+                sub_stages=transform_sub_stages,
             )
             image_caption_summary = _image_caption_summary(transformed_chunks)
             trace_controller.record_stage(

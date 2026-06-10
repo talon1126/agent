@@ -31,6 +31,7 @@ from src.observability.pages.ingestion_manage import (
     render_ingestion_manage_page,
 )
 from src.observability.pages.ingestion_trace import (
+    INGESTION_TRACE_WIDGET_KEY,
     build_ingestion_trace_page_model,
     render_ingestion_trace_page,
 )
@@ -39,6 +40,7 @@ from src.observability.pages.overview import (
     render_overview_page,
 )
 from src.observability.pages.query_trace import (
+    QUERY_TRACE_WIDGET_KEY,
     build_query_trace_page_model,
     render_query_trace_page,
 )
@@ -236,6 +238,10 @@ def render_dashboard_page(page_name: str, ui: Any) -> None:
                 build_query_trace_page_model(
                     trace_reader=trace_reader,
                     collection_id=collection_id,
+                    trace_id=_selected_trace_id(
+                        ui,
+                        QUERY_TRACE_WIDGET_KEY,
+                    ),
                 ),
                 ui=ui,
             )
@@ -245,6 +251,10 @@ def render_dashboard_page(page_name: str, ui: Any) -> None:
                 build_ingestion_trace_page_model(
                     trace_reader=trace_reader,
                     collection_id=collection_id,
+                    trace_id=_selected_trace_id(
+                        ui,
+                        INGESTION_TRACE_WIDGET_KEY,
+                    ),
                 ),
                 ui=ui,
             )
@@ -261,6 +271,27 @@ def render_dashboard_page(page_name: str, ui: Any) -> None:
         raise ValueError(f"Unknown Dashboard page: {page_name}")
     finally:
         pool.close()
+
+
+def _selected_trace_id(ui: Any, widget_key: str) -> str | None:
+    """Read one persisted Trace selector value from Streamlit session state.
+
+    Args:
+        ui: Streamlit-compatible module or test double.
+        widget_key: Stable Query/Ingestion Trace selectbox key.
+
+    Returns:
+        The selected non-blank trace ID, or ``None`` before the widget has
+        stored a selection.
+    """
+
+    session_state = getattr(ui, "session_state", None)
+    if session_state is None or not hasattr(session_state, "get"):
+        return None
+    value = session_state.get(widget_key)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
 
 
 def _load_streamlit() -> Any:

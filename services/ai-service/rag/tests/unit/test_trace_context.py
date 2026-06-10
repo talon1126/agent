@@ -466,6 +466,70 @@ def test_ingestion_trace_records_only_documented_stages() -> None:
         context.record_ingestion_stage("query_processing")
 
 
+def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
+    """Transform traces should retain per-implementation timing evidence."""
+
+    context = TraceContext.ingestion(
+        trace_id="trace-ingestion-transform-steps",
+        collection="shopping_guides",
+        source_uri="shopping_guides/relax-toys.pdf",
+        source_hash="d" * 64,
+    )
+    sub_stages = [
+        {
+            "name": "metadata_enrich",
+            "duration_ms": 1.25,
+            "status": "success",
+            "input_count": 3,
+            "output_count": 3,
+            "method": "transform",
+            "provider": "MetadataEnricher",
+            "error": None,
+        },
+        {
+            "name": "rewrite_chunk",
+            "duration_ms": 25.5,
+            "status": "failed",
+            "input_count": 3,
+            "output_count": 0,
+            "method": "transform",
+            "provider": "ChunkRewriter",
+            "error": {
+                "error_type": "ProviderError",
+                "message": "rewrite unavailable",
+            },
+        },
+    ]
+
+    context.record_ingestion_stage(
+        "transform",
+        duration_ms=27.0,
+        sub_stages=sub_stages,
+    )
+    sub_stages[0]["provider"] = "MutatedProvider"
+
+    stored = context.to_dict()["stages"][0]["sub_stages"]
+    assert stored[0]["provider"] == "MetadataEnricher"
+    assert stored[1]["error"] == {
+        "error_type": "ProviderError",
+        "message": "rewrite unavailable",
+    }
+
+    with pytest.raises(ValueError, match="sub_stages duration_ms"):
+        context.record_ingestion_stage(
+            "transform",
+            sub_stages=[
+                {
+                    "name": "denoise",
+                    "duration_ms": -1,
+                    "status": "success",
+                    "input_count": 1,
+                    "output_count": 1,
+                }
+            ],
+        )
+
+
 def test_ingestion_trace_finish_adds_summary_and_evaluation_sections() -> None:
     """Finish should normalize the documented ingestion summary/evaluation keys."""
 

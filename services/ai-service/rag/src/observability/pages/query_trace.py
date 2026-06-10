@@ -19,6 +19,8 @@ from src.observability.services import (
     TraceStageWaterfallItem,
 )
 
+QUERY_TRACE_WIDGET_KEY = "query_trace_id"
+
 
 @dataclass(frozen=True, slots=True)
 class QueryTracePageModel:
@@ -48,7 +50,12 @@ def build_query_trace_page_model(
     """
 
     history = tuple(trace_reader.list_query_traces(collection_id))
-    selected_trace_id = trace_id or (history[0].trace_id if history else None)
+    history_ids = {trace.trace_id for trace in history}
+    selected_trace_id = (
+        trace_id
+        if trace_id is not None and trace_id in history_ids
+        else (history[0].trace_id if history else None)
+    )
     selected_trace = (
         trace_reader.get_query_trace_detail(selected_trace_id)
         if selected_trace_id is not None
@@ -87,7 +94,15 @@ def render_query_trace_page(
 
     streamlit.subheader("History")
     streamlit.dataframe([_history_row(trace) for trace in model.history])
-    selected_trace_id = _select_trace(streamlit, model.history)
+    selected_trace_id = _select_trace(
+        streamlit,
+        model.history,
+        selected_trace_id=(
+            model.selected_trace.trace_id
+            if model.selected_trace is not None
+            else None
+        ),
+    )
 
     if model.selected_trace is None:
         streamlit.info("No query trace detail is available.")
@@ -151,14 +166,26 @@ def _stage_row(stage: TraceStageWaterfallItem) -> dict[str, object]:
 def _select_trace(
     streamlit: Any,
     history: tuple[TraceHistoryItem, ...],
+    *,
+    selected_trace_id: str | None,
 ) -> str | None:
-    """Render query trace selection and return the selected trace ID."""
+    """Render persistent Query Trace selection and return the selected ID."""
 
     options = tuple(trace.trace_id for trace in history)
     if not options:
         streamlit.info("No query traces are available.")
         return None
-    selected = streamlit.selectbox("Trace", options=options)
+    selected_index = (
+        options.index(selected_trace_id)
+        if selected_trace_id in options
+        else 0
+    )
+    selected = streamlit.selectbox(
+        "Trace",
+        options=options,
+        index=selected_index,
+        key=QUERY_TRACE_WIDGET_KEY,
+    )
     return str(selected) if selected is not None else None
 
 

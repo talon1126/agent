@@ -171,6 +171,97 @@ def test_transform_pipeline_runs_steps_serially_without_factory_provider() -> No
     assert result[0].text == "source-a-b"
 
 
+def test_transform_pipeline_reports_each_implementation_timing() -> None:
+    """The pipeline should report ordered timing and chunk counts per step."""
+
+    class AppendTransform(BaseTransform):
+        """Append one suffix while preserving the number of chunks."""
+
+        def transform(
+            self,
+            chunks: list[Chunk],
+            *,
+            context: dict[str, object] | None = None,
+        ) -> list[Chunk]:
+            del context
+            return [
+                chunk.model_copy(update={"text": f"{chunk.text}-enhanced"})
+                for chunk in chunks
+            ]
+
+    class DropLastTransform(BaseTransform):
+        """Remove the final chunk to expose output-count changes."""
+
+        def transform(
+            self,
+            chunks: list[Chunk],
+            *,
+            context: dict[str, object] | None = None,
+        ) -> list[Chunk]:
+            del context
+            return list(chunks[:-1])
+
+    records: list[dict[str, object]] = []
+    pipeline = TransformPipeline([AppendTransform(), DropLastTransform()])
+
+    result = pipeline.run(
+        [make_chunk(chunk_id="chunk-1"), make_chunk(chunk_id="chunk-2")],
+        step_observer=records.append,
+    )
+
+    assert len(result) == 1
+    assert [record["name"] for record in records] == [
+        "append_transform",
+        "drop_last_transform",
+    ]
+    assert [record["provider"] for record in records] == [
+        "AppendTransform",
+        "DropLastTransform",
+    ]
+    assert [(record["input_count"], record["output_count"]) for record in records] == [
+        (2, 2),
+        (2, 1),
+    ]
+    assert all(record["status"] == "success" for record in records)
+    assert all(float(record["duration_ms"]) >= 0 for record in records)
+
+
+def test_transform_pipeline_reports_failed_implementation_before_raising() -> None:
+    """A failed transform should emit its timing record before propagation."""
+
+    class FailingTransform(BaseTransform):
+        """Raise a deterministic provider-like failure."""
+
+        def transform(
+            self,
+            chunks: list[Chunk],
+            *,
+            context: dict[str, object] | None = None,
+        ) -> list[Chunk]:
+            del chunks, context
+            raise RuntimeError("transform failed")
+
+    records: list[dict[str, object]] = []
+
+    with pytest.raises(RuntimeError, match="transform failed"):
+        TransformPipeline([FailingTransform()]).run(
+            [make_chunk()],
+            step_observer=records.append,
+        )
+
+    assert len(records) == 1
+    assert records[0]["name"] == "failing_transform"
+    assert records[0]["provider"] == "FailingTransform"
+    assert records[0]["status"] == "failed"
+    assert records[0]["input_count"] == 1
+    assert records[0]["output_count"] == 0
+    assert float(records[0]["duration_ms"]) >= 0
+    assert records[0]["error"] == {
+        "error_type": "RuntimeError",
+        "message": "transform failed",
+    }
+
+
 def test_transform_pipeline_rejects_unknown_enabled_steps() -> None:
     """Require invalid transform step names to fail before ingestion starts."""
 

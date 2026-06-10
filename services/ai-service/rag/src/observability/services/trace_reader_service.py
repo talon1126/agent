@@ -46,6 +46,26 @@ class TraceStageWaterfallItem:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceTransformStepItem:
+    """Represent one concrete Transform implementation execution.
+
+    The DTO separates internal Transform timings from the main ingestion
+    waterfall. This preserves the stable top-level pipeline while allowing the
+    Dashboard to explain which configured implementation consumed time or
+    failed.
+    """
+
+    name: str
+    duration_ms: float | None
+    status: str
+    input_count: int
+    output_count: int
+    method: str | None = None
+    provider: str | None = None
+    error: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TraceHistoryItem:
     """Represent one trace in the Dashboard history list.
 
@@ -86,6 +106,7 @@ class TraceDetail:
     finished_at: datetime | None
     duration_ms: float | None
     waterfall: tuple[TraceStageWaterfallItem, ...]
+    transform_steps: tuple[TraceTransformStepItem, ...] = ()
     candidate_counts: Mapping[str, int] = field(default_factory=dict)
     summary_metrics: Mapping[str, Any] = field(default_factory=dict)
     evaluation_metrics: Mapping[str, Any] = field(default_factory=dict)
@@ -245,6 +266,7 @@ def _ingestion_detail(record: IngestionTraceRecord) -> TraceDetail:
         finished_at=record.finished_at,
         duration_ms=_duration(record),
         waterfall=_waterfall(record.stages),
+        transform_steps=_transform_steps(record.stages),
         candidate_counts={},
         summary_metrics=record.summary_metrics,
         evaluation_metrics=record.evaluation_metrics,
@@ -275,6 +297,50 @@ def _waterfall(
                 ),
             )
         )
+    return tuple(items)
+
+
+def _transform_steps(
+    stages: tuple[Mapping[str, Any], ...],
+) -> tuple[TraceTransformStepItem, ...]:
+    """Extract validated Transform child records from an ingestion trace.
+
+    Older traces contain only the top-level ``transform`` stage. Missing or
+    malformed child records are ignored so the Dashboard remains compatible
+    with historical data.
+    """
+
+    items: list[TraceTransformStepItem] = []
+    for stage in stages:
+        if stage.get("stage") != "transform":
+            continue
+        sub_stages = stage.get("sub_stages")
+        if not isinstance(sub_stages, list | tuple):
+            continue
+        for child in sub_stages:
+            if not isinstance(child, Mapping):
+                continue
+            name = _optional_str(child.get("name"))
+            input_count = _optional_int(child.get("input_count"))
+            output_count = _optional_int(child.get("output_count"))
+            if name is None or input_count is None or output_count is None:
+                continue
+            items.append(
+                TraceTransformStepItem(
+                    name=name,
+                    duration_ms=_optional_float(child.get("duration_ms")),
+                    status=str(child.get("status") or "success"),
+                    input_count=input_count,
+                    output_count=output_count,
+                    method=_optional_str(child.get("method")),
+                    provider=_optional_str(child.get("provider")),
+                    error=(
+                        dict(child.get("error"))
+                        if isinstance(child.get("error"), Mapping)
+                        else None
+                    ),
+                )
+            )
     return tuple(items)
 
 
