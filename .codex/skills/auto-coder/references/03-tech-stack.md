@@ -327,6 +327,7 @@ rerank:
 ingestion:
   document_summary:
     enabled: true
+    llm_provider: deepseek
     prompt_path: config/prompts/document_summary_prompt.yaml
     max_document_chars: 12000
 
@@ -409,6 +410,7 @@ database:
   provider: postgresql
   url_env: DATABASE_URL
   pool_size: 5
+  timezone: Asia/Shanghai
   echo_sql: false
 
 llm:
@@ -575,7 +577,11 @@ mcp:
 
 ### 3.6 PostgreSQL 数据设计
 
-PostgreSQL 是唯一持久化层，不使用 SQLite。
+PostgreSQL 是唯一持久化层，不使用 SQLite。所有数据库时间字段使用
+`TIMESTAMPTZ` 保存绝对时间；RAG 应用连接池必须根据
+`database.timezone` 为每条 PostgreSQL session 执行 `SET TIME ZONE`，
+默认使用 `Asia/Shanghai`，使 Dashboard、MCP 和本地脚本通过应用连接
+查询到的入库时间按北京时间展示。
 
 核心文档对象统一使用 Python 业务层生成的稳定字符串 ID。数据库不得为
 `rag_collections`、`rag_documents` 或 `rag_chunks` 另行生成自增主键：
@@ -637,7 +643,8 @@ CREATE TABLE image_index (
     collection TEXT,
     doc_hash TEXT,
     page_num INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_collection ON image_index(collection);

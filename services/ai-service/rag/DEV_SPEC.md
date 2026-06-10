@@ -504,6 +504,7 @@ rerank:
 ingestion:
   document_summary:
     enabled: true
+    llm_provider: deepseek
     prompt_path: config/prompts/document_summary_prompt.yaml
     max_document_chars: 12000
 
@@ -586,6 +587,7 @@ database:
   provider: postgresql
   url_env: DATABASE_URL
   pool_size: 5
+  timezone: Asia/Shanghai
   echo_sql: false
 
 llm:
@@ -752,7 +754,11 @@ mcp:
 
 ### 3.6 PostgreSQL 数据设计
 
-PostgreSQL 是唯一持久化层，不使用 SQLite。
+PostgreSQL 是唯一持久化层，不使用 SQLite。所有数据库时间字段使用
+`TIMESTAMPTZ` 保存绝对时间；RAG 应用连接池必须根据
+`database.timezone` 为每条 PostgreSQL session 执行 `SET TIME ZONE`，
+默认使用 `Asia/Shanghai`，使 Dashboard、MCP 和本地脚本通过应用连接
+查询到的入库时间按北京时间展示。
 
 核心文档对象统一使用 Python 业务层生成的稳定字符串 ID。数据库不得为
 `rag_collections`、`rag_documents` 或 `rag_chunks` 另行生成自增主键：
@@ -814,7 +820,8 @@ CREATE TABLE image_index (
     collection TEXT,
     doc_hash TEXT,
     page_num INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_collection ON image_index(collection);
@@ -1469,6 +1476,7 @@ services/ai-service/rag/
 │   │   │   ├── config_reader.py                   # Dashboard 读取 settings 和组件配置
 │   │   │   ├── data_browser_service.py            # Dashboard 查询文档、chunk、图片数据
 │   │   │   ├── trace_reader_service.py            # Dashboard 读取 query/ingestion trace
+│   │   │   ├── ingestion_operation_service.py     # Dashboard 触发真实摄取操作
 │   │   │   └── evaluation_service.py              # Dashboard 运行评估和读取历史趋势
 │   │   ├── pages/
 │   │   │   ├── overview.py                        # 系统总览页面
@@ -1538,8 +1546,8 @@ services/ai-service/rag/
 | `config/settings.example.yaml` | 提供完整版本化配置模板 | 展示 LLM、Embedding、Splitter、Transform steps、VectorStore、Reranker、Evaluator 配置和参数 |
 | `config/settings.yaml` | 管理本地运行配置和组件选择 | 由示例模板复制，允许环境定制并被 Git 忽略 |
 | `config/prompts/rerank_prompt.yaml` | 保存 rerank 阶段提示词 | prompt 与代码分离，便于评估不同 rerank 策略 |
-| `config/prompts/document_summary_prompt.yaml` | 保存文档级摘要提示词 | 在 Loader 后生成 `Document.summary`，为 chunk rewrite 提供全局语义上下文 |
-| `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段结合 `Document.summary` 做 chunk rewrite，并保持事实和图片引用 |
+| `config/prompts/document_summary_prompt.yaml` | 保存文档级摘要提示词 | 在 Loader 后生成 `Document.summary`，为 chunk rewrite 提供全局语义上下文；首版通过 `ingestion.document_summary.llm_provider=deepseek` 显式使用 DeepSeek |
+| `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段结合 `Document.summary` 做 chunk rewrite；Prompt 只接收 chunk 正文和文档摘要，不接收 metadata 或 image_refs；输出只允许把 searchable text 写入 `text` 字段，禁止把 metadata/image_refs 报告写入正文 |
 | `config/prompts/semantic_merge_prompt.yaml` | 保存相邻 chunk 合并判断提示词 | 仅合并逻辑连续内容，要求结构化 merge 决策和合并文本 |
 | `config/prompts/image_to_text_prompt.yaml` | 保存图片转文字提示词 | 使用英文 Prompt 指令，按图片类型生成可检索的简体中文描述，并原样保留图片中的文字 |
 | `data/raw/shopping_guides/` | 存放 shopping_guides collection 原始文档 | 按 collection 分类，便于离线摄取和回归测试 |
@@ -1631,7 +1639,7 @@ services/ai-service/rag/
 
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
-| `src/storage/postgres.py` | 管理 PostgreSQL 连接 | 连接池、事务、超时、健康检查 |
+| `src/storage/postgres.py` | 管理 PostgreSQL 连接 | 连接池、事务、超时、健康检查；按 `database.timezone` 初始化 session timezone，默认北京时间 |
 | `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`rag_bm25_terms`、`image_index`、traces、evaluation |
 | `src/storage/vector_storage.py` | 管理向量存储 | pgvector upsert/search、metadata filter |
 | `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | C9 实现 document 级 posting 快照替换；D12 实现 collection 隔离的 PostgreSQL BM25 查询，按当前语料动态计算 corpus stats 并输出有序候选 |
@@ -1656,6 +1664,7 @@ services/ai-service/rag/
 | `src/observability/services/config_reader.py` | Dashboard 读取配置 | 展示当前启用组件和 provider |
 | `src/observability/services/data_browser_service.py` | Dashboard 查询数据资产 | 文档、chunk、图片、metadata、索引状态 |
 | `src/observability/services/trace_reader_service.py` | Dashboard 读取 trace | query/ingestion 历史、瀑布图数据、fallback 原因 |
+| `src/observability/services/ingestion_operation_service.py` | Dashboard 摄取操作编排 | 接收页面提交的 collection/source_path/force，复用 ingestion pipeline/CLI 组装逻辑触发真实摄取，返回成功、跳过、失败、trace_id 和处理数量；不得只返回 pending DTO |
 | `src/observability/services/evaluation_service.py` | Dashboard 运行评估 | 触发评估、读取历史趋势 |
 | `src/observability/pages/overview.py` | 系统总览页面 | 组件配置、collection 统计、健康指标 |
 | `src/observability/pages/query_trace.py` | Query Trace 页面 | Dense/BM25 对比、RRF、rerank 前后对比 |
@@ -1959,7 +1968,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase C | Ingestion & Indexing Pipeline | 离线摄取与索引主链路已完成，可通过 CLI 将 Markdown/PDF 文件或目录写入 PostgreSQL、pgvector、BM25 和图片索引 | SHA256 去重、Loader、智能分块、Transform、图片 caption 降级、差量 Dense 编码、BM25、事务 upsert、生命周期管理和 `ingest.py` CLI | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.ingest --help` | 2026-06-07 |
 | Phase D | Retrieval | 在线查询主链路已完成，可基于已摄取知识库执行 Query Processor、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Response Builder 和 CLI 查询 | QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
 | Phase E | MCP 工具服务 | MCP stdio 工具服务已完成，可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
-| Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services 和六大页面验收已完成，可进入质量评估体系开发 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-08 |
+| Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作已完成，可进入质量评估体系开发 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
 | Phase G | 质量评估体系 | 未完成 | 暂无 | 暂无 |  |
 | Phase H | AImodel 联调集成 | 未完成 | 暂无 | 暂无 |  |
 
@@ -2153,7 +2162,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | --- | --- | --- | --- | --- |
 | B1 | 编写 collection/document/chunk schema | [✔] | 2026-06-06 | 已实现稳定字符串 ID、pgvector/HNSW、核心约束和索引；真实 PostgreSQL 连续初始化两次通过，5 个集成测试通过 |
 | B2 | 编写 image/trace/evaluation schema | [✔] | 2026-06-06 | 已实现图片索引、四段式 Query/Ingestion Trace、评估任务和指标结果表；真实 PostgreSQL 幂等初始化通过，8 个集成测试通过 |
-| B3 | 实现数据库连接池和 schema 初始化 | [✔] | 2026-06-06 | 已实现配置驱动惰性连接池、生命周期、健康检查、事务回滚和幂等 schema 初始化；15 个集成测试通过 |
+| B3 | 实现数据库连接池和 schema 初始化 | [✔] | 2026-06-10 | 已实现配置驱动惰性连接池、生命周期、健康检查、事务回滚和幂等 schema 初始化；补充 `database.timezone=Asia/Shanghai`，连接池为每条 PostgreSQL session 执行 timezone 初始化，真实连接池验证 `SHOW timezone = Asia/Shanghai`；长期运行进程必须重启以释放旧 session；78 个相关回归测试通过 |
 | B4 | 实现 Document/Chunk/Image Repository | [✔] | 2026-06-06 | 已实现 collection 自动创建、文档版本替换、Chunk 批量 upsert、图片安全落盘和索引查询；19 个集成测试通过 |
 | B5 | 实现 Trace/Evaluation Repository | [✔] | 2026-06-06 | 已实现 Query/Ingestion Trace 与评估任务/指标的不可变记录、幂等 upsert 和历史查询；21 个集成测试通过 |
 | B6 | 实现文档生命周期管理 | [✔] | 2026-06-06 | 已实现 `lifecycle_status` schema、状态流转、retrievable 查询过滤和 deleted 清理 chunks/images；23 个集成测试通过 |
@@ -2170,14 +2179,14 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 已实现流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-06 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；11 个新增单元测试及真实文本/图片 PDF 冒烟测试通过 |
 | C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-06 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；24 个相关单元测试、111 个全量测试通过 |
-| C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-06 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；49 个相关测试、120 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；已修复 ChunkRewriter 只基于 chunk 正文和 Document.summary 调用 LLM，不发送 metadata/image_refs，只保存 LLM JSON/text 正文，不把 metadata/image_refs 报告写入 chunk content；合法 JSON 的 text 为空或缺失时直接失败，禁止原始 JSON 入库；78 个相关回归测试通过 |
 | C5 | 实现 ImageCaptioner | [✔] | 2026-06-06 | 已实现 ImageCaptioner、ImageToTextTransform、image_to_text transform step、skipped/failed/low_quality 状态和 caption metadata；34 个相关测试、125 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C6 | 实现 DenseEncoder | [✔] | 2026-06-06 | 已实现 DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C7 | 实现 BM25Indexer | [✔] | 2026-06-07 | 已实现 BM25Candidate、BM25IndexResult、BM25Indexer.index/query、词频统计、倒排索引、关键词 Top-k 排序、中文连续文本 n-gram fallback 和重复 index 状态重建；6 个相关测试、137 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C8 | 实现 BatchProcessor 批处理优化 | [✔] | 2026-06-07 | 已实现 BatchProcessor、BatchRunResult、BatchSuccess、BatchFailure、DenseEncoder.encode_batch、batch_size 拆分、throttle_seconds 节流、有限 retry、失败隔离、EmbeddingStep.run_batch、Dense/BM25 批处理编排；20 个相关测试、145 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C9 | 实现统一 upsert | [✔] | 2026-06-07 | 已实现 rag_bm25_terms schema、BM25Storage、UpsertStep 单事务完整快照写入、pgvector/image/repository 调用方事务接口、图片文件失败恢复、重复 upsert 幂等和内容变更旧 chunk 清理；2 个 C9 PostgreSQL 集成测试、148 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C10 | 实现统一 Pipeline MVP 编排和集成测试 | [✔] | 2026-06-07 | 已实现 IngestionPipelineResult、完整依赖校验、run_indexing、Markdown 图片摄取、Splitter、Transform/ImageCaptioner、成功文档 content_hash 向量复用、重复内容单次编码、Dense/BM25 batch、统一 upsert、lifecycle success 和重复文件 dedup skip；6 个 ingestion integration 测试、14 个 embedding 单元测试、153 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C11 | 新增 `ingest.py` 摄取脚本入口 | [✔] | 2026-06-07 | 已实现必填 `--path`、可选 `--collection`、`--force`、父目录 `.env` 自动加载、系统环境优先、RAG 根目录运行时路径解析、递归 Markdown/PDF 发现、配置驱动 Pipeline 组装、JSON 结果、错误码和连接池释放；真实购物指南 PDF 完成 4 个 chunk、4 个 Dense 向量、4 份 BM25 数据和 3 张图片摄取；25 个 Loader/CLI 测试、163 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C11 | 新增 `ingest.py` 摄取脚本入口 | [✔] | 2026-06-10 | 已实现必填 `--path`、可选 `--collection`、`--force`、父目录 `.env` 自动加载、系统环境优先、RAG 根目录运行时路径解析、递归 Markdown/PDF 发现、配置驱动 Pipeline 组装、JSON 结果、错误码和连接池释放；`ingestion.document_summary.llm_provider` 显式配置 DeepSeek，构建摘要步骤时按该 provider 调用 LLMFactory；当旧版本地 `settings.yaml` 缺少 `ingestion.document_summary` 时默认启用文档摘要步骤，避免 `rag_documents.summary` 长期为空；68 个相关单元测试通过 |
 
 #### 阶段 D：Retrieval
 
@@ -2218,7 +2227,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-08 | 已将 TraceContext/TraceController 注入 ingestion 和 query 主链路，CLI 默认写入 JSONL trace；8 个 ingestion/query 集成测试、15 个 trace 单元测试和 ruff 通过 |
 | F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | 已实现 Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
 | F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | 已实现 Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
-| F8 | 实现系统总览与 Ingestion 管理页面 | [✔] | 2026-06-08 | 已实现系统总览和 Ingestion 管理页面的可启动渲染函数、页面模型和 fake Streamlit 集成测试；7 个 Dashboard service/page 集成测试和 ruff 通过 |
+| F8 | 实现系统总览、Ingestion 管理页面和摄取操作 | [✔] | 2026-06-10 | 已新增 `IngestionOperationService`，点击 Run ingestion 会复用 `run_ingest_cli()` 触发真实摄取并展示 success/skipped/failed 结果；支持多文件选择、目录上传、服务器文件夹候选发现和单文件取消摄入；22 个 Dashboard 集成测试和 ruff 通过 |
 | F9 | 实现数据浏览器与 Query Trace 页面 | [✔] | 2026-06-08 | 已实现数据浏览器和 Query Trace 页面的可启动渲染函数、页面模型、文档/chunk/图片展示、召回候选对比和 rerank delta 展示；9 个 Dashboard service/page 集成测试和 ruff 通过 |
 | F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-08 | 已实现 Ingestion Trace 和评估面板页面的可启动渲染函数、页面模型、阶段耗时瀑布图、处理统计、评估 run 历史、指标详情和趋势展示；11 个 Dashboard service/page 集成测试和 ruff 通过 |
 | F11 | 实现 Dashboard 启动脚本和冒烟测试 | [✔] | 2026-06-08 | 已实现 Streamlit app 最小入口、六大页面模块导入校验、`run_dashboard.py` dry-run、端口配置、headless 启动命令和注入 command runner；14 个 Dashboard service/page/launcher 集成测试通过 |
@@ -2439,7 +2448,7 @@ schema 可重复执行。
 
 实现类/函数：
 
-- `PostgresPool.from_settings()`：从 `settings.database.url_env` 读取 DSN，并按 `pool_size` 创建惰性连接池
+- `PostgresPool.from_settings()`：从 `settings.database.url_env` 读取 DSN，按 `pool_size` 创建惰性连接池，并为每条连接配置 `database.timezone`
 - `PostgresPool.open()`：启动连接池并等待最小连接可用
 - `PostgresPool.close()`：关闭连接池
 - `PostgresPool.connection()`：提供自动归还连接的上下文
@@ -2448,10 +2457,12 @@ schema 可重复执行。
 - `init_schema()`：读取并以事务方式执行 `schema.sql`
 
 验收标准：连接池完全由 `DatabaseSettings` 和环境变量驱动，不在源码中
-硬编码 DSN；可完成打开、健康检查、连接借用、事务提交/回滚和关闭；
+硬编码 DSN；通过连接池获取的 PostgreSQL session 必须显示
+`SHOW timezone = Asia/Shanghai`；可完成打开、健康检查、连接借用、事务提交/回滚和关闭；
 `init_schema()` 可重复执行；配置缺失、连接失败、SQL 文件缺失或 SQL
 执行失败时抛出带安全上下文和原始 cause 的 `DatabaseError` 或
-`ConfigurationError`。
+`ConfigurationError`。修改数据库默认 timezone 或 `database.timezone` 后，
+必须重启长期运行的 Dashboard、MCP 和 API 进程，使旧连接池释放已有 session。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
@@ -2710,11 +2721,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `TransformPipeline.from_settings()`：从 `settings.transform.steps` 构建 enabled step 链路
 - `TransformPipeline.run()`：按配置顺序串行执行 Transform
 - `MetadataEnricher.transform()`：注入标题路径、来源、文档主题等上下文 metadata
-- `ChunkRewriter.transform()`：读取 `document_summary` 作为全局上下文，利用 LLM 重写 chunk，使片段语义更完整
+- `ChunkRewriter.transform()`：读取 `document_summary` 作为全局上下文，利用 LLM 重写 chunk，使片段语义更完整；发送给 LLM 的输入只能包含 chunk 正文和文档摘要，不发送 `Chunk.metadata` 或 `image_refs`；必须解析 JSON schema 或清理 Markdown 分段回复，只把正文写入 `Chunk.text`，不得把 metadata、image_refs、Prompt 标签或代码块写入 chunk content；合法 JSON 响应缺少非空 `text` 时必须作为 provider 无效响应失败，不得把原始 JSON 写入正文
 - `SemanticMergeTransform.transform()`：合并逻辑相关但被物理切开的相邻 chunk
 - `DenoiseTransform.transform()`：清理空白、页眉页脚、目录和解析残留噪声
 
-验收标准：运行时 `config/settings.yaml` 被 Git 忽略，仓库提交 `config/settings.example.yaml` 作为完整模板；`settings.transform.steps` 只描述步骤顺序、启用状态和 prompt_path，不包含 provider；`src.libs.transform` 只暴露 `BaseTransform`；具体 Transform 位于 `src/ingestion/transform/`；chunk 包含标题、来源、主题上下文；`ChunkRewriter` 必须接收 `document_summary` 并只把它作为语义背景，不得凭摘要补造 chunk 中不存在的事实；fake LLM 下可 rewrite；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
+验收标准：运行时 `config/settings.yaml` 被 Git 忽略，仓库提交 `config/settings.example.yaml` 作为完整模板；`ingestion.document_summary.llm_provider` 显式配置为 `deepseek`，运行时摘要步骤必须按该 provider 构建 LLM；`settings.transform.steps` 只描述步骤顺序、启用状态和 prompt_path，不包含 provider；`src.libs.transform` 只暴露 `BaseTransform`；具体 Transform 位于 `src/ingestion/transform/`；chunk 包含标题、来源、主题上下文；`ChunkRewriter` 必须接收 `document_summary` 并只把它作为语义背景，不得凭摘要补造 chunk 中不存在的事实；`ChunkRewriter` 不得把 `Chunk.metadata` 或 `image_refs` 发送给大模型，metadata/image_refs 只能在 Python 对象层面继承和维护；fake LLM 下可 rewrite；LLM 返回 JSON 或 Markdown 分段时，最终 `Chunk.text` 只能包含可检索正文，metadata 和 image_refs 只能保留在 `Chunk.metadata`；合法 JSON 的 `text` 为空或缺失时摄取必须失败，不得把 `{ "text": ... }` JSON 结构作为 chunk 正文写入；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
 
 补充要求：执行该任务时必须在 `settings.example.yaml` 和本地 `settings.yaml` 中配置真实启用的 Transform steps 链路，测试不能只依赖 fake transform；需要创建典型噪声场景 fixture，例如连续空白、页眉页脚、重复目录、页码水印、PDF 解析断行、无意义符号残留和图片占位符附近噪声。
 
@@ -3363,22 +3374,36 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
-##### F8：实现总览和摄取管理页面
+##### F8：实现总览、摄取管理页面和摄取操作
 
-目标：实现系统总览和 Ingestion 管理页面。
+目标：实现系统总览和 Ingestion 管理页面，并让 Dashboard 的 `Run ingestion` 按钮触发真实摄取操作，而不是仅返回 `pending orchestration` 占位状态。
 
-修改文件：`src/observability/pages/__init__.py`、`src/observability/pages/overview.py`、`src/observability/pages/ingestion_manage.py`、`tests/integration/test_dashboard_services.py`
+修改文件：`src/observability/pages/__init__.py`、`src/observability/pages/overview.py`、`src/observability/pages/ingestion_manage.py`、`src/observability/dashboard/app.py`、`src/observability/services/ingestion_operation_service.py`、`tests/integration/test_dashboard_services.py`、`tests/integration/test_dashboard_pages.py`
 
 实现类/函数：
 
 - `build_overview_page_model()`：读取配置、collection 统计和最新 query/ingestion trace，生成系统总览页面模型
 - `render_overview_page()`：渲染组件配置、数据资产统计和系统健康指标
 - `build_ingestion_manage_page_model()`：读取默认 collection、raw data 路径和已索引文档列表
-- `render_ingestion_manage_page()`：渲染摄取参数、force 选项、已索引文档表格和删除选择控件，并返回操作意图 DTO
+- `render_ingestion_manage_page()`：渲染摄取参数、force 选项、文件/目录选择控件、批量候选确认表、已索引文档表格和删除选择控件；当用户点击 `Run ingestion` 时展示真实摄取结果或错误信息
+- `IngestionOperationRequest`：保存 Dashboard 摄取请求参数，包括 collection、source_path/source_paths、force 和可选 uploaded_files
+- `IngestionOperationResult`：保存真实摄取结果，包括 status、processed、trace_ids、source_paths、error 和 summary
+- `IngestionOperationService.run_ingestion()`：校验 source_path/source_paths，保存用户通过 Dashboard 上传的文件，复用 ingestion pipeline/CLI 组装逻辑执行单文件或批量摄取，返回真实结果；不得返回未执行的 pending 状态
+- `render_dashboard_page()`：把 `IngestionOperationService` 注入 Ingestion 管理页面，让页面提交能够进入真实 service 层
 
-验收标准：总览和摄取管理页面可启动。
+职责边界：
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
+- Dashboard 页面负责采集参数、展示进度/结果和错误，不直接拼接底层 pipeline 依赖。
+- Dashboard 页面必须提供文件选择入口：多文件上传使用 Streamlit 文件选择器，目录上传使用 `accept_multiple_files="directory"`，服务器本机目录仍支持路径输入。
+- 当用户选择目录或一次选择多个文件时，页面必须展示待摄取文件列表，允许用户取消某个文件后再提交；最终只摄取用户保留的候选文件。
+- `IngestionOperationService` 负责把 Dashboard 请求转换为摄取执行，复用 `src.scripts.ingest` 或相同 Pipeline Builder，避免 Dashboard 与 CLI 出现两套摄取逻辑。
+- 上传文件应保存到 `data/raw/{collection}/dashboard_uploads/` 下，再把保存后的本地路径交给摄取入口。
+- 摄取操作必须继续走 `IngestionPipeline`，保证 dedup、document_summary、split、transform、embedding、upsert、trace 写入和错误处理一致。
+- 测试中必须使用 fake provider、测试数据库或注入 runner，禁止真实调用外部 LLM/Embedding。
+
+验收标准：总览和摄取管理页面可启动；用户可通过文件选择器一次选择多个文件，也可通过目录上传选择文件夹；选择文件夹或多个文件后页面展示候选文件列表并支持取消某个文件；点击 `Run ingestion` 后只摄取被选中的文件；成功时 PostgreSQL 中可以看到新增/更新的 document、chunk、image index 和 ingestion trace；skipped 时返回真实 skipped 结果和 trace_id；失败时页面展示结构化错误；页面不再把 `pending orchestration` 作为成功提示。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py services\ai-service\rag\tests\integration\test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ##### F9：实现数据浏览和 Query Trace 页面
 

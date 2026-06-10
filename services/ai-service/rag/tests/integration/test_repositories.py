@@ -77,6 +77,7 @@ def _database_settings(
     *,
     url_env: str = "DATABASE_URL",
     pool_size: int = 5,
+    timezone: str = "Asia/Shanghai",
 ) -> object:
     """Build the minimum typed-settings shape consumed by PostgresPool.
 
@@ -94,6 +95,7 @@ def _database_settings(
         provider="postgresql",
         url_env=url_env,
         pool_size=pool_size,
+        timezone=timezone,
         echo_sql=False,
     )
 
@@ -120,15 +122,72 @@ def test_postgres_pool_is_created_from_settings_without_opening(
         environ={"DATABASE_URL": "postgresql://user:secret@db:5432/rag"},
     )
 
-    pool_class.assert_called_once_with(
-        "postgresql://user:secret@db:5432/rag",
-        min_size=1,
-        max_size=7,
-        open=False,
-        name="aimodel-rag",
-    )
+    pool_class.assert_called_once()
+    assert pool_class.call_args.args == ("postgresql://user:secret@db:5432/rag",)
+    assert pool_class.call_args.kwargs["min_size"] == 1
+    assert pool_class.call_args.kwargs["max_size"] == 7
+    assert pool_class.call_args.kwargs["open"] is False
+    assert pool_class.call_args.kwargs["name"] == "aimodel-rag"
+    assert callable(pool_class.call_args.kwargs["configure"])
     assert pool.is_open is False
     assert "secret" not in repr(pool)
+
+
+@pytest.mark.integration
+def test_postgres_pool_configures_session_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require every pooled connection to display timestamps in Beijing time.
+
+    PostgreSQL ``TIMESTAMPTZ`` stores absolute instants, but Dashboard and CLI
+    reads should present database timestamps through the configured session
+    timezone. A failure means new connections will keep the server default,
+    which is commonly ``Etc/UTC`` in Docker images.
+    """
+
+    from src.storage import postgres
+
+    driver_pool = MagicMock()
+    pool_class = MagicMock(return_value=driver_pool)
+    connection = MagicMock()
+    monkeypatch.setattr(postgres, "ConnectionPool", pool_class)
+
+    postgres.PostgresPool.from_settings(
+        _database_settings(timezone="Asia/Shanghai"),
+        environ={"DATABASE_URL": "postgresql://user:secret@db:5432/rag"},
+    )
+
+    configure = pool_class.call_args.kwargs["configure"]
+    configure(connection)
+
+    connection.execute.assert_called_once_with("SET TIME ZONE 'Asia/Shanghai'")
+    connection.commit.assert_called_once_with()
+
+
+@pytest.mark.integration
+def test_postgres_pool_rejects_unsafe_session_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject timezone values that cannot be safely rendered in SET TIME ZONE."""
+
+    from src.core.errors import ConfigurationError
+    from src.storage import postgres
+
+    driver_pool = MagicMock()
+    pool_class = MagicMock(return_value=driver_pool)
+    connection = MagicMock()
+    monkeypatch.setattr(postgres, "ConnectionPool", pool_class)
+
+    postgres.PostgresPool.from_settings(
+        _database_settings(timezone="Asia/Shanghai'; DROP TABLE rag_chunks; --"),
+        environ={"DATABASE_URL": "postgresql://user:secret@db:5432/rag"},
+    )
+
+    configure = pool_class.call_args.kwargs["configure"]
+    with pytest.raises(ConfigurationError, match="timezone"):
+        configure(connection)
+    connection.execute.assert_not_called()
+    connection.commit.assert_not_called()
 
 
 @pytest.mark.integration

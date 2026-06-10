@@ -53,6 +53,7 @@ class DatabaseSettings(ConfigSection):
     provider: str = Field(min_length=1)
     url_env: str = Field(min_length=1)
     pool_size: int = Field(gt=0)
+    timezone: str = Field(default="Asia/Shanghai", min_length=1)
     echo_sql: bool = False
 
 

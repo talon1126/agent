@@ -16,6 +16,7 @@ and credentials are never copied into messages or diagnostic metadata.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -31,6 +32,7 @@ from src.core.errors import ConfigurationError, DatabaseError
 
 DEFAULT_SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 POOL_NAME = "aimodel-rag"
+TIMEZONE_PATTERN = re.compile(r"^[A-Za-z0-9_./+-]+$")
 
 
 class PostgresPool:
@@ -102,6 +104,10 @@ class PostgresPool:
             max_size=settings.pool_size,
             open=False,
             name=POOL_NAME,
+            configure=lambda connection: _configure_session_timezone(
+                connection,
+                settings.timezone,
+            ),
         )
         return cls(driver_pool)
 
@@ -339,3 +345,29 @@ def init_schema(
                 cause=error.cause or error,
             ) from error
         raise
+
+
+def _configure_session_timezone(
+    connection: Connection[Any],
+    timezone: str,
+) -> None:
+    """Configure one newly opened PostgreSQL session for timestamp display.
+
+    Args:
+        connection: Fresh psycopg connection supplied by ``ConnectionPool``.
+        timezone: IANA timezone name from ``database.timezone``.
+
+    Side Effects:
+        Executes ``SET TIME ZONE`` and commits the session-level setting so the
+        pool receives an idle connection. This does not change how
+        ``TIMESTAMPTZ`` values are stored; it controls how PostgreSQL renders
+        them when the RAG application reads rows.
+    """
+
+    if not TIMEZONE_PATTERN.fullmatch(timezone):
+        raise ConfigurationError(
+            "PostgreSQL timezone contains unsupported characters",
+            context={"timezone": timezone},
+        )
+    connection.execute(f"SET TIME ZONE '{timezone}'")
+    connection.commit()
