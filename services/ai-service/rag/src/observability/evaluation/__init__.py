@@ -8,5 +8,6 @@ tracking workflow, while the actual retrieval pipeline remains under
 """
 
 from src.observability.evaluation.metrics import HitRateMetric, MRRMetric, NDCGMetric
+from src.observability.evaluation.ragas_adapter import RagasEvaluator
 
-__all__ = ["HitRateMetric", "MRRMetric", "NDCGMetric"]
+__all__ = ["HitRateMetric", "MRRMetric", "NDCGMetric", "RagasEvaluator"]

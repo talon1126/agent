@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from src.observability.evaluation.metrics import HitRateMetric, MRRMetric, NDCGMetric
+from src.observability.evaluation.ragas_adapter import RagasEvaluator
 
 RAG_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_SET_PATH = RAG_ROOT / "tests" / "fixtures" / "golden_set.json"
@@ -142,6 +144,100 @@ def test_custom_retrieval_metrics_validate_dataset_and_prediction_contracts() ->
             [{"question": "missing source contract"}],
             [{"retrieved_sources": ["shopping_guides/a.md#section"]}],
         )
+
+
+@pytest.mark.unit
+def test_ragas_evaluator_builds_generation_samples_with_injected_backend() -> None:
+    """Verify the Ragas adapter contract without importing or calling real Ragas."""
+
+    captured: dict[str, Any] = {}
+
+    def fake_ragas_evaluate(
+        rows: list[dict[str, Any]],
+        *,
+        metrics: tuple[str, ...],
+    ) -> dict[str, float]:
+        """Record adapter input and return deterministic generation scores."""
+
+        captured["rows"] = rows
+        captured["metrics"] = metrics
+        return {"faithfulness": 0.91, "answer_relevancy": 0.87}
+
+    evaluator = RagasEvaluator(evaluate_fn=fake_ragas_evaluate)
+    dataset = [
+        {
+            "question": "如何挑选适合通勤的无线耳机？",
+            "golden_answer": "应重点关注降噪、佩戴舒适度、续航和连接稳定性。",
+        }
+    ]
+    predictions = [
+        {
+            "answer": "通勤耳机优先看主动降噪、佩戴重量、续航和蓝牙稳定性。",
+            "contexts": [
+                "通勤场景应优先考虑主动降噪和连接稳定性。",
+                "长时间佩戴需要关注重量和耳压。",
+            ],
+        }
+    ]
+
+    scores = evaluator.evaluate(dataset, predictions)
+
+    assert scores == {"faithfulness": pytest.approx(0.91), "answer_relevancy": pytest.approx(0.87)}
+    assert captured["metrics"] == ("faithfulness", "answer_relevancy")
+    assert captured["rows"] == [
+        {
+            "question": "如何挑选适合通勤的无线耳机？",
+            "answer": "通勤耳机优先看主动降噪、佩戴重量、续航和蓝牙稳定性。",
+            "contexts": [
+                "通勤场景应优先考虑主动降噪和连接稳定性。",
+                "长时间佩戴需要关注重量和耳压。",
+            ],
+            "ground_truth": "应重点关注降噪、佩戴舒适度、续航和连接稳定性。",
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_ragas_evaluator_validates_generation_metric_contracts() -> None:
+    """Fail fast when Ragas generation metrics cannot be computed safely."""
+
+    evaluator = RagasEvaluator(evaluate_fn=lambda rows, *, metrics: {})
+
+    with pytest.raises(ValueError, match="metric_names"):
+        RagasEvaluator(metric_names=[])
+
+    with pytest.raises(ValueError, match="same number"):
+        evaluator.evaluate(
+            [{"question": "q", "golden_answer": "a"}],
+            [],
+        )
+
+    with pytest.raises(ValueError, match="answer"):
+        evaluator.evaluate(
+            [{"question": "q", "golden_answer": "a"}],
+            [{"contexts": ["ctx"]}],
+        )
+
+    with pytest.raises(ValueError, match="contexts"):
+        evaluator.evaluate(
+            [{"question": "q", "golden_answer": "a"}],
+            [{"answer": "generated", "contexts": []}],
+        )
+
+
+@pytest.mark.external
+@pytest.mark.skipif(
+    os.getenv("RUN_RAG_EXTERNAL_TESTS") != "1",
+    reason="Set RUN_RAG_EXTERNAL_TESTS=1 to import optional Ragas dependencies",
+)
+def test_ragas_evaluator_real_backend_import_is_external_only() -> None:
+    """Keep the real Ragas dependency isolated from normal unit-test execution."""
+
+    pytest.importorskip("ragas")
+
+    evaluator = RagasEvaluator()
+
+    assert evaluator.metric_names == ("faithfulness", "answer_relevancy")
 
 
 def _load_golden_set() -> list[dict[str, Any]]:
