@@ -8,6 +8,7 @@ chunk ID because content is part of the storage identity contract.
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from hashlib import sha256
 from typing import Any
@@ -18,6 +19,8 @@ from src.core.types import Chunk
 from src.ingestion.chunk.chunk_id import build_chunk_id
 from src.libs.llm import BaseLLM, ChatMessage
 from src.libs.transform.base_transform import BaseTransform
+
+_IMAGE_PLACEHOLDER = re.compile(r"\[\[image:[^\]]+\]\]")
 
 
 class ChunkRewriter(BaseTransform):
@@ -87,6 +90,16 @@ class ChunkRewriter(BaseTransform):
             and rewrite_metadata.get("output_hash") == current_hash
         ):
             return chunk.model_copy(deep=True)
+        if _is_image_placeholder_only(chunk.text):
+            metadata = deepcopy(chunk.metadata)
+            metadata["rewrite"] = {
+                "version": self._version,
+                "status": "skipped",
+                "reason": "image_placeholder_only",
+                "input_hash": current_hash,
+                "output_hash": current_hash,
+            }
+            return chunk.model_copy(update={"metadata": metadata}, deep=True)
 
         try:
             response = self._llm.chat(
@@ -171,6 +184,20 @@ def _content_hash(text: str) -> str:
     """
 
     return sha256(text.encode("utf-8")).hexdigest()
+
+
+def _is_image_placeholder_only(text: str) -> bool:
+    """Return whether a chunk contains image references without text content.
+
+    Args:
+        text: Source chunk text produced by ``DocumentChunker``.
+
+    Returns:
+        ``True`` when removing every ``[[image:...]]`` placeholder and
+        whitespace leaves no textual content.
+    """
+
+    return not _IMAGE_PLACEHOLDER.sub("", text).strip()
 
 
 def _extract_rewritten_text(content: str) -> str:

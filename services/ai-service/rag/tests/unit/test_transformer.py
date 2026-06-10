@@ -303,6 +303,37 @@ def test_chunk_rewriter_rejects_structured_response_with_blank_text() -> None:
         transform.transform([source])
 
 
+def test_chunk_rewriter_skips_image_placeholder_only_chunk() -> None:
+    """Preserve pure image-reference chunks for the Image-to-Text stage.
+
+    Text LLMs may reasonably return an empty rewrite for chunks containing only
+    image placeholders. Calling the provider would make the complete document
+    fail before optional image captioning can process those references.
+    """
+
+    source = make_chunk(
+        text=(
+            "[[image:image-one]]\n\n"
+            "[[image:image-two]]"
+        ),
+        metadata={"image_refs": ["image-one", "image-two"]},
+    )
+    llm = Mock()
+    transform = ChunkRewriter(
+        llm=llm,
+        prompt=config_module.load_prompt("config/prompts/rewrite_chunk_prompt.yaml"),
+    )
+
+    rewritten = transform.transform([source])
+
+    assert rewritten[0].text == source.text
+    assert rewritten[0].id == source.id
+    assert rewritten[0].metadata["image_refs"] == ["image-one", "image-two"]
+    assert rewritten[0].metadata["rewrite"]["status"] == "skipped"
+    assert rewritten[0].metadata["rewrite"]["reason"] == "image_placeholder_only"
+    llm.chat.assert_not_called()
+
+
 def test_chunk_rewriter_strips_markdown_metadata_sections_from_llm_response() -> None:
     """Require non-JSON provider replies to drop preserved metadata sections."""
 
