@@ -146,7 +146,7 @@ MCP 的价值是让 RAG 不只服务当前 AImodel，也可以作为一个通用
 
 - **系统总览**：展示当前启用的可插拔组件，包括 LLM、Embedding、Splitter、Reranker 等
 - **Ingestion 管理**：支持在页面选择文件进行摄入，实时展示 Markdown 转换、智能分块、上下文增强、Embedding、入库等阶段进度，也支持删除已摄入文档。
-- **数据浏览器**：查询已经索引的文档和 chunk 详情，方便确认知识是否真的进入系统，以及 chunk 内容是否适合被检索。
+- **数据浏览器**：查询索引中的文档和 chunk 详情，方便确认知识是否进入系统，以及 chunk 内容是否适合被检索。
 - **Query 追踪**：查看查询历史、耗时瀑布图、Dense/BM25 召回对比，以及 rerank 前后的排名变化，用可视化方式解释一次查询是如何得到结果的。
 - **Ingestion 追踪**：展示每次摄取任务在各阶段的耗时和状态，帮助定位是文件解析慢、分块慢、模型调用慢，还是数据库写入慢。
 - **评估面板**：展示运行中的评估任务、各项指标对比和历史趋势对比，确保每一次分块、检索、重排或提示词策略调整都有量化分数支撑。
@@ -224,11 +224,11 @@ Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform（包含 ImageCap
 
 | 层级 | 职责 | 关键实现要素 |
 | --- | --- | --- |
-| `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹；若 `rag_documents` 中同一 collection、canonical source_path 和 source_hash 的文档状态为 `success`，则写入 skipped ingestion trace 并直接结束，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
-| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + summary + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；`summary` 为顶层字段，后续由独立摘要步骤生成或更新，不放入 `metadata.summary`；只处理去重判断后确认需要摄取的文档 |
+| `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹；若 `rag_documents` 中同一 collection、canonical source_path 和 source_hash 的文档状态为 `success`，则写入 skipped ingestion trace 并直接结束摄取 |
+| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + summary + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；`summary` 为顶层字段，由独立摘要步骤生成或更新；只处理去重判断后确认需要摄取的文档 |
 | `DocumentSummarizer` | 为加载后的文档生成顶层 `Document.summary` | 作为 Loader 之后、Splitter 之前的独立步骤；读取 `document_summary_prompt.yaml`；复用统一 LLM provider；已有同版本摘要时保持幂等；摘要只作为全局语义上下文，不写入 `metadata.summary` |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
-| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 只保留完整文档图片清单的 `id/path`，`Chunk.metadata` 不再复制 `images[]` |
+| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 保存完整文档图片清单的 `id/path`，`Chunk.metadata` 保存关联图片的 `image_refs` |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
 | `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后替换 chunk 正文中的图片占位符，使 caption 进入 Dense/BM25 可检索文本；执行详情写入 ingestion trace 的 `transform.sub_stages`，不写入 chunk metadata |
 | `BaseEmbedding` | 将增强后的 chunk 执行双路索引 | 在编码前先计算 `content_hash`，只对数据库中不存在的内容哈希执行新编码；DenseEncoder 调用百炼 `text-embedding-v4` 生成 1536 维语义向量；BM25Indexer 生成词项、词频和倒排索引；BatchProcessor 统一处理批量、限流、重试和失败隔离 |
@@ -287,7 +287,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 
 - 字段命名统一使用 `start_offset`，不使用 `start_offest`。
 - Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。
-- `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`，不再依赖图片 offset 与 chunk offset 的区间交集。
+- `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`。
 - `source_ref` 是可选字段，但首版建议保留，方便 Dashboard 展示引用来源、原文位置和关联图片。
 - `Chunk.metadata` 只保留检索过滤和业务解释需要的字段，例如 `collection`、`document_id`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。不得保存 `images`、`headings`、`source_path`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等来源、图片详情和 Transform 执行信息。
 - 来源引用保存在独立 `Chunk.source_ref` 字段，Dense/Sparse Retrieval 构造 `RetrievalResult` 时再将其深拷贝到 result metadata，避免持久化职责混淆或丢失文档来源信息。
@@ -343,7 +343,7 @@ uv run --project services/ai-service/rag python -m src.mcp_server.server --trans
 
 stdio 协议要求 stdout/stdin 只承载 MCP 协议帧，业务日志不得写入 stdout。RAG MCP 普通运行日志写入 `src/logs/app.log`，错误诊断可以写 stderr；Trace 仍按可观测性阶段写入结构化日志。MCP 启动入口必须加载本地 `.env`，并读取 `DATABASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`RAG_SETTINGS_PATH`、`RAG_DEFAULT_COLLECTION` 等环境变量。
 
-AImodel 集成时不让 Agent 直接依赖 MCP SDK。后续 H2/H3 应新增 AImodel 侧 adapter：`rag_mcp_client.py` 负责启动/连接 stdio MCP 子进程，`rag_tool.py` 负责把 MCP `query_knowledge_hub` 包装成 LangChain Tool。Agent 只依赖 `RagKnowledgeTool` 这类业务工具，底层可以从直连 Python 平滑切换为 MCP。
+AImodel 集成时不让 Agent 直接依赖 MCP SDK。H2/H3 提供 AImodel 侧 adapter：`rag_mcp_client.py` 负责启动/连接 stdio MCP 子进程，`rag_tool.py` 负责把 MCP `query_knowledge_hub` 包装成 LangChain Tool。Agent 只依赖 `RagKnowledgeTool` 这类业务工具，底层可以从直连 Python 平滑切换为 MCP。
 
 MCP 工具一：`query_knowledge_hub`
 
@@ -482,7 +482,7 @@ EvaluatorFactory
 
 工厂读取配置后返回对应实现。Factory 的注册表默认保持为空，通过
 `register_builtin_providers()` 统一注入项目内置实现类；`create()` 和
-`list_providers()` 内部必须自动确保内置实现已注册，业务代码不需要手动调用
+`list_providers()` 内部必须自动确保内置实现完成注册，业务代码不需要手动调用
 注册步骤。
 
 ```yaml
@@ -925,7 +925,7 @@ Storage 负责同时保存增强后的 chunk 和原始图片索引。
 
 - 增强后的 chunk 写入 PostgreSQL + pgvector，chunk metadata 包含 `image_refs`。
 - 原始图片文件保存在本地文件系统。
-- PostgreSQL 新增 `image_index` 表保存图片索引信息。
+- PostgreSQL 使用 `image_index` 表保存图片索引信息。
 - 检索命中 chunk 后，如果 chunk metadata 中包含 `image_refs`，响应可以返回相关图片信息，供 Dashboard 或前端展示。
 
 `image_index` 表建议字段：
@@ -991,7 +991,7 @@ Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各�
 | `document_summary` | 摘要 Prompt 版本、LLM Provider、是否生成摘要、摘要长度、是否复用已有摘要、耗时、失败详情 |
 | `split` | Splitter 类型、粗切分 chunk 数量、标题层级识别结果、平均 chunk 长度、耗时、失败详情 |
 | `transform` | Transform Pipeline 总耗时、输入输出 chunk 数量，以及按配置顺序记录的 `sub_stages`；每个子阶段包含配置步骤名、具体实现类、耗时、输入输出 chunk 数量、状态、失败详情和受限 `snapshots` 预览 |
-| `embed` | Embedding Provider、`content_hash` 命中数量、新增 embedding 数量、Dense 编码批次数、Sparse/BM25 编码批次数、耗时、失败详情 |
+| `embed` | Embedding Provider、`content_hash` 命中数量、待生成 embedding 数量、Dense 编码批次数、Sparse/BM25 编码批次数、耗时、失败详情 |
 | `upsert` | VectorStore Provider、写入 chunk 数量、更新 chunk 数量、跳过 chunk 数量、删除旧版本数量、耗时、失败详情 |
 
 汇总指标：
@@ -1630,7 +1630,7 @@ services/ai-service/rag/
 
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
-| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | C10 已实现 dedup -> load -> document_summary -> split -> transform -> existing content_hash vector lookup -> Dense/BM25 batch -> transactional upsert -> lifecycle success；图片 caption 仅作为 `transform.sub_stages.image_captioner` 记录；保留 Loader-only 兼容模式并拒绝部分依赖和空 chunk 快照 |
+| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | 编排 dedup -> load -> document_summary -> split -> transform -> existing content_hash vector lookup -> Dense/BM25 batch -> transactional upsert -> lifecycle success；图片 caption 记录在 `transform.sub_stages.image_captioner`；支持 Loader-only 模式并拒绝部分依赖和空 chunk 快照 |
 | `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 去重通过后的 Loader 调用和 Document 标准化 |
 | `src/ingestion/document_summarizer.py` | 生成文档级语义摘要 | 读取 `document_summary_prompt.yaml`，调用统一 LLMClient，写入 `Document.summary`，按 prompt version 和文档 hash 保持幂等 |
 | `src/ingestion/pdf_to_markdown.py` | PDF 转 Markdown 辅助逻辑 | MarkItDown、页码、图片抽取、基于图片矩形和相邻文本块生成图片锚点 |
@@ -1645,9 +1645,9 @@ services/ai-service/rag/
 | `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、占位符替换为 `[[image_caption:image_id]] + caption`、trace 执行详情输出 |
 | `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | `run_dense()` 提供窄粒度差量编码；`run_batch()` 复用数据库已有 content_hash 向量、对当前批次重复内容只调用一次模型，并为每个有序 chunk 生成完整 Dense 结果，同时编排 BM25Indexer |
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | content_hash 计算、差量判断、单 chunk `embed()` 编码和 C8 批量 `embed_batch()` 编码；不承担 retry、upsert 或 BM25 职责 |
-| `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | C7 已实现 in-memory BM25 词频、倒排索引构建和关键词候选查询；复用 core analyzer，并接受可选 collection 参数以保持 Sparse Route 最小接口一致 |
-| `src/ingestion/embedding/batch_processor.py` | 批处理优化 | C8 已实现按 batch_size 拆分、可配置 throttle_seconds 节流、失败批次按 item 隔离、有限 retry、失败记录和有序成功结果返回 |
-| `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | C9 已实现完整文档快照校验、受管图片复制、document/chunk/vector/BM25/image_index 单事务写入、失败回滚和输入顺序保持 |
+| `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | 提供 in-memory BM25 词频、倒排索引构建和关键词候选查询；复用 core analyzer，并接受可选 collection 参数以保持 Sparse Route 最小接口一致 |
+| `src/ingestion/embedding/batch_processor.py` | 批处理优化 | 按 batch_size 拆分任务，支持可配置 throttle_seconds 节流、失败批次按 item 隔离、有限 retry、失败记录和有序成功结果返回 |
+| `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | 校验完整文档快照，复制受管图片，并在单一事务中写入 document/chunk/vector/BM25/image_index；失败时回滚并保持输入顺序 |
 
 #### 5.3.5 Storage 与本地运行层
 
@@ -1656,7 +1656,7 @@ services/ai-service/rag/
 | `src/storage/postgres.py` | 管理 PostgreSQL 连接 | 连接池、事务、超时、健康检查；按 `database.timezone` 初始化 session timezone，默认北京时间 |
 | `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`rag_bm25_terms`、`image_index`、traces、evaluation |
 | `src/storage/vector_storage.py` | 管理向量存储 | pgvector upsert/search、metadata filter |
-| `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | C9 实现 document 级 posting 快照替换；D12 实现 collection 隔离的 PostgreSQL BM25 查询，按当前语料动态计算 corpus stats 并输出有序候选 |
+| `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | 支持 document 级 posting 快照替换和 collection 隔离的 PostgreSQL BM25 查询，按当前语料动态计算 corpus stats 并输出有序候选 |
 | `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`；支持安全路径解析、原子文件替换、调用方事务内 image_index upsert，以及 Response Builder 使用的 `find_by_ids()` 批量查询 |
 | `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
 | `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、成功文档 content_hash 向量复用查询、traces、evaluation_runs |
@@ -1677,7 +1677,7 @@ services/ai-service/rag/
 | `src/observability/structured_log.py` | 配置结构化日志 | Python logging + JSONFormatter |
 | `src/observability/services/config_reader.py` | Dashboard 读取配置 | 展示当前启用组件和 provider |
 | `src/observability/services/data_browser_service.py` | Dashboard 查询数据资产 | 文档、chunk、图片、metadata、索引状态 |
-| `src/observability/services/trace_reader_service.py` | Dashboard 读取 trace | query/ingestion 历史、主阶段瀑布图、Transform 子阶段 DTO、Transform snapshot DTO、fallback 原因；兼容没有 `sub_stages/snapshots` 的旧 trace |
+| `src/observability/services/trace_reader_service.py` | Dashboard 读取 trace | query/ingestion 历史、主阶段瀑布图、Transform 子阶段 DTO、Transform snapshot DTO、fallback 原因；兼容缺少 `sub_stages/snapshots` 字段的 trace |
 | `src/observability/services/ingestion_operation_service.py` | Dashboard 摄取操作编排 | 接收页面提交的 collection/source_path/force，复用 ingestion pipeline/CLI 组装逻辑触发真实摄取，返回成功、跳过、失败、trace_id 和处理数量；不得只返回 pending DTO |
 | `src/observability/services/evaluation_service.py` | Dashboard 运行评估 | 触发评估、读取历史趋势 |
 | `src/observability/pages/overview.py` | 系统总览页面 | 组件配置、collection 统计、健康指标 |
@@ -1769,7 +1769,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 关键说明：
 
 - 文档级去重依赖 `SHA256`，未变更文档直接结束，避免重复摄取。
-- chunk 级差量依赖 `content_hash`，只对新增或变更 chunk 执行 embedding。
+- chunk 级差量依赖 `content_hash`，只对未命中或内容变更 chunk 执行 embedding。
 - Transform 阶段负责把粗切分结果加工成更适合检索的知识片段，包括 **LLM 重写、元数据注入、图片描述生成、智能合并和去噪**。
 - Upsert 阶段统一写入 PostgreSQL 相关表，并保持文档生命周期、chunk、向量、BM25 和图片记录的一致性。
 
@@ -1944,12 +1944,12 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 ### 6.2 交付里程碑
 
-每完成一个阶段后，必须维护该阶段的交付里程碑。里程碑不是重复任务列表，而是面向后续开发者、面试官和项目讲解者说明：**当前项目已经走到哪里、已经有哪些可用功能、下一阶段从哪里继续**。
+每完成一个阶段后，必须维护该阶段的交付里程碑。里程碑不是重复任务列表，而是面向后续开发者、面试官和项目讲解者说明：**当前项目位置、可用功能和下一阶段入口**。
 
 维护要求：
 
 - **项目当前位置**：说明当前阶段完成后，RAG 系统处于什么能力状态。
-- **可用功能**：列出此时已经可以实际运行、测试或演示的功能。
+- **可用功能**：列出当前可以实际运行、测试或演示的功能。
 - **验证方式**：列出该阶段完成后最小验证命令或页面入口。
 - **下一阶段入口**：说明下一个阶段依赖当前阶段的哪些产物继续开发。
 - **状态更新时间**：记录阶段完成日期，便于进度追踪。
@@ -1979,11 +1979,11 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | --- | --- | --- | --- | --- | --- |
 | Phase A | 配置与项目骨架 | 独立 RAG 模块骨架、uv 锁定环境、运行配置、Prompt 和共享数据契约已就绪，可进入持久化与可插拔组件开发 | `uv.lock`、项目 `.venv`、独立 CLI、frozen Docker 构建、类型化配置加载、活动环境变量校验、英文 Prompt、核心领域类型和统一异常 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q` | 2026-06-06 |
 | Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Loader/Splitter/LLM/Embedding/VectorStore/Reranker/Evaluator Factory、BaseTransform、DeepSeek、DashScope Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q` | 2026-06-06 |
-| Phase C | Ingestion & Indexing Pipeline | 离线摄取与索引主链路已完成，可通过 CLI 将 Markdown/PDF 文件或目录写入 PostgreSQL、pgvector、BM25 和图片索引 | SHA256 去重、Loader、智能分块、Transform、图片 caption 降级、差量 Dense 编码、BM25、事务 upsert、生命周期管理和 `ingest.py` CLI | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.ingest --help` | 2026-06-07 |
-| Phase D | Retrieval | 在线查询主链路已完成，可基于已摄取知识库执行 Query Processor、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Response Builder 和 CLI 查询 | QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
-| Phase E | MCP 工具服务 | MCP stdio 工具服务已完成，可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
-| Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作已完成，可进入质量评估体系开发 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
-| Phase G | 质量评估体系 | 质量评估体系已完成，黄金测试集、检索指标、Ragas 生成质量适配、策略对比 runner 和评估趋势持久化已就绪，可进入 AImodel 集成前验收门禁 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、Ragas faithfulness、Ragas answer_relevancy adapter、hybrid/dense_only/sparse_only/rerank 策略对比、`EvaluationRunner.save_results()` 写入 evaluation run/results | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v` | 2026-06-10 |
+| Phase C | Ingestion & Indexing Pipeline | 离线摄取与索引主链路可通过 CLI 将 Markdown/PDF 文件或目录写入 PostgreSQL、pgvector、BM25 和图片索引 | SHA256 去重、Loader、智能分块、Transform、图片 caption 降级、差量 Dense 编码、BM25、事务 upsert、生命周期管理和 `ingest.py` CLI | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.ingest --help` | 2026-06-07 |
+| Phase D | Retrieval | 在线查询主链路可基于已摄取知识库执行 Query Processor、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Response Builder 和 CLI 查询 | QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
+| Phase E | MCP 工具服务 | MCP stdio 工具服务可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
+| Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作可用 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
+| Phase G | 质量评估体系 | 质量评估体系支持黄金测试集、检索指标、Ragas 生成质量适配、策略对比 runner 和评估趋势持久化 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、Ragas faithfulness、Ragas answer_relevancy adapter、hybrid/dense_only/sparse_only/rerank 策略对比、`EvaluationRunner.save_results()` 写入 evaluation run/results | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v` | 2026-06-10 |
 | Phase H | AImodel 联调集成 | 未完成 | 暂无 | 暂无 |  |
 
 #### 阶段 A 交付里程碑：配置与项目骨架
@@ -1992,7 +1992,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 项目当前位置：
 
-RAG 已形成使用 uv 锁定依赖、可独立安装、测试和构建 Docker 镜像的 Python 子模块。统一配置、Prompt、核心数据对象和异常边界已经稳定，后续阶段可以直接围绕这些契约实现 PostgreSQL 持久化、Provider Factory 和业务 Pipeline。
+RAG 是使用 uv 锁定依赖、可独立安装、测试和构建 Docker 镜像的 Python 子模块。统一配置、Prompt、核心数据对象和异常边界为 PostgreSQL 持久化、Provider Factory 和业务 Pipeline 提供稳定契约。
 
 可用功能：
 
@@ -2018,7 +2018,7 @@ RAG 已形成使用 uv 锁定依赖、可独立安装、测试和构建 Docker �
 
 项目当前位置：
 
-RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和八类可插拔组件包。配置可以创建百炼 DeepSeek、百炼 `text-embedding-v4`、PgVectorStore 以及不访问外部服务的 fake 实现，阶段 C 可以直接编排离线摄取链路。
+RAG 提供 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和八类可插拔组件包。配置可以创建百炼 DeepSeek、百炼 `text-embedding-v4`、PgVectorStore 以及不访问外部服务的 fake 实现。
 
 可用功能：
 
@@ -2047,7 +2047,7 @@ RAG 已具备 PostgreSQL/pgvector 持久化基础、完整 Repository 边界和�
 
 项目当前位置：
 
-RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipeline` 可以从原始 Markdown/PDF 文档开始，完成 source hash 去重、Loader 标准化、业务 Chunk 适配、串行 Transform、图片描述降级、Dense/BM25 双路索引、差量向量复用和 PostgreSQL 事务写入。
+RAG 提供可独立运行的离线数据摄取能力。统一 `IngestionPipeline` 从原始 Markdown/PDF 文档开始，完成 source hash 去重、Loader 标准化、业务 Chunk 适配、串行 Transform、图片描述降级、Dense/BM25 双路索引、差量向量复用和 PostgreSQL 事务写入。
 
 可用功能：
 
@@ -2055,7 +2055,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 - 从 Markdown/PDF 提取正文、标题层级、图片占位符和图片 metadata。
 - 生成稳定 chunk ID、source_ref、image_refs 和有序 chunk_index。
 - 串行执行 metadata enrich、chunk rewrite、semantic merge、denoise 和 image caption。
-- 复用成功文档中相同 content_hash 的 Dense 向量，仅编码新增或变化内容。
+- 复用成功文档中相同 content_hash 的 Dense 向量，仅编码未命中或内容变化的 chunk。
 - 将 document、chunk、pgvector、BM25 posting 和 image index 作为完整快照写入。
 - 通过 `python -m src.scripts.ingest --path ... [--collection ...] [--force]` 摄取单文件或递归目录。
 
@@ -2074,7 +2074,7 @@ RAG 已具备可独立运行的离线数据摄取能力。统一 `IngestionPipel
 
 项目当前位置：
 
-RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 query 开始，完成查询预处理、Dense 向量召回、BM25 关键词召回、RRF 排名融合、Rerank 前 metadata filter、可降级 Rerank、引用构造和多模态响应组装。
+RAG 提供可独立运行的在线检索能力。查询入口从用户 query 开始，完成查询预处理、Dense 向量召回、BM25 关键词召回、RRF 排名融合、Rerank 前 metadata filter、可降级 Rerank、引用构造和多模态响应组装。
 
 可用功能：
 
@@ -2101,7 +2101,7 @@ RAG 已具备可独立运行的在线检索能力。查询入口可以从用户 
 
 项目当前位置：
 
-RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或其他外部调用方可以通过 MCP tools 发现工具 schema，并调用知识库查询、collection 列表和文档摘要能力。阶段 E 不重新实现检索算法，而是把阶段 D 的 `QueryRuntime`、`KnowledgeHubResponse`、citation、多模态图片公开字段和 collection 元数据查询封装成稳定的工具边界。
+RAG 提供可被 MCP client 调用的 stdio 工具服务。AImodel 或其他外部调用方可以通过 MCP tools 发现工具 schema，并调用知识库查询、collection 列表和文档摘要能力。MCP 层将 `QueryRuntime`、`KnowledgeHubResponse`、citation、多模态图片公开字段和 collection 元数据查询封装成稳定的工具边界。
 
 可用功能：
 
@@ -2120,7 +2120,7 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 
 下一阶段入口：
 
-阶段 F 在 MCP 工具服务已稳定的基础上补齐可观测能力。后续任务需要把 Ingestion 和 Query 链路接入 TraceContext/TraceController，写入结构化日志，并为 Dashboard 六大页面提供 trace、配置、数据浏览和评估读取能力。
+阶段 F 使用 TraceContext/TraceController 覆盖 Ingestion 和 Query 链路，写入结构化日志，并为 Dashboard 六大页面提供 trace、配置、数据浏览和评估读取能力。
 
 #### 阶段 F 交付里程碑：可观测与管理平台
 
@@ -2128,15 +2128,15 @@ RAG 已具备可被 MCP client 调用的 stdio 工具服务能力。AImodel 或�
 
 项目当前位置：
 
-RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路已经注入 TraceContext/TraceController，运行过程可以写入结构化 JSON Lines 日志，并把关键 trace、文档、chunk、图片、collection 和评估记录投影给 Dashboard 读取。Streamlit Dashboard 已提供 sidebar 六页导航，并能按选中页面渲染对应 service-backed 页面，后续阶段可以在此基础上继续实现质量评估体系和 AImodel 集成前验收门禁。
+RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注入 TraceContext/TraceController，运行过程写入结构化 JSON Lines 日志，并把关键 trace、文档、chunk、图片、collection 和评估记录投影给 Dashboard 读取。Streamlit Dashboard 提供 sidebar 六页导航，并按选中页面渲染对应 service-backed 页面。
 
 可用功能：
 
 - 通过 `TraceContext` 和 `TraceController` 记录 ingestion/query 基础信息、阶段详情、汇总指标、评估指标、fallback 和错误信息。
 - 通过 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter` 写入结构化日志和 `traces.jsonl`。
-- Ingestion Pipeline 和 Query Runtime 已接入 trace 打点，Dashboard 可读取历史 trace 和单次 trace 详情。
+- Ingestion Pipeline 和 Query Runtime 接入 trace 打点，Dashboard 可读取历史 trace 和单次 trace 详情。
 - Dashboard service 层可读取组件配置、collection 统计、文档列表、chunk 详情、图片索引、query trace、ingestion trace、evaluation run 和指标趋势。
-- 六大 Streamlit 页面已实现并挂入 sidebar 导航：系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板。
+- sidebar 导航包含六大 Streamlit 页面：系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板。
 - `run_dashboard.py` 可校验 app、构建 Streamlit 启动命令并支持 dry-run，测试不需要真实打开浏览器。
 - `test_dashboard_pages.py` 使用真实 PostgreSQL 测试数据验证六大页面都能读取配置、数据库记录、trace 和 evaluation 数据并完成渲染入口调用；`test_dashboard_services.py` 覆盖 app sidebar 导航和默认页面分发。
 
@@ -2162,100 +2162,100 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| A1 | 创建独立模块基础文件 | [✔] | 2026-06-06 | 已创建独立模块说明、项目元数据、依赖声明、pytest 配置、忽略规则和基础包入口 |
-| A2 | 创建独立运行入口、Docker 骨架和 pytest 冒烟测试 | [✔] | 2026-06-06 | 已创建最小运行入口、健康状态、Docker 骨架、六个关键包入口，4 个冒烟测试通过 |
-| A3 | 创建 `config/settings.example.yaml` 示例配置 | [✔] | 2026-06-06 | 已覆盖全部可插拔组件、流水线、存储、可观测、Dashboard、评估和 MCP 配置，5 个单元测试通过；C4 将运行时 settings 与版本化模板分离 |
-| A4 | 创建 prompt 配置目录 | [✔] | 2026-06-06 | 已创建统一英文 Prompt YAML 契约，覆盖 rerank、chunk rewrite、六类图片理解策略和中文 caption 输出，10 个配置测试通过 |
-| A5 | 实现配置读取和校验 | [✔] | 2026-06-06 | 已实现完整 `RagSettings`、Provider/model selector、活动环境变量、Embedding/pgvector 维度、检索参数和 Prompt 占位符校验，18 个配置测试通过 |
-| A6 | 定义核心类型和统一异常 | [✔] | 2026-06-06 | 已实现 Document、ImageMetadata、Chunk、RetrievalResult 及六类 RagError 子类，覆盖必填位置、非空文本、来源区间和异常链校验，16 个类型测试通过 |
-| A7 | 迁移至 uv 包管理与锁定环境 | [✔] | 2026-06-06 | 已生成 183 包锁文件，创建 111 包开发环境，统一 README/auto-coder/DEV_SPEC 命令，Docker frozen build 与运行通过；6 个冒烟测试、106 个全量测试通过 |
+| A1 | 创建独立模块基础文件 | [✔] | 2026-06-06 | 独立模块说明、项目元数据、依赖声明、pytest 配置、忽略规则和基础包入口 |
+| A2 | 创建独立运行入口、Docker 骨架和 pytest 冒烟测试 | [✔] | 2026-06-06 | 最小运行入口、健康状态、Docker 骨架、六个关键包入口，4 个冒烟测试通过 |
+| A3 | 创建 `config/settings.example.yaml` 示例配置 | [✔] | 2026-06-06 | 版本化配置模板覆盖可插拔组件、流水线、存储、可观测、Dashboard、评估和 MCP，运行时 `settings.yaml` 由 Git 忽略；5 个单元测试通过 |
+| A4 | 创建 prompt 配置目录 | [✔] | 2026-06-06 | 统一英文 Prompt YAML 契约，覆盖 rerank、chunk rewrite、六类图片理解策略和中文 caption 输出，10 个配置测试通过 |
+| A5 | 实现配置读取和校验 | [✔] | 2026-06-06 | 完整 `RagSettings`、Provider/model selector、活动环境变量、Embedding/pgvector 维度、检索参数和 Prompt 占位符校验，18 个配置测试通过 |
+| A6 | 定义核心类型和统一异常 | [✔] | 2026-06-06 | Document、ImageMetadata、Chunk、RetrievalResult 及六类 RagError 子类，覆盖必填位置、非空文本、来源区间和异常链校验，16 个类型测试通过 |
+| A7 | 迁移至 uv 包管理与锁定环境 | [✔] | 2026-06-06 | 183 包锁文件，创建 111 包开发环境，统一 README/auto-coder/DEV_SPEC 命令，Docker frozen build 与运行通过；6 个冒烟测试、106 个全量测试通过 |
 
 #### 阶段 B：数据持久化与可插拔组件
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| B1 | 编写 collection/document/chunk schema | [✔] | 2026-06-06 | 已实现稳定字符串 ID、pgvector/HNSW、核心约束和索引；真实 PostgreSQL 连续初始化两次通过，5 个集成测试通过 |
-| B2 | 编写 image/trace/evaluation schema | [✔] | 2026-06-06 | 已实现图片索引、Query/Ingestion Trace、评估任务和指标结果表；Query Trace 后续扩展顶层 `query_result`，Ingestion Trace 保持四段式；真实 PostgreSQL 幂等初始化通过 |
-| B3 | 实现数据库连接池和 schema 初始化 | [✔] | 2026-06-10 | 已实现配置驱动惰性连接池、生命周期、健康检查、事务回滚和幂等 schema 初始化；补充 `database.timezone=Asia/Shanghai`，连接池为每条 PostgreSQL session 执行 timezone 初始化，真实连接池验证 `SHOW timezone = Asia/Shanghai`；长期运行进程必须重启以释放旧 session；78 个相关回归测试通过 |
-| B4 | 实现 Document/Chunk/Image Repository | [✔] | 2026-06-06 | 已实现 collection 自动创建、文档版本替换、Chunk 批量 upsert、图片安全落盘和索引查询；19 个集成测试通过 |
-| B5 | 实现 Trace/Evaluation Repository | [✔] | 2026-06-06 | 已实现 Query/Ingestion Trace 与评估任务/指标的不可变记录、幂等 upsert 和历史查询；21 个集成测试通过 |
-| B6 | 实现文档生命周期管理 | [✔] | 2026-06-06 | 已实现 `lifecycle_status` schema、状态流转、retrievable 查询过滤和 deleted 清理 chunks/images；23 个集成测试通过 |
-| B7 | 建立 libs 可插拔组件包结构 | [✔] | 2026-06-06 | 已创建八个 libs 可插拔组件包和稳定导入契约；2 个单元测试通过 |
-| B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [✔] | 2026-06-06 | 已实现 loader/splitter 基类、注册表工厂、fake/markdown/pdf loader、fake/recursive splitter 和 DocumentChunker 契约；9 个指定单元测试通过 |
-| B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现 BaseLLM/LLMFactory/FakeLLM 与 BaseEmbedding/EmbeddingFactory/FakeEmbedding，统一 `chat()`、`embed()`、`embed_batch()`；10 个指定单元测试通过 |
-| B10 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 已实现三类最小接口、注册表工厂、固定维度 fake vector store、确定性 fake 和 RRF 顺序回退；17 个指定单元测试通过 |
-| B11 | 实现首批真实组件最小适配 | [✔] | 2026-06-06 | 已实现百炼 DeepSeek、百炼 text-embedding-v4 OpenAI 兼容调用和 PgVectorStore；factory 单元测试、pgvector 集成测试和 external smoke test 已覆盖 |
+| B1 | 编写 collection/document/chunk schema | [✔] | 2026-06-06 | 稳定字符串 ID、pgvector/HNSW、核心约束和索引；真实 PostgreSQL 连续初始化两次通过，5 个集成测试通过 |
+| B2 | 编写 image/trace/evaluation schema | [✔] | 2026-06-06 | 图片索引、包含顶层 `query_result` 的 Query Trace、四段式 Ingestion Trace、评估任务和指标结果表；真实 PostgreSQL 幂等初始化通过 |
+| B3 | 实现数据库连接池和 schema 初始化 | [✔] | 2026-06-10 | 配置驱动惰性连接池、生命周期、健康检查、事务回滚和幂等 schema 初始化；每条 PostgreSQL session 使用 `database.timezone=Asia/Shanghai`，真实连接池验证 `SHOW timezone = Asia/Shanghai`；78 个相关回归测试通过 |
+| B4 | 实现 Document/Chunk/Image Repository | [✔] | 2026-06-06 | collection 自动创建、文档版本替换、Chunk 批量 upsert、图片安全落盘和索引查询；19 个集成测试通过 |
+| B5 | 实现 Trace/Evaluation Repository | [✔] | 2026-06-06 | Query/Ingestion Trace 与评估任务/指标的不可变记录、幂等 upsert 和历史查询；21 个集成测试通过 |
+| B6 | 实现文档生命周期管理 | [✔] | 2026-06-06 | `lifecycle_status` schema、状态流转、retrievable 查询过滤和 deleted 清理 chunks/images；23 个集成测试通过 |
+| B7 | 建立 libs 可插拔组件包结构 | [✔] | 2026-06-06 | 八个 libs 可插拔组件包和稳定导入契约；2 个单元测试通过 |
+| B8 | 实现 Loader/Splitter libs 基类、factory 和 DocumentChunker 契约 | [✔] | 2026-06-06 | loader/splitter 基类、注册表工厂、fake/markdown/pdf loader、fake/recursive splitter 和 DocumentChunker 契约；9 个指定单元测试通过 |
+| B9 | 实现 LLM/Embedding libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | BaseLLM/LLMFactory/FakeLLM 与 BaseEmbedding/EmbeddingFactory/FakeEmbedding，统一 `chat()`、`embed()`、`embed_batch()`；10 个指定单元测试通过 |
+| B10 | 实现 VectorStore/Reranker/Evaluator libs 基类、factory 和 fake 实现 | [✔] | 2026-06-06 | 三类最小接口、注册表工厂、固定维度 fake vector store、确定性 fake 和 RRF 顺序回退；17 个指定单元测试通过 |
+| B11 | 实现首批真实组件最小适配 | [✔] | 2026-06-06 | 百炼 DeepSeek、百炼 text-embedding-v4 OpenAI 兼容调用和 PgVectorStore；factory 单元测试、pgvector 集成测试和 external smoke test 覆盖对应 Provider 边界 |
 
 #### 阶段 C：Ingestion & Indexing Pipeline
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 已实现流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
-| C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-10 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；PyMuPDF 图片矩形绑定邻近文本锚点，MarkItDown 无页标记时仍能将图片插入对应章节附近；真实购物指南 PDF 冒烟验证通过 |
-| C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-10 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；纯图片占位符片段会合并到相邻正文 chunk，真实购物指南 PDF 不再生成独立图片 chunk |
-| C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；ChunkRewriter 只基于文本节点和 Document.summary 调用 LLM，不发送 metadata/image_refs/图片节点，改写后按原顺序恢复图片占位符；普通文本节点的合法 JSON text 为空或缺失时直接失败，纯图片占位符 chunk 跳过文本 rewrite 并保留给 Image-to-Text |
-| C5 | 实现 ImageCaptioner | [✔] | 2026-06-11 | 重构为单一 `image_captioner` transform step，新增 `BaseVisionLLM` 和 `DashScopeVisionLLM`，caption 写入 chunk 正文并进入 Dense/BM25 索引；chunk metadata 不再保存图片 caption/provenance，执行详情进入 `transform.sub_stages` |
-| C6 | 实现 DenseEncoder | [✔] | 2026-06-06 | 已实现 DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C7 | 实现 BM25Indexer | [✔] | 2026-06-07 | 已实现 BM25Candidate、BM25IndexResult、BM25Indexer.index/query、词频统计、倒排索引、关键词 Top-k 排序、中文连续文本 n-gram fallback 和重复 index 状态重建；6 个相关测试、137 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C8 | 实现 BatchProcessor 批处理优化 | [✔] | 2026-06-07 | 已实现 BatchProcessor、BatchRunResult、BatchSuccess、BatchFailure、DenseEncoder.encode_batch、batch_size 拆分、throttle_seconds 节流、有限 retry、失败隔离、EmbeddingStep.run_batch、Dense/BM25 批处理编排；20 个相关测试、145 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C9 | 实现统一 upsert | [✔] | 2026-06-07 | 已实现 rag_bm25_terms schema、BM25Storage、UpsertStep 单事务完整快照写入、pgvector/image/repository 调用方事务接口、图片文件失败恢复、重复 upsert 幂等和内容变更旧 chunk 清理；2 个 C9 PostgreSQL 集成测试、148 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C10 | 实现统一 Pipeline MVP 编排和集成测试 | [✔] | 2026-06-07 | 已实现 IngestionPipelineResult、完整依赖校验、run_indexing、Markdown 图片摄取、Splitter、包含 ImageCaptioner 的 Transform Pipeline、成功文档 content_hash 向量复用、重复内容单次编码、Dense/BM25 batch、统一 upsert、lifecycle success 和重复文件 dedup skip；6 个 ingestion integration 测试、14 个 embedding 单元测试、153 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C11 | 新增 `ingest.py` 摄取脚本入口 | [✔] | 2026-06-10 | 已实现必填 `--path`、可选 `--collection`、`--force`、父目录 `.env` 自动加载、系统环境优先、RAG 根目录运行时路径解析、递归 Markdown/PDF 发现、配置驱动 Pipeline 组装、JSON 结果、错误码和连接池释放；`ingestion.document_summary.llm_provider` 显式配置 DeepSeek，构建摘要步骤时按该 provider 调用 LLMFactory；当旧版本地 `settings.yaml` 缺少 `ingestion.document_summary` 时默认启用文档摘要步骤，避免 `rag_documents.summary` 长期为空；68 个相关单元测试通过 |
+| C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
+| C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-10 | canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；PyMuPDF 图片矩形绑定邻近文本锚点，MarkItDown 无页标记时仍能将图片插入对应章节附近；真实购物指南 PDF 冒烟验证通过 |
+| C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-10 | 稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；纯图片占位符片段合并到相邻正文 chunk，确保检索单元包含文本语义 |
+| C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | BaseTransform、配置驱动 TransformPipeline、metadata enrich、chunk rewrite、semantic merge、denoise、英文 Prompt、噪声 fixture 和幂等测试；ChunkRewriter 仅使用文本节点与 Document.summary 调用 LLM，并按原顺序保留图片占位符；无效文本响应直接失败，纯图片占位符 chunk 跳过文本 rewrite |
+| C5 | 实现 ImageCaptioner | [✔] | 2026-06-11 | `image_captioner` transform step、`BaseVisionLLM`、`DashScopeVisionLLM`、正文 caption 注入和 Dense/BM25 索引；图片 caption/provenance 记录在 `transform.sub_stages` |
+| C6 | 实现 DenseEncoder | [✔] | 2026-06-06 | DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C7 | 实现 BM25Indexer | [✔] | 2026-06-07 | BM25Candidate、BM25IndexResult、BM25Indexer.index/query、词频统计、倒排索引、关键词 Top-k 排序、中文连续文本 n-gram fallback 和重复 index 状态重建；6 个相关测试、137 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C8 | 实现 BatchProcessor 批处理优化 | [✔] | 2026-06-07 | BatchProcessor、BatchRunResult、BatchSuccess、BatchFailure、DenseEncoder.encode_batch、batch_size 拆分、throttle_seconds 节流、有限 retry、失败隔离、EmbeddingStep.run_batch、Dense/BM25 批处理编排；20 个相关测试、145 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C9 | 实现统一 upsert | [✔] | 2026-06-07 | rag_bm25_terms schema、BM25Storage、UpsertStep 单事务完整快照写入、pgvector/image/repository 调用方事务接口、图片文件失败恢复、重复 upsert 幂等和内容变更旧 chunk 清理；2 个 C9 PostgreSQL 集成测试、148 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C10 | 实现统一 Pipeline MVP 编排和集成测试 | [✔] | 2026-06-07 | IngestionPipelineResult、完整依赖校验、run_indexing、Markdown 图片摄取、Splitter、包含 ImageCaptioner 的 Transform Pipeline、成功文档 content_hash 向量复用、重复内容单次编码、Dense/BM25 batch、统一 upsert、lifecycle success 和重复文件 dedup skip；6 个 ingestion integration 测试、14 个 embedding 单元测试、153 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C11 | 实现 `ingest.py` 摄取脚本入口 | [✔] | 2026-06-10 | 必填 `--path`、可选 `--collection`、`--force`、父目录 `.env` 自动加载、系统环境优先、RAG 根目录运行时路径解析、递归 Markdown/PDF 发现、配置驱动 Pipeline 组装、JSON 结果、错误码和连接池释放；文档摘要使用 `ingestion.document_summary.llm_provider` 指定的 DeepSeek Provider；68 个相关单元测试通过 |
 
 #### 阶段 D：Retrieval
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| D1 | 实现 Query Processor | [✔] | 2026-06-07 | 已实现不可变 ProcessedQuery 和 keywords 快照、Unicode/空白标准化、关键词提取、collection/top_k 类型校验与默认覆盖、四类购物意图、商品工具协同判断、可注入 QueryRewriter 和异常/空结果 fallback；15 个 D1 单元测试通过 |
-| D2 | 实现 Dense Route 向量检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、Query Embedding、配置驱动 dense_top_k、VectorStore 语义召回、RetrievalResult 校验、embedding/vector search 错误边界和低侵入 Trace；8 个 D2 单元测试通过 |
-| D3 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | 已实现 raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D3 单元测试通过 |
-| D4 | 实现 RRF Fusion | [✔] | 2026-06-07 | 已实现 Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D4 单元测试通过 |
-| D5 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | 已实现 ProcessedQuery 输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D5 单元测试通过 |
-| D6 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | 已实现 CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D6 单元测试通过 |
-| D7 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | 已实现 CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D7 单元测试通过 |
-| D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-11 | 已实现 LLMReranker、PromptTemplate 加载、BaseLLM 注入和结构化 JSON 排名解析；Prompt 强制只返回 JSON object array，禁止 ID-only array、Markdown fence 和解释文字；真实 DeepSeek 查询验证 rerank 成功且未触发 fallback |
-| D9 | 实现 rerank fallback | [✔] | 2026-06-07 | 已实现 RerankController、RerankOutcome、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、显式 fallback 状态、低侵入 rerank trace 和 trace sink 失败隔离；28 个 Reranker 单元测试通过 |
-| D10 | 实现引用构造 | [✔] | 2026-06-07 | 已实现共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 source_ref 传播、source_ref 优先和顶层 metadata 兼容、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；11 个 Citation 单元测试、16 个核心类型回归测试、2 个 source_ref 单元测试和 1 个 pgvector 集成测试通过 |
-| D11 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 已实现不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号文本上下文、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；16 个 Response Builder 单元测试和 1 个真实 PostgreSQL 图片查询集成测试通过 |
-| D12 | 新增 `query.py` 脚本入口 | [✔] | 2026-06-07 | 已实现配置驱动完整查询链路、PostgreSQL BM25 collection 查询、过滤前 Fusion 快照、RerankOutcome 显式 fallback 状态、安全 verbose 输出、no-rerank 跳过和连接池释放；63 个 Retrieval 单元测试通过 |
-| D13 | 实现 Retrieval 单元测试矩阵 | [✔] | 2026-06-07 | 已形成 120 个 Retrieval/Reranker/Response 单元测试，补齐 Fusion 失败、PostgreSQL BM25 边界、QueryRuntime rerank、no-op/duplicate/empty fallback、Citation source_ref 和图片 resolver 脏契约；目标模块覆盖率 91% |
-| D14 | 实现 Retrieval 集成测试 | [✔] | 2026-06-07 | 已新增 PostgreSQL/pgvector 集成测试，覆盖 QueryProcessor、DenseRoute、SparseRoute、HybridSearch、metadata filter、RerankController、Response Builder、`query.py` verbose 输出、Dense 失败时 Sparse fallback；2 个 D14 集成测试通过 |
+| D1 | 实现 Query Processor | [✔] | 2026-06-07 | 不可变 ProcessedQuery 和 keywords 快照、Unicode/空白标准化、关键词提取、collection/top_k 类型校验与默认覆盖、四类购物意图、商品工具协同判断、可注入 QueryRewriter 和异常/空结果 fallback；15 个 D1 单元测试通过 |
+| D2 | 实现 Dense Route 向量检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、Query Embedding、配置驱动 dense_top_k、VectorStore 语义召回、RetrievalResult 校验、embedding/vector search 错误边界和低侵入 Trace；8 个 D2 单元测试通过 |
+| D3 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D3 单元测试通过 |
+| D4 | 实现 RRF Fusion | [✔] | 2026-06-07 | Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D4 单元测试通过 |
+| D5 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | ProcessedQuery 输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D5 单元测试通过 |
+| D6 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D6 单元测试通过 |
+| D7 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D7 单元测试通过 |
+| D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-11 | LLMReranker、PromptTemplate 加载、BaseLLM 注入和结构化 JSON 排名解析；Prompt 强制只返回 JSON object array，禁止 ID-only array、Markdown fence 和解释文字；真实 DeepSeek 查询验证 rerank 成功且未触发 fallback |
+| D9 | 实现 rerank fallback | [✔] | 2026-06-07 | RerankController、RerankOutcome、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、显式 fallback 状态、低侵入 rerank trace 和 trace sink 失败隔离；28 个 Reranker 单元测试通过 |
+| D10 | 实现引用构造 | [✔] | 2026-06-07 | 共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 source_ref 传播、source_ref 优先和顶层 metadata 兼容、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；11 个 Citation 单元测试、16 个核心类型回归测试、2 个 source_ref 单元测试和 1 个 pgvector 集成测试通过 |
+| D11 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号文本上下文、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；16 个 Response Builder 单元测试和 1 个真实 PostgreSQL 图片查询集成测试通过 |
+| D12 | 实现 `query.py` 脚本入口 | [✔] | 2026-06-07 | 配置驱动完整查询链路、PostgreSQL BM25 collection 查询、过滤前 Fusion 快照、RerankOutcome 显式 fallback 状态、安全 verbose 输出、no-rerank 跳过和连接池释放；63 个 Retrieval 单元测试通过 |
+| D13 | 实现 Retrieval 单元测试矩阵 | [✔] | 2026-06-07 | 120 个 Retrieval/Reranker/Response 单元测试，补齐 Fusion 失败、PostgreSQL BM25 边界、QueryRuntime rerank、no-op/duplicate/empty fallback、Citation source_ref 和图片 resolver 脏契约；目标模块覆盖率 91% |
+| D14 | 实现 Retrieval 集成测试 | [✔] | 2026-06-07 | PostgreSQL/pgvector 集成测试，覆盖 QueryProcessor、DenseRoute、SparseRoute、HybridSearch、metadata filter、RerankController、Response Builder、`query.py` verbose 输出、Dense 失败时 Sparse fallback；2 个 D14 集成测试通过 |
 
 #### 阶段 E：MCP 工具服务
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| E1 | 搭建 MCP Server | [✔] | 2026-06-07 | 已实现 FastMCP server 工厂、stdio 启动入口、`.env` 加载、app.log 文件日志、配置驱动 tool 注册、未知工具 fail fast、E1 placeholder tool 错误边界和 SDK ToolError 包装契约；5 个 MCP 单元测试通过 |
-| E2 | 暴露 `query_knowledge_hub` | [✔] | 2026-06-08 | 已实现 QueryKnowledgeHubTool、QueryRuntime 适配、请求原语校验先于 settings 加载、默认 collection/top_k、no_rerank、结构化业务错误、默认不返回图片 base64、显式 include_image_base64 支持、PostgreSQL pool 打开失败也能释放资源和 FastMCP 真实 query tool 注册；12 个 MCP 单元测试通过 |
-| E3 | 暴露 `list_collections` 和 `get_document_summary` | [✔] | 2026-06-08 | 已实现 MetadataTool、PostgresMetadataReader、真实 FastMCP collection/summary handler 注册、空 collection 可读业务错误、document_id/source_uri 参数校验、文档摘要与章节 outline 返回；17 个 MCP 单元测试通过 |
-| E4 | 完成 MCP tools 测试 | [✔] | 2026-06-08 | 已补充官方 FastMCP schema 精确断言、成功输出安全字段扫描、结构化业务错误 envelope 契约测试；20 个 MCP 单元测试通过 |
+| E1 | 搭建 MCP Server | [✔] | 2026-06-07 | FastMCP server 工厂、stdio 启动入口、`.env` 加载、app.log 文件日志、配置驱动 tool 注册、未知工具 fail fast、E1 placeholder tool 错误边界和 SDK ToolError 包装契约；5 个 MCP 单元测试通过 |
+| E2 | 暴露 `query_knowledge_hub` | [✔] | 2026-06-08 | QueryKnowledgeHubTool、QueryRuntime 适配、请求原语校验先于 settings 加载、默认 collection/top_k、no_rerank、结构化业务错误、默认不返回图片 base64、显式 include_image_base64 支持、PostgreSQL pool 打开失败也能释放资源和 FastMCP 真实 query tool 注册；12 个 MCP 单元测试通过 |
+| E3 | 暴露 `list_collections` 和 `get_document_summary` | [✔] | 2026-06-08 | MetadataTool、PostgresMetadataReader、真实 FastMCP collection/summary handler 注册、空 collection 可读业务错误、document_id/source_uri 参数校验、文档摘要与章节 outline 返回；17 个 MCP 单元测试通过 |
+| E4 | 完成 MCP tools 测试 | [✔] | 2026-06-08 | 官方 FastMCP schema 精确断言、成功输出安全字段扫描和结构化业务错误 envelope 契约测试；20 个 MCP 单元测试通过 |
 
 #### 阶段 F：可观测与管理平台
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| F1 | 实现 TraceContext 和 TraceController | [✔] | 2026-06-08 | 已实现 `src/core/trace` 包导出、内存 TraceContext、TraceController、阶段耗时/输入输出摘要记录、flush sink、错误/fallback 详情和防御性快照；4 个 TraceContext 单元测试通过 |
-| F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-10 | 已实现 `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、摄取阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；顶层阶段支持结构化 `sub_stages`，用于保存 Transform Pipeline 内每个具体实现的独立耗时、状态和受限 snapshots |
-| F3 | 实现 query trace 数据结构 | [✔] | 2026-06-11 | 已实现 Query 五段式结构；顶层 `query_result` 保存 contexts/content 及轻量 citations/images 快照，其中 citation 不记录 source_uri、image 仅记录 image_id/chunk_ids/caption/quality_status；summary 使用 `top_score` 代替重复的 `top_k_results`，并完成结构校验和 Dashboard DTO 透传 |
-| F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | 已实现 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；已保留 `src/logs/.gitkeep`，运行时 `*.log/*.jsonl` 仍不提交；15 个 TraceContext/TraceWriter 单元测试通过 |
-| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-11 | 已实现 JSONL/PostgreSQL 双写、Transform 子阶段打点，并将 QueryRuntime 实际返回给 Agent/调用方的结果投影为轻量快照写入 Query Trace 顶层 `query_result`，完整 citation/image 响应契约保持不变；真实查询验证 `top_score/query_result` 正常写入 |
-| F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | 已实现 Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
-| F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | 已实现 Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
-| F8 | 实现系统总览、Ingestion 管理页面和摄取操作 | [✔] | 2026-06-10 | 已新增 `IngestionOperationService`，点击 Run ingestion 会复用 `run_ingest_cli()` 触发真实摄取并展示 success/skipped/failed 结果；支持多文件选择、目录上传、服务器文件夹候选发现和单文件取消摄入；22 个 Dashboard 集成测试和 ruff 通过 |
-| F9 | 实现数据浏览器与 Query Trace 页面 | [✔] | 2026-06-10 | 已实现数据浏览器和 Query Trace 页面，并修复 Trace 下拉框选择未驱动详情切换的问题；Query Trace 使用固定 session_state key，Dashboard 重跑时加载已选详情，跨 collection 的过期选择自动回退最新记录 |
-| F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-10 | 已实现 Ingestion Trace 和评估面板页面，并修复 Trace 下拉框选择未驱动详情切换的问题；Ingestion Trace 保留主阶段瀑布图，并新增带 changed/unchanged 数量的 Transform Breakdown、柱状图和按 Transform 类型着色、按红绿标注文本变更的 Result Diff；未变化文本使用独立显式深色样式，避免受 Streamlit 代码块主题影响而不可见 |
-| F11 | 实现 Dashboard 启动脚本和冒烟测试 | [✔] | 2026-06-08 | 已实现 Streamlit app 最小入口、六大页面模块导入校验、`run_dashboard.py` dry-run、端口配置、headless 启动命令和注入 command runner；14 个 Dashboard service/page/launcher 集成测试通过 |
-| F12 | 完成 Dashboard 六大页面测试 | [✔] | 2026-06-08 | 已新增 `test_dashboard_pages.py` 并修复 Dashboard app 导航，真实 PostgreSQL 测试数据验证六大页面均可读取配置、数据库记录、trace 和 evaluation 数据并完成渲染入口调用；app 入口测试覆盖 sidebar 六页导航和默认页面分发；16 个 Dashboard 集成测试和 ruff 通过 |
+| F1 | 实现 TraceContext 和 TraceController | [✔] | 2026-06-08 | `src/core/trace` 包导出、内存 TraceContext、TraceController、阶段耗时/输入输出摘要记录、flush sink、错误/fallback 详情和防御性快照；4 个 TraceContext 单元测试通过 |
+| F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-10 | `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、摄取阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；顶层阶段支持结构化 `sub_stages`，用于保存 Transform Pipeline 内每个具体实现的独立耗时、状态和受限 snapshots |
+| F3 | 实现 query trace 数据结构 | [✔] | 2026-06-11 | Query 五段式结构；顶层 `query_result` 保存 contexts/content 及轻量 citations/images 快照，其中 citation 不记录 source_uri、image 仅记录 image_id/chunk_ids/caption/quality_status；summary 使用 `top_score` 代替重复的 `top_k_results`，并完成结构校验和 Dashboard DTO 透传 |
+| F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；`src/logs/.gitkeep` 纳入版本控制，运行时 `*.log/*.jsonl` 由 Git 忽略；15 个 TraceContext/TraceWriter 单元测试通过 |
+| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-11 | JSONL/PostgreSQL 双写、Transform 子阶段打点，并将 QueryRuntime 实际返回给 Agent/调用方的结果投影为轻量快照写入 Query Trace 顶层 `query_result`，完整 citation/image 响应契约保持不变；真实查询验证 `top_score/query_result` 正常写入 |
+| F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
+| F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
+| F8 | 实现系统总览、Ingestion 管理页面和摄取操作 | [✔] | 2026-06-10 | `IngestionOperationService`，点击 Run ingestion 会复用 `run_ingest_cli()` 触发真实摄取并展示 success/skipped/failed 结果；支持多文件选择、目录上传、服务器文件夹候选发现和单文件取消摄入；22 个 Dashboard 集成测试和 ruff 通过 |
+| F9 | 实现数据浏览器与 Query Trace 页面 | [✔] | 2026-06-10 | 数据浏览器和 Query Trace 页面；Trace 下拉框使用固定 session_state key 驱动详情切换，跨 collection 的过期选择自动回退最新记录 |
+| F10 | 实现 Ingestion Trace 与评估面板页面 | [✔] | 2026-06-10 | Ingestion Trace 和评估面板页面；包含主阶段瀑布图、changed/unchanged Transform Breakdown、柱状图和按 Transform 类型着色的 Result Diff；未变化文本使用独立显式深色样式 |
+| F11 | 实现 Dashboard 启动脚本和冒烟测试 | [✔] | 2026-06-08 | Streamlit app 最小入口、六大页面模块导入校验、`run_dashboard.py` dry-run、端口配置、headless 启动命令和注入 command runner；14 个 Dashboard service/page/launcher 集成测试通过 |
+| F12 | 完成 Dashboard 六大页面测试 | [✔] | 2026-06-08 | `test_dashboard_pages.py` 使用真实 PostgreSQL 测试数据验证六大页面读取配置、数据库记录、trace 和 evaluation 数据并完成渲染；app 入口测试覆盖 sidebar 六页导航和默认页面分发；16 个 Dashboard 集成测试和 ruff 通过 |
 
 #### 阶段 G：质量评估体系
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| G1 | 准备黄金测试集格式 | [✔] | 2026-06-10 | 已新增 `tests/fixtures/golden_set.json`，定义 `id/collection/question/golden_answer/expected_sources/expected_keywords` 字段，并覆盖无线耳机、人体工学键盘和解压玩具三类购物指南问题；2 个单元测试通过 |
-| G2 | 实现自定义检索指标 | [✔] | 2026-06-10 | 已新增 `src/observability/evaluation/metrics.py`，实现无 LLM 依赖的 Hit Rate@K、MRR 和 NDCG@K；指标支持字符串来源和 mapping 候选输入，校验 dataset/predictions 对齐、top_k 和 expected_sources 契约；5 个 evaluation 单元测试通过 |
-| G3 | 接入 Ragas 生成指标 | [✔] | 2026-06-10 | 已新增 `src/observability/evaluation/ragas_adapter.py`，封装 faithfulness 和 answer_relevancy 生成质量指标；真实 Ragas 依赖采用懒加载，普通单测使用 fake backend，真实 import 测试使用 external marker 隔离；adapter 在真实 backend 边界将项目内部 `question/answer/contexts/ground_truth` 行转换为 Ragas 0.2 的 `user_input/response/retrieved_contexts/reference` 列，并对空 `metric_names` fail fast；7 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
-| G4 | 实现策略对比评估 | [✔] | 2026-06-10 | 已新增 `src/observability/evaluation/runner.py`，通过可注入 retrieval callable 对比 hybrid、dense_only、sparse_only、rerank 四种策略，并复用 Hit Rate@K、MRR@K、NDCG@K 计算指标；runner 不直接打开数据库或构造 QueryRuntime，便于单元测试和后续 Dashboard/CLI 适配；包入口导出 `RetrievalStrategy` 以支持外部自定义策略，空 metrics 配置 fail fast；9 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
-| G5 | 实现评估历史趋势展示 | [✔] | 2026-06-10 | 已实现 `EvaluationRunner.save_results()`，将策略对比结果写入 `EvaluationRepository` 边界，生成一条 evaluation run 和按 `strategy.metric` 命名的 metric rows；metric details 保留 strategy、retrieval_mode、use_rerank、raw_metric_name、sample_count 和 predictions，供 Dashboard 趋势与详情展示；保存前校验各策略 prediction 数量一致，避免 summary 误导；11 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
+| G1 | 准备黄金测试集格式 | [✔] | 2026-06-10 | `tests/fixtures/golden_set.json`，定义 `id/collection/question/golden_answer/expected_sources/expected_keywords` 字段，并覆盖无线耳机、人体工学键盘和解压玩具三类购物指南问题；2 个单元测试通过 |
+| G2 | 实现自定义检索指标 | [✔] | 2026-06-10 | `src/observability/evaluation/metrics.py`，实现无 LLM 依赖的 Hit Rate@K、MRR 和 NDCG@K；指标支持字符串来源和 mapping 候选输入，校验 dataset/predictions 对齐、top_k 和 expected_sources 契约；5 个 evaluation 单元测试通过 |
+| G3 | 接入 Ragas 生成指标 | [✔] | 2026-06-10 | `src/observability/evaluation/ragas_adapter.py`，封装 faithfulness 和 answer_relevancy 生成质量指标；真实 Ragas 依赖采用懒加载，普通单测使用 fake backend，真实 import 测试使用 external marker 隔离；adapter 在真实 backend 边界将项目内部 `question/answer/contexts/ground_truth` 行转换为 Ragas 0.2 的 `user_input/response/retrieved_contexts/reference` 列，并对空 `metric_names` fail fast；7 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
+| G4 | 实现策略对比评估 | [✔] | 2026-06-10 | `src/observability/evaluation/runner.py` 通过可注入 retrieval callable 对比 hybrid、dense_only、sparse_only、rerank 四种策略，并复用 Hit Rate@K、MRR@K、NDCG@K 计算指标；runner 不直接打开数据库或构造 QueryRuntime；包入口导出 `RetrievalStrategy` 以支持外部自定义策略，空 metrics 配置 fail fast；9 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
+| G5 | 实现评估历史趋势展示 | [✔] | 2026-06-10 | `EvaluationRunner.save_results()`，将策略对比结果写入 `EvaluationRepository` 边界，生成一条 evaluation run 和按 `strategy.metric` 命名的 metric rows；metric details 保留 strategy、retrieval_mode、use_rerank、raw_metric_name、sample_count 和 predictions，供 Dashboard 趋势与详情展示；保存前校验各策略 prediction 数量一致，避免 summary 误导；11 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 
 #### 阶段 H：AImodel 联调集成
 
@@ -2398,10 +2398,10 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 - `Dockerfile`：使用固定版本 uv 和 `uv sync --frozen --no-dev` 构建独立运行环境
 - `README.md`：记录 `uv sync --extra dev`、`uv run pytest`、`uv run ruff` 和本地运行命令
 - `test_uv_project_contract()`：验证锁文件、Python 版本、开发 extra 和 uv 项目配置
-- `test_docker_skeleton_uses_uv()`：验证 Docker 不再使用 pip，并通过 frozen lock 安装生产依赖
-- `auto-coder/SKILL.md`：所有 Python、pytest、Ruff 和规格同步命令通过 `uv run --project services/ai-service/rag` 执行，不再手工激活 `.venv`
+- `test_docker_skeleton_uses_uv()`：验证 Docker 通过 uv frozen lock 安装生产依赖
+- `auto-coder/SKILL.md`：所有 Python、pytest、Ruff 和规格同步命令通过 `uv run --project services/ai-service/rag` 执行
 
-验收标准：`uv lock --check` 通过；`uv sync --extra dev --frozen` 创建项目 `.venv`；所有测试和 Ruff 通过 `uv run` 执行；Dockerfile 复制 `pyproject.toml` 与 `uv.lock` 并使用固定版本 uv frozen sync；README 和 auto-coder 不再要求手工激活虚拟环境或使用 pip 安装项目依赖；`AGENTS.md` 等无关 dirty 文件不纳入任务。
+验收标准：`uv lock --check` 通过；`uv sync --extra dev --frozen` 创建项目 `.venv`；所有测试和 Ruff 通过 `uv run` 执行；Dockerfile 复制 `pyproject.toml` 与 `uv.lock` 并使用固定版本 uv frozen sync；README 和 auto-coder 统一记录 uv 工作流；`AGENTS.md` 等无关 dirty 文件不纳入任务。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py -v`；`$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests -q`；`uv run --project services/ai-service/rag ruff check services\ai-service\rag\src services\ai-service\rag\tests`
 
@@ -2588,10 +2588,10 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 - `BaseLoader`：定义最小抽象接口
 - `LoaderFactory.register_builtin_providers()`：一次性注入 fake/markdown/pdf 内置实现
-- `LoaderFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
+- `LoaderFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现完成注册
 - `BaseSplitter.split(text) -> List[str]`：定义输入输出契约
 - `SplitterFactory.register_builtin_providers()`：一次性注入 fake/recursive_character 内置实现
-- `SplitterFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
+- `SplitterFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现完成注册
 - `DocumentChunker.chunk(document) -> List[Chunk]`：定义输入输出契约
 
 验收标准：可创建 fake/markdown/pdf loader 和 splitter；`libs.splitter` 只接收文本并返回 `List[str]`；`DocumentChunker` 契约测试覆盖 `chunk_id`、metadata 继承、`chunk_index`、`source_ref`、图片引用分发，以及 `List[str] -> List[Chunk]` 类型转换。
@@ -2608,10 +2608,10 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 - `BaseLLM`：定义最小抽象接口
 - `LLMFactory.register_builtin_providers()`：一次性注入 fake 内置实现，真实 provider 在 B11 注册
-- `LLMFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
+- `LLMFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现完成注册
 - `BaseEmbedding`：定义最小抽象接口
 - `EmbeddingFactory.register_builtin_providers()`：一次性注入 fake 内置实现，真实 provider 在 B11 注册
-- `EmbeddingFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现已注册
+- `EmbeddingFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现完成注册
 
 验收标准：`chat()`、`embed()`、`embed_batch()` 接口统一。
 
@@ -2852,7 +2852,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 
-##### C11：新增 ingest.py 摄取脚本入口
+##### C11：实现 ingest.py 摄取脚本入口
 
 目标：提供本地命令行入口，调用 Ingestion Pipeline 执行离线文档摄取。
 
@@ -3095,7 +3095,7 @@ metadata；空候选返回 `ok=true`、`is_empty=true`、空 content/citations/i
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`；使用 Docker PostgreSQL 设置 `DATABASE_URL` 后执行 `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py::test_image_storage_saves_files_and_queries_upserted_indexes -v`
 
-##### D12：新增 query.py 脚本入口
+##### D12：实现 query.py 脚本入口
 
 目标：提供本地命令行入口，完整调用 `hybridsearch + filter + rerank` 查询链路，方便调试和验收。
 
@@ -3308,7 +3308,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `_validate_candidate_count_by_stage()`：校验 Dense、Sparse、Fusion、Filter、Rerank 阶段候选数量
 - `_validate_bool()`：校验 fallback、empty_result 等布尔指标，避免字符串 truthy 值污染结构化日志
 
-验收标准：包含 query 基础信息、阶段详情、顶层 `query_result`、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=query`、`started_at`、`collection`、`raw_query`，并在存在时记录 `request_source`；阶段详情必须限制在 `query_processing/dense/sparse/fusion/filter/rerank/response`；`query_result` 必须包含 `contexts/content/citations/images`，contexts 每项包含 `chunk_id/score/rank`，citations 不包含 `source_uri`，images 仅包含 `image_id/chunk_ids/caption/quality_status`；汇总指标必须包含 `top_score`、`candidate_count_by_stage`、`fallback_used`、`error`、`total_duration_ms`，不再重复保存 `top_k_results`；评估指标支持 `query_document_relevance`、`citation_hit_rate`、`rerank_delta`、`empty_result`。
+验收标准：包含 query 基础信息、阶段详情、顶层 `query_result`、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=query`、`started_at`、`collection`、`raw_query`，并在存在时记录 `request_source`；阶段详情必须限制在 `query_processing/dense/sparse/fusion/filter/rerank/response`；`query_result` 必须包含 `contexts/content/citations/images`，contexts 每项包含 `chunk_id/score/rank`，citations 不包含 `source_uri`，images 仅包含 `image_id/chunk_ids/caption/quality_status`；汇总指标仅保存 `top_score`、`candidate_count_by_stage`、`fallback_used`、`error`、`total_duration_ms`；评估指标支持 `query_document_relevance`、`citation_hit_rate`、`rerank_delta`、`empty_result`。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
@@ -3349,7 +3349,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `PostgresTraceWriter`：将 TraceController 完成后的统一 snapshot 转换为 Query/Ingestion Trace Record，并按 `trace_id` 幂等写入 PostgreSQL；Query Trace 独立持久化 `query_result` JSONB
 - `CompositeTraceWriter`：将同一最终 snapshot 分发至 JSONL 和 PostgreSQL writer，避免业务链路为不同存储编写特殊分支
 - Trace writer CLI 注入：`ingest.py` 和 `query.py` 默认使用 `settings.observability.trace_jsonl_path`；当 `settings.observability.persist_to_postgresql=true` 时同时写入 PostgreSQL
-- Trace 状态约束迁移：Query/Ingestion trace 表接受 `degraded`，且 `init_schema()` 可幂等升级已存在的本地数据库约束
+- Trace 状态约束：Query/Ingestion trace 表接受 `degraded`，且 `init_schema()` 可幂等升级本地数据库约束
 
 验收标准：ingestion 链路记录 dedup、load、split、transform、embed、upsert；图片 caption 不得重复记录为顶层 stage，只能记录在 `transform.sub_stages.image_captioner`；顶层 `transform.duration_ms` 保留整个 Transform Pipeline 总耗时，`transform.sub_stages` 按实际执行顺序记录每个启用实现的名称、具体类、耗时、输入输出 chunk 数、`changed_count`、`unchanged_count` 和状态，使 Dashboard 能区分“执行但未改变”与“未执行”；`image_captioner` 子阶段必须记录图片 caption 的 provider/model、输入图片数、成功 caption 数和失败/降级原因；某个实现失败时必须先记录该失败子阶段，再让主链路按原错误语义失败；Transform snapshots 必须由配置控制，默认只记录变化 chunk、每步最多 20 个、每段预览最多 800 字，不额外调用 LLM 或数据库；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response，并在结束时保存顶层 `query_result`；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
 
@@ -3426,7 +3426,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - 摄取操作必须继续走 `IngestionPipeline`，保证 dedup、document_summary、split、transform、embedding、upsert、trace 写入和错误处理一致。
 - 测试中必须使用 fake provider、测试数据库或注入 runner，禁止真实调用外部 LLM/Embedding。
 
-验收标准：总览和摄取管理页面可启动；用户可通过文件选择器一次选择多个文件，也可通过目录上传选择文件夹；选择文件夹或多个文件后页面展示候选文件列表并支持取消某个文件；点击 `Run ingestion` 后只摄取被选中的文件；成功时 PostgreSQL 中可以看到新增/更新的 document、chunk、image index 和 ingestion trace；skipped 时返回真实 skipped 结果和 trace_id；失败时页面展示结构化错误；页面不再把 `pending orchestration` 作为成功提示。
+验收标准：总览和摄取管理页面可启动；用户可通过文件选择器一次选择多个文件，也可通过目录上传选择文件夹；选择文件夹或多个文件后页面展示候选文件列表并支持取消某个文件；点击 `Run ingestion` 后只摄取被选中的文件；成功时 PostgreSQL 中可以看到写入或更新的 document、chunk、image index 和 ingestion trace；skipped 时返回真实 skipped 结果和 trace_id；失败时页面展示结构化错误；页面仅展示真实摄取执行结果。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py services\ai-service\rag\tests\integration\test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
@@ -3462,7 +3462,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `build_evaluation_page_model()`：读取 evaluation run 历史、选中 run detail 和 metric trends，生成评估页面模型
 - `render_evaluation_page()`：渲染评估运行入口、run 历史、指标详情、settings snapshot 和趋势图，并返回运行评估意图 DTO
 
-验收标准：可展示阶段耗时和评估趋势；Transform 主阶段存在 `sub_stages` 时，页面必须按执行顺序展示每个 Transform 实现的名称、实现类、耗时、输入输出 chunk 数、变化数量、未变化数量、状态和错误，避免将“没有 diff”误解为“没有执行”；`image_captioner` 子阶段详情必须展示 provider/model、图片数量、caption 数量和失败/降级原因；存在 snapshots 时展示 Transform Result Diff，用专属颜色区分 `metadata_enrich`、`rewrite_chunk`、`semantic_merge`、`denoise` 和 `image_captioner`，并以浅红背景标注 before 中被删除或替换的内容、以浅绿背景标注 after 中新增或替换的内容；Diff 必须采用兼容中英文混排的细粒度 token 对比，不能将无空格的整段中文直接判定为单个替换块，也不能使用影响长文本可读性的整段删除线；未变化文本必须使用独立的显式深色前景样式，不能依赖 Streamlit `pre`/代码块主题继承，确保浅色和深色主题下都可读；同时展示 before/after 预览、变化类型和截断标记；旧 trace 不包含 `sub_stages/snapshots` 或变化计数时页面保持兼容且不显示空明细区；选择任意 Ingestion Trace 后阶段耗时、Transform Breakdown、Result Diff、处理统计和错误详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
+验收标准：可展示阶段耗时和评估趋势；Transform 主阶段存在 `sub_stages` 时，页面必须按执行顺序展示每个 Transform 实现的名称、实现类、耗时、输入输出 chunk 数、变化数量、未变化数量、状态和错误，避免将“没有 diff”误解为“没有执行”；`image_captioner` 子阶段详情必须展示 provider/model、图片数量、caption 数量和失败/降级原因；存在 snapshots 时展示 Transform Result Diff，用专属颜色区分 `metadata_enrich`、`rewrite_chunk`、`semantic_merge`、`denoise` 和 `image_captioner`，并以浅红背景标注 before 中被删除或替换的内容、以浅绿背景标注 after 中新增或替换的内容；Diff 必须采用兼容中英文混排的细粒度 token 对比，不能将无空格的整段中文直接判定为单个替换块，也不能使用影响长文本可读性的整段删除线；未变化文本必须使用独立的显式深色前景样式，不能依赖 Streamlit `pre`/代码块主题继承，确保浅色和深色主题下都可读；同时展示 before/after 预览、变化类型和截断标记；缺少 `sub_stages/snapshots` 或变化计数的 trace 保持可读且不显示空明细区；选择任意 Ingestion Trace 后阶段耗时、Transform Breakdown、Result Diff、处理统计和错误详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
@@ -3489,7 +3489,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：在进入 AImodel 集成前，验证六大 Dashboard 页面都能基于测试数据正常渲染。
 
-修改文件：`tests/integration/test_dashboard_pages.py`、`tests/integration/test_dashboard_services.py`、`src/observability/dashboard/app.py`。六个页面模块已在 F8-F10 完成，F12 新增跨页面验收测试，并修复 app 入口缺少 sidebar 六页导航的问题。
+修改文件：`tests/integration/test_dashboard_pages.py`、`tests/integration/test_dashboard_services.py`、`src/observability/dashboard/app.py`
 
 实现类/函数：
 
@@ -3599,7 +3599,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 ##### H1：执行 AImodel 集成前验收门禁
 
-目标：在接入 AImodel 前确认 RAG 独立模块已经完成 Dashboard 六大页面测试、RAG 全链路 E2E 和 MCP stdio 可连接验收。
+目标：通过 Dashboard 六大页面测试、RAG 全链路 E2E 和 MCP stdio 可连接验收，确认 RAG 独立模块满足 AImodel 集成条件。
 
 修改文件：`tests/integration/test_dashboard_pages.py`、`tests/e2e/test_full_rag_flow.py`
 
@@ -3783,6 +3783,7 @@ DEV_SPEC 是项目设计、实施和验收的**单一事实来源**。用户在�
 - **先更新规范，再继续开发**：用户明确修改架构、流程顺序、命名、文件位置、数据契约、测试要求、提交要求或验收标准时，应先修改 DEV_SPEC，再继续对应任务。
 - **执行影响范围检查**：一次更正可能同时影响技术选型、目录结构、模块职责、数据流、测试方案、任务明细和进度统计。不能只修改用户直接指出的一行。
 - **以最新明确要求为准**：新要求与旧文档冲突时，采用用户最新的明确要求，并删除或改写所有过期描述。
+- **只描述最终状态**：技术设计、模块职责、任务备注和验收标准只记录当前有效成果与约束，不保留“原先、后来、新增、改为、不再、重构为、修复了”等演进过程。需要说明兼容性时，直接描述当前支持的输入或行为。
 - **保持排期一致**：任务合并、删除、拆分或调整顺序后，必须同步更新阶段预览、任务表、实施明细、总任务数、完成数和进度百分比。
 - **同步自动开发参考文件**：DEV_SPEC 修改完成后，必须执行 `sync_spec.py --force`，确保 auto-coder 使用最新规范。
 - **记录可复用规则**：如果用户更正的是可长期复用的开发流程，例如注释语言、TDD、Git 提交格式或任务完成方式，应写入“开发规范”，不能只修改当前任务。
@@ -3841,7 +3842,7 @@ Tests: ✅ 5/5 passed in 0.10s
 - **Tests**：必须引用提交前最后一次真实测试结果，包括通过数量和耗时，不得沿用旧执行结果或估算数据。
 - **原子性**：暂存时使用精确文件路径；发现无关 dirty 文件时不纳入提交。
 - **历史重写**：已经推送的提交只有在用户明确要求时才能重写，并使用 `git push --force-with-lease` 更新远程。
-- **连续开发**：用户输入 `next` 时，先按本规范提交当前已完成任务，再开始下一个待执行任务。
+- **连续开发**：用户输入 `next` 时，先按本规范提交当前通过验收的任务，再开始下一个待执行任务。
 
 ### 7.9 任务完成审查门禁
 
@@ -3861,7 +3862,7 @@ Tests: ✅ 5/5 passed in 0.10s
 
 ### 7.10 uv 包与环境管理规范
 
-RAG 独立模块统一使用 **uv** 管理 Python 依赖、虚拟环境、锁文件和命令执行，不再使用系统 Python、手工 `pip install` 或手工激活 `.venv` 作为项目开发流程。
+RAG 独立模块统一使用 **uv** 管理 Python 依赖、虚拟环境、锁文件和命令执行。
 
 执行要求：
 
@@ -3872,5 +3873,5 @@ RAG 独立模块统一使用 **uv** 管理 Python 依赖、虚拟环境、锁文
 - Python 脚本使用 `uv run --project services/ai-service/rag python ...`。
 - CI 和 Docker 必须使用 `--frozen`，锁文件与声明不一致时直接失败，禁止隐式更新。
 - Docker 只安装生产依赖，使用 `uv sync --frozen --no-dev`，不把宿主机 `.venv` 复制进镜像。
-- auto-coder 在任何 Python、pytest、Ruff 或规格同步命令前不再手工激活 `.venv`，统一通过 uv 选择项目环境。
+- auto-coder 的 Python、pytest、Ruff 和规格同步命令统一通过 uv 选择项目环境。
 - 依赖升级必须显式执行 `uv lock --upgrade-package <package>` 或经审查的 `uv lock --upgrade`，不能在普通测试任务中隐式升级。

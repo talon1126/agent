@@ -335,7 +335,7 @@ services/ai-service/rag/
 
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
-| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | C10 已实现 dedup -> load -> document_summary -> split -> transform -> existing content_hash vector lookup -> Dense/BM25 batch -> transactional upsert -> lifecycle success；图片 caption 仅作为 `transform.sub_stages.image_captioner` 记录；保留 Loader-only 兼容模式并拒绝部分依赖和空 chunk 快照 |
+| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | 编排 dedup -> load -> document_summary -> split -> transform -> existing content_hash vector lookup -> Dense/BM25 batch -> transactional upsert -> lifecycle success；图片 caption 记录在 `transform.sub_stages.image_captioner`；支持 Loader-only 模式并拒绝部分依赖和空 chunk 快照 |
 | `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 去重通过后的 Loader 调用和 Document 标准化 |
 | `src/ingestion/document_summarizer.py` | 生成文档级语义摘要 | 读取 `document_summary_prompt.yaml`，调用统一 LLMClient，写入 `Document.summary`，按 prompt version 和文档 hash 保持幂等 |
 | `src/ingestion/pdf_to_markdown.py` | PDF 转 Markdown 辅助逻辑 | MarkItDown、页码、图片抽取、基于图片矩形和相邻文本块生成图片锚点 |
@@ -350,9 +350,9 @@ services/ai-service/rag/
 | `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、占位符替换为 `[[image_caption:image_id]] + caption`、trace 执行详情输出 |
 | `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | `run_dense()` 提供窄粒度差量编码；`run_batch()` 复用数据库已有 content_hash 向量、对当前批次重复内容只调用一次模型，并为每个有序 chunk 生成完整 Dense 结果，同时编排 BM25Indexer |
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | content_hash 计算、差量判断、单 chunk `embed()` 编码和 C8 批量 `embed_batch()` 编码；不承担 retry、upsert 或 BM25 职责 |
-| `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | C7 已实现 in-memory BM25 词频、倒排索引构建和关键词候选查询；复用 core analyzer，并接受可选 collection 参数以保持 Sparse Route 最小接口一致 |
-| `src/ingestion/embedding/batch_processor.py` | 批处理优化 | C8 已实现按 batch_size 拆分、可配置 throttle_seconds 节流、失败批次按 item 隔离、有限 retry、失败记录和有序成功结果返回 |
-| `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | C9 已实现完整文档快照校验、受管图片复制、document/chunk/vector/BM25/image_index 单事务写入、失败回滚和输入顺序保持 |
+| `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | 提供 in-memory BM25 词频、倒排索引构建和关键词候选查询；复用 core analyzer，并接受可选 collection 参数以保持 Sparse Route 最小接口一致 |
+| `src/ingestion/embedding/batch_processor.py` | 批处理优化 | 按 batch_size 拆分任务，支持可配置 throttle_seconds 节流、失败批次按 item 隔离、有限 retry、失败记录和有序成功结果返回 |
+| `src/ingestion/storage/upsert_step.py` | 写入摄取结果 | 校验完整文档快照，复制受管图片，并在单一事务中写入 document/chunk/vector/BM25/image_index；失败时回滚并保持输入顺序 |
 
 #### 5.3.5 Storage 与本地运行层
 
@@ -361,7 +361,7 @@ services/ai-service/rag/
 | `src/storage/postgres.py` | 管理 PostgreSQL 连接 | 连接池、事务、超时、健康检查；按 `database.timezone` 初始化 session timezone，默认北京时间 |
 | `src/storage/schema.sql` | 定义数据库 schema | pgvector extension、documents、chunks、`rag_bm25_terms`、`image_index`、traces、evaluation |
 | `src/storage/vector_storage.py` | 管理向量存储 | pgvector upsert/search、metadata filter |
-| `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | C9 实现 document 级 posting 快照替换；D12 实现 collection 隔离的 PostgreSQL BM25 查询，按当前语料动态计算 corpus stats 并输出有序候选 |
+| `src/storage/bm25_storage.py` | 管理 BM25 索引数据 | 支持 document 级 posting 快照替换和 collection 隔离的 PostgreSQL BM25 查询，按当前语料动态计算 corpus stats 并输出有序候选 |
 | `src/storage/image_storage.py` | 管理图片文件和索引 | 原始图片保存到 `data/images/{collection}/`；支持安全路径解析、原子文件替换、调用方事务内 image_index upsert，以及 Response Builder 使用的 `find_by_ids()` 批量查询 |
 | `src/storage/trace_log_storage.py` | 管理 trace 日志读写 | `traces.jsonl` 追加写入和 Dashboard 读取 |
 | `src/storage/repositories.py` | 管理通用 repository | documents、chunks、source_hash 去重查询、成功文档 content_hash 向量复用查询、traces、evaluation_runs |
@@ -382,7 +382,7 @@ services/ai-service/rag/
 | `src/observability/structured_log.py` | 配置结构化日志 | Python logging + JSONFormatter |
 | `src/observability/services/config_reader.py` | Dashboard 读取配置 | 展示当前启用组件和 provider |
 | `src/observability/services/data_browser_service.py` | Dashboard 查询数据资产 | 文档、chunk、图片、metadata、索引状态 |
-| `src/observability/services/trace_reader_service.py` | Dashboard 读取 trace | query/ingestion 历史、主阶段瀑布图、Transform 子阶段 DTO、Transform snapshot DTO、fallback 原因；兼容没有 `sub_stages/snapshots` 的旧 trace |
+| `src/observability/services/trace_reader_service.py` | Dashboard 读取 trace | query/ingestion 历史、主阶段瀑布图、Transform 子阶段 DTO、Transform snapshot DTO、fallback 原因；兼容缺少 `sub_stages/snapshots` 字段的 trace |
 | `src/observability/services/ingestion_operation_service.py` | Dashboard 摄取操作编排 | 接收页面提交的 collection/source_path/force，复用 ingestion pipeline/CLI 组装逻辑触发真实摄取，返回成功、跳过、失败、trace_id 和处理数量；不得只返回 pending DTO |
 | `src/observability/services/evaluation_service.py` | Dashboard 运行评估 | 触发评估、读取历史趋势 |
 | `src/observability/pages/overview.py` | 系统总览页面 | 组件配置、collection 统计、健康指标 |
@@ -474,7 +474,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 关键说明：
 
 - 文档级去重依赖 `SHA256`，未变更文档直接结束，避免重复摄取。
-- chunk 级差量依赖 `content_hash`，只对新增或变更 chunk 执行 embedding。
+- chunk 级差量依赖 `content_hash`，只对未命中或内容变更 chunk 执行 embedding。
 - Transform 阶段负责把粗切分结果加工成更适合检索的知识片段，包括 **LLM 重写、元数据注入、图片描述生成、智能合并和去噪**。
 - Upsert 阶段统一写入 PostgreSQL 相关表，并保持文档生命周期、chunk、向量、BM25 和图片记录的一致性。
 

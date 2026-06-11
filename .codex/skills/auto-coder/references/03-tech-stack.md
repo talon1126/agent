@@ -47,11 +47,11 @@ Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform（包含 ImageCap
 
 | 层级 | 职责 | 关键实现要素 |
 | --- | --- | --- |
-| `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹；若 `rag_documents` 中同一 collection、canonical source_path 和 source_hash 的文档状态为 `success`，则写入 skipped ingestion trace 并直接结束，不再执行 PDF 转换、图片提取、splitter、transform 和 embedding |
-| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + summary + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；`summary` 为顶层字段，后续由独立摘要步骤生成或更新，不放入 `metadata.summary`；只处理去重判断后确认需要摄取的文档 |
+| `Dedup` | 在进入 Loader 前判断原始文档是否需要摄取 | 每个文档先计算 SHA256 哈希纹；若 `rag_documents` 中同一 collection、canonical source_path 和 source_hash 的文档状态为 `success`，则写入 skipped ingestion trace 并直接结束摄取 |
+| `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + summary + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；`summary` 为顶层字段，由独立摘要步骤生成或更新；只处理去重判断后确认需要摄取的文档 |
 | `DocumentSummarizer` | 为加载后的文档生成顶层 `Document.summary` | 作为 Loader 之后、Splitter 之前的独立步骤；读取 `document_summary_prompt.yaml`；复用统一 LLM provider；已有同版本摘要时保持幂等；摘要只作为全局语义上下文，不写入 `metadata.summary` |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
-| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 只保留完整文档图片清单的 `id/path`，`Chunk.metadata` 不再复制 `images[]` |
+| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 保存完整文档图片清单的 `id/path`，`Chunk.metadata` 保存关联图片的 `image_refs` |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
 | `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后替换 chunk 正文中的图片占位符，使 caption 进入 Dense/BM25 可检索文本；执行详情写入 ingestion trace 的 `transform.sub_stages`，不写入 chunk metadata |
 | `BaseEmbedding` | 将增强后的 chunk 执行双路索引 | 在编码前先计算 `content_hash`，只对数据库中不存在的内容哈希执行新编码；DenseEncoder 调用百炼 `text-embedding-v4` 生成 1536 维语义向量；BM25Indexer 生成词项、词频和倒排索引；BatchProcessor 统一处理批量、限流、重试和失败隔离 |
@@ -110,7 +110,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 
 - 字段命名统一使用 `start_offset`，不使用 `start_offest`。
 - Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。
-- `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`，不再依赖图片 offset 与 chunk offset 的区间交集。
+- `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`。
 - `source_ref` 是可选字段，但首版建议保留，方便 Dashboard 展示引用来源、原文位置和关联图片。
 - `Chunk.metadata` 只保留检索过滤和业务解释需要的字段，例如 `collection`、`document_id`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。不得保存 `images`、`headings`、`source_path`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等来源、图片详情和 Transform 执行信息。
 - 来源引用保存在独立 `Chunk.source_ref` 字段，Dense/Sparse Retrieval 构造 `RetrievalResult` 时再将其深拷贝到 result metadata，避免持久化职责混淆或丢失文档来源信息。
@@ -166,7 +166,7 @@ uv run --project services/ai-service/rag python -m src.mcp_server.server --trans
 
 stdio 协议要求 stdout/stdin 只承载 MCP 协议帧，业务日志不得写入 stdout。RAG MCP 普通运行日志写入 `src/logs/app.log`，错误诊断可以写 stderr；Trace 仍按可观测性阶段写入结构化日志。MCP 启动入口必须加载本地 `.env`，并读取 `DATABASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`RAG_SETTINGS_PATH`、`RAG_DEFAULT_COLLECTION` 等环境变量。
 
-AImodel 集成时不让 Agent 直接依赖 MCP SDK。后续 H2/H3 应新增 AImodel 侧 adapter：`rag_mcp_client.py` 负责启动/连接 stdio MCP 子进程，`rag_tool.py` 负责把 MCP `query_knowledge_hub` 包装成 LangChain Tool。Agent 只依赖 `RagKnowledgeTool` 这类业务工具，底层可以从直连 Python 平滑切换为 MCP。
+AImodel 集成时不让 Agent 直接依赖 MCP SDK。H2/H3 提供 AImodel 侧 adapter：`rag_mcp_client.py` 负责启动/连接 stdio MCP 子进程，`rag_tool.py` 负责把 MCP `query_knowledge_hub` 包装成 LangChain Tool。Agent 只依赖 `RagKnowledgeTool` 这类业务工具，底层可以从直连 Python 平滑切换为 MCP。
 
 MCP 工具一：`query_knowledge_hub`
 
@@ -305,7 +305,7 @@ EvaluatorFactory
 
 工厂读取配置后返回对应实现。Factory 的注册表默认保持为空，通过
 `register_builtin_providers()` 统一注入项目内置实现类；`create()` 和
-`list_providers()` 内部必须自动确保内置实现已注册，业务代码不需要手动调用
+`list_providers()` 内部必须自动确保内置实现完成注册，业务代码不需要手动调用
 注册步骤。
 
 ```yaml
@@ -748,7 +748,7 @@ Storage 负责同时保存增强后的 chunk 和原始图片索引。
 
 - 增强后的 chunk 写入 PostgreSQL + pgvector，chunk metadata 包含 `image_refs`。
 - 原始图片文件保存在本地文件系统。
-- PostgreSQL 新增 `image_index` 表保存图片索引信息。
+- PostgreSQL 使用 `image_index` 表保存图片索引信息。
 - 检索命中 chunk 后，如果 chunk metadata 中包含 `image_refs`，响应可以返回相关图片信息，供 Dashboard 或前端展示。
 
 `image_index` 表建议字段：
@@ -814,7 +814,7 @@ Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各�
 | `document_summary` | 摘要 Prompt 版本、LLM Provider、是否生成摘要、摘要长度、是否复用已有摘要、耗时、失败详情 |
 | `split` | Splitter 类型、粗切分 chunk 数量、标题层级识别结果、平均 chunk 长度、耗时、失败详情 |
 | `transform` | Transform Pipeline 总耗时、输入输出 chunk 数量，以及按配置顺序记录的 `sub_stages`；每个子阶段包含配置步骤名、具体实现类、耗时、输入输出 chunk 数量、状态、失败详情和受限 `snapshots` 预览 |
-| `embed` | Embedding Provider、`content_hash` 命中数量、新增 embedding 数量、Dense 编码批次数、Sparse/BM25 编码批次数、耗时、失败详情 |
+| `embed` | Embedding Provider、`content_hash` 命中数量、待生成 embedding 数量、Dense 编码批次数、Sparse/BM25 编码批次数、耗时、失败详情 |
 | `upsert` | VectorStore Provider、写入 chunk 数量、更新 chunk 数量、跳过 chunk 数量、删除旧版本数量、耗时、失败详情 |
 
 汇总指标：
