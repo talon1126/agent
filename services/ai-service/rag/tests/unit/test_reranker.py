@@ -15,7 +15,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.core.config import load_settings
+from src.core.config import load_prompt, load_settings
 from src.core.errors import ProviderError
 from src.core.query_engine import RerankController, RerankOutcome
 from src.core.types import RetrievalResult
@@ -304,6 +304,26 @@ def test_cross_encoder_reranker_wraps_scorer_failures() -> None:
 
     assert isinstance(captured.value.cause, RuntimeError)
     assert captured.value.context["provider"] == "cross_encoder"
+
+
+def test_rerank_prompt_requires_a_strict_json_object_array() -> None:
+    """Prevent chat models from returning ID-only arrays or explanatory prose."""
+
+    reranker = LLMReranker(
+        llm_client=RecordingLLM("[]"),
+        prompt=load_prompt(RAG_ROOT / "config" / "prompts" / "rerank_prompt.yaml"),
+    )
+    messages = reranker._build_messages(  # noqa: SLF001 - prompt contract test
+        query="quiet office toy",
+        candidates=[_candidate("chunk-a", "Silent stress toy.")],
+    )
+    combined_prompt = "\n".join(message.content for message in messages)
+
+    assert "Return only valid JSON" in combined_prompt
+    assert "Do not return Markdown fences" in combined_prompt
+    assert '"candidate_id": "<exact candidate_id from Candidate chunks>"' in combined_prompt
+    assert '"score": 0.95' in combined_prompt
+    assert '"reason": "Directly answers the query."' in combined_prompt
 
 
 def test_reranker_factory_creates_cross_encoder_with_injected_scorer() -> None:

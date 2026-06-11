@@ -12,6 +12,10 @@ system_prompt: |
   facts, and satisfies the user's stated constraints.
   Do not introduce information outside the candidates, and never modify a
   candidate_id.
+  Return only valid JSON. The root value must be an array, and every array item
+  must be an object containing candidate_id, score, and reason.
+  Do not return Markdown fences, prose, comments, an array of candidate IDs, or
+  any text before or after the JSON array.
 user_prompt: |
   User query:
   {query}
@@ -19,7 +23,16 @@ user_prompt: |
   Candidate chunks:
   {candidates}
 
-  Return a JSON array ordered from highest to lowest relevance.
+  Return only a JSON object array ordered from highest to lowest relevance.
+  Use exactly this shape. Replace the candidate_id placeholder with an exact
+  candidate_id copied from Candidate chunks:
+  [
+    {{
+      "candidate_id": "<exact candidate_id from Candidate chunks>",
+      "score": 0.95,
+      "reason": "Directly answers the query."
+    }}
+  ]
 output_schema:
   type: json
   root: array
