@@ -4,7 +4,11 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.routers.AImodel.schemas import AiModelChatRequest, AiModelChatResponse
+from app.routers.AImodel.schemas import (
+    AiModelChatRequest,
+    AiModelChatResponse,
+    AiModelToolResult,
+)
 from app.routers.AImodel.memory import AiModelMemoryMessage, AiModelUserMemory, NoopAiModelMemoryStore
 from app.routers.AImodel.service import (
     _build_langchain_messages,
@@ -146,6 +150,52 @@ def test_chat_endpoint_streams_sse_from_existing_route(monkeypatch) -> None:
     stored_messages = memory_store.load_recent_messages(1, limit=5)
     assert [message.role for message in stored_messages] == ["user", "assistant"]
     assert [message.content for message in stored_messages] == ["有推荐的解压玩具吗", "推荐减压魔方。"]
+
+
+def test_stream_chat_associates_rag_trace_ids_with_the_assistant_message(
+    monkeypatch,
+) -> None:
+    """Persist every RAG query trace consumed while generating one answer."""
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    memory_store = NoopAiModelMemoryStore()
+
+    def fake_streaming_agent_runner(
+        request: AiModelChatRequest,
+        tool_results: list[AiModelToolResult],
+    ) -> list[str]:
+        tool_results.extend(
+            [
+                AiModelToolResult(
+                    tool="search_shopping_guides",
+                    ok=True,
+                    input=request.message,
+                    data={"trace_id": "query-a"},
+                ),
+                AiModelToolResult(
+                    tool="search_shopping_guides",
+                    ok=True,
+                    input=request.message,
+                    data={"trace_id": "query-b"},
+                ),
+            ]
+        )
+        return ["回答"]
+
+    list(
+        stream_chat_events(
+            AiModelChatRequest(user_id=1, message="无线耳机怎么选", links=[]),
+            mock_api_url="http://mock-api",
+            streaming_agent_runner=fake_streaming_agent_runner,
+            memory_store=memory_store,
+        )
+    )
+
+    assistant_message = memory_store.list_messages(1, user_id=1)[-1]
+    assert memory_store.list_message_query_traces(assistant_message.id) == [
+        "query-a",
+        "query-b",
+    ]
 
 
 def test_stream_chat_filters_tool_json_from_model_answer(monkeypatch) -> None:

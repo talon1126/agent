@@ -786,7 +786,7 @@ PostgreSQL 是唯一持久化层，不使用 SQLite。所有数据库时间字�
 | `rag_chunks` | chunk 文本、metadata、embedding vector |
 | `rag_bm25_terms` | BM25 词项统计 |
 | `image_index` | 图片文件路径和来源索引 |
-| `rag_query_traces` | Query Trace 索引 |
+| `rag_query_traces` | Query Trace 索引及顶层 `query_result` JSONB 快照 |
 | `rag_ingestion_traces` | Ingestion Trace 索引、摄取历史和 skipped 结果摘要 |
 | `rag_evaluation_runs` | 评估任务 |
 | `rag_evaluation_results` | 评估结果 |
@@ -1019,7 +1019,7 @@ Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各�
 
 #### 3.8.3 Query Trace 数据结构
 
-Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详情、汇总指标、评估指标**。
+Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详情、查询结果、汇总指标、评估指标**。`query_result` 与统计指标分离，避免业务结果被埋入 `summary_metrics`，方便评估、审计和 Dashboard 直接读取。
 
 基础信息：
 
@@ -1043,12 +1043,21 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `filter` | 过滤参数、过滤前候选数量、过滤后候选数量、被过滤原因、耗时 |
 | `rerank` | Reranker Provider、过滤后 rerank 前排名、rerank 后排名、fallback 原因（若有）、耗时 |
 
+查询结果：
+
+| 字段 | 记录内容 |
+| --- | --- |
+| `contexts` | 最终进入响应构造的结果列表，每项包含 `chunk_id`、最终 `score` 和 `rank` |
+| `content` | RAG 实际返回给 Agent 或调用方的格式化知识文本快照 |
+| `citations` | 与最终 contexts 对齐的轻量引用快照，仅保存 `document_id`、`chunk_id`、`title`、`section_path`、`score`、`trace_id`；不重复记录由完整公共响应和文档存储负责的 `source_uri` |
+| `images` | 与最终 contexts 关联的轻量图片快照，仅保存 `image_id`、`chunk_ids`、`caption`、`quality_status`；图片路径、页码、尺寸和 MIME 类型仍由完整公共响应与图片索引负责 |
+
 汇总指标：
 
 | 字段 | 记录内容 |
 | --- | --- |
 | `total_duration_ms` | 从 query_processing 到 response 的端到端耗时 |
-| `top_k_results` | 最终返回给 Agent 的 Top-k 结果摘要 |
+| `top_score` | 最终排名第一项的分数；空结果时为 `null` |
 | `candidate_count_by_stage` | dense、sparse、fusion、filter、rerank 各阶段候选数量 |
 | `fallback_used` | 是否触发降级，例如 rerank fallback 到 RRF |
 | `error` | 链路级错误信息；无错误时为空 |
@@ -1074,7 +1083,7 @@ Trace 结构化日志基于 **Python logging + JSONFormatter** 实现。日志�
 | --- | --- |
 | 请求开始 | 在 pipeline 入口创建 `TraceContext` 实例，生成唯一 `trace_id`，并写入请求基础信息，例如 `trace_type`、`started_at`、`collection`、`raw_query` 或 `source_uri` |
 | 阶段记录 | 每个阶段执行结束后调用 `trace_context.record_stage()`，记录阶段名、耗时、输入摘要、输出摘要、候选数量、错误信息、Provider 和 method |
-| 请求结束 | pipeline 结束时调用 `trace_context.flush()`，将基础信息、阶段详情、汇总指标和评估指标序列化为 JSON，并追加写入日志文件 |
+| 请求结束 | pipeline 结束时调用 `trace_context.flush()`；Query Trace 将基础信息、阶段详情、查询结果、汇总指标和评估指标序列化，Ingestion Trace 保持基础信息、阶段详情、汇总指标和评估指标结构，并追加写入日志文件 |
 
 Trace 事件示例：
 
@@ -1140,6 +1149,7 @@ AImodel 侧新增 RAG 工具时，应保持工具边界清晰：
 - RAG 工具只返回知识片段、引用和 trace id。
 - SSE 正文不能暴露 RAG 原始工具 JSON。
 - Assistant 最终回答可以展示引用标题，但不展示内部 chunk id。
+- AImodel 最终 assistant message 通过逻辑关联表 `message_query_trace(message_id, query_trace_id)` 关联本轮使用的全部 RAG Query Trace；不使用物理外键，一个回答允许关联多个 trace id。
 
 建议工具名：
 
@@ -2166,7 +2176,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | B1 | 编写 collection/document/chunk schema | [✔] | 2026-06-06 | 已实现稳定字符串 ID、pgvector/HNSW、核心约束和索引；真实 PostgreSQL 连续初始化两次通过，5 个集成测试通过 |
-| B2 | 编写 image/trace/evaluation schema | [✔] | 2026-06-06 | 已实现图片索引、四段式 Query/Ingestion Trace、评估任务和指标结果表；真实 PostgreSQL 幂等初始化通过，8 个集成测试通过 |
+| B2 | 编写 image/trace/evaluation schema | [✔] | 2026-06-06 | 已实现图片索引、Query/Ingestion Trace、评估任务和指标结果表；Query Trace 后续扩展顶层 `query_result`，Ingestion Trace 保持四段式；真实 PostgreSQL 幂等初始化通过 |
 | B3 | 实现数据库连接池和 schema 初始化 | [✔] | 2026-06-10 | 已实现配置驱动惰性连接池、生命周期、健康检查、事务回滚和幂等 schema 初始化；补充 `database.timezone=Asia/Shanghai`，连接池为每条 PostgreSQL session 执行 timezone 初始化，真实连接池验证 `SHOW timezone = Asia/Shanghai`；长期运行进程必须重启以释放旧 session；78 个相关回归测试通过 |
 | B4 | 实现 Document/Chunk/Image Repository | [✔] | 2026-06-06 | 已实现 collection 自动创建、文档版本替换、Chunk 批量 upsert、图片安全落盘和索引查询；19 个集成测试通过 |
 | B5 | 实现 Trace/Evaluation Repository | [✔] | 2026-06-06 | 已实现 Query/Ingestion Trace 与评估任务/指标的不可变记录、幂等 upsert 和历史查询；21 个集成测试通过 |
@@ -2204,7 +2214,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | D5 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | 已实现 ProcessedQuery 输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D5 单元测试通过 |
 | D6 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | 已实现 CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D6 单元测试通过 |
 | D7 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | 已实现 CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D7 单元测试通过 |
-| D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-07 | 已实现 LLMReranker、PromptTemplate 加载、BaseLLM 注入、结构化 JSON 排名解析、未知/重复/非法 score 错误边界、未返回候选按过滤后顺序追加、rerank metadata 诊断、RerankerFactory llm 注册和 settings-only 无客户端时 fallback 到 RRF；15 个 Reranker 单元测试、22 个 Factory 单元测试通过 |
+| D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-11 | 已实现 LLMReranker、PromptTemplate 加载、BaseLLM 注入和结构化 JSON 排名解析；Prompt 强制只返回 JSON object array，禁止 ID-only array、Markdown fence 和解释文字；真实 DeepSeek 查询验证 rerank 成功且未触发 fallback |
 | D9 | 实现 rerank fallback | [✔] | 2026-06-07 | 已实现 RerankController、RerankOutcome、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、显式 fallback 状态、低侵入 rerank trace 和 trace sink 失败隔离；28 个 Reranker 单元测试通过 |
 | D10 | 实现引用构造 | [✔] | 2026-06-07 | 已实现共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 source_ref 传播、source_ref 优先和顶层 metadata 兼容、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；11 个 Citation 单元测试、16 个核心类型回归测试、2 个 source_ref 单元测试和 1 个 pgvector 集成测试通过 |
 | D11 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 已实现不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号文本上下文、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；16 个 Response Builder 单元测试和 1 个真实 PostgreSQL 图片查询集成测试通过 |
@@ -2227,9 +2237,9 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | --- | --- | --- | --- | --- |
 | F1 | 实现 TraceContext 和 TraceController | [✔] | 2026-06-08 | 已实现 `src/core/trace` 包导出、内存 TraceContext、TraceController、阶段耗时/输入输出摘要记录、flush sink、错误/fallback 详情和防御性快照；4 个 TraceContext 单元测试通过 |
 | F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-10 | 已实现 `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、摄取阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；顶层阶段支持结构化 `sub_stages`，用于保存 Transform Pipeline 内每个具体实现的独立耗时、状态和受限 snapshots |
-| F3 | 实现 query trace 数据结构 | [✔] | 2026-06-08 | 已实现 `TraceContext.query()`、raw_query/request_source 基础信息校验、query_processing/dense/sparse/fusion/filter/rerank 阶段 allowlist、query summary/evaluation 指标和检索候选计数校验；12 个 TraceContext 单元测试通过 |
+| F3 | 实现 query trace 数据结构 | [✔] | 2026-06-11 | 已实现 Query 五段式结构；顶层 `query_result` 保存 contexts/content 及轻量 citations/images 快照，其中 citation 不记录 source_uri、image 仅记录 image_id/chunk_ids/caption/quality_status；summary 使用 `top_score` 代替重复的 `top_k_results`，并完成结构校验和 Dashboard DTO 透传 |
 | F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | 已实现 `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；已保留 `src/logs/.gitkeep`，运行时 `*.log/*.jsonl` 仍不提交；15 个 TraceContext/TraceWriter 单元测试通过 |
-| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-10 | 已修复生产组合根仅写入 JSONL 的缺口并实现 JSONL/PostgreSQL 双写；Transform Pipeline 对每个启用实现单独计时，将结果作为顶层 `transform` 的 `sub_stages` 注入 trace，保留总耗时、失败实现、changed/unchanged 数量，并可按配置记录变化 chunk 的 before/after 预览快照 |
+| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-11 | 已实现 JSONL/PostgreSQL 双写、Transform 子阶段打点，并将 QueryRuntime 实际返回给 Agent/调用方的结果投影为轻量快照写入 Query Trace 顶层 `query_result`，完整 citation/image 响应契约保持不变；真实查询验证 `top_score/query_result` 正常写入 |
 | F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | 已实现 Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
 | F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | 已实现 Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
 | F8 | 实现系统总览、Ingestion 管理页面和摄取操作 | [✔] | 2026-06-10 | 已新增 `IngestionOperationService`，点击 Run ingestion 会复用 `run_ingest_cli()` 触发真实摄取并展示 success/skipped/failed 结果；支持多文件选择、目录上传、服务器文件夹候选发现和单文件取消摄入；22 个 Dashboard 集成测试和 ruff 通过 |
@@ -2253,8 +2263,8 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | H1 | 执行 AImodel 集成前验收门禁 | [ ] |  | Dashboard 六大页面测试和 RAG 全链路 E2E 通过后才进入集成 |
-| H2 | 实现 AImodel RAG 工具适配 | [ ] |  |  |
-| H3 | 将 RAG 工具接入 Agent 工具列表 | [ ] |  |  |
+| H2 | 实现 AImodel RAG 工具适配 | [ ] |  | 已提前完成 `message_query_trace` 逻辑关联表和 MemoryStore 原子写入能力；仍需实现 RAG MCP/LangChain 工具适配 |
+| H3 | 将 RAG 工具接入 Agent 工具列表 | [ ] |  | 已提前完成工具结果 trace id 收集和 assistant message 关联；仍需将真实 RAG 工具加入 Agent 工具列表 |
 | H4 | 验证商品 API 工具与 RAG 工具协同 | [ ] |  | 商品事实走 API，知识补充走 RAG |
 | H5 | 验证简单询问和商品链接场景 | [ ] |  | 推荐、对比、选购指南、政策 FAQ |
 | H6 | 完成前后端联调和端到端测试 | [ ] |  | AImodel 工具响应不暴露 tool result |
@@ -2524,7 +2534,7 @@ schema 可重复执行。
 - `EvaluationRepository.list_runs()`：按 collection 和创建时间倒序查询评估历史
 - `EvaluationRepository.list_results()`：按指标名称稳定排序查询任务结果
 
-验收标准：Query/Ingestion Trace 可从 running 状态幂等更新为完成状态，四段式
+验收标准：Query/Ingestion Trace 可从 running 状态幂等更新为完成状态，Ingestion 四段式与 Query 五段式
 JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 查询；评估任务
 和多个指标结果可写入和查询；同一任务同名指标再次写入时更新稳定结果 ID、
 分数和详情，保留原始创建时间；批量结果返回顺序与输入一致；所有只读 SQL
@@ -2998,6 +3008,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `LLMReranker.rerank()`：调用注入的 `BaseLLM` 对过滤后的候选执行 Prompt 驱动重排
 - `LLMReranker._build_messages()`：渲染英文 rerank Prompt，并以稳定 `candidate_id` 序列化候选
 - `LLMReranker._parse_ranking()`：解析并校验 LLM JSON array 输出，拒绝未知 ID、重复 ID 和非法 score
+- `rerank_prompt.yaml`：要求模型只返回严格 JSON object array；禁止 Markdown fence、解释文字、ID-only array 和 JSON 前后附加内容
 - `LLMReranker._apply_ranking()`：按 LLM 排序返回 `RetrievalResult` 副本，未返回候选按过滤后原顺序追加
 - `RerankerFactory.register_builtin_providers()`：注册 `llm` provider
 
@@ -3290,12 +3301,13 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 - `TraceContext.query()`：构建标准 query trace，上线前校验 `collection`、用户原始 `raw_query` 和可选 `request_source`
 - `TraceContext.record_query_stage()`：仅允许记录 `query_processing`、`dense`、`sparse`、`fusion`、`filter`、`rerank` 六个查询阶段
-- `TraceContext.finish_query()`：写入 query 汇总指标和评估指标，并生成完整结构化快照
-- `_validate_top_k_results()`：校验并复制最终 Top-k 结果摘要列表，避免 trace 泄漏内部 provider payload
+- `TraceContext.finish_query()`：写入顶层 `query_result`、query 汇总指标和评估指标，并生成完整结构化快照
+- `_validate_query_result()`：校验 `contexts/content/citations/images` 轻量查询结果快照，严格限制 citation/image 字段，避免 trace 重复保存完整公共响应或泄漏内部 provider payload
+- `_validate_optional_finite_float()`：校验 `top_score` 和 context score 为有限数值或空值
 - `_validate_candidate_count_by_stage()`：校验 Dense、Sparse、Fusion、Filter、Rerank 阶段候选数量
 - `_validate_bool()`：校验 fallback、empty_result 等布尔指标，避免字符串 truthy 值污染结构化日志
 
-验收标准：包含 query 基础信息、阶段详情、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=query`、`started_at`、`collection`、`raw_query`，并在存在时记录 `request_source`；阶段详情必须限制在 `query_processing/dense/sparse/fusion/filter/rerank`；汇总指标必须包含 `top_k_results`、`candidate_count_by_stage`、`fallback_used`、`error`、`total_duration_ms`；评估指标支持 `query_document_relevance`、`citation_hit_rate`、`rerank_delta`、`empty_result`。
+验收标准：包含 query 基础信息、阶段详情、顶层 `query_result`、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=query`、`started_at`、`collection`、`raw_query`，并在存在时记录 `request_source`；阶段详情必须限制在 `query_processing/dense/sparse/fusion/filter/rerank/response`；`query_result` 必须包含 `contexts/content/citations/images`，contexts 每项包含 `chunk_id/score/rank`，citations 不包含 `source_uri`，images 仅包含 `image_id/chunk_ids/caption/quality_status`；汇总指标必须包含 `top_score`、`candidate_count_by_stage`、`fallback_used`、`error`、`total_duration_ms`，不再重复保存 `top_k_results`；评估指标支持 `query_document_relevance`、`citation_hit_rate`、`rerank_delta`、`empty_result`。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
@@ -3327,18 +3339,18 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 - `TraceController.record_stage()` 注入点：记录链路阶段信息
 - `TraceController.flush_ingestion()`：按 ingestion trace 契约 flush 汇总指标
-- `TraceController.flush_query()`：按 query trace 契约 flush 汇总指标
+- `TraceController.flush_query()`：按 query trace 契约 flush 顶层 `query_result`、`top_score` 和汇总指标
 - `IngestionPipeline.run()` trace 打点：注入链路追踪点
 - `TransformPipeline.run()` trace observer：按配置顺序测量每个具体 Transform 实现，成功和失败都生成子阶段记录；记录 `changed_count/unchanged_count` 解释实际处理结果；开启 `observability.transform_snapshots.enabled` 时记录变化 chunk 的受限 before/after 预览
 - `IngestionPipeline.run_indexing()` trace 打点：注入索引子链路追踪点
 - `HybridSearch.search()` trace 打点：将 RRF 阶段统一记录为 `fusion`
-- `QueryRuntime.execute()` trace 打点：注入 query_processing、rerank 跳过、response 和最终 flush
-- `PostgresTraceWriter`：将 TraceController 完成后的统一 snapshot 转换为 Query/Ingestion Trace Record，并按 `trace_id` 幂等写入 PostgreSQL
+- `QueryRuntime.execute()` trace 打点：注入 query_processing、rerank 跳过、response 和最终 flush；将实际返回给 Agent/调用方的 content、contexts 及精简后的 citations/images 快照写入 `query_result`
+- `PostgresTraceWriter`：将 TraceController 完成后的统一 snapshot 转换为 Query/Ingestion Trace Record，并按 `trace_id` 幂等写入 PostgreSQL；Query Trace 独立持久化 `query_result` JSONB
 - `CompositeTraceWriter`：将同一最终 snapshot 分发至 JSONL 和 PostgreSQL writer，避免业务链路为不同存储编写特殊分支
 - Trace writer CLI 注入：`ingest.py` 和 `query.py` 默认使用 `settings.observability.trace_jsonl_path`；当 `settings.observability.persist_to_postgresql=true` 时同时写入 PostgreSQL
 - Trace 状态约束迁移：Query/Ingestion trace 表接受 `degraded`，且 `init_schema()` 可幂等升级已存在的本地数据库约束
 
-验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；顶层 `transform.duration_ms` 保留整个 Transform Pipeline 总耗时，`transform.sub_stages` 按实际执行顺序记录每个启用实现的名称、具体类、耗时、输入输出 chunk 数、`changed_count`、`unchanged_count` 和状态，使 Dashboard 能区分“执行但未改变”与“未执行”；某个实现失败时必须先记录该失败子阶段，再让主链路按原错误语义失败；Transform snapshots 必须由配置控制，默认只记录变化 chunk、每步最多 20 个、每段预览最多 800 字，不额外调用 LLM 或数据库；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
+验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；顶层 `transform.duration_ms` 保留整个 Transform Pipeline 总耗时，`transform.sub_stages` 按实际执行顺序记录每个启用实现的名称、具体类、耗时、输入输出 chunk 数、`changed_count`、`unchanged_count` 和状态，使 Dashboard 能区分“执行但未改变”与“未执行”；某个实现失败时必须先记录该失败子阶段，再让主链路按原错误语义失败；Transform snapshots 必须由配置控制，默认只记录变化 chunk、每步最多 20 个、每段预览最多 800 字，不额外调用 LLM 或数据库；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response，并在结束时保存顶层 `query_result`；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
@@ -3375,7 +3387,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `EvaluationService`：运行评估任务并读取指标趋势
 - `TraceReaderService.list_query_traces()`：返回 Query Trace 历史列表，包含耗时、阶段数量、fallback 状态和输入摘要
 - `TraceReaderService.list_ingestion_traces()`：返回 Ingestion Trace 历史列表，包含耗时、阶段数量和来源文件摘要
-- `TraceReaderService.get_query_trace_detail()`：返回 Query Trace 阶段瀑布图、候选数量、summary/evaluation metrics 和 rerank delta
+- `TraceReaderService.get_query_trace_detail()`：返回 Query Trace 阶段瀑布图、候选数量、顶层 query_result、summary/evaluation metrics 和 rerank delta
 - `TraceReaderService.get_ingestion_trace_detail()`：返回 Ingestion Trace 主阶段瀑布图、Transform 子阶段明细、Transform snapshot diff、summary/evaluation metrics 和错误详情
 - `EvaluationService.run_evaluation()`：通过 EvaluatorFactory 同步运行评估并持久化 run/results
 - `EvaluationService.list_runs()`：返回 evaluation run 历史和指标摘要
@@ -3428,7 +3440,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `build_data_browser_page_model()`：读取文档、chunk、chunk detail 和图片列表，生成数据浏览页面模型
 - `render_data_browser_page()`：渲染文档列表、chunk 列表、chunk 详情、source_ref、image_refs 和图片表格
 - `build_query_trace_page_model()`：读取 Query Trace 历史和选中 trace 详情，生成 Query Trace 页面模型
-- `render_query_trace_page()`：渲染 Query Trace 历史、阶段瀑布图、Dense/Sparse/Fusion/Rerank 候选数量对比、Top-k 结果和 rerank delta；Trace 下拉框使用固定 widget key 持久化选择
+- `render_query_trace_page()`：渲染 Query Trace 历史、阶段瀑布图、Dense/Sparse/Fusion/Rerank 候选数量对比、`query_result.contexts`、`top_score` 和 rerank delta；Trace 下拉框使用固定 widget key 持久化选择
 - Dashboard Query Trace 分发：每次 Streamlit 重跑从 `session_state` 读取已选 Query Trace ID，并传入 `build_query_trace_page_model()`
 
 验收标准：可展示文档、chunk、召回对比、rerank 变化；选择任意 Query Trace 后详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
@@ -3604,13 +3616,16 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：封装 AImodel 可调用的 RAG 工具。
 
-修改文件：`services/ai-service/app/routers/AImodel/tools.py`、`services/ai-service/tests/test_aimodel_rag_tool.py`
+修改文件：`services/ai-service/app/routers/AImodel/tools.py`、`services/ai-service/app/routers/AImodel/memory.py`、`services/ai-service/tests/test_aimodel_rag_tool.py`、`services/ai-service/tests/test_aimodel_memory.py`
 
 实现类/函数：
 
 - `search_shopping_guides`：暴露对外工具能力
+- `message_query_trace`：使用 `message_id + query_trace_id` 保存 assistant message 与一个或多个 RAG Query Trace 的逻辑关联，不使用物理外键
+- `AiModelMemoryStore.append_assistant_message()`：保存最终回答时原子写入去重后的 query trace 关联，并返回 message id
+- `AiModelMemoryStore.list_message_query_traces()`：按 message id 查询用于生成该回答的 trace id
 
-验收标准：工具返回格式化内容和引用。
+验收标准：工具返回格式化内容、引用和 trace id；最终 assistant message 保存后可查询本轮使用的全部 RAG trace id；无 RAG 调用时不写入虚假关联。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
 
@@ -3618,13 +3633,14 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：把 RAG 工具加入 AImodel Agent 工具集合。
 
-修改文件：`services/ai-service/app/routers/AImodel/service.py`、`services/ai-service/tests/test_aimodel_rag_tool.py`
+修改文件：`services/ai-service/app/routers/AImodel/service.py`、`services/ai-service/app/routers/AImodel/memory.py`、`services/ai-service/tests/test_aimodel_rag_tool.py`、`services/ai-service/tests/test_aimodel_memory.py`
 
 实现类/函数：
 
 - `build_rag_tool()`：构建标准对象
+- `_query_trace_ids_from_tool_results()`：收集本轮 Agent 工具结果中的 RAG trace id，并在最终 assistant message 入库时建立关联
 
-验收标准：Agent 可调用 RAG 工具。
+验收标准：Agent 可调用 RAG 工具；一个 assistant message 可关联多个 RAG Query Trace，重复 trace id 只保存一次；关联写入与 assistant message 写入处于同一数据库事务。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
 

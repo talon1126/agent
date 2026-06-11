@@ -192,6 +192,7 @@ def stream_chat_events(
             user_id=request.user_id,
             content=answer,
             recommended_links=recommended_links,
+            query_trace_ids=_query_trace_ids_from_tool_results(tool_results),
         )
         for memory in extract_user_memories_from_text(request.message, user_id=request.user_id):
             memory_store.upsert_user_memory(
@@ -325,6 +326,19 @@ def _build_user_prompt(request: AiModelChatRequest) -> str:
     links = "\n".join(f"- {link}" for link in request.links) if request.links else "无"
     # 中文注释：把显式链接放进用户上下文，便于 agent 判断是否必须调用商品详情工具。
     return f"用户问题：{request.message}\n用户提供的商品链接：\n{links}"
+
+
+def _query_trace_ids_from_tool_results(
+    tool_results: list[AiModelToolResult],
+) -> list[str]:
+    """Collect stable RAG trace IDs returned by Agent tools."""
+
+    trace_ids: list[str] = []
+    for result in tool_results:
+        trace_id = result.data.get("trace_id") if isinstance(result.data, dict) else None
+        if isinstance(trace_id, str) and trace_id.strip() and trace_id.strip() not in trace_ids:
+            trace_ids.append(trace_id.strip())
+    return trace_ids
 
 
 def _build_langchain_messages(

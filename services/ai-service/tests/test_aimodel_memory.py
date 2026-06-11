@@ -22,7 +22,15 @@ def test_aimodel_memory_schema_uses_integer_ids_without_physical_foreign_keys() 
     assert "conversation_id INTEGER NOT NULL" in schema_sql
     assert "REFERENCES conversation" not in schema_sql
     assert "CREATE TABLE IF NOT EXISTS user_memory" in schema_sql
-    assert "TRUNCATE TABLE message, conversation, user_memory" in normalized_schema
+    assert "CREATE TABLE IF NOT EXISTS message_query_trace" in schema_sql
+    assert "message_id INTEGER NOT NULL" in schema_sql
+    assert "query_trace_id TEXT NOT NULL" in schema_sql
+    assert "REFERENCES message" not in schema_sql
+    assert "REFERENCES rag_query_traces" not in schema_sql
+    assert (
+        "TRUNCATE TABLE message_query_trace, message, conversation, user_memory"
+        in normalized_schema
+    )
 
 
 def test_noop_aimodel_memory_store_generates_conversation_id_and_keeps_recent_messages() -> None:
@@ -116,3 +124,21 @@ def test_noop_aimodel_memory_store_lists_conversations_and_messages_by_int_user_
     ]
     assert messages[0].links == ["/items/item_a"]
     assert messages[1].recommended_links == [{"item_id": "item_a", "item_name": "商品A", "url": "/items/item_a"}]
+
+
+def test_noop_store_associates_assistant_message_with_multiple_query_traces() -> None:
+    """One Agent answer may consume multiple RAG query tool results."""
+
+    store = NoopAiModelMemoryStore()
+    conversation_id = store.ensure_conversation(None, user_id=1, first_message="对比商品")
+
+    message_id = store.append_assistant_message(
+        conversation_id,
+        user_id=1,
+        content="对比结论",
+        recommended_links=[],
+        query_trace_ids=["query-a", "query-b", "query-a"],
+    )
+
+    assert message_id == 1
+    assert store.list_message_query_traces(message_id) == ["query-a", "query-b"]
