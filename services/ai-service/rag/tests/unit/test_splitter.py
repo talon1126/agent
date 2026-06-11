@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import importlib
 import sys
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -58,38 +57,32 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
     """Require DocumentChunker to add every business field around text splits.
 
     The adapter must preserve inherited metadata, add ordered chunk indexes,
-    compute source offsets, build source references, distribute image IDs based
-    on placeholder ranges, and return validated ``Chunk`` objects.
+    compute source offsets, build source references, distribute image IDs by
+    scanning placeholders in chunk text, and return validated ``Chunk`` objects.
     """
 
     document_text = (
-        "Alpha intro [image:one] details.\n"
+        "Alpha intro [[image:image-1]] details.\n"
         "Beta comparison details.\n"
-        "Gamma outro [image:two] details."
+        "Gamma outro [[image:image-2]] details."
     )
-    first_image_offset = document_text.index("[image:one]")
-    second_image_offset = document_text.index("[image:two]")
     first_image = {
         "id": "image-1",
         "path": "data/images/shopping_guides/image-1.png",
-        "page": 1,
-        "text_offset": first_image_offset,
-        "text_length": len("[image:one]"),
-        "position": {"x": 10, "y": 20, "width": 300, "height": 200},
     }
     second_image = {
         "id": "image-2",
         "path": "data/images/shopping_guides/image-2.png",
-        "page": 2,
-        "text_offset": second_image_offset,
-        "text_length": len("[image:two]"),
-        "position": {"x": 15, "y": 25, "width": 320, "height": 220},
     }
     document = Document(
         id="doc-shopping-guide",
         text=document_text,
         metadata={
             "source_path": "shopping_guides/headphones.md",
+            "collection": "shopping_guides",
+            "title": "Headphones",
+            "source_type": "markdown",
+            "source_hash": "hash-1",
             "heading_path": ["Guides", "Headphones"],
             "doc_type": "shopping_guide",
             "images": [first_image, second_image],
@@ -98,9 +91,9 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
     chunker = DocumentChunker(
         splitter=FakeSplitter(
             chunks=[
-                "Alpha intro [image:one] details.",
+                "Alpha intro [[image:image-1]] details.",
                 "Beta comparison details.",
-                "Gamma outro [image:two] details.",
+                "Gamma outro [[image:image-2]] details.",
             ]
         )
     )
@@ -112,23 +105,32 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
     assert all(isinstance(chunk, Chunk) for chunk in chunks)
     assert [chunk.id for chunk in chunks] == [chunk.id for chunk in repeated_chunks]
     assert document.metadata["images"] == [first_image, second_image]
+    assert chunks[0].metadata == {
+        "collection": "shopping_guides",
+        "document_id": "doc-shopping-guide",
+        "doc_type": "shopping_guide",
+        "topic": "Headphones",
+        "chunk_index": 0,
+        "section_path": ["Guides", "Headphones"],
+        "image_refs": ["image-1"],
+    }
     assert chunks[0].metadata["doc_type"] == "shopping_guide"
-    assert chunks[0].metadata["chunk_index"] == 0
-    assert chunks[1].metadata["chunk_index"] == 1
-    assert chunks[2].metadata["chunk_index"] == 2
-    assert chunks[0].metadata["section_path"] == ["Guides", "Headphones"]
-    assert chunks[0].metadata["image_refs"] == ["image-1"]
-    assert [image["id"] for image in chunks[0].metadata["images"]] == ["image-1"]
     assert "image_refs" not in chunks[1].metadata
-    assert "images" not in chunks[1].metadata
     assert chunks[2].metadata["image_refs"] == ["image-2"]
-    assert [image["id"] for image in chunks[2].metadata["images"]] == ["image-2"]
+    for chunk in chunks:
+        assert "images" not in chunk.metadata
+        assert "headings" not in chunk.metadata
+        assert "source_path" not in chunk.metadata
+        assert "source_type" not in chunk.metadata
+        assert "source_hash" not in chunk.metadata
+        assert "title" not in chunk.metadata
     assert chunks[0].source_ref == {
         "document_id": "doc-shopping-guide",
         "source_path": "shopping_guides/headphones.md",
         "section_path": ["Guides", "Headphones"],
+        "collection": "shopping_guides",
         "start_offset": 0,
-        "end_offset": len("Alpha intro [image:one] details."),
+        "end_offset": len("Alpha intro [[image:image-1]] details."),
     }
     assert chunks[1].start_offset == document_text.index("Beta comparison details.")
     assert chunks[2].start_offset == document_text.index("Gamma outro")
@@ -150,10 +152,6 @@ def test_document_chunker_merges_trailing_image_only_chunk_into_previous_text() 
                 {
                     "id": "image-headphones",
                     "path": "data/images/image-headphones.png",
-                    "page": 1,
-                    "text_offset": document_text.index(placeholder),
-                    "text_length": len(placeholder),
-                    "position": {"x": 10, "y": 20, "width": 300, "height": 200},
                 }
             ],
         },
@@ -276,10 +274,10 @@ def test_document_chunker_attaches_active_heading_path_to_each_chunk() -> None:
 
 
 def test_document_chunker_deep_copies_document_metadata() -> None:
-    """Require each chunk to own independent nested metadata structures.
+    """Require each chunk to own independent retained metadata structures.
 
-    Later transform stages mutate chunk metadata. Sharing nested dictionaries
-    or lists with the source Document or sibling chunks would make one
+    Later transform stages may update retained business metadata such as
+    ``section_path``. Sharing nested lists with sibling chunks would make one
     transform silently alter unrelated pipeline objects.
     """
 
@@ -288,18 +286,17 @@ def test_document_chunker_deep_copies_document_metadata() -> None:
         text="First section.\nSecond section.",
         metadata={
             "source_path": "shopping_guides/copy.md",
-            "classification": {"tags": ["audio"]},
+            "heading_path": ["Copy", "Guide"],
         },
     )
-    original_metadata = deepcopy(document.metadata)
     chunks = DocumentChunker(
         splitter=FakeSplitter(chunks=["First section.", "Second section."])
     ).chunk(document)
 
-    chunks[0].metadata["classification"]["tags"].append("mutated")
+    chunks[0].metadata["section_path"].append("mutated")
 
-    assert document.metadata == original_metadata
-    assert chunks[1].metadata["classification"]["tags"] == ["audio"]
+    assert document.metadata["heading_path"] == ["Copy", "Guide"]
+    assert chunks[1].metadata["section_path"] == ["Copy", "Guide"]
 
 
 def test_document_chunker_rejects_segment_that_is_not_in_source() -> None:

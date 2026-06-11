@@ -75,7 +75,7 @@ services/ai-service/rag/
 │       ├── document_summary_prompt.yaml           # 文档级语义摘要提示词模板
 │       ├── rewrite_chunk_prompt.yaml              # chunk 语义改写与增强提示词模板
 │       ├── semantic_merge_prompt.yaml              # 相邻 chunk 语义合并判断提示词模板
-│       └── image_to_text_prompt.yaml              # 图片转文字描述提示词模板
+│       └── image_caption_prompt.yaml              # 图片 caption 生成提示词模板
 ├── data/
 │   ├── raw/                                       # 按 collection 分类存放原始测试文档和本地摄取文件
 │   │   └── shopping_guides/                       # shopping_guides collection 的原始文档
@@ -113,11 +113,13 @@ services/ai-service/rag/
 │   │   │   └── pdf_loader.py                      # PDF 转 Markdown 并抽取图片的加载实现
 │   │   ├── llm/
 │   │   │   ├── base_llm.py                        # LLMClient 最小抽象接口
+│   │   │   ├── base_vision_llm.py                 # Vision LLM 最小抽象接口
 │   │   │   ├── llm_factory.py                     # 根据配置创建 LLMClient
 │   │   │   ├── openai_client.py                   # OpenAI Chat 实现
 │   │   │   ├── azure_openai_client.py             # Azure OpenAI Chat 实现
 │   │   │   ├── ollama_client.py                   # Ollama 本地 LLM 实现
-│   │   │   └── deepseek_client.py                 # DeepSeek 兼容接口实现
+│   │   │   ├── deepseek_client.py                 # DeepSeek 兼容接口实现
+│   │   │   └── dashscope_vision_llm.py            # 百炼 Qwen-VL 图片 caption 实现
 │   │   ├── splitter/
 │   │   │   ├── base_splitter.py                   # Splitter 最小抽象接口
 │   │   │   ├── splitter_factory.py                # 根据配置创建 Splitter
@@ -156,8 +158,7 @@ services/ai-service/rag/
 │   │   │   ├── chunk_rewriter.py                  # 利用 LLM 对 chunk 进行语义改写
 │   │   │   ├── semantic_merge_transform.py        # 合并逻辑相关但被物理切割的 chunk
 │   │   │   ├── denoise_transform.py               # 去除页眉页脚、重复目录和解析噪声
-│   │   │   ├── image_to_text_transform.py         # 调用 Vision LLM 生成结构化图片 caption
-│   │   │   └── image_captioner.py                 # 根据 image_refs 生成 caption 并写入 metadata
+│   │   │   └── image_captioner.py                 # 根据 image_refs 生成 caption 并写入 chunk 正文
 │   │   ├── embedding/
 │   │   │   ├── embedding_step.py                  # Embedding 阶段主编排
 │   │   │   ├── dense_encoder.py                   # Dense 向量编码
@@ -266,7 +267,7 @@ services/ai-service/rag/
 | `config/prompts/document_summary_prompt.yaml` | 保存文档级摘要提示词 | 在 Loader 后生成 `Document.summary`，为 chunk rewrite 提供全局语义上下文；首版通过 `ingestion.document_summary.llm_provider=deepseek` 显式使用 DeepSeek |
 | `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段结合 `Document.summary` 做 chunk rewrite；Prompt 只接收 chunk 正文和文档摘要，不接收 metadata 或 image_refs；输出只允许把 searchable text 写入 `text` 字段，禁止把 metadata/image_refs 报告写入正文 |
 | `config/prompts/semantic_merge_prompt.yaml` | 保存相邻 chunk 合并判断提示词 | 仅合并逻辑连续内容，要求结构化 merge 决策和合并文本 |
-| `config/prompts/image_to_text_prompt.yaml` | 保存图片转文字提示词 | 使用英文 Prompt 指令，按图片类型生成可检索的简体中文描述，并原样保留图片中的文字 |
+| `config/prompts/image_caption_prompt.yaml` | 保存图片 caption 提示词 | 使用英文 Prompt 指令，按图片类型生成可检索的简体中文描述，并原样保留图片中的文字 |
 | `data/raw/shopping_guides/` | 存放 shopping_guides collection 原始文档 | 按 collection 分类，便于离线摄取和回归测试 |
 | `data/db/postgres/` | 存放 PostgreSQL 本地开发辅助数据 | 保存初始化辅助文件、dump 或本地持久化数据 |
 | `data/db/bm25/` | 存放 BM25 本地索引辅助数据 | 保存倒排索引和词项统计缓存 |
@@ -277,7 +278,7 @@ services/ai-service/rag/
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
 | `src/core/config.py` | 加载 settings 和 prompt 配置 | Pydantic/YAML 校验、环境变量覆盖、默认值处理 |
-| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`metadata.images[]`、`Citation`、`TraceRecord` |
+| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`Document.metadata.images[]` 的 `id/path` 契约、`Citation`、`TraceRecord` |
 | `src/core/errors.py` | 定义统一异常类型 | 配置错误、Provider 错误、检索错误、摄取错误、MCP 错误 |
 | `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用相同英文/数字 normalize、中文 full-span 与 2/3-gram 分词，避免分析漂移和 ingestion/storage 循环依赖 |
 | `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、意图识别 |
@@ -290,7 +291,7 @@ services/ai-service/rag/
 | `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 Citation、KnowledgeHubResponse、ResponseImage 及其 Builder/Assembler |
 | `src/core/response/citation_builder.py` | 从最终排序结果构建引用来源 | `source_ref` 优先、顶层 metadata 兼容、标题文件名回退、section_path 归一化、trace_id 关联、缺失来源 fail fast、不从 chunk 正文猜测 citation |
 | `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 按最终检索顺序收集、去重 `image_refs`，通过最小 `ImageResolver.find_by_ids()` 接口批量读取图片索引，恢复首次引用顺序，只投影 file_path、caption、尺寸、质量状态和关联 chunk IDs |
-| `src/core/trace/trace_context.py` | 管理单次 trace 上下文 | `trace_id`、基础信息、阶段列表、汇总指标、评估指标；主阶段可携带经过校验和防御性复制的 `sub_stages`，Transform 子阶段可携带受限 snapshots |
+| `src/core/trace/trace_context.py` | 管理单次 trace 上下文 | `trace_id`、基础信息、阶段列表、汇总指标、评估指标；主阶段可携带经过校验和防御性复制的 `sub_stages`，Transform 子阶段可携带受限 snapshots 和 JSON-safe `details`，用于保留 `image_captioner` 等实现的 provider、model、计数与失败原因 |
 | `src/core/trace/trace_controller.py` | 编排 trace 写入 | `record_stage()`、`flush()`、错误和 fallback 记录 |
 
 #### 5.3.3 Libs 可插拔抽象层
@@ -302,11 +303,13 @@ services/ai-service/rag/
 | `src/libs/loader/markdown_loader.py` | 加载 Markdown 文档 | 提取标题层级、metadata、图片引用 |
 | `src/libs/loader/pdf_loader.py` | 加载 PDF 文档 | PDF -> Markdown、图片提取、优先按 PyMuPDF 邻近文本锚点插入图片占位符，锚点不可用时再按页标记或稳定追加降级 |
 | `src/libs/llm/base_llm.py` | 定义 LLMClient 抽象接口 | `chat(messages) -> response` |
+| `src/libs/llm/base_vision_llm.py` | 定义 Vision LLM 抽象接口 | `caption_image(image_path, prompt) -> VisionCaptionResponse`，只暴露图片 caption 所需的最小接口 |
 | `src/libs/llm/llm_factory.py` | 创建 LLMClient | 根据 settings 选择 OpenAI/Azure/Ollama/DeepSeek |
 | `src/libs/llm/openai_client.py` | OpenAI Chat 实现 | OpenAI SDK、统一 messages 输入输出 |
 | `src/libs/llm/azure_openai_client.py` | Azure OpenAI Chat 实现 | Azure endpoint、deployment、api-version |
 | `src/libs/llm/ollama_client.py` | Ollama 本地 LLM 实现 | 本地模型调用、离线降级 |
 | `src/libs/llm/deepseek_client.py` | DeepSeek 兼容接口实现 | OpenAI-compatible chat API |
+| `src/libs/llm/dashscope_vision_llm.py` | 百炼 Vision LLM 实现 | 使用 Qwen-VL-Max 生成图片 caption；读取 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_BASE_URL`，返回统一 `VisionCaptionResponse` |
 | `src/libs/splitter/base_splitter.py` | 定义 Splitter 抽象接口 | 纯文本工具，接口固定为 `split(text: str) -> List[str]` |
 | `src/libs/splitter/splitter_factory.py` | 创建 Splitter | 根据配置选择 splitter 实现 |
 | `src/libs/splitter/recursive_character_splitter.py` | 包装 LangChain splitter | 只输出文本片段 `List[str]`，不创建业务 `Chunk`，不引入 LangChain RAG 链路 |
@@ -332,20 +335,19 @@ services/ai-service/rag/
 
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
-| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | C10 已实现 dedup -> load -> document_summary -> split -> transform/image_caption -> existing content_hash vector lookup -> Dense/BM25 batch -> transactional upsert -> lifecycle success；保留 Loader-only 兼容模式并拒绝部分依赖和空 chunk 快照 |
+| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | C10 已实现 dedup -> load -> document_summary -> split -> transform -> existing content_hash vector lookup -> Dense/BM25 batch -> transactional upsert -> lifecycle success；图片 caption 仅作为 `transform.sub_stages.image_captioner` 记录；保留 Loader-only 兼容模式并拒绝部分依赖和空 chunk 快照 |
 | `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 去重通过后的 Loader 调用和 Document 标准化 |
 | `src/ingestion/document_summarizer.py` | 生成文档级语义摘要 | 读取 `document_summary_prompt.yaml`，调用统一 LLMClient，写入 `Document.summary`，按 prompt version 和文档 hash 保持幂等 |
 | `src/ingestion/pdf_to_markdown.py` | PDF 转 Markdown 辅助逻辑 | MarkItDown、页码、图片抽取、基于图片矩形和相邻文本块生成图片锚点 |
 | `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
-| `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、继承 metadata、添加 `chunk_index`、建立 `source_ref`、按需分发 `image_refs`，并把纯图片占位符片段合并到相邻正文 chunk |
+| `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、保留检索过滤所需 metadata、添加 `chunk_index`、建立 `source_ref`、通过占位符扫描分发 `image_refs`，并把纯图片占位符片段合并到相邻正文 chunk |
 | `src/ingestion/chunk/chunk_id.py` | 生成稳定 chunk_id | `hash(source_path + section_path + content_hash)` |
 | `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 从 `settings.transform.steps` 读取顺序并串行执行；通过可选 observer 输出每个实现的耗时、输入输出数量、变化/未变化数量、状态、错误和受限 before/after 快照 |
 | `src/ingestion/transform/metadata_enricher.py` | metadata 注入实现 | 标题路径、来源、文档主题、业务 metadata 注入 |
 | `src/ingestion/transform/chunk_rewriter.py` | LLM 改写 chunk | 使用 `Document.summary` 作为全局上下文；将 chunk 拆分为文本节点与图片节点，只改写文本节点，再按原顺序重组图片占位符 |
 | `src/ingestion/transform/semantic_merge_transform.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk，保留 source_ref 和 image_refs |
 | `src/ingestion/transform/denoise_transform.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留，保留图片占位符 |
-| `src/ingestion/transform/image_to_text_transform.py` | 图片理解适配 | 调用注入的 Vision LLM，解析 status、description、extracted_text、key_facts 和 reason |
-| `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、caption 写入 chunk metadata |
+| `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、占位符替换为 `[[image_caption:image_id]] + caption`、trace 执行详情输出 |
 | `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | `run_dense()` 提供窄粒度差量编码；`run_batch()` 复用数据库已有 content_hash 向量、对当前批次重复内容只调用一次模型，并为每个有序 chunk 生成完整 Dense 结果，同时编排 BM25Indexer |
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | content_hash 计算、差量判断、单 chunk `embed()` 编码和 C8 批量 `embed_batch()` 编码；不承担 retry、upsert 或 BM25 职责 |
 | `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | C7 已实现 in-memory BM25 词频、倒排索引构建和关键词候选查询；复用 core analyzer，并接受可选 collection 参数以保持 Sparse Route 最小接口一致 |

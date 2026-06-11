@@ -28,7 +28,7 @@ TRANSFORM_STEP_COLORS = {
     "rewrite_chunk": "#8B5CF6",
     "semantic_merge": "#F97316",
     "denoise": "#16A34A",
-    "image_to_text": "#0EA5E9",
+    "image_captioner": "#0EA5E9",
 }
 DEFAULT_TRANSFORM_STEP_COLOR = "#64748B"
 
@@ -94,6 +94,7 @@ class TraceTransformStepItem:
     method: str | None = None
     provider: str | None = None
     error: Mapping[str, Any] | None = None
+    details: Mapping[str, Any] = field(default_factory=dict)
     snapshots: tuple[TraceTransformSnapshotItem, ...] = ()
 
 
@@ -374,6 +375,11 @@ def _transform_steps(
                         dict(child.get("error"))
                         if isinstance(child.get("error"), Mapping)
                         else None
+                    ),
+                    details=(
+                        dict(child.get("details"))
+                        if isinstance(child.get("details"), Mapping)
+                        else {}
                     ),
                     snapshots=_transform_snapshots(
                         step_name=name,

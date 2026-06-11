@@ -30,7 +30,7 @@ RAG 流水线分为两条主链路：**数据摄取流水线** 和 **检索流�
 数据摄取流水线负责把外部文件变成可检索的向量和索引数据：
 
 ```text
-Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25Indexer -> BatchProcessor -> Upsert -> 文档生命周期管理
+Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform（包含 ImageCaptioner） -> DenseEncoder/BM25Indexer -> BatchProcessor -> Upsert -> 文档生命周期管理
 ```
 
 检索流水线负责把用户问题变成可引用的上下文结果：
@@ -39,7 +39,7 @@ Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform -> ImageCaptioner
 查询预处理 -> 双路混合检索 -> 候选过滤 -> 重排 -> 引用结果构造
 ```
 
-流水线要支持 **可组合**：不同 Loader、Splitter、Transform、Embedding 和 VectorStore 可以通过配置组合成不同策略。例如首版使用 PDF/Markdown Loader + RecursiveCharacterTextSplitter + ImageCaptioner + DashScope Embedding + pgvector，后续可以替换某一层而不重写整条链路。
+流水线要支持 **可组合**：不同 Loader、Splitter、Transform、Embedding 和 VectorStore 可以通过配置组合成不同策略。例如首版使用 PDF/Markdown Loader + RecursiveCharacterTextSplitter + 包含 ImageCaptioner 的 Transform Pipeline + DashScope Embedding + pgvector，后续可以替换某一层而不重写整条链路。
 
 #### 3.2.2 数据摄取流水线
 
@@ -51,9 +51,9 @@ Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform -> ImageCaptioner
 | `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + summary + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；`summary` 为顶层字段，后续由独立摘要步骤生成或更新，不放入 `metadata.summary`；只处理去重判断后确认需要摄取的文档 |
 | `DocumentSummarizer` | 为加载后的文档生成顶层 `Document.summary` | 作为 Loader 之后、Splitter 之前的独立步骤；读取 `document_summary_prompt.yaml`；复用统一 LLM provider；已有同版本摘要时保持幂等；摘要只作为全局语义上下文，不写入 `metadata.summary` |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
-| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、继承非图片类 `document.metadata`、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并按图片占位符位置分发 `image_refs`；`Document.metadata.images[]` 保留完整文档图片清单，`Chunk.metadata.images[]` 只保留当前 chunk 通过 `image_refs` 命中的图片子集 |
+| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 只保留完整文档图片清单的 `id/path`，`Chunk.metadata` 不再复制 `images[]` |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
-| `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后写入 chunk metadata；未启用 Vision LLM、无 `image_refs` 或生成失败时安全跳过并写入状态 |
+| `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后替换 chunk 正文中的图片占位符，使 caption 进入 Dense/BM25 可检索文本；执行详情写入 ingestion trace 的 `transform.sub_stages`，不写入 chunk metadata |
 | `BaseEmbedding` | 将增强后的 chunk 执行双路索引 | 在编码前先计算 `content_hash`，只对数据库中不存在的内容哈希执行新编码；DenseEncoder 调用百炼 `text-embedding-v4` 生成 1536 维语义向量；BM25Indexer 生成词项、词频和倒排索引；BatchProcessor 统一处理批量、限流、重试和失败隔离 |
 | `BaseVectorStore` | 将 chunk、metadata、Dense 向量和 Sparse 检索数据写入 PostgreSQL | 首版只实现 PostgreSQL + pgvector；upsert 时保证同一文档版本的 chunk 可覆盖更新；`chunk_id` 使用 `hash(source_path + section_path + content_hash)` 生成，确保同一来源、同一章节、同一内容具有稳定标识 |
 | 文档生命周期管理 | 管理文档从摄取、更新、删除到重建索引的状态 | 支持 `pending`、`processing`、`success`、`failed`、`deleted`；删除文档时同步删除对应 chunk、向量、BM25 统计和检索可见状态 |
@@ -73,7 +73,7 @@ Splitter 职责边界：
 
 摄取链路的重点不是只完成入库，而是保证 **可重复执行、可差量计算、可跳过重复、可追踪失败、可删除重建**。
 
-Indexing Pipeline 首版必须并入统一摄取入口：`IngestionPipeline.run()` 在完成 Loader、Splitter、Transform 和 ImageCaptioner 后继续调用 `IngestionPipeline.run_indexing()`，串联 `content_hash` 差量判断、Dense 向量编码、BM25Indexer 和 pgvector/BM25 upsert。该统一入口必须有集成测试，不能只实现分散的 encoder 或 upsert step。
+Indexing Pipeline 首版必须并入统一摄取入口：`IngestionPipeline.run()` 在完成 Loader、Splitter 和包含 ImageCaptioner 的 Transform Pipeline 后继续调用 `IngestionPipeline.run_indexing()`，串联 `content_hash` 差量判断、Dense 向量编码、BM25Indexer 和 pgvector/BM25 upsert。该统一入口必须有集成测试，不能只实现分散的 encoder 或 upsert step。
 
 #### 3.2.3 核心数据对象设计
 
@@ -86,7 +86,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `id` | `str` | 文档稳定 ID，建议由 `collection + source_path + source_hash` 生成 |
 | `text` | `str` | 文档统一文本内容，PDF 先转 Markdown，图片位置写入占位符 |
 | `summary` | `str/null` | 文档级语义摘要，供 chunk rewrite、文档摘要工具和 Dashboard 使用；空值表示摘要步骤未启用或摘要生成降级 |
-| `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息 |
+| `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息；其中 `images[]` 对外只保留 `id/path`，图片定位信息仅作为 Loader 内部插入占位符的临时数据 |
 
 `Chunk` 字段：
 
@@ -105,17 +105,14 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | --- | --- | --- |
 | `id` | `str` | 图片稳定 ID |
 | `path` | `str` | 原始图片在文件系统中的存储路径 |
-| `page` | `int/null` | 图片在原文中的页码；Markdown 图片可为空 |
-| `text_offset` | `int` | 图片占位符在 `Document.text` 中的起始位置 |
-| `text_length` | `int` | 图片占位符文本长度 |
-| `position` | `dict` | 图片在原文中的物理位置信息，例如 `x`、`y`、`width`、`height`、`bbox` |
 
 说明：
 
 - 字段命名统一使用 `start_offset`，不使用 `start_offest`。
-- `text_offset` 和 `text_length` 基于完整 `Document.text` 计算，Splitter 根据 offset 交集为 chunk 生成 `image_refs`。
+- Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。
+- `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`，不再依赖图片 offset 与 chunk offset 的区间交集。
 - `source_ref` 是可选字段，但首版建议保留，方便 Dashboard 展示引用来源、原文位置和关联图片。
-- `DocumentChunker` 必须把 `Document.metadata` 中的来源、标题、collection、hash、heading 等非图片字段复制到 `Chunk.metadata`，再追加 `chunk_index`、`image_refs` 等 chunk 级 metadata；`Document.metadata.images[]` 是文档级完整图片清单，不能无脑复制到每个 chunk；`Chunk.metadata.images[]` 只能保留当前 chunk 命中的图片子集，没有图片引用的 chunk 必须删除 `images` 和 `image_refs`。
+- `Chunk.metadata` 只保留检索过滤和业务解释需要的字段，例如 `collection`、`document_id`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。不得保存 `images`、`headings`、`source_path`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等来源、图片详情和 Transform 执行信息。
 - 来源引用保存在独立 `Chunk.source_ref` 字段，Dense/Sparse Retrieval 构造 `RetrievalResult` 时再将其深拷贝到 result metadata，避免持久化职责混淆或丢失文档来源信息。
 
 `RetrievalResult` 字段：
@@ -436,7 +433,7 @@ vision_llm:
   enabled: true
   providers:
     qwen_vl_max:
-      model: Qwen-VL-Max
+      model: qwen-vl-max
       api_key_env: DASHSCOPE_API_KEY
       base_url_env: DASHSCOPE_BASE_URL
       timeout_seconds: 90
@@ -492,9 +489,9 @@ transform:
       prompt_path: config/prompts/semantic_merge_prompt.yaml
     - name: denoise
       enabled: true
-    - name: image_to_text
+    - name: image_captioner
       enabled: true
-      prompt_path: config/prompts/image_to_text_prompt.yaml
+      prompt_path: config/prompts/image_caption_prompt.yaml
 
 retrieval:
   query_rewrite_enabled: true
@@ -609,7 +606,7 @@ PostgreSQL 是唯一持久化层，不使用 SQLite。所有数据库时间字�
 | `rag_chunks` | chunk 文本、metadata、embedding vector |
 | `rag_bm25_terms` | BM25 词项统计 |
 | `image_index` | 图片文件路径和来源索引 |
-| `rag_query_traces` | Query Trace 索引 |
+| `rag_query_traces` | Query Trace 索引及顶层 `query_result` JSONB 快照 |
 | `rag_ingestion_traces` | Ingestion Trace 索引、摄取历史和 skipped 结果摘要 |
 | `rag_evaluation_runs` | 评估任务 |
 | `rag_evaluation_results` | 评估结果 |
@@ -658,7 +655,7 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
 
 ### 3.7 多模态图片处理设计
 
-多模态处理选型为 **Image-to-Text 策略**。图片不单独建立 CLIP 多模态向量，而是先由 Vision LLM 转换为可检索的文本描述，再把描述注入 chunk 正文或 metadata 中。
+多模态处理选型为 **Image-to-Text 策略**。图片不单独建立 CLIP 多模态向量，而是先由 Vision LLM 转换为可检索的文本描述，再把描述注入 chunk 正文，使图片语义进入 Dense/BM25 索引。
 
 #### 3.7.1 图片处理全流程
 
@@ -669,7 +666,7 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
   -> 输出 Document(id + text + summary + metadata.images[])
   -> Splitter 保留图片引用标记到对应 chunk
   -> ImageCaptioner 判断 vision_llm 和 image_refs
-  -> 满足条件时生成 caption 并写入 chunk metadata
+  -> 满足条件时生成 caption 并替换 chunk 正文中的图片占位符
   -> Storage 存储增强后的 chunk 和原始图片
 ```
 
@@ -677,9 +674,9 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
 
 | 阶段 | 输出 |
 | --- | --- |
-| Loader | `Document(id + text + summary + metadata.images[])`，其中 `summary` 是顶层可空字段，`text` 包含图片占位符，`metadata.images[]` 保存图片基础信息 |
-| Splitter | chunk 文本保留图片引用标记，chunk metadata 增加 `image_refs: List[image_id]`；`Chunk.metadata.images[]` 只保留当前 chunk 命中的图片子集 |
-| ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption，并写入 chunk metadata |
+| Loader | `Document(id + text + summary + metadata.images[])`，其中 `summary` 是顶层可空字段，`text` 包含图片占位符，`metadata.images[]` 只保存图片 `id/path` |
+| Splitter | chunk 文本保留图片引用标记，chunk metadata 增加 `image_refs: List[image_id]`；`Chunk.metadata` 不复制 `Document.metadata.images[]` |
+| ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption，并把 `[[image:image_id]]` 替换为 `[[image_caption:image_id]] + caption` |
 | Storage | 向量库存储增强后的 chunk，文件系统保存原始图片，PostgreSQL `image_index` 表保存图片索引信息 |
 
 #### 3.7.2 Loader 技术要点
@@ -691,7 +688,7 @@ Loader 负责从 PDF、Markdown 或其他文档中抽取图片，并建立图片
 - **提取策略**：PDF 文本由 MarkItDown 转换，PDF 图片由 PyMuPDF 按页码和物理位置提取；Markdown 图片按本地图片语法解析。
 - **图片 ID**：为每张图片生成稳定 `image_id`，建议基于 `source_doc + page + image_index + image_hash`。
 - **引用标记**：在文档文本中写入图片占位符，例如 `[[image:image_xxx]]`，确保后续 splitter 能保留图片与上下文的关系；PDF 图片应先按 `page + position.y + position.x` 排序，再插入到对应页文本区间末尾、下一页标记之前，避免所有图片占位符集中追加到文档末尾。
-- **页标记降级**：当 MarkItDown 输出包含 `<!-- page: N -->` 等页标记时，Loader 使用页区间定位；当转换结果没有页标记时，Loader 按源位置稳定排序后追加占位符，并保留 `metadata.images[].position` 供后续改进。
+- **页标记降级**：当 MarkItDown 输出包含 `<!-- page: N -->` 等页标记时，Loader 使用页区间定位；当转换结果没有页标记时，Loader 按源位置稳定排序后追加占位符；页码、物理位置和文本 offset 仅作为 Loader 内部临时定位数据，最终 `Document.metadata.images[]` 只保留 `id/path`。
 - **原始图片存储**：原始图片保存到本地文件系统，数据库只保存索引和 metadata。
 
 #### 3.7.3 Splitter 技术要点
@@ -701,12 +698,12 @@ Splitter 必须保留图片引用和文本上下文之间的关联，不能在�
 关键实现：
 
 - **关联保持**：如果图片占位符位于某个标题或段落附近，应保留在对应 chunk 中。
-- **chunk metadata 扩展**：每个命中图片的 chunk 增加 `image_refs: List[image_id]`，并将 `images[]` 裁剪为这些引用对应的图片子集；没有图片引用的 chunk 不保留 `images[]`。
+- **chunk metadata 扩展**：每个命中图片的 chunk 增加 `image_refs: List[image_id]`；没有图片引用的 chunk 不保留 `image_refs`，所有 chunk 都不保存 `images[]`。
 - **上下文保护**：当图片前后文本共同解释图片含义时，splitter 应尽量避免把图片占位符和说明文字切到不同 chunk。
 
 #### 3.7.4 ImageCaptioner 技术要点
 
-ImageCaptioner 是图片 caption 的业务编排层。它只在 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时调用 Vision LLM；底层图片理解能力由 `ImageToTextTransform` 提供，ImageCaptioner 负责读取图片引用、调用图片描述能力、写入 chunk metadata，并处理 skipped、failed、low_quality 等状态。
+ImageCaptioner 是图片 caption 的业务编排层。它只在 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时调用 Vision LLM；底层图片理解能力由 `BaseVisionLLM` 的具体实现提供。ImageCaptioner 负责读取图片引用、定位 `Document.metadata.images[]` 中的图片路径、调用图片描述能力、把 caption 写回 chunk 正文，并把 skipped、failed、low_quality、provider、model、耗时和快照写入 ingestion trace 的 `transform.sub_stages`。同一轮摄取中相同 `image_id` 即使被多个 chunk 引用，也只能调用一次 Vision LLM，后续 chunk 复用同一 caption 或失败结果；Provider 失败时必须记录经过脱敏和长度限制的底层错误类型与错误信息，禁止记录 API Key、base64 图片正文或完整请求体。
 
 Vision LLM 选型：
 
@@ -778,7 +775,7 @@ Storage 负责同时保存增强后的 chunk 和原始图片索引。
 
 - **描述质量检测**：如果生成描述过短、内容为空、Vision LLM 明确表示无法识别，图片应标记为 `low_quality`。
 - **图片压缩**：大尺寸图片在调用 Vision LLM 前应提前压缩，降低请求成本和超时概率。
-- **Vision LLM 降级**：如果 Vision LLM 不可用，图片保留占位符，但不生成描述、不参与检索，并在 chunk metadata 中标记 `image_caption_status=skipped`。
+- **Vision LLM 降级**：如果 Vision LLM 不可用，图片保留占位符，但不生成描述、不参与检索，并在 ingestion trace 的 `image_captioner` 子阶段记录 skipped 原因。
 - **批量处理优化**：图片描述应支持批处理、并发限流和失败重试，避免大量图片摄取时阻塞整个 Ingestion Pipeline。
 
 ### 3.8 可观测性与可视化管理平台设计
@@ -842,7 +839,7 @@ Ingestion Trace 面向文档摄取链路，结构固定为 **基础信息、各�
 
 #### 3.8.3 Query Trace 数据结构
 
-Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详情、汇总指标、评估指标**。
+Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详情、查询结果、汇总指标、评估指标**。`query_result` 与统计指标分离，避免业务结果被埋入 `summary_metrics`，方便评估、审计和 Dashboard 直接读取。
 
 基础信息：
 
@@ -866,12 +863,21 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `filter` | 过滤参数、过滤前候选数量、过滤后候选数量、被过滤原因、耗时 |
 | `rerank` | Reranker Provider、过滤后 rerank 前排名、rerank 后排名、fallback 原因（若有）、耗时 |
 
+查询结果：
+
+| 字段 | 记录内容 |
+| --- | --- |
+| `contexts` | 最终进入响应构造的结果列表，每项包含 `chunk_id`、最终 `score` 和 `rank` |
+| `content` | RAG 实际返回给 Agent 或调用方的格式化知识文本快照 |
+| `citations` | 与最终 contexts 对齐的轻量引用快照，仅保存 `document_id`、`chunk_id`、`title`、`section_path`、`score`、`trace_id`；不重复记录由完整公共响应和文档存储负责的 `source_uri` |
+| `images` | 与最终 contexts 关联的轻量图片快照，仅保存 `image_id`、`chunk_ids`、`caption`、`quality_status`；图片路径、页码、尺寸和 MIME 类型仍由完整公共响应与图片索引负责 |
+
 汇总指标：
 
 | 字段 | 记录内容 |
 | --- | --- |
 | `total_duration_ms` | 从 query_processing 到 response 的端到端耗时 |
-| `top_k_results` | 最终返回给 Agent 的 Top-k 结果摘要 |
+| `top_score` | 最终排名第一项的分数；空结果时为 `null` |
 | `candidate_count_by_stage` | dense、sparse、fusion、filter、rerank 各阶段候选数量 |
 | `fallback_used` | 是否触发降级，例如 rerank fallback 到 RRF |
 | `error` | 链路级错误信息；无错误时为空 |
@@ -897,7 +903,7 @@ Trace 结构化日志基于 **Python logging + JSONFormatter** 实现。日志�
 | --- | --- |
 | 请求开始 | 在 pipeline 入口创建 `TraceContext` 实例，生成唯一 `trace_id`，并写入请求基础信息，例如 `trace_type`、`started_at`、`collection`、`raw_query` 或 `source_uri` |
 | 阶段记录 | 每个阶段执行结束后调用 `trace_context.record_stage()`，记录阶段名、耗时、输入摘要、输出摘要、候选数量、错误信息、Provider 和 method |
-| 请求结束 | pipeline 结束时调用 `trace_context.flush()`，将基础信息、阶段详情、汇总指标和评估指标序列化为 JSON，并追加写入日志文件 |
+| 请求结束 | pipeline 结束时调用 `trace_context.flush()`；Query Trace 将基础信息、阶段详情、查询结果、汇总指标和评估指标序列化，Ingestion Trace 保持基础信息、阶段详情、汇总指标和评估指标结构，并追加写入日志文件 |
 
 Trace 事件示例：
 
@@ -963,6 +969,7 @@ AImodel 侧新增 RAG 工具时，应保持工具边界清晰：
 - RAG 工具只返回知识片段、引用和 trace id。
 - SSE 正文不能暴露 RAG 原始工具 JSON。
 - Assistant 最终回答可以展示引用标题，但不展示内部 chunk id。
+- AImodel 最终 assistant message 通过逻辑关联表 `message_query_trace(message_id, query_trace_id)` 关联本轮使用的全部 RAG Query Trace；不使用物理外键，一个回答允许关联多个 trace id。
 
 建议工具名：
 

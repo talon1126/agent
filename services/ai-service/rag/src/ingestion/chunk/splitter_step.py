@@ -8,6 +8,7 @@ objects continue to transform and indexing stages.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -92,50 +93,42 @@ def build_source_ref(
     return source_ref
 
 
+_IMAGE_PLACEHOLDER = re.compile(r"\[\[image:(?P<image_id>[^\]]+)\]\]")
+
+
 def distribute_image_refs(
     metadata: dict[str, Any],
     *,
-    start_offset: int,
-    end_offset: int,
+    chunk_text: str,
 ) -> list[str]:
-    """Attach image IDs whose placeholder ranges intersect a chunk.
+    """Attach image IDs found in the chunk's image placeholders.
 
     Args:
-        metadata: Deep-copied document metadata containing normalized
-            ``images`` entries when the loader extracted images.
-        start_offset: Start-inclusive chunk position in source text.
-        end_offset: End-exclusive chunk position in source text.
+        metadata: Chunk-owned metadata being assembled by ``DocumentChunker``.
+        chunk_text: Chunk source text that may contain ``[[image:...]]``
+            placeholders.
 
     Returns:
         Ordered unique image IDs assigned to the chunk.
 
     Side Effects:
         Writes ``metadata["image_refs"]`` only when at least one placeholder
-        intersects the chunk. ``metadata["images"]`` is also narrowed to the
-        matching image records for that chunk. Removing empty image fields
-        prevents downstream caption, rewrite, and multimodal stages from
-        treating text-only chunks as image work or leaking document-wide image
-        metadata into unrelated chunks.
+        appears in ``chunk_text``. The full document-level ``images`` list is
+        never copied into chunk metadata.
     """
 
     image_refs: list[str] = []
-    scoped_images: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for image in metadata.get("images", []):
-        image_start = int(image["text_offset"])
-        image_end = image_start + int(image["text_length"])
-        image_id = str(image["id"])
-        if image_start < end_offset and image_end > start_offset and image_id not in seen:
+    for match in _IMAGE_PLACEHOLDER.finditer(chunk_text):
+        image_id = match.group("image_id").strip()
+        if image_id and image_id not in seen:
             image_refs.append(image_id)
-            scoped_images.append(dict(image))
             seen.add(image_id)
 
     if image_refs:
         metadata["image_refs"] = image_refs
-        metadata["images"] = scoped_images
     else:
         metadata.pop("image_refs", None)
-        metadata.pop("images", None)
     return image_refs
 
 

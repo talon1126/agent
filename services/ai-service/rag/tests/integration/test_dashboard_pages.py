@@ -371,10 +371,6 @@ def _seed_dashboard_fixture(pool: object, tmp_path: Path) -> DashboardFixture:
                 {
                     "id": image_id,
                     "path": "wireless-headphones.png",
-                    "page": 1,
-                    "text_offset": 32,
-                    "text_length": 24,
-                    "position": {"x": 10, "y": 20, "width": 320, "height": 180},
                 }
             ],
         },

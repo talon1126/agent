@@ -1,56 +1,59 @@
-"""Orchestrate optional image captioning for chunks with image references.
+"""Inject Vision LLM image captions into searchable chunk text.
 
-``ImageCaptioner`` is the ingestion-layer bridge between chunk metadata and
-Vision LLM image understanding. It decides whether captioning should run,
-maps ``image_refs`` to the source ``metadata.images`` entries, records skipped
-or failed states, and writes structured caption metadata without changing chunk
-text or source offsets.
+``ImageCaptioner`` is a Transform step, not a generic provider factory. It
+uses ``image_refs`` on chunks and document-level ``images`` supplied through
+the transform context to find local image files, call a Vision LLM, and replace
+``[[image:...]]`` placeholders with ``[[image_caption:...]]`` nodes plus the
+caption text. Execution details are exposed through ``trace_details()`` so
+Transform Pipeline can attach them to ``transform.sub_stages``.
 """
 
 from __future__ import annotations
 
+import re
+from collections import Counter
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
+from src.core.errors import RagError
 from src.core.types import Chunk
+from src.ingestion.chunk.chunk_id import build_chunk_id
+from src.libs.llm import BaseVisionLLM, VisionCaptionResponse
 from src.libs.transform.base_transform import BaseTransform
+
+_IMAGE_PLACEHOLDER = re.compile(r"\[\[image:(?P<image_id>[^\]]+)\]\]")
 
 
 class ImageCaptioner(BaseTransform):
-    """Generate image caption metadata for chunks that reference images."""
+    """Generate image captions and write them into chunk text."""
 
     def __init__(
         self,
         *,
-        image_transform: Any | None,
+        vision_llm: BaseVisionLLM | Any | None,
+        prompt: Any | None,
         enabled: bool,
     ) -> None:
         """Configure caption execution.
 
         Args:
-            image_transform: Object exposing ``transform(image,
-                document_context=...)``. Tests often pass a mock; production
-                code passes ``ImageToTextTransform``.
+            vision_llm: Object exposing ``caption_image(...)``. Tests may pass
+                a mock; production passes a concrete ``BaseVisionLLM``.
+            prompt: Prompt document loaded from ``image_caption_prompt.yaml``.
             enabled: Feature switch derived from ``vision_llm.enabled`` and
                 whether a Vision client is available.
         """
 
-        self._image_transform = image_transform
+        self._vision_llm = vision_llm
+        self._prompt = prompt
         self._enabled = enabled
+        self._last_events: list[dict[str, Any]] = []
 
     def should_caption(self, chunk: Chunk) -> bool:
-        """Return whether one chunk has image references worth processing.
+        """Return whether one chunk has image references worth processing."""
 
-        Args:
-            chunk: Candidate chunk from the ingestion transform chain.
-
-        Returns:
-            ``True`` only when the captioner is enabled, an image transform is
-            available, and ``metadata.image_refs`` contains at least one image
-            identifier.
-        """
-
-        return self._enabled and self._image_transform is not None and _has_image_refs(chunk)
+        return self._enabled and self._vision_llm is not None and _has_image_refs(chunk)
 
     def transform(
         self,
@@ -58,15 +61,7 @@ class ImageCaptioner(BaseTransform):
         *,
         context: dict[str, Any] | None = None,
     ) -> list[Chunk]:
-        """Satisfy the ``BaseTransform`` contract by delegating to captioning.
-
-        Args:
-            chunks: Ordered chunks from prior transform steps.
-            context: Optional trace-safe document context.
-
-        Returns:
-            Ordered chunk copies with image caption metadata where applicable.
-        """
+        """Satisfy the ``BaseTransform`` contract by delegating to captioning."""
 
         return self.caption(chunks, context=context)
 
@@ -76,174 +71,284 @@ class ImageCaptioner(BaseTransform):
         *,
         context: dict[str, Any] | None = None,
     ) -> list[Chunk]:
-        """Caption every referenced image and preserve chunk order.
+        """Caption referenced images while preserving chunk order.
 
         Args:
-            chunks: Ordered chunks whose metadata may include ``image_refs`` and
-                an ``images`` list inherited from the source document.
-            context: Optional runtime context. ``document_context`` can be
-                supplied to guide the Vision model.
+            chunks: Ordered chunks whose metadata may include ``image_refs``.
+            context: Runtime context. ``document_images`` should contain the
+                parent ``Document.metadata.images`` list, and
+                ``document_context`` supplies nearby text for the Vision model.
 
         Returns:
-            New chunk objects. Text-only chunks are copied unchanged; disabled
-            captioning marks image-bearing chunks as skipped; provider failures
-            are captured as failed caption metadata.
+            New chunk objects. Successful captions update chunk text; skipped,
+            failed, and low-quality captions preserve original text.
         """
 
-        return [self._caption_chunk(chunk, context=context or {}) for chunk in chunks]
+        runtime_context = context or {}
+        image_index = _document_image_index(runtime_context.get("document_images"))
+        self._last_events = []
+        result_cache: dict[str, VisionCaptionResponse] = {}
+        output: list[Chunk] = []
+        for chunk in chunks:
+            output.append(
+                self._caption_chunk(
+                    chunk,
+                    image_index=image_index,
+                    document_context=str(runtime_context.get("document_context") or ""),
+                    result_cache=result_cache,
+                )
+            )
+        return output
 
-    def write_metadata(
-        self,
-        chunk: Chunk,
-        *,
-        status: str,
-        captions: list[dict[str, Any]] | None = None,
-    ) -> Chunk:
-        """Return a chunk copy with caption status and optional captions.
+    def trace_details(self) -> dict[str, Any]:
+        """Return trace-safe execution details for the previous run."""
 
-        Args:
-            chunk: Source chunk to copy.
-            status: Aggregate caption status for the chunk, such as
-                ``success``, ``skipped``, ``failed``, or ``low_quality``.
-            captions: Optional per-image caption records.
-
-        Returns:
-            A deep-copied chunk with caption metadata added.
-        """
-
-        metadata = deepcopy(chunk.metadata)
-        metadata["image_caption_status"] = status
-        if captions is not None:
-            metadata["image_captions"] = deepcopy(captions)
-        return chunk.model_copy(update={"metadata": metadata}, deep=True)
+        statuses = Counter(str(event["status"]) for event in self._last_events)
+        successful = [
+            event for event in self._last_events if event["status"] == "success"
+        ]
+        provider = _first_non_blank(event.get("provider") for event in self._last_events)
+        model = _first_non_blank(event.get("model") for event in self._last_events)
+        return {
+            "provider": provider,
+            "model": model,
+            "image_count": len(self._last_events),
+            "caption_count": len(successful),
+            "status_counts": dict(statuses),
+            "failures": [
+                _failure_event(event)
+                for event in self._last_events
+                if event.get("status") in {"failed", "low_quality", "skipped"}
+            ],
+        }
 
     def _caption_chunk(
         self,
         chunk: Chunk,
         *,
-        context: dict[str, Any],
+        image_index: dict[str, dict[str, Any]],
+        document_context: str,
+        result_cache: dict[str, VisionCaptionResponse],
     ) -> Chunk:
-        """Caption one chunk while isolating provider failures.
+        """Caption every placeholder referenced by one chunk."""
 
-        Args:
-            chunk: Source chunk that may reference images.
-            context: Runtime metadata used to build nearby document context.
-
-        Returns:
-            A copied chunk with caption metadata or the original metadata
-            copied unchanged when no image references exist.
-        """
-
-        if not _has_image_refs(chunk):
+        image_refs = _ordered_string_refs(chunk.metadata.get("image_refs", []))
+        if not image_refs:
             return chunk.model_copy(deep=True)
         if not self.should_caption(chunk):
-            return self.write_metadata(chunk, status="skipped", captions=[])
+            for image_id in image_refs:
+                self._record_event(image_id=image_id, status="skipped", reason="disabled")
+            return chunk.model_copy(deep=True)
 
-        image_index = {
-            str(image.get("id")): image
-            for image in chunk.metadata.get("images", [])
-            if isinstance(image, dict) and image.get("id")
-        }
-        captions: list[dict[str, Any]] = []
-        for image_id in _ordered_string_refs(chunk.metadata.get("image_refs", [])):
-            image = image_index.get(image_id, {"id": image_id})
-            try:
-                caption = self._image_transform.transform(
-                    image,
-                    document_context=str(
-                        context.get("document_context")
-                        or context.get("title")
-                        or chunk.text
-                    ),
+        replacements: dict[str, str] = {}
+        for image_id in image_refs:
+            image = image_index.get(image_id)
+            if image is None:
+                self._record_event(
+                    image_id=image_id,
+                    status="failed",
+                    reason="image metadata not found",
                 )
-                normalized = _normalize_caption(image_id=image_id, caption=caption)
-            except Exception as error:
-                normalized = {
-                    "image_id": image_id,
-                    "status": "failed",
-                    "description": "",
-                    "extracted_text": "",
-                    "key_facts": [],
-                    "reason": str(error),
-                    "provider": None,
-                    "model": None,
-                }
-            captions.append(normalized)
+                continue
+            normalized = result_cache.get(image_id)
+            if normalized is None:
+                try:
+                    response = self._vision_llm.caption_image(
+                        image["path"],
+                        prompt=self._prompt,
+                        image_type=str(image.get("image_type") or "product"),
+                        document_context=document_context or chunk.text,
+                    )
+                    normalized = _normalize_response(response)
+                except Exception as error:
+                    normalized = _failed_response(error)
+                result_cache[image_id] = normalized
+                self._record_event(
+                    image_id=image_id,
+                    status=normalized.status,
+                    reason=normalized.reason,
+                    provider=normalized.provider,
+                    model=normalized.model,
+                    error_type=str(normalized.raw.get("error_type") or ""),
+                )
+            if normalized.status == "success":
+                replacements[image_id] = _caption_node(
+                    image_id=image_id,
+                    description=normalized.description,
+                )
 
-        aggregate_status = _aggregate_status(captions)
-        return self.write_metadata(
-            chunk,
-            status=aggregate_status,
-            captions=captions,
+        if not replacements:
+            return chunk.model_copy(deep=True)
+        updated_text = _replace_placeholders(chunk.text, replacements)
+        if updated_text == chunk.text:
+            return chunk.model_copy(deep=True)
+        section_path = chunk.metadata.get("section_path", [])
+        if not isinstance(section_path, list):
+            section_path = []
+        updated = chunk.model_copy(
+            update={
+                "id": build_chunk_id(
+                    source_path=str(
+                        (chunk.source_ref or {}).get(
+                            "source_path",
+                            chunk.metadata.get("document_id", chunk.id),
+                        )
+                    ),
+                    section_path=[str(item) for item in section_path],
+                    text=updated_text,
+                ),
+                "text": updated_text,
+                "metadata": deepcopy(chunk.metadata),
+            },
+            deep=True,
+        )
+        return updated
+
+    def _record_event(
+        self,
+        *,
+        image_id: str,
+        status: str,
+        reason: str = "",
+        provider: str | None = None,
+        model: str | None = None,
+        error_type: str = "",
+    ) -> None:
+        """Append one compact event used by ``trace_details()``."""
+
+        self._last_events.append(
+            {
+                "image_id": image_id,
+                "status": status,
+                "reason": reason,
+                "provider": provider,
+                "model": model,
+                "error_type": error_type,
+            }
         )
 
 
-def _normalize_caption(
-    *,
-    image_id: str,
-    caption: dict[str, Any],
-) -> dict[str, Any]:
-    """Normalize one adapter result before storing it on chunk metadata.
+def _document_image_index(value: Any) -> dict[str, dict[str, Any]]:
+    """Normalize document-level image metadata into an ID lookup."""
 
-    Args:
-        image_id: Image reference currently being processed.
-        caption: Raw adapter result from ``ImageToTextTransform`` or a test
-            double.
-
-    Returns:
-        A JSON-compatible caption record with stable keys.
-    """
-
-    status = str(caption.get("status") or "success")
-    description = str(caption.get("description") or "").strip()
-    if status != "failed" and len(description) < 8:
-        status = "low_quality"
+    if not isinstance(value, list):
+        return {}
     return {
-        "image_id": image_id,
-        "status": status,
-        "description": description,
-        "extracted_text": str(caption.get("extracted_text") or ""),
-        "key_facts": [
-            str(fact)
-            for fact in caption.get("key_facts", [])
-            if str(fact).strip()
-        ],
-        "reason": str(caption.get("reason") or ""),
-        "provider": caption.get("provider"),
-        "model": caption.get("model"),
+        str(image["id"]): dict(image)
+        for image in value
+        if isinstance(image, dict)
+        and image.get("id")
+        and image.get("path")
+        and Path(str(image.get("path"))).name
     }
 
 
-def _aggregate_status(captions: list[dict[str, Any]]) -> str:
-    """Summarize per-image caption states for quick filtering.
+def _normalize_response(response: VisionCaptionResponse | Any) -> VisionCaptionResponse:
+    """Accept typed or duck-typed Vision caption responses."""
 
-    Args:
-        captions: Per-image caption records for one chunk.
+    if isinstance(response, VisionCaptionResponse):
+        if response.status == "success" and len(response.description.strip()) < 8:
+            return response.model_copy(
+                update={
+                    "status": "low_quality",
+                    "reason": response.reason or "caption too short",
+                }
+            )
+        return response
+    status = str(getattr(response, "status", "success"))
+    description = str(getattr(response, "description", "")).strip()
+    if status not in {"success", "low_quality", "failed"}:
+        status = "failed"
+    if status == "success" and len(description) < 8:
+        status = "low_quality"
+    return VisionCaptionResponse(
+        status=status,
+        description=description,
+        reason=str(getattr(response, "reason", "")),
+        provider=str(getattr(response, "provider", "unknown")),
+        model=str(getattr(response, "model", "unknown")),
+    )
 
-    Returns:
-        ``failed`` when every caption failed, ``low_quality`` when at least one
-        caption is low quality and none succeeded, otherwise ``success``.
-    """
 
-    statuses = {caption["status"] for caption in captions}
-    if statuses == {"failed"}:
-        return "failed"
-    if "success" in statuses:
-        return "success"
-    if "low_quality" in statuses:
-        return "low_quality"
-    return "failed"
+def _failed_response(error: Exception) -> VisionCaptionResponse:
+    """Convert one provider exception into a trace-safe failed response."""
+
+    context = error.context if isinstance(error, RagError) else {}
+    cause = error.cause if isinstance(error, RagError) else error.__cause__
+    cause_type = type(cause).__name__ if cause is not None else type(error).__name__
+    return VisionCaptionResponse(
+        status="failed",
+        description="",
+        reason=_safe_error_reason(error, cause=cause),
+        provider=_optional_context_string(context.get("provider")) or "unknown",
+        model=_optional_context_string(context.get("model")) or "unknown",
+        raw={"error_type": cause_type},
+    )
+
+
+def _safe_error_reason(error: Exception, *, cause: Exception | None) -> str:
+    """Build a bounded diagnostic message without persisting image payloads."""
+
+    reason = str(error)
+    if cause is not None and cause is not error:
+        reason = f"{reason}: {type(cause).__name__}: {cause}"
+    reason = re.sub(
+        r"data:[^;\s]+;base64,[A-Za-z0-9+/=_-]+",
+        "[redacted-base64-image]",
+        reason,
+    )
+    reason = re.sub(
+        r"(?i)\b(api[_-]?key|authorization)\s*[=:]\s*[^\s;,]+",
+        lambda match: f"{match.group(1)}=[redacted-secret]",
+        reason,
+    )
+    reason = re.sub(
+        r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [redacted-secret]",
+        reason,
+    )
+    return reason[:1000]
+
+
+def _optional_context_string(value: Any) -> str | None:
+    """Return a stripped context string or ``None`` for missing values."""
+
+    if value is None or not str(value).strip():
+        return None
+    return str(value).strip()
+
+
+def _failure_event(event: dict[str, Any]) -> dict[str, str]:
+    """Project one failed caption event into compact trace details."""
+
+    result = {
+        "image_id": str(event.get("image_id") or ""),
+        "status": str(event.get("status") or ""),
+        "reason": str(event.get("reason") or ""),
+    }
+    if event.get("error_type"):
+        result["error_type"] = str(event["error_type"])
+    return result
+
+
+def _replace_placeholders(text: str, replacements: dict[str, str]) -> str:
+    """Replace image placeholders whose caption succeeded."""
+
+    def replace(match: re.Match[str]) -> str:
+        image_id = match.group("image_id").strip()
+        return replacements.get(image_id, match.group(0))
+
+    return _IMAGE_PLACEHOLDER.sub(replace, text)
+
+
+def _caption_node(*, image_id: str, description: str) -> str:
+    """Build the text node injected in place of one image placeholder."""
+
+    return f"[[image_caption:{image_id}]]\n{description.strip()}\n"
 
 
 def _ordered_string_refs(values: Any) -> list[str]:
-    """Return unique non-blank image references in source order.
-
-    Args:
-        values: Candidate ``metadata.image_refs`` value.
-
-    Returns:
-        Ordered string image IDs with duplicates removed.
-    """
+    """Return unique non-blank image references in source order."""
 
     if not isinstance(values, list):
         return []
@@ -251,14 +356,15 @@ def _ordered_string_refs(values: Any) -> list[str]:
 
 
 def _has_image_refs(chunk: Chunk) -> bool:
-    """Return whether one chunk carries at least one usable image reference.
-
-    Args:
-        chunk: Candidate chunk metadata to inspect.
-
-    Returns:
-        ``True`` when ``metadata.image_refs`` is a list with one or more
-        non-blank image IDs.
-    """
+    """Return whether one chunk carries at least one usable image reference."""
 
     return bool(_ordered_string_refs(chunk.metadata.get("image_refs", [])))
+
+
+def _first_non_blank(values: Any) -> str | None:
+    """Return the first non-blank string from an iterable."""
+
+    for value in values:
+        if value is not None and str(value).strip():
+            return str(value)
+    return None

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from hashlib import sha256
 from typing import Any
 
 from src.core.config import PromptTemplate
@@ -49,15 +48,11 @@ class SemanticMergeTransform(BaseTransform):
             context: Optional trace context reserved for orchestration.
 
         Returns:
-            New chunks with approved adjacent pairs merged. Every result carries
-            versioned evaluation metadata, so repeating the same transform does
-            not call the LLM again.
+            New chunks with approved adjacent pairs merged. Execution details
+            belong to transform trace sub-stages, not chunk metadata.
         """
 
         del context
-        if self._already_processed(chunks):
-            return [chunk.model_copy(deep=True) for chunk in chunks]
-
         output: list[Chunk] = []
         index = 0
         while index < len(chunks):
@@ -203,14 +198,7 @@ class SemanticMergeTransform(BaseTransform):
         )
         if not metadata["image_refs"]:
             metadata.pop("image_refs")
-        metadata["semantic_merge"] = {
-            "version": self._version,
-            "status": "merged",
-            "provider": provider,
-            "model": model,
-            "source_chunk_ids": [left.id, right.id],
-            "output_hash": _content_hash(merged_text),
-        }
+        del provider, model
 
         source_ref = deepcopy(left.source_ref) if left.source_ref is not None else None
         if source_ref is not None:
@@ -246,7 +234,7 @@ class SemanticMergeTransform(BaseTransform):
         provider: str | None = None,
         model: str | None = None,
     ) -> Chunk:
-        """Mark one unchanged chunk as evaluated for idempotent retries.
+        """Return one unchanged chunk copy without provenance metadata.
 
         Args:
             chunk: Source chunk retained without text changes.
@@ -255,36 +243,11 @@ class SemanticMergeTransform(BaseTransform):
             model: Optional model identifier when the model was consulted.
 
         Returns:
-            A deep copy carrying versioned semantic-merge metadata.
+            A deep copy preserving caller-visible metadata.
         """
 
-        metadata = deepcopy(chunk.metadata)
-        metadata["semantic_merge"] = {
-            "version": self._version,
-            "status": status,
-            "provider": provider,
-            "model": model,
-            "output_hash": _content_hash(chunk.text),
-        }
-        return chunk.model_copy(update={"metadata": metadata}, deep=True)
-
-    def _already_processed(self, chunks: list[Chunk]) -> bool:
-        """Return whether every input came from this exact Prompt version.
-
-        Args:
-            chunks: Candidate chunks for one transform invocation.
-
-        Returns:
-            ``True`` only when every chunk records this Prompt version and its
-            current text hash matches the recorded output hash.
-        """
-
-        return bool(chunks) and all(
-            isinstance(chunk.metadata.get("semantic_merge"), dict)
-            and chunk.metadata["semantic_merge"].get("version") == self._version
-            and chunk.metadata["semantic_merge"].get("output_hash") == _content_hash(chunk.text)
-            for chunk in chunks
-        )
+        del status, provider, model
+        return chunk.model_copy(deep=True)
 
 
 def _section_path(chunk: Chunk) -> list[str]:
@@ -314,16 +277,3 @@ def _ordered_unique(values: list[Any]) -> list[str]:
     """
 
     return list(dict.fromkeys(str(value) for value in values))
-
-
-def _content_hash(text: str) -> str:
-    """Return the digest used to prove merge idempotency.
-
-    Args:
-        text: Exact chunk text.
-
-    Returns:
-        Lowercase SHA256 hexadecimal digest.
-    """
-
-    return sha256(text.encode("utf-8")).hexdigest()

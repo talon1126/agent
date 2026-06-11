@@ -1,11 +1,11 @@
-name: image_to_text
+name: image_caption
 version: 1
-description: Generate retrieval-oriented descriptions for document images.
+description: Generate retrieval-oriented captions for document images.
 input_variables:
   - image_type
   - document_context
 system_prompt: |
-  You are the image understanding component of a RAG document ingestion system.
+  You are the image captioning component of a RAG document ingestion system.
   Generate a retrieval-oriented description from the visible image content,
   including objects, text, structure, processes, and data.
   When the image contains products, specifications, procedures, or comparisons,
@@ -25,8 +25,7 @@ user_prompt: |
   Document context:
   {document_context}
 
-  Return a structured description using the strategy for the supplied image
-  type.
+  Return a structured caption using the strategy for the supplied image type.
 image_type_strategies:
   product:
     focus: Product appearance, materials, structure, use cases, and visible selling points

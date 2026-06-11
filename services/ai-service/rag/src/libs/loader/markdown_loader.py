@@ -197,20 +197,7 @@ def extract_markdown_images(
         image_id = f"image-{sha256(identity.encode()).hexdigest()}"
         placeholder = f"[[image:{image_id}]]"
         output.append(placeholder)
-        images.append(
-            {
-                "id": image_id,
-                "path": str(candidate),
-                "page": None,
-                "text_offset": output_length,
-                "text_length": len(placeholder),
-                "position": {
-                    "source_type": "markdown",
-                    "line": content.count("\n", 0, match.start()) + 1,
-                    "alt_text": match.group("alt"),
-                },
-            }
-        )
+        images.append({"id": image_id, "path": str(candidate)})
         output_length += len(placeholder)
         source_cursor = match.end()
 

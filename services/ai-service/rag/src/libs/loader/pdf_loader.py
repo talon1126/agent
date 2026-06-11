@@ -244,9 +244,10 @@ def _insert_placeholders_by_page(
         entries: Persisted image metadata entries containing page numbers and
             placeholders but not final text offsets.
 
-    Returns:
-        Updated document text and metadata entries whose ``text_offset`` values
-        point at the inserted placeholders.
+        Returns:
+            Updated document text and public image metadata entries containing
+            only ``id`` and ``path``. Page geometry and offsets remain internal
+            insertion details.
 
     Notes:
         MarkItDown output does not expose exact character offsets for PDF
@@ -289,13 +290,9 @@ def _insert_placeholders_by_page(
         content_parts.append(markdown[cursor:offset])
         prefix = _placeholder_prefix("".join(content_parts))
         placeholder_text = f"{prefix}{entry['placeholder']}\n"
-        text_offset = len("".join(content_parts)) + len(prefix)
         content_parts.append(placeholder_text)
         cursor = offset
-        metadata_entry = dict(entry)
-        metadata_entry.pop("placeholder")
-        metadata_entry["text_offset"] = text_offset
-        metadata.append(metadata_entry)
+        metadata.append({"id": str(entry["id"]), "path": str(entry["path"])})
     content_parts.append(markdown[cursor:])
     return "".join(content_parts), metadata
 

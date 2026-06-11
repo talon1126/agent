@@ -250,7 +250,7 @@ def _transform_model_contract(
             settings.llm.selected_provider.model or "n/a",
             "llm.default",
         )
-    if step_name == "image_to_text":
+    if step_name == "image_captioner":
         provider = settings.vision_llm.default
         return (
             provider,

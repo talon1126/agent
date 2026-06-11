@@ -82,7 +82,7 @@ markers =
 
 | 测试类型 | 测试重点 | 典型测试用例 |
 | --- | --- | --- |
-| Ingestion 集成测试 | 验证摄取链路可完整写入 PostgreSQL/pgvector | 使用一份小型 Markdown 指南，执行 load -> split -> transform -> image_caption -> batch -> upsert，验证文档、chunk、caption metadata、Dense 向量、BM25 索引、`image_index` 和 ingestion trace 都存在 |
+| Ingestion 集成测试 | 验证摄取链路可完整写入 PostgreSQL/pgvector | 使用一份小型 Markdown 指南，执行 load -> split -> transform -> batch -> upsert，验证文档、chunk 正文 caption、Dense 向量、BM25 索引、`image_index` 和 ingestion trace 都存在 |
 | Indexing 集成测试 | 验证索引 MVP 编排 | 准备测试文档或增强后 chunk fixture，执行 `IngestionPipeline.run()` 或 `IngestionPipeline.run_indexing()`，检查 content_hash 跳过、Dense/BM25Indexer 和 upsert 结果 |
 | Query 集成测试 | 验证查询链路可返回带引用的 Top-k 结果 | 摄取测试文档后查询“如何挑选高性价比无线耳机”，验证 Dense/BM25 候选、RRF 结果、最终引用来源 |
 | MCP 集成测试 | 验证 MCP tool 契约稳定 | 调用 `query_knowledge_hub`，验证返回 `content`、`citations`、`trace_id`，并且空 collection 返回可读错误 |

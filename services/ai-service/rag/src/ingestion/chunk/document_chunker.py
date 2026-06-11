@@ -75,7 +75,7 @@ class DocumentChunker:
             start_offset = part.start_offset
             end_offset = part.end_offset
 
-            metadata = deepcopy(document.metadata)
+            metadata = _chunk_metadata_from_document(document)
             metadata["chunk_index"] = chunk_index
             section_path = attach_section_path(
                 metadata,
@@ -84,8 +84,7 @@ class DocumentChunker:
             )
             distribute_image_refs(
                 metadata,
-                start_offset=start_offset,
-                end_offset=end_offset,
+                chunk_text=part.text,
             )
             source_ref = build_source_ref(
                 document,
@@ -195,3 +194,26 @@ def _merge_image_only_parts(
     if leading_images is not None:
         merged.append(leading_images)
     return merged
+
+
+def _chunk_metadata_from_document(document: Document) -> dict[str, object]:
+    """Build the intentionally small metadata payload stored on each chunk.
+
+    Args:
+        document: Source document whose metadata may contain loader-only fields
+            such as source path, source hash, headings, and document images.
+
+    Returns:
+        A new dictionary containing only fields used for retrieval filtering
+        and high-level business explanation. Source details remain in
+        ``Chunk.source_ref`` and document/image tables.
+    """
+
+    metadata: dict[str, object] = {"document_id": document.id}
+    for key in ("collection", "doc_type", "topic"):
+        value = document.metadata.get(key)
+        if value is not None:
+            metadata[key] = deepcopy(value)
+    if "topic" not in metadata and document.metadata.get("title"):
+        metadata["topic"] = str(document.metadata["title"])
+    return metadata

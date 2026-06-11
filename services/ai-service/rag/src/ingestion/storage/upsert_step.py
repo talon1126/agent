@@ -10,6 +10,7 @@ image index rows.
 from __future__ import annotations
 
 import mimetypes
+import re
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
@@ -367,16 +368,36 @@ class UpsertStep:
 
 
 def _captions_by_image(chunks: list[Chunk]) -> dict[str, dict[str, object]]:
-    """Collect the latest structured caption for each referenced image."""
+    """Collect the latest caption text injected into chunk content."""
 
     captions: dict[str, dict[str, object]] = {}
     for chunk in chunks:
-        for caption in chunk.metadata.get("image_captions", []):
-            if not isinstance(caption, dict):
-                continue
-            image_id = str(caption.get("image_id") or "")
-            if image_id:
-                captions[image_id] = dict(caption)
+        for image_id, description in _caption_nodes(chunk.text):
+            captions[image_id] = {
+                "image_id": image_id,
+                "status": "success",
+                "description": description,
+            }
+    return captions
+
+
+def _caption_nodes(text: str) -> list[tuple[str, str]]:
+    """Parse ``[[image_caption:id]]`` nodes from chunk text.
+
+    The caption body is the non-blank text immediately following the marker,
+    up to the next image marker or blank paragraph boundary.
+    """
+
+    pattern = re.compile(
+        r"\[\[image_caption:(?P<image_id>[^\]]+)\]\]\s*(?P<caption>.*?)(?=\n\s*\n|\[\[image:|\[\[image_caption:|$)",
+        flags=re.DOTALL,
+    )
+    captions: list[tuple[str, str]] = []
+    for match in pattern.finditer(text):
+        image_id = match.group("image_id").strip()
+        caption = " ".join(match.group("caption").split())
+        if image_id and caption:
+            captions.append((image_id, caption))
     return captions
 
 

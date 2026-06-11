@@ -87,8 +87,8 @@ def test_config_reader_service_returns_dashboard_component_overview() -> None:
     semantic_merge_step = next(
         step for step in transform_steps if step["name"] == "semantic_merge"
     )
-    image_to_text_step = next(
-        step for step in transform_steps if step["name"] == "image_to_text"
+    image_captioner_step = next(
+        step for step in transform_steps if step["name"] == "image_captioner"
     )
     assert rewrite_step["provider"] == settings.llm.default
     assert rewrite_step["model"] == settings.llm.selected_provider.model
@@ -96,9 +96,9 @@ def test_config_reader_service_returns_dashboard_component_overview() -> None:
     assert semantic_merge_step["provider"] == settings.llm.default
     assert semantic_merge_step["model"] == settings.llm.selected_provider.model
     assert semantic_merge_step["model_source"] == "llm.default"
-    assert image_to_text_step["provider"] == settings.vision_llm.default
-    assert image_to_text_step["model"] == settings.vision_llm.selected_provider.model
-    assert image_to_text_step["model_source"] == "vision_llm.default"
+    assert image_captioner_step["provider"] == settings.vision_llm.default
+    assert image_captioner_step["model"] == settings.vision_llm.selected_provider.model
+    assert image_captioner_step["model_source"] == "vision_llm.default"
     assert overview.dashboard_pages == tuple(settings.dashboard.pages)
     assert overview.paths["trace_jsonl_path"] == settings.observability.trace_jsonl_path
 
@@ -413,6 +413,32 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
                                     }
                                 ],
                             },
+                            {
+                                "name": "image_captioner",
+                                "duration_ms": 20.0,
+                                "status": "success",
+                                "input_count": 3,
+                                "output_count": 3,
+                                "changed_count": 0,
+                                "unchanged_count": 3,
+                                "method": "transform",
+                                "provider": "ImageCaptioner",
+                                "error": None,
+                                "details": {
+                                    "provider": "dashscope",
+                                    "model": "qwen-vl-max",
+                                    "image_count": 3,
+                                    "caption_count": 0,
+                                    "status_counts": {"failed": 3},
+                                    "failures": [
+                                        {
+                                            "image_id": "image-1",
+                                            "status": "failed",
+                                            "reason": "provider unavailable",
+                                        }
+                                    ],
+                                },
+                            },
                         ],
                     },
                     {
@@ -469,6 +495,7 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
         assert [step.name for step in ingestion_detail.transform_steps] == [
             "metadata_enrich",
             "rewrite_chunk",
+            "image_captioner",
         ]
         assert ingestion_detail.transform_steps[1].duration_ms == 115.0
         assert ingestion_detail.transform_steps[1].provider == "ChunkRewriter"
@@ -477,6 +504,10 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
         assert ingestion_detail.transform_steps[1].snapshots[0].step_color == "#8B5CF6"
         assert ingestion_detail.transform_steps[1].snapshots[0].before_preview == (
             "Original buying guide."
+        )
+        assert ingestion_detail.transform_steps[2].details["model"] == "qwen-vl-max"
+        assert ingestion_detail.transform_steps[2].details["failures"][0]["reason"] == (
+            "provider unavailable"
         )
         assert ingestion_detail.summary_metrics["chunk_count"] == 3
         assert ingestion_detail.evaluation_metrics["index_ready"] is True
@@ -1635,6 +1666,31 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
                     ),
                 ),
             ),
+            TraceTransformStepItem(
+                name="image_captioner",
+                duration_ms=35.0,
+                status="success",
+                input_count=4,
+                output_count=4,
+                changed_count=0,
+                unchanged_count=4,
+                method="transform",
+                provider="ImageCaptioner",
+                details={
+                    "provider": "dashscope",
+                    "model": "qwen-vl-max",
+                    "image_count": 3,
+                    "caption_count": 0,
+                    "status_counts": {"failed": 3},
+                    "failures": [
+                        {
+                            "image_id": "image-1",
+                            "status": "failed",
+                            "reason": "provider unavailable",
+                        }
+                    ],
+                },
+            ),
         ),
         summary_metrics={
             "document_status": "success",
@@ -1693,6 +1749,16 @@ def test_ingestion_trace_page_builds_and_renders_stage_timing() -> None:
     assert "border-left:6px solid #8B5CF6" in diff_markdown
     assert "transform-diff-removed" in diff_markdown
     assert "transform-diff-added" in diff_markdown
+    transform_tables = [
+        args[0]
+        for name, args, _kwargs in fake_ui.calls
+        if name == "dataframe"
+        and isinstance(args[0], list)
+        and args[0]
+        and isinstance(args[0][0], dict)
+        and "name" in args[0][0]
+    ]
+    assert transform_tables[0][2]["details"]["model"] == "qwen-vl-max"
     assert "Original" in diff_markdown
     assert "Rewritten" in diff_markdown
     assert "buying guide." in diff_markdown

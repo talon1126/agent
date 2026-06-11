@@ -55,62 +55,35 @@ def build_image_metadata(**overrides: object) -> dict[str, object]:
     image: dict[str, object] = {
         "id": "image-1",
         "path": "data/images/shopping_guides/image-1.png",
-        "page": 2,
-        "text_offset": 10,
-        "text_length": 14,
-        "position": {"x": 12, "y": 30, "width": 640, "height": 480},
     }
     image.update(overrides)
     return image
 
 
-def test_image_metadata_preserves_source_location() -> None:
-    """Verify image metadata carries logical and physical source positions.
+def test_image_metadata_preserves_public_image_identity_only() -> None:
+    """Verify persisted image metadata exposes only stable public fields.
 
-    The loader and splitter rely on text offsets to associate placeholders with
-    chunks, while the dashboard needs page and physical position information.
-    The serialized model must remain a plain JSON-compatible mapping.
+    Loader implementations may use page geometry and source offsets while
+    inserting placeholders, but those temporary positioning details must not
+    leak into the final ``Document.metadata.images`` contract.
     """
     image = ImageMetadata.model_validate(build_image_metadata())
 
     assert image.id == "image-1"
-    assert image.page == 2
-    assert image.text_offset == 10
-    assert image.text_length == 14
-    assert image.position["width"] == 640
-    assert image.model_dump()["path"].endswith("image-1.png")
+    assert image.path.endswith("image-1.png")
+    assert image.model_dump() == {
+        "id": "image-1",
+        "path": "data/images/shopping_guides/image-1.png",
+    }
 
 
-def test_image_metadata_rejects_negative_offsets_and_empty_identifiers() -> None:
-    """Verify invalid image references fail before chunk distribution.
-
-    Negative offsets cannot intersect document/chunk ranges, and blank IDs or
-    paths cannot be persisted or returned as references. Construction-time
-    validation prevents these malformed values from reaching ingestion logic.
-    """
+def test_image_metadata_rejects_empty_identifiers_and_extra_position_fields() -> None:
+    """Verify invalid or over-wide image records fail at construction time."""
     with pytest.raises(ValidationError):
         ImageMetadata.model_validate(build_image_metadata(id=""))
 
     with pytest.raises(ValidationError):
-        ImageMetadata.model_validate(build_image_metadata(text_offset=-1))
-
-
-def test_image_metadata_requires_physical_position() -> None:
-    """Verify every extracted image includes its physical source position.
-
-    The A6 contract defines ``position`` as required metadata used by document
-    inspection and multimodal response assembly. Silently replacing an omitted
-    value with an empty mapping would hide incomplete loader output and make the
-    source image impossible to locate reliably.
-    """
-    image = build_image_metadata()
-    image.pop("position")
-
-    with pytest.raises(ValidationError, match="position"):
-        ImageMetadata.model_validate(image)
-
-    with pytest.raises(ValidationError, match="position"):
-        ImageMetadata.model_validate(build_image_metadata(position={}))
+        ImageMetadata.model_validate(build_image_metadata(page=1))
 
 
 def test_document_validates_and_normalizes_image_metadata() -> None:
@@ -123,7 +96,7 @@ def test_document_validates_and_normalizes_image_metadata() -> None:
     """
     document = Document(
         id="doc-1",
-        text="0123456789[image:one] document body",
+        text="[[image:image-1]] document body",
         metadata={
             "collection": "shopping_guides",
             "title": "Headphones Guide",
@@ -160,21 +133,6 @@ def test_document_summary_is_a_top_level_optional_field() -> None:
     assert document.summary == "Quiet office stress toy buying guidance."
     assert document.metadata["summary"] == "legacy metadata value"
     assert without_summary.summary is None
-
-
-def test_document_rejects_image_placeholder_outside_text() -> None:
-    """Verify an image placeholder range cannot exceed document text bounds.
-
-    Splitter image-reference distribution assumes every ``text_offset`` and
-    ``text_length`` range points into the canonical document text. Rejecting an
-    impossible range here avoids silently dropping image references later.
-    """
-    with pytest.raises(ValidationError, match="exceeds document text length"):
-        Document(
-            id="doc-1",
-            text="short",
-            metadata={"images": [build_image_metadata(text_offset=4, text_length=10)]},
-        )
 
 
 def test_document_rejects_blank_canonical_text() -> None:

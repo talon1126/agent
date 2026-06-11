@@ -21,10 +21,9 @@ from src.core.types import Chunk
 from src.ingestion.transform.chunk_rewriter import ChunkRewriter
 from src.ingestion.transform.denoise_transform import DenoiseTransform
 from src.ingestion.transform.image_captioner import ImageCaptioner
-from src.ingestion.transform.image_to_text_transform import ImageToTextTransform
 from src.ingestion.transform.metadata_enricher import MetadataEnricher
 from src.ingestion.transform.semantic_merge_transform import SemanticMergeTransform
-from src.libs.llm import BaseLLM, LLMFactory
+from src.libs.llm import BaseLLM, BaseVisionLLM, LLMFactory
 from src.libs.transform.base_transform import BaseTransform
 
 
@@ -33,7 +32,7 @@ class TransformPipeline:
 
     _STEP_BUILDERS: dict[
         str,
-        Callable[[TransformStepSettings, BaseLLM | None, BaseLLM | None], BaseTransform],
+        Callable[[TransformStepSettings, BaseLLM | None, BaseVisionLLM | None], BaseTransform],
     ]
 
     def __init__(
@@ -82,7 +81,7 @@ class TransformPipeline:
         settings: RagSettings,
         *,
         llm: BaseLLM | None = None,
-        vision_llm: BaseLLM | None = None,
+        vision_llm: BaseVisionLLM | None = None,
     ) -> TransformPipeline:
         """Build the transform chain from ``settings.transform.steps``.
 
@@ -91,7 +90,7 @@ class TransformPipeline:
                 ``config/settings.yaml`` or the versioned example.
             llm: Optional injected chat client for unit tests and offline
                 execution. When omitted, model-backed steps use ``LLMFactory``.
-            vision_llm: Optional injected Vision LLM used by the image-to-text
+            vision_llm: Optional injected Vision LLM used by the image caption
                 step. It is separate from the text LLM because image captioning
                 is optional and may later use a provider with a multimodal SDK.
 
@@ -219,6 +218,7 @@ class TransformPipeline:
                     "provider": type(transform).__name__,
                     "error": None,
                     "snapshots": snapshots,
+                    "details": _transform_trace_details(transform),
                 },
             )
         return output
@@ -226,7 +226,7 @@ class TransformPipeline:
     @staticmethod
     def _step_builders() -> dict[
         str,
-        Callable[[TransformStepSettings, BaseLLM | None, BaseLLM | None], BaseTransform],
+        Callable[[TransformStepSettings, BaseLLM | None, BaseVisionLLM | None], BaseTransform],
     ]:
         """Return the fixed ingestion transform registry.
 
@@ -241,7 +241,7 @@ class TransformPipeline:
             "rewrite_chunk": _build_chunk_rewriter,
             "semantic_merge": _build_semantic_merge,
             "denoise": _build_denoise_transform,
-            "image_to_text": _build_image_captioner,
+            "image_captioner": _build_image_captioner,
         }
 
 
@@ -262,7 +262,7 @@ def _default_step_name(transform: BaseTransform) -> str:
         "ChunkRewriter": "rewrite_chunk",
         "SemanticMergeTransform": "semantic_merge",
         "DenoiseTransform": "denoise",
-        "ImageCaptioner": "image_to_text",
+        "ImageCaptioner": "image_captioner",
     }
     return built_in_names.get(
         class_name,
@@ -292,6 +292,28 @@ def _notify_step_observer(
         observer(record)
     except Exception:
         return
+
+
+def _transform_trace_details(transform: BaseTransform) -> dict[str, Any]:
+    """Read optional transform-specific details for trace sub-stages.
+
+    Args:
+        transform: Concrete transform implementation that just finished.
+
+    Returns:
+        A trace-safe details mapping. Transforms without ``trace_details`` or
+        transforms whose detail method fails return an empty mapping so
+        observability cannot replace business behavior.
+    """
+
+    trace_details = getattr(transform, "trace_details", None)
+    if not callable(trace_details):
+        return {}
+    try:
+        details = trace_details()
+    except Exception:
+        return {}
+    return dict(details) if isinstance(details, Mapping) else {}
 
 
 def _build_transform_snapshots(
@@ -573,7 +595,7 @@ def _positive_int_option(
 def _build_metadata_enricher(
     step: TransformStepSettings,
     llm: BaseLLM | None,
-    vision_llm: BaseLLM | None,
+    vision_llm: BaseVisionLLM | None,
 ) -> BaseTransform:
     """Create the metadata enrichment step.
 
@@ -594,7 +616,7 @@ def _build_metadata_enricher(
 def _build_chunk_rewriter(
     step: TransformStepSettings,
     llm: BaseLLM | None,
-    vision_llm: BaseLLM | None,
+    vision_llm: BaseVisionLLM | None,
 ) -> BaseTransform:
     """Create the LLM-backed chunk rewrite step.
 
@@ -626,7 +648,7 @@ def _build_chunk_rewriter(
 def _build_semantic_merge(
     step: TransformStepSettings,
     llm: BaseLLM | None,
-    vision_llm: BaseLLM | None,
+    vision_llm: BaseVisionLLM | None,
 ) -> BaseTransform:
     """Create the LLM-backed semantic merge step.
 
@@ -658,7 +680,7 @@ def _build_semantic_merge(
 def _build_denoise_transform(
     step: TransformStepSettings,
     llm: BaseLLM | None,
-    vision_llm: BaseLLM | None,
+    vision_llm: BaseVisionLLM | None,
 ) -> BaseTransform:
     """Create the deterministic denoise step.
 
@@ -679,12 +701,12 @@ def _build_denoise_transform(
 def _build_image_captioner(
     step: TransformStepSettings,
     llm: BaseLLM | None,
-    vision_llm: BaseLLM | None,
+    vision_llm: BaseVisionLLM | None,
 ) -> BaseTransform:
     """Create the optional image captioning step.
 
     Args:
-        step: Settings containing the required image-to-text Prompt path.
+        step: Settings containing the required image caption Prompt path.
         llm: Unused text LLM accepted for a uniform builder signature.
         vision_llm: Optional multimodal client. When absent, the captioner is
             disabled so text-only ingestion and local tests remain usable.
@@ -703,15 +725,8 @@ def _build_image_captioner(
             "Transform step requires prompt_path",
             context={"step_name": step.name},
         )
-    image_transform = (
-        ImageToTextTransform(
-            vision_llm=vision_llm,
-            prompt=load_prompt(step.prompt_path),
-        )
-        if vision_llm is not None
-        else None
-    )
     return ImageCaptioner(
-        image_transform=image_transform,
+        vision_llm=vision_llm,
+        prompt=load_prompt(step.prompt_path),
         enabled=vision_llm is not None,
     )

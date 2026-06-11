@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 from collections import Counter
 from copy import deepcopy
-from hashlib import sha256
 from typing import Any
 
 from src.core.errors import IngestionError
@@ -69,12 +68,7 @@ class DenoiseTransform(BaseTransform):
             IngestionError: If cleanup removes all searchable content.
         """
 
-        current_hash = _content_hash(chunk.text)
-        existing = chunk.metadata.get("denoise")
-        if isinstance(existing, dict) and existing.get("output_hash") == current_hash:
-            return chunk.model_copy(deep=True)
-
-        cleaned_text, removed_line_count = _clean_text(chunk.text)
+        cleaned_text, _removed_line_count = _clean_text(chunk.text)
         if not cleaned_text.strip():
             raise IngestionError(
                 "Denoise transform removed all chunk content",
@@ -82,12 +76,6 @@ class DenoiseTransform(BaseTransform):
             )
 
         metadata = deepcopy(chunk.metadata)
-        output_hash = _content_hash(cleaned_text)
-        metadata["denoise"] = {
-            "removed_line_count": removed_line_count,
-            "input_hash": current_hash,
-            "output_hash": output_hash,
-        }
         source_path = str(
             metadata.get("source_path")
             or (chunk.source_ref or {}).get("source_path")
@@ -191,16 +179,3 @@ def _join_wrapped_lines(lines: list[str]) -> str:
         separator = "\n" if _SENTENCE_END.search(output) else " "
         output = f"{output}{separator}{line}"
     return output
-
-
-def _content_hash(text: str) -> str:
-    """Return the digest used by denoise idempotency and chunk identity.
-
-    Args:
-        text: Exact cleaned or source chunk text.
-
-    Returns:
-        Lowercase SHA256 hexadecimal digest.
-    """
-
-    return sha256(text.encode("utf-8")).hexdigest()

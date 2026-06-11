@@ -554,6 +554,8 @@ def test_ingestion_trace_records_only_documented_stages() -> None:
 
     with pytest.raises(ValueError, match="ingestion stage"):
         context.record_ingestion_stage("query_processing")
+    with pytest.raises(ValueError, match="ingestion stage"):
+        context.record_ingestion_stage("image_caption")
 
 
 def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
@@ -577,6 +579,19 @@ def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
             "method": "transform",
             "provider": "MetadataEnricher",
             "error": None,
+            "details": {
+                "provider": "dashscope",
+                "model": "qwen-vl-max",
+                "image_count": 3,
+                "caption_count": 0,
+                "failures": [
+                    {
+                        "image_id": "image-1",
+                        "status": "failed",
+                        "reason": "provider unavailable",
+                    }
+                ],
+            },
             "snapshots": [
                 {
                     "chunk_id": "chunk-1",
@@ -610,6 +625,7 @@ def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
         sub_stages=sub_stages,
     )
     sub_stages[0]["provider"] = "MutatedProvider"
+    sub_stages[0]["details"]["failures"][0]["reason"] = "mutated"
 
     stored = context.to_dict()["stages"][0]["sub_stages"]
     assert stored[0]["provider"] == "MetadataEnricher"
@@ -617,6 +633,7 @@ def test_ingestion_transform_stage_preserves_validated_sub_stages() -> None:
     assert stored[0]["unchanged_count"] == 2
     assert stored[0]["snapshots"][0]["before_preview"] == "Original chunk text."
     assert stored[0]["snapshots"][0]["after_preview"] == "Rewritten chunk text."
+    assert stored[0]["details"]["failures"][0]["reason"] == "provider unavailable"
     assert stored[1]["error"] == {
         "error_type": "ProviderError",
         "message": "rewrite unavailable",

@@ -201,6 +201,7 @@ def _transform_step_row(step: TraceTransformStepItem) -> dict[str, object]:
         "unchanged_count": step.unchanged_count,
         "method": step.method,
         "provider": step.provider,
+        "details": dict(step.details),
         "error": step.error,
     }
 

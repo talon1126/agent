@@ -696,7 +696,7 @@ def test_markdown_loader_normalizes_text_and_extracts_heading_hierarchy(
 def test_markdown_loader_replaces_local_images_with_stable_placeholders(
     tmp_path: Path,
 ) -> None:
-    """Require local Markdown image syntax to become offset-addressable metadata."""
+    """Require local Markdown image syntax to become stable image references."""
 
     image = tmp_path / "diagram.png"
     image.write_bytes(b"fake-png-content")
@@ -714,15 +714,11 @@ def test_markdown_loader_replaces_local_images_with_stable_placeholders(
     placeholder = f"[[image:{image_metadata['id']}]]"
     assert placeholder in document.text
     assert "![Signal flow](diagram.png)" not in document.text
-    assert image_metadata["path"] == str(image.resolve())
-    assert image_metadata["page"] is None
-    assert image_metadata["text_offset"] == document.text.index(placeholder)
-    assert image_metadata["text_length"] == len(placeholder)
-    assert image_metadata["position"] == {
-        "source_type": "markdown",
-        "line": 5,
-        "alt_text": "Signal flow",
+    assert image_metadata == {
+        "id": image_metadata["id"],
+        "path": str(image.resolve()),
     }
+    assert document.text.index(placeholder) > document.text.index("Before.")
 
 
 def test_markdown_loader_does_not_read_images_outside_source_directory(
@@ -1003,11 +999,8 @@ def test_pdf_loader_persists_images_and_injects_valid_metadata(
     image_metadata = document.metadata["images"][0]
     placeholder = f"[[image:{image_metadata['id']}]]"
     assert placeholder in document.text
-    assert image_metadata["text_offset"] == document.text.index(placeholder)
-    assert image_metadata["text_length"] == len(placeholder)
     assert Path(image_metadata["path"]).read_bytes() == b"first-image"
-    assert image_metadata["page"] == 1
-    assert image_metadata["position"]["width"] == 50.0
+    assert set(image_metadata) == {"id", "path"}
 
 
 def test_pdf_loader_inserts_image_placeholders_near_source_page_text(
@@ -1052,8 +1045,6 @@ def test_pdf_loader_inserts_image_placeholders_near_source_page_text(
     second_placeholder = f"[[image:{second_image['id']}]]"
     page_two_marker = "<!-- page: 2 -->"
 
-    assert first_image["page"] == 1
-    assert second_image["page"] == 2
     assert document.text.index("Page one introduction.") < document.text.index(
         first_placeholder
     )
@@ -1064,8 +1055,8 @@ def test_pdf_loader_inserts_image_placeholders_near_source_page_text(
         second_placeholder
     )
     assert document.text.index(second_placeholder) < len(document.text.rstrip())
-    assert first_image["text_offset"] == document.text.index(first_placeholder)
-    assert second_image["text_offset"] == document.text.index(second_placeholder)
+    assert set(first_image) == {"id", "path"}
+    assert set(second_image) == {"id", "path"}
 
 
 def test_pdf_loader_uses_image_text_anchors_when_markdown_has_no_page_markers(

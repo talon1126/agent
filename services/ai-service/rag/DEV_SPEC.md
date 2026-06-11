@@ -207,7 +207,7 @@ RAG 流水线分为两条主链路：**数据摄取流水线** 和 **检索流�
 数据摄取流水线负责把外部文件变成可检索的向量和索引数据：
 
 ```text
-Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform -> ImageCaptioner -> DenseEncoder/BM25Indexer -> BatchProcessor -> Upsert -> 文档生命周期管理
+Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform（包含 ImageCaptioner） -> DenseEncoder/BM25Indexer -> BatchProcessor -> Upsert -> 文档生命周期管理
 ```
 
 检索流水线负责把用户问题变成可引用的上下文结果：
@@ -216,7 +216,7 @@ Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform -> ImageCaptioner
 查询预处理 -> 双路混合检索 -> 候选过滤 -> 重排 -> 引用结果构造
 ```
 
-流水线要支持 **可组合**：不同 Loader、Splitter、Transform、Embedding 和 VectorStore 可以通过配置组合成不同策略。例如首版使用 PDF/Markdown Loader + RecursiveCharacterTextSplitter + ImageCaptioner + DashScope Embedding + pgvector，后续可以替换某一层而不重写整条链路。
+流水线要支持 **可组合**：不同 Loader、Splitter、Transform、Embedding 和 VectorStore 可以通过配置组合成不同策略。例如首版使用 PDF/Markdown Loader + RecursiveCharacterTextSplitter + 包含 ImageCaptioner 的 Transform Pipeline + DashScope Embedding + pgvector，后续可以替换某一层而不重写整条链路。
 
 #### 3.2.2 数据摄取流水线
 
@@ -228,9 +228,9 @@ Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform -> ImageCaptioner
 | `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + summary + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；`summary` 为顶层字段，后续由独立摘要步骤生成或更新，不放入 `metadata.summary`；只处理去重判断后确认需要摄取的文档 |
 | `DocumentSummarizer` | 为加载后的文档生成顶层 `Document.summary` | 作为 Loader 之后、Splitter 之前的独立步骤；读取 `document_summary_prompt.yaml`；复用统一 LLM provider；已有同版本摘要时保持幂等；摘要只作为全局语义上下文，不写入 `metadata.summary` |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
-| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、继承非图片类 `document.metadata`、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并按图片占位符位置分发 `image_refs`；`Document.metadata.images[]` 保留完整文档图片清单，`Chunk.metadata.images[]` 只保留当前 chunk 通过 `image_refs` 命中的图片子集 |
+| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 只保留完整文档图片清单的 `id/path`，`Chunk.metadata` 不再复制 `images[]` |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
-| `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后写入 chunk metadata；未启用 Vision LLM、无 `image_refs` 或生成失败时安全跳过并写入状态 |
+| `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后替换 chunk 正文中的图片占位符，使 caption 进入 Dense/BM25 可检索文本；执行详情写入 ingestion trace 的 `transform.sub_stages`，不写入 chunk metadata |
 | `BaseEmbedding` | 将增强后的 chunk 执行双路索引 | 在编码前先计算 `content_hash`，只对数据库中不存在的内容哈希执行新编码；DenseEncoder 调用百炼 `text-embedding-v4` 生成 1536 维语义向量；BM25Indexer 生成词项、词频和倒排索引；BatchProcessor 统一处理批量、限流、重试和失败隔离 |
 | `BaseVectorStore` | 将 chunk、metadata、Dense 向量和 Sparse 检索数据写入 PostgreSQL | 首版只实现 PostgreSQL + pgvector；upsert 时保证同一文档版本的 chunk 可覆盖更新；`chunk_id` 使用 `hash(source_path + section_path + content_hash)` 生成，确保同一来源、同一章节、同一内容具有稳定标识 |
 | 文档生命周期管理 | 管理文档从摄取、更新、删除到重建索引的状态 | 支持 `pending`、`processing`、`success`、`failed`、`deleted`；删除文档时同步删除对应 chunk、向量、BM25 统计和检索可见状态 |
@@ -250,7 +250,7 @@ Splitter 职责边界：
 
 摄取链路的重点不是只完成入库，而是保证 **可重复执行、可差量计算、可跳过重复、可追踪失败、可删除重建**。
 
-Indexing Pipeline 首版必须并入统一摄取入口：`IngestionPipeline.run()` 在完成 Loader、Splitter、Transform 和 ImageCaptioner 后继续调用 `IngestionPipeline.run_indexing()`，串联 `content_hash` 差量判断、Dense 向量编码、BM25Indexer 和 pgvector/BM25 upsert。该统一入口必须有集成测试，不能只实现分散的 encoder 或 upsert step。
+Indexing Pipeline 首版必须并入统一摄取入口：`IngestionPipeline.run()` 在完成 Loader、Splitter 和包含 ImageCaptioner 的 Transform Pipeline 后继续调用 `IngestionPipeline.run_indexing()`，串联 `content_hash` 差量判断、Dense 向量编码、BM25Indexer 和 pgvector/BM25 upsert。该统一入口必须有集成测试，不能只实现分散的 encoder 或 upsert step。
 
 #### 3.2.3 核心数据对象设计
 
@@ -263,7 +263,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `id` | `str` | 文档稳定 ID，建议由 `collection + source_path + source_hash` 生成 |
 | `text` | `str` | 文档统一文本内容，PDF 先转 Markdown，图片位置写入占位符 |
 | `summary` | `str/null` | 文档级语义摘要，供 chunk rewrite、文档摘要工具和 Dashboard 使用；空值表示摘要步骤未启用或摘要生成降级 |
-| `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息 |
+| `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息；其中 `images[]` 对外只保留 `id/path`，图片定位信息仅作为 Loader 内部插入占位符的临时数据 |
 
 `Chunk` 字段：
 
@@ -282,17 +282,14 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | --- | --- | --- |
 | `id` | `str` | 图片稳定 ID |
 | `path` | `str` | 原始图片在文件系统中的存储路径 |
-| `page` | `int/null` | 图片在原文中的页码；Markdown 图片可为空 |
-| `text_offset` | `int` | 图片占位符在 `Document.text` 中的起始位置 |
-| `text_length` | `int` | 图片占位符文本长度 |
-| `position` | `dict` | 图片在原文中的物理位置信息，例如 `x`、`y`、`width`、`height`、`bbox` |
 
 说明：
 
 - 字段命名统一使用 `start_offset`，不使用 `start_offest`。
-- `text_offset` 和 `text_length` 基于完整 `Document.text` 计算，Splitter 根据 offset 交集为 chunk 生成 `image_refs`。
+- Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。
+- `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`，不再依赖图片 offset 与 chunk offset 的区间交集。
 - `source_ref` 是可选字段，但首版建议保留，方便 Dashboard 展示引用来源、原文位置和关联图片。
-- `DocumentChunker` 必须把 `Document.metadata` 中的来源、标题、collection、hash、heading 等非图片字段复制到 `Chunk.metadata`，再追加 `chunk_index`、`image_refs` 等 chunk 级 metadata；`Document.metadata.images[]` 是文档级完整图片清单，不能无脑复制到每个 chunk；`Chunk.metadata.images[]` 只能保留当前 chunk 命中的图片子集，没有图片引用的 chunk 必须删除 `images` 和 `image_refs`。
+- `Chunk.metadata` 只保留检索过滤和业务解释需要的字段，例如 `collection`、`document_id`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。不得保存 `images`、`headings`、`source_path`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等来源、图片详情和 Transform 执行信息。
 - 来源引用保存在独立 `Chunk.source_ref` 字段，Dense/Sparse Retrieval 构造 `RetrievalResult` 时再将其深拷贝到 result metadata，避免持久化职责混淆或丢失文档来源信息。
 
 `RetrievalResult` 字段：
@@ -613,7 +610,7 @@ vision_llm:
   enabled: true
   providers:
     qwen_vl_max:
-      model: Qwen-VL-Max
+      model: qwen-vl-max
       api_key_env: DASHSCOPE_API_KEY
       base_url_env: DASHSCOPE_BASE_URL
       timeout_seconds: 90
@@ -669,9 +666,9 @@ transform:
       prompt_path: config/prompts/semantic_merge_prompt.yaml
     - name: denoise
       enabled: true
-    - name: image_to_text
+    - name: image_captioner
       enabled: true
-      prompt_path: config/prompts/image_to_text_prompt.yaml
+      prompt_path: config/prompts/image_caption_prompt.yaml
 
 retrieval:
   query_rewrite_enabled: true
@@ -835,7 +832,7 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
 
 ### 3.7 多模态图片处理设计
 
-多模态处理选型为 **Image-to-Text 策略**。图片不单独建立 CLIP 多模态向量，而是先由 Vision LLM 转换为可检索的文本描述，再把描述注入 chunk 正文或 metadata 中。
+多模态处理选型为 **Image-to-Text 策略**。图片不单独建立 CLIP 多模态向量，而是先由 Vision LLM 转换为可检索的文本描述，再把描述注入 chunk 正文，使图片语义进入 Dense/BM25 索引。
 
 #### 3.7.1 图片处理全流程
 
@@ -846,7 +843,7 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
   -> 输出 Document(id + text + summary + metadata.images[])
   -> Splitter 保留图片引用标记到对应 chunk
   -> ImageCaptioner 判断 vision_llm 和 image_refs
-  -> 满足条件时生成 caption 并写入 chunk metadata
+  -> 满足条件时生成 caption 并替换 chunk 正文中的图片占位符
   -> Storage 存储增强后的 chunk 和原始图片
 ```
 
@@ -854,9 +851,9 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
 
 | 阶段 | 输出 |
 | --- | --- |
-| Loader | `Document(id + text + summary + metadata.images[])`，其中 `summary` 是顶层可空字段，`text` 包含图片占位符，`metadata.images[]` 保存图片基础信息 |
-| Splitter | chunk 文本保留图片引用标记，chunk metadata 增加 `image_refs: List[image_id]`；`Chunk.metadata.images[]` 只保留当前 chunk 命中的图片子集 |
-| ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption，并写入 chunk metadata |
+| Loader | `Document(id + text + summary + metadata.images[])`，其中 `summary` 是顶层可空字段，`text` 包含图片占位符，`metadata.images[]` 只保存图片 `id/path` |
+| Splitter | chunk 文本保留图片引用标记，chunk metadata 增加 `image_refs: List[image_id]`；`Chunk.metadata` 不复制 `Document.metadata.images[]` |
+| ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption，并把 `[[image:image_id]]` 替换为 `[[image_caption:image_id]] + caption` |
 | Storage | 向量库存储增强后的 chunk，文件系统保存原始图片，PostgreSQL `image_index` 表保存图片索引信息 |
 
 #### 3.7.2 Loader 技术要点
@@ -868,7 +865,7 @@ Loader 负责从 PDF、Markdown 或其他文档中抽取图片，并建立图片
 - **提取策略**：PDF 文本由 MarkItDown 转换，PDF 图片由 PyMuPDF 按页码和物理位置提取；Markdown 图片按本地图片语法解析。
 - **图片 ID**：为每张图片生成稳定 `image_id`，建议基于 `source_doc + page + image_index + image_hash`。
 - **引用标记**：在文档文本中写入图片占位符，例如 `[[image:image_xxx]]`，确保后续 splitter 能保留图片与上下文的关系；PDF 图片应先按 `page + position.y + position.x` 排序，再插入到对应页文本区间末尾、下一页标记之前，避免所有图片占位符集中追加到文档末尾。
-- **页标记降级**：当 MarkItDown 输出包含 `<!-- page: N -->` 等页标记时，Loader 使用页区间定位；当转换结果没有页标记时，Loader 按源位置稳定排序后追加占位符，并保留 `metadata.images[].position` 供后续改进。
+- **页标记降级**：当 MarkItDown 输出包含 `<!-- page: N -->` 等页标记时，Loader 使用页区间定位；当转换结果没有页标记时，Loader 按源位置稳定排序后追加占位符；页码、物理位置和文本 offset 仅作为 Loader 内部临时定位数据，最终 `Document.metadata.images[]` 只保留 `id/path`。
 - **原始图片存储**：原始图片保存到本地文件系统，数据库只保存索引和 metadata。
 
 #### 3.7.3 Splitter 技术要点
@@ -878,12 +875,12 @@ Splitter 必须保留图片引用和文本上下文之间的关联，不能在�
 关键实现：
 
 - **关联保持**：如果图片占位符位于某个标题或段落附近，应保留在对应 chunk 中。
-- **chunk metadata 扩展**：每个命中图片的 chunk 增加 `image_refs: List[image_id]`，并将 `images[]` 裁剪为这些引用对应的图片子集；没有图片引用的 chunk 不保留 `images[]`。
+- **chunk metadata 扩展**：每个命中图片的 chunk 增加 `image_refs: List[image_id]`；没有图片引用的 chunk 不保留 `image_refs`，所有 chunk 都不保存 `images[]`。
 - **上下文保护**：当图片前后文本共同解释图片含义时，splitter 应尽量避免把图片占位符和说明文字切到不同 chunk。
 
 #### 3.7.4 ImageCaptioner 技术要点
 
-ImageCaptioner 是图片 caption 的业务编排层。它只在 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时调用 Vision LLM；底层图片理解能力由 `ImageToTextTransform` 提供，ImageCaptioner 负责读取图片引用、调用图片描述能力、写入 chunk metadata，并处理 skipped、failed、low_quality 等状态。
+ImageCaptioner 是图片 caption 的业务编排层。它只在 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时调用 Vision LLM；底层图片理解能力由 `BaseVisionLLM` 的具体实现提供。ImageCaptioner 负责读取图片引用、定位 `Document.metadata.images[]` 中的图片路径、调用图片描述能力、把 caption 写回 chunk 正文，并把 skipped、failed、low_quality、provider、model、耗时和快照写入 ingestion trace 的 `transform.sub_stages`。同一轮摄取中相同 `image_id` 即使被多个 chunk 引用，也只能调用一次 Vision LLM，后续 chunk 复用同一 caption 或失败结果；Provider 失败时必须记录经过脱敏和长度限制的底层错误类型与错误信息，禁止记录 API Key、base64 图片正文或完整请求体。
 
 Vision LLM 选型：
 
@@ -955,7 +952,7 @@ Storage 负责同时保存增强后的 chunk 和原始图片索引。
 
 - **描述质量检测**：如果生成描述过短、内容为空、Vision LLM 明确表示无法识别，图片应标记为 `low_quality`。
 - **图片压缩**：大尺寸图片在调用 Vision LLM 前应提前压缩，降低请求成本和超时概率。
-- **Vision LLM 降级**：如果 Vision LLM 不可用，图片保留占位符，但不生成描述、不参与检索，并在 chunk metadata 中标记 `image_caption_status=skipped`。
+- **Vision LLM 降级**：如果 Vision LLM 不可用，图片保留占位符，但不生成描述、不参与检索，并在 ingestion trace 的 `image_captioner` 子阶段记录 skipped 原因。
 - **批量处理优化**：图片描述应支持批处理、并发限流和失败重试，避免大量图片摄取时阻塞整个 Ingestion Pipeline。
 
 ### 3.8 可观测性与可视化管理平台设计
@@ -1238,7 +1235,7 @@ markers =
 
 | 测试类型 | 测试重点 | 典型测试用例 |
 | --- | --- | --- |
-| Ingestion 集成测试 | 验证摄取链路可完整写入 PostgreSQL/pgvector | 使用一份小型 Markdown 指南，执行 load -> split -> transform -> image_caption -> batch -> upsert，验证文档、chunk、caption metadata、Dense 向量、BM25 索引、`image_index` 和 ingestion trace 都存在 |
+| Ingestion 集成测试 | 验证摄取链路可完整写入 PostgreSQL/pgvector | 使用一份小型 Markdown 指南，执行 load -> split -> transform -> batch -> upsert，验证文档、chunk 正文 caption、Dense 向量、BM25 索引、`image_index` 和 ingestion trace 都存在 |
 | Indexing 集成测试 | 验证索引 MVP 编排 | 准备测试文档或增强后 chunk fixture，执行 `IngestionPipeline.run()` 或 `IngestionPipeline.run_indexing()`，检查 content_hash 跳过、Dense/BM25Indexer 和 upsert 结果 |
 | Query 集成测试 | 验证查询链路可返回带引用的 Top-k 结果 | 摄取测试文档后查询“如何挑选高性价比无线耳机”，验证 Dense/BM25 候选、RRF 结果、最终引用来源 |
 | MCP 集成测试 | 验证 MCP tool 契约稳定 | 调用 `query_knowledge_hub`，验证返回 `content`、`citations`、`trace_id`，并且空 collection 返回可读错误 |
@@ -1373,7 +1370,7 @@ services/ai-service/rag/
 │       ├── document_summary_prompt.yaml           # 文档级语义摘要提示词模板
 │       ├── rewrite_chunk_prompt.yaml              # chunk 语义改写与增强提示词模板
 │       ├── semantic_merge_prompt.yaml              # 相邻 chunk 语义合并判断提示词模板
-│       └── image_to_text_prompt.yaml              # 图片转文字描述提示词模板
+│       └── image_caption_prompt.yaml              # 图片 caption 生成提示词模板
 ├── data/
 │   ├── raw/                                       # 按 collection 分类存放原始测试文档和本地摄取文件
 │   │   └── shopping_guides/                       # shopping_guides collection 的原始文档
@@ -1411,11 +1408,13 @@ services/ai-service/rag/
 │   │   │   └── pdf_loader.py                      # PDF 转 Markdown 并抽取图片的加载实现
 │   │   ├── llm/
 │   │   │   ├── base_llm.py                        # LLMClient 最小抽象接口
+│   │   │   ├── base_vision_llm.py                 # Vision LLM 最小抽象接口
 │   │   │   ├── llm_factory.py                     # 根据配置创建 LLMClient
 │   │   │   ├── openai_client.py                   # OpenAI Chat 实现
 │   │   │   ├── azure_openai_client.py             # Azure OpenAI Chat 实现
 │   │   │   ├── ollama_client.py                   # Ollama 本地 LLM 实现
-│   │   │   └── deepseek_client.py                 # DeepSeek 兼容接口实现
+│   │   │   ├── deepseek_client.py                 # DeepSeek 兼容接口实现
+│   │   │   └── dashscope_vision_llm.py            # 百炼 Qwen-VL 图片 caption 实现
 │   │   ├── splitter/
 │   │   │   ├── base_splitter.py                   # Splitter 最小抽象接口
 │   │   │   ├── splitter_factory.py                # 根据配置创建 Splitter
@@ -1454,8 +1453,7 @@ services/ai-service/rag/
 │   │   │   ├── chunk_rewriter.py                  # 利用 LLM 对 chunk 进行语义改写
 │   │   │   ├── semantic_merge_transform.py        # 合并逻辑相关但被物理切割的 chunk
 │   │   │   ├── denoise_transform.py               # 去除页眉页脚、重复目录和解析噪声
-│   │   │   ├── image_to_text_transform.py         # 调用 Vision LLM 生成结构化图片 caption
-│   │   │   └── image_captioner.py                 # 根据 image_refs 生成 caption 并写入 metadata
+│   │   │   └── image_captioner.py                 # 根据 image_refs 生成 caption 并写入 chunk 正文
 │   │   ├── embedding/
 │   │   │   ├── embedding_step.py                  # Embedding 阶段主编排
 │   │   │   ├── dense_encoder.py                   # Dense 向量编码
@@ -1564,7 +1562,7 @@ services/ai-service/rag/
 | `config/prompts/document_summary_prompt.yaml` | 保存文档级摘要提示词 | 在 Loader 后生成 `Document.summary`，为 chunk rewrite 提供全局语义上下文；首版通过 `ingestion.document_summary.llm_provider=deepseek` 显式使用 DeepSeek |
 | `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段结合 `Document.summary` 做 chunk rewrite；Prompt 只接收 chunk 正文和文档摘要，不接收 metadata 或 image_refs；输出只允许把 searchable text 写入 `text` 字段，禁止把 metadata/image_refs 报告写入正文 |
 | `config/prompts/semantic_merge_prompt.yaml` | 保存相邻 chunk 合并判断提示词 | 仅合并逻辑连续内容，要求结构化 merge 决策和合并文本 |
-| `config/prompts/image_to_text_prompt.yaml` | 保存图片转文字提示词 | 使用英文 Prompt 指令，按图片类型生成可检索的简体中文描述，并原样保留图片中的文字 |
+| `config/prompts/image_caption_prompt.yaml` | 保存图片 caption 提示词 | 使用英文 Prompt 指令，按图片类型生成可检索的简体中文描述，并原样保留图片中的文字 |
 | `data/raw/shopping_guides/` | 存放 shopping_guides collection 原始文档 | 按 collection 分类，便于离线摄取和回归测试 |
 | `data/db/postgres/` | 存放 PostgreSQL 本地开发辅助数据 | 保存初始化辅助文件、dump 或本地持久化数据 |
 | `data/db/bm25/` | 存放 BM25 本地索引辅助数据 | 保存倒排索引和词项统计缓存 |
@@ -1575,7 +1573,7 @@ services/ai-service/rag/
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
 | `src/core/config.py` | 加载 settings 和 prompt 配置 | Pydantic/YAML 校验、环境变量覆盖、默认值处理 |
-| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`metadata.images[]`、`Citation`、`TraceRecord` |
+| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`Document.metadata.images[]` 的 `id/path` 契约、`Citation`、`TraceRecord` |
 | `src/core/errors.py` | 定义统一异常类型 | 配置错误、Provider 错误、检索错误、摄取错误、MCP 错误 |
 | `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用相同英文/数字 normalize、中文 full-span 与 2/3-gram 分词，避免分析漂移和 ingestion/storage 循环依赖 |
 | `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、意图识别 |
@@ -1588,7 +1586,7 @@ services/ai-service/rag/
 | `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 Citation、KnowledgeHubResponse、ResponseImage 及其 Builder/Assembler |
 | `src/core/response/citation_builder.py` | 从最终排序结果构建引用来源 | `source_ref` 优先、顶层 metadata 兼容、标题文件名回退、section_path 归一化、trace_id 关联、缺失来源 fail fast、不从 chunk 正文猜测 citation |
 | `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 按最终检索顺序收集、去重 `image_refs`，通过最小 `ImageResolver.find_by_ids()` 接口批量读取图片索引，恢复首次引用顺序，只投影 file_path、caption、尺寸、质量状态和关联 chunk IDs |
-| `src/core/trace/trace_context.py` | 管理单次 trace 上下文 | `trace_id`、基础信息、阶段列表、汇总指标、评估指标；主阶段可携带经过校验和防御性复制的 `sub_stages`，Transform 子阶段可携带受限 snapshots |
+| `src/core/trace/trace_context.py` | 管理单次 trace 上下文 | `trace_id`、基础信息、阶段列表、汇总指标、评估指标；主阶段可携带经过校验和防御性复制的 `sub_stages`，Transform 子阶段可携带受限 snapshots 和 JSON-safe `details`，用于保留 `image_captioner` 等实现的 provider、model、计数与失败原因 |
 | `src/core/trace/trace_controller.py` | 编排 trace 写入 | `record_stage()`、`flush()`、错误和 fallback 记录 |
 
 #### 5.3.3 Libs 可插拔抽象层
@@ -1600,11 +1598,13 @@ services/ai-service/rag/
 | `src/libs/loader/markdown_loader.py` | 加载 Markdown 文档 | 提取标题层级、metadata、图片引用 |
 | `src/libs/loader/pdf_loader.py` | 加载 PDF 文档 | PDF -> Markdown、图片提取、优先按 PyMuPDF 邻近文本锚点插入图片占位符，锚点不可用时再按页标记或稳定追加降级 |
 | `src/libs/llm/base_llm.py` | 定义 LLMClient 抽象接口 | `chat(messages) -> response` |
+| `src/libs/llm/base_vision_llm.py` | 定义 Vision LLM 抽象接口 | `caption_image(image_path, prompt) -> VisionCaptionResponse`，只暴露图片 caption 所需的最小接口 |
 | `src/libs/llm/llm_factory.py` | 创建 LLMClient | 根据 settings 选择 OpenAI/Azure/Ollama/DeepSeek |
 | `src/libs/llm/openai_client.py` | OpenAI Chat 实现 | OpenAI SDK、统一 messages 输入输出 |
 | `src/libs/llm/azure_openai_client.py` | Azure OpenAI Chat 实现 | Azure endpoint、deployment、api-version |
 | `src/libs/llm/ollama_client.py` | Ollama 本地 LLM 实现 | 本地模型调用、离线降级 |
 | `src/libs/llm/deepseek_client.py` | DeepSeek 兼容接口实现 | OpenAI-compatible chat API |
+| `src/libs/llm/dashscope_vision_llm.py` | 百炼 Vision LLM 实现 | 使用 Qwen-VL-Max 生成图片 caption；读取 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_BASE_URL`，返回统一 `VisionCaptionResponse` |
 | `src/libs/splitter/base_splitter.py` | 定义 Splitter 抽象接口 | 纯文本工具，接口固定为 `split(text: str) -> List[str]` |
 | `src/libs/splitter/splitter_factory.py` | 创建 Splitter | 根据配置选择 splitter 实现 |
 | `src/libs/splitter/recursive_character_splitter.py` | 包装 LangChain splitter | 只输出文本片段 `List[str]`，不创建业务 `Chunk`，不引入 LangChain RAG 链路 |
@@ -1630,20 +1630,19 @@ services/ai-service/rag/
 
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
-| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | C10 已实现 dedup -> load -> document_summary -> split -> transform/image_caption -> existing content_hash vector lookup -> Dense/BM25 batch -> transactional upsert -> lifecycle success；保留 Loader-only 兼容模式并拒绝部分依赖和空 chunk 快照 |
+| `src/ingestion/pipeline.py` | 编排离线摄取与索引主流程 | C10 已实现 dedup -> load -> document_summary -> split -> transform -> existing content_hash vector lookup -> Dense/BM25 batch -> transactional upsert -> lifecycle success；图片 caption 仅作为 `transform.sub_stages.image_captioner` 记录；保留 Loader-only 兼容模式并拒绝部分依赖和空 chunk 快照 |
 | `src/ingestion/loader.py` | 调用 Loader 并输出 Document | 去重通过后的 Loader 调用和 Document 标准化 |
 | `src/ingestion/document_summarizer.py` | 生成文档级语义摘要 | 读取 `document_summary_prompt.yaml`，调用统一 LLMClient，写入 `Document.summary`，按 prompt version 和文档 hash 保持幂等 |
 | `src/ingestion/pdf_to_markdown.py` | PDF 转 Markdown 辅助逻辑 | MarkItDown、页码、图片抽取、基于图片矩形和相邻文本块生成图片锚点 |
 | `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
-| `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、继承 metadata、添加 `chunk_index`、建立 `source_ref`、按需分发 `image_refs`，并把纯图片占位符片段合并到相邻正文 chunk |
+| `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、保留检索过滤所需 metadata、添加 `chunk_index`、建立 `source_ref`、通过占位符扫描分发 `image_refs`，并把纯图片占位符片段合并到相邻正文 chunk |
 | `src/ingestion/chunk/chunk_id.py` | 生成稳定 chunk_id | `hash(source_path + section_path + content_hash)` |
 | `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 从 `settings.transform.steps` 读取顺序并串行执行；通过可选 observer 输出每个实现的耗时、输入输出数量、变化/未变化数量、状态、错误和受限 before/after 快照 |
 | `src/ingestion/transform/metadata_enricher.py` | metadata 注入实现 | 标题路径、来源、文档主题、业务 metadata 注入 |
 | `src/ingestion/transform/chunk_rewriter.py` | LLM 改写 chunk | 使用 `Document.summary` 作为全局上下文；将 chunk 拆分为文本节点与图片节点，只改写文本节点，再按原顺序重组图片占位符 |
 | `src/ingestion/transform/semantic_merge_transform.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk，保留 source_ref 和 image_refs |
 | `src/ingestion/transform/denoise_transform.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留，保留图片占位符 |
-| `src/ingestion/transform/image_to_text_transform.py` | 图片理解适配 | 调用注入的 Vision LLM，解析 status、description、extracted_text、key_facts 和 reason |
-| `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、caption 写入 chunk metadata |
+| `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、占位符替换为 `[[image_caption:image_id]] + caption`、trace 执行详情输出 |
 | `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | `run_dense()` 提供窄粒度差量编码；`run_batch()` 复用数据库已有 content_hash 向量、对当前批次重复内容只调用一次模型，并为每个有序 chunk 生成完整 Dense 结果，同时编排 BM25Indexer |
 | `src/ingestion/embedding/dense_encoder.py` | DenseEncoder | content_hash 计算、差量判断、单 chunk `embed()` 编码和 C8 批量 `embed_batch()` 编码；不承担 retry、upsert 或 BM25 职责 |
 | `src/ingestion/embedding/bm25_indexer.py` | BM25Indexer | C7 已实现 in-memory BM25 词频、倒排索引构建和关键词候选查询；复用 core analyzer，并接受可选 collection 参数以保持 Sparse Route 最小接口一致 |
@@ -1936,7 +1935,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | --- | --- | --- | --- |
 | Phase A | 配置与项目骨架 | 独立模块基础文件、uv 依赖锁定、Docker 部署骨架、pytest 冒烟测试、配置模板、prompt 配置、核心类型和配置加载 | [✔] |
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
-| Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、Transform、ImageCaptioner、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
+| Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Splitter、包含 ImageCaptioner 的 Transform Pipeline、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [✔] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [✔] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [✔] |
@@ -2195,12 +2194,12 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-10 | 已实现 canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；PyMuPDF 图片矩形绑定邻近文本锚点，MarkItDown 无页标记时仍能将图片插入对应章节附近；真实购物指南 PDF 冒烟验证通过 |
 | C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-10 | 已实现独立稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；纯图片占位符片段会合并到相邻正文 chunk，真实购物指南 PDF 不再生成独立图片 chunk |
 | C4 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | 已分离本地 settings 与版本化模板，保留 BaseTransform，新增 ingestion TransformPipeline、metadata/rewrite/semantic merge/denoise 串行实现、英文 merge Prompt、噪声 fixture 和幂等测试；ChunkRewriter 只基于文本节点和 Document.summary 调用 LLM，不发送 metadata/image_refs/图片节点，改写后按原顺序恢复图片占位符；普通文本节点的合法 JSON text 为空或缺失时直接失败，纯图片占位符 chunk 跳过文本 rewrite 并保留给 Image-to-Text |
-| C5 | 实现 ImageCaptioner | [✔] | 2026-06-06 | 已实现 ImageCaptioner、ImageToTextTransform、image_to_text transform step、skipped/failed/low_quality 状态和 caption metadata；34 个相关测试、125 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C5 | 实现 ImageCaptioner | [✔] | 2026-06-11 | 重构为单一 `image_captioner` transform step，新增 `BaseVisionLLM` 和 `DashScopeVisionLLM`，caption 写入 chunk 正文并进入 Dense/BM25 索引；chunk metadata 不再保存图片 caption/provenance，执行详情进入 `transform.sub_stages` |
 | C6 | 实现 DenseEncoder | [✔] | 2026-06-06 | 已实现 DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C7 | 实现 BM25Indexer | [✔] | 2026-06-07 | 已实现 BM25Candidate、BM25IndexResult、BM25Indexer.index/query、词频统计、倒排索引、关键词 Top-k 排序、中文连续文本 n-gram fallback 和重复 index 状态重建；6 个相关测试、137 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C8 | 实现 BatchProcessor 批处理优化 | [✔] | 2026-06-07 | 已实现 BatchProcessor、BatchRunResult、BatchSuccess、BatchFailure、DenseEncoder.encode_batch、batch_size 拆分、throttle_seconds 节流、有限 retry、失败隔离、EmbeddingStep.run_batch、Dense/BM25 批处理编排；20 个相关测试、145 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C9 | 实现统一 upsert | [✔] | 2026-06-07 | 已实现 rag_bm25_terms schema、BM25Storage、UpsertStep 单事务完整快照写入、pgvector/image/repository 调用方事务接口、图片文件失败恢复、重复 upsert 幂等和内容变更旧 chunk 清理；2 个 C9 PostgreSQL 集成测试、148 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C10 | 实现统一 Pipeline MVP 编排和集成测试 | [✔] | 2026-06-07 | 已实现 IngestionPipelineResult、完整依赖校验、run_indexing、Markdown 图片摄取、Splitter、Transform/ImageCaptioner、成功文档 content_hash 向量复用、重复内容单次编码、Dense/BM25 batch、统一 upsert、lifecycle success 和重复文件 dedup skip；6 个 ingestion integration 测试、14 个 embedding 单元测试、153 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C10 | 实现统一 Pipeline MVP 编排和集成测试 | [✔] | 2026-06-07 | 已实现 IngestionPipelineResult、完整依赖校验、run_indexing、Markdown 图片摄取、Splitter、包含 ImageCaptioner 的 Transform Pipeline、成功文档 content_hash 向量复用、重复内容单次编码、Dense/BM25 batch、统一 upsert、lifecycle success 和重复文件 dedup skip；6 个 ingestion integration 测试、14 个 embedding 单元测试、153 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C11 | 新增 `ingest.py` 摄取脚本入口 | [✔] | 2026-06-10 | 已实现必填 `--path`、可选 `--collection`、`--force`、父目录 `.env` 自动加载、系统环境优先、RAG 根目录运行时路径解析、递归 Markdown/PDF 发现、配置驱动 Pipeline 组装、JSON 结果、错误码和连接池释放；`ingestion.document_summary.llm_provider` 显式配置 DeepSeek，构建摘要步骤时按该 provider 调用 LLMFactory；当旧版本地 `settings.yaml` 缺少 `ingestion.document_summary` 时默认启用文档摘要步骤，避免 `rag_documents.summary` 长期为空；68 个相关单元测试通过 |
 
 #### 阶段 D：Retrieval
@@ -2343,7 +2342,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 
 目标：将提示词从业务代码中分离，便于后续评估和策略替换。
 
-修改文件：`config/prompts/rerank_prompt.yaml`、`config/prompts/document_summary_prompt.yaml`、`config/prompts/rewrite_chunk_prompt.yaml`、`config/prompts/image_to_text_prompt.yaml`
+修改文件：`config/prompts/rerank_prompt.yaml`、`config/prompts/document_summary_prompt.yaml`、`config/prompts/rewrite_chunk_prompt.yaml`、`config/prompts/image_caption_prompt.yaml`
 
 实现类/函数：
 
@@ -2383,7 +2382,7 @@ RAG 已具备可观测和可视化管理能力。Ingestion 和 Query 主链路�
 - `RetrievalResult`：定义流程返回结果
 - `RagError`：定义 RAG 子系统统一异常基类
 
-验收标准：`Document.metadata.images[]` 支持 `id/path/page/text_offset/text_length/position`；`Chunk` 支持 `start_offset`、`end_offset` 和可选 `source_ref`；类型可被 Ingestion、Retrieval、Trace 复用。
+验收标准：`Document.metadata.images[]` 只持久化 `id/path`；Loader 内部可以使用页码、物理位置和 offset 完成占位符插入，但不得把这些定位字段写入最终 metadata；`Chunk` 支持 `start_offset`、`end_offset` 和可选 `source_ref`；类型可被 Ingestion、Retrieval、Trace 复用。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_types.py -v`
 
@@ -2701,7 +2700,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `extract_images()`：使用 PyMuPDF 仅在 PDF 存在图片时抽取图片字节、页码与物理位置信息，并根据图片矩形选择最近的后续或前置文本块作为 Markdown 插入锚点
 - `DocumentSummarizer.summarize()`：在 Loader 后为 Document 生成顶层摘要，作为后续 chunk rewrite 的全局上下文
 
-验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码、物理位置和邻近文本锚点；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置；PDF 图片占位符必须优先根据按页顺序解析的邻近文本锚点插入对应正文附近，重复锚点使用顺序游标映射到后续页面；锚点不可用或文本块提取异常时必须优雅回退到页标记区间或确定性文末追加，不能导致图片提取或整个 PDF 摄取失败，正常可定位图片不能集中追加到文档末尾；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + summary + metadata)` 并提取标题层级，`summary` 是顶层字段且可为 `null`，不得写入 `metadata.summary`；`DocumentSummarizer` 作为 Loader 后的独立步骤生成 `Document.summary`，已有同版本摘要时保持幂等；fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
+验收标准：PDF 使用 MarkItDown 转换为 canonical Markdown，并由独立的 PyMuPDF 图片提取边界补充图片字节、页码、物理位置和邻近文本锚点；同一页面重复出现的 PyMuPDF xref 只解析一次，但保留该 xref 的多个物理位置用于内部定位；PDF 图片占位符必须优先根据按页顺序解析的邻近文本锚点插入对应正文附近，重复锚点使用顺序游标映射到后续页面；锚点不可用或文本块提取异常时必须优雅回退到页标记区间或确定性文末追加，不能导致图片提取或整个 PDF 摄取失败，正常可定位图片不能集中追加到文档末尾；多图片写入中途失败时清理当前临时文件和本次已写文件，不遗留无 Document 对应的孤儿资源；Markdown 可输出标准 `Document(id + text + summary + metadata)` 并提取标题层级，`summary` 是顶层字段且可为 `null`，不得写入 `metadata.summary`；`DocumentSummarizer` 作为 Loader 后的独立步骤生成 `Document.summary`，已有同版本摘要时保持幂等；fenced code block 内的标题和图片示例不得被业务解析器改写；Markdown 本地图片只能读取源文档目录及其子目录，父目录穿越或远程地址保留原语法且不生成 metadata；无图片文档不生成无效图片 metadata；有图片文档生成稳定 `image_id`、`[[image:image_id]]` 占位符和仅包含 `id/path` 的 `metadata.images[]`；转换器和图片提取器支持依赖注入，单元测试不得依赖真实 PDF 解析包。
 
 测试方法：`uv run --project services/ai-service/rag pytest -p no:cacheprovider services\ai-service\rag\tests\unit\test_loader.py -v`；单元测试通过注入 fake MarkItDown converter 和 fake PyMuPDF module 验证转换与图片提取契约，不依赖真实外部解析环境。
 
@@ -2718,10 +2717,10 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `build_source_ref()`：建立 chunk 到来源文档的引用
 - `extract_heading_hierarchy()`：为标题层级 metadata 补充源文本 `text_offset`
 - `attach_section_path()`：根据标题 offset 将当前标题层级写入 chunk metadata
-- `distribute_image_refs()`：根据图片占位符 offset 分发图片引用
+- `distribute_image_refs()`：扫描 chunk 正文中的 `[[image:image_id]]` 占位符并分发图片引用
 - `_merge_image_only_parts()`：将 splitter 产生的纯图片占位符片段合并到相邻正文 chunk，保留源文本顺序和 offset
 
-验收标准：Loader 的每个 heading metadata 包含 canonical `Document.text` 中的起始 offset；同来源、同章节、同内容生成相同 `chunk_id`，来源、章节或内容变化时 ID 发生变化；每个 chunk 都通过独立 `build_chunk_id()` 规则生成 ID；`Document.metadata` 的非图片字段被复制到 `Chunk.metadata`；`Document.metadata.images[]` 保留完整文档图片清单，`Chunk.metadata.images[]` 只保留当前 chunk 命中的图片子集；按顺序添加 `chunk_index`；根据文档来源建立 `source_ref`；chunk metadata 根据 heading offset 包含当前 chunk 对应的 `section_path` 和按需分发的 `image_refs`；没有图片的 chunk 不添加无效 `image_refs`，也不保留文档级 `images[]`；splitter 产生的纯图片占位符 chunk 必须合并到相邻正文，不能作为缺少文本语义的独立检索单元；完成 `List[str] -> List[Chunk]` 类型转换。
+验收标准：Loader 的每个 heading metadata 包含 canonical `Document.text` 中的起始 offset；同来源、同章节、同内容生成相同 `chunk_id`，来源、章节或内容变化时 ID 发生变化；每个 chunk 都通过独立 `build_chunk_id()` 规则生成 ID；`Chunk.metadata` 只保留 `collection`、`document_id`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs` 等检索过滤字段，不复制 `images`、`headings`、`source_path`、`source_type`、`source_hash` 或 `title`；`Document.metadata.images[]` 保留完整文档图片清单的 `id/path`；按顺序添加 `chunk_index`；根据文档来源建立 `source_ref`；chunk metadata 根据 heading offset 包含当前 chunk 对应的 `section_path`，并通过占位符扫描按需分发 `image_refs`；没有图片的 chunk 不添加无效 `image_refs`；splitter 产生的纯图片占位符 chunk 必须合并到相邻正文，不能作为缺少文本语义的独立检索单元；完成 `List[str] -> List[Chunk]` 类型转换。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 
@@ -2741,7 +2740,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `SemanticMergeTransform.transform()`：合并逻辑相关但被物理切开的相邻 chunk
 - `DenoiseTransform.transform()`：清理空白、页眉页脚、目录和解析残留噪声
 
-验收标准：运行时 `config/settings.yaml` 被 Git 忽略，仓库提交 `config/settings.example.yaml` 作为完整模板；`ingestion.document_summary.llm_provider` 显式配置为 `deepseek`，运行时摘要步骤必须按该 provider 构建 LLM；`settings.transform.steps` 只描述步骤顺序、启用状态和 prompt_path，不包含 provider；`src.libs.transform` 只暴露 `BaseTransform`；具体 Transform 位于 `src/ingestion/transform/`；chunk 包含标题、来源、主题上下文；`ChunkRewriter` 必须接收 `document_summary` 并只把它作为语义背景，不得凭摘要补造 chunk 中不存在的事实；`ChunkRewriter` 不得把 `Chunk.metadata`、`image_refs` 或图片占位符节点发送给大模型，metadata/image_refs 只能在 Python 对象层面继承和维护；含正文和图片的 chunk 必须分别改写各文本节点并按原顺序恢复每个图片占位符，图片不得被删除、复制或移动；仅包含图片占位符的 chunk 跳过文本 rewrite，metadata 记录 `rewrite.status=skipped` 和 `reason=image_placeholder_only`；fake LLM 下可 rewrite；LLM 返回 JSON 或 Markdown 分段时，最终 `Chunk.text` 只能包含可检索正文和原有图片占位符，metadata 和 image_refs 只能保留在 `Chunk.metadata`；普通文本节点的合法 JSON `text` 为空或缺失时摄取必须失败，不得把 `{ "text": ... }` JSON 结构作为 chunk 正文写入；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
+验收标准：运行时 `config/settings.yaml` 被 Git 忽略，仓库提交 `config/settings.example.yaml` 作为完整模板；`ingestion.document_summary.llm_provider` 显式配置为 `deepseek`，运行时摘要步骤必须按该 provider 构建 LLM；`settings.transform.steps` 只描述步骤顺序、启用状态和 prompt_path，不包含 provider；`src.libs.transform` 只暴露 `BaseTransform`；具体 Transform 位于 `src/ingestion/transform/`；chunk 包含标题、来源、主题上下文；`ChunkRewriter` 必须接收 `document_summary` 并只把它作为语义背景，不得凭摘要补造 chunk 中不存在的事实；`ChunkRewriter` 不得把 `Chunk.metadata`、`image_refs` 或图片占位符节点发送给大模型，metadata/image_refs 只能在 Python 对象层面继承和维护；含正文和图片的 chunk 必须分别改写各文本节点并按原顺序恢复每个图片占位符，图片不得被删除、复制或移动；仅包含图片占位符的 chunk 跳过文本 rewrite；fake LLM 下可 rewrite；LLM 返回 JSON 或 Markdown 分段时，最终 `Chunk.text` 只能包含可检索正文和原有图片占位符，metadata 和 image_refs 只能保留在 `Chunk.metadata`；普通文本节点的合法 JSON `text` 为空或缺失时摄取必须失败，不得把 `{ "text": ... }` JSON 结构作为 chunk 正文写入；`rewrite`、`semantic_merge` 和 `denoise` 的执行详情只进入 ingestion trace 的 `transform.sub_stages`，不得写入 chunk metadata；逻辑相关 chunk 可合并且 metadata 不丢失；页眉页脚、目录和解析残留可清理。
 
 补充要求：执行该任务时必须在 `settings.example.yaml` 和本地 `settings.yaml` 中配置真实启用的 Transform steps 链路，测试不能只依赖 fake transform；需要创建典型噪声场景 fixture，例如连续空白、页眉页脚、重复目录、页码水印、PDF 解析断行、无意义符号残留和图片占位符附近噪声。
 
@@ -2749,18 +2748,20 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 ##### C5：实现 ImageCaptioner
 
-目标：当 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时，为关联图片生成 caption，并将 caption 写入 chunk metadata；未启用 Vision LLM 或没有 `image_refs` 时必须安全跳过。
+目标：当 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时，为关联图片生成 caption，并将 chunk 正文中的 `[[image:image_id]]` 替换为 `[[image_caption:image_id]] + caption`；未启用 Vision LLM 或没有 `image_refs` 时必须安全跳过。
 
-修改文件：`src/ingestion/transform/image_captioner.py`、`src/ingestion/transform/image_to_text_transform.py`、`config/settings.example.yaml`、`tests/unit/test_transformer.py`
+修改文件：`src/libs/llm/base_vision_llm.py`、`src/libs/llm/dashscope_vision_llm.py`、`src/ingestion/transform/image_captioner.py`、`config/settings.example.yaml`、`config/prompts/image_caption_prompt.yaml`、`tests/unit/test_transformer.py`
 
 实现类/函数：
 
+- `BaseVisionLLM.caption_image()`：定义 Vision LLM 图片 caption 的最小统一接口
+- `DashScopeVisionLLM.caption_image()`：调用百炼 Qwen-VL-Max 生成图片 caption
 - `ImageCaptioner.caption()`：读取 chunk 的 `image_refs` 并生成图片描述
 - `ImageCaptioner.should_caption()`：判断是否满足 `vision_llm.enabled=true` 且存在 `image_refs`
-- `ImageCaptioner.write_metadata()`：将 `image_caption_status` 和 `image_captions` 写入 chunk metadata
-- `ImageToTextTransform.transform()`：调用 Vision LLM 生成图片描述并返回结构化 caption 结果
+- `ImageCaptioner.replace_placeholder()`：把原始图片占位符替换为 caption 节点并保留 `image_refs`
+- `ImageCaptioner.trace_details()`：输出 image_captioner 的执行状态、provider、model、图片数量、caption 数量和失败原因，供 Transform sub_stage 使用
 
-验收标准：启用 `vision_llm` 且存在 `image_refs` 时会生成 caption 并写入 chunk metadata；未启用 `vision_llm` 时不调用 Vision LLM，并写入 skipped 状态；没有 `image_refs` 的 chunk 不生成 caption；Vision LLM 失败时写入 failed/low_quality 状态并保留原 chunk；caption 可被后续 DenseEncoder 和 BM25Indexer 使用。
+验收标准：启用 `vision_llm` 且存在 `image_refs` 时会生成 caption 并替换 chunk 正文中的图片占位符；替换后的文本包含 `[[image_caption:image_id]]` 和可检索 caption，原相对位置保持不变；未启用 `vision_llm` 时不调用 Vision LLM，并通过 trace 记录 skipped；没有 `image_refs` 的 chunk 不生成 caption；同一轮摄取中相同 `image_id` 只调用一次 Vision LLM，并在所有引用该图片的 chunk 中复用结果；Vision LLM 失败或低质量时保留原图片占位符并通过 trace 记录 failed/low_quality、provider、model、底层错误类型和经过脱敏/截断的错误信息；chunk metadata 不写入 `image_captions`、`image_caption_status` 或 provider/model；caption 文本可被后续 DenseEncoder 和 BM25Indexer 使用。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
 
@@ -2847,7 +2848,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `ChunkRepository.get_dense_vectors_by_content_hashes()`：读取同一 collection 中成功文档的可复用 Dense 向量
 - `EmbeddingStep.run_batch()`：复用已有 content_hash 向量，避免重复模型调用并恢复每个 chunk 的有序 Dense 结果
 
-验收标准：给定原始文档路径，可以完成去重、Loader、Splitter、Transform、ImageCaptioner 条件 caption、DenseEncoder 编码、BM25Indexer 索引、BatchProcessor 批处理、统一 upsert 和 lifecycle success；同一路径同内容重复执行时命中 successful source hash 并直接 skipped，不重复调用 Loader、Embedding 或 upsert；文档局部变化时，数据库中成功文档已有的 content_hash 必须复用 Dense 向量，仅对新增或变化内容调用 embedding；当前批次重复内容只调用一次模型，但仍为每个 chunk 返回独立且有序的 Dense 结果；Loader-only 模式保持 C1 兼容；部分后置组件配置必须启动失败；Splitter/Transform 产生空 chunk 时不得写入成功文档。
+验收标准：给定原始文档路径，可以完成去重、Loader、Splitter、包含 ImageCaptioner 条件 caption 的 Transform Pipeline、DenseEncoder 编码、BM25Indexer 索引、BatchProcessor 批处理、统一 upsert 和 lifecycle success；同一路径同内容重复执行时命中 successful source hash 并直接 skipped，不重复调用 Loader、Embedding 或 upsert；文档局部变化时，数据库中成功文档已有的 content_hash 必须复用 Dense 向量，仅对新增或变化内容调用 embedding；当前批次重复内容只调用一次模型，但仍为每个 chunk 返回独立且有序的 Dense 结果；Loader-only 模式保持 C1 兼容；部分后置组件配置必须启动失败；Splitter/Transform 产生空 chunk 时不得写入成功文档。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 
@@ -3279,7 +3280,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 - `TraceContext.ingestion()`：构建标准 ingestion trace，上线前校验 `collection`、`source_uri` 和 SHA256 `source_hash`
 - `TraceContext.record_ingestion_stage()`：仅允许记录约定的摄取主阶段，并允许主阶段携带结构化 `sub_stages`
-- `_normalize_sub_stages()`：校验并防御性复制子阶段名称、实现类、耗时、输入输出数量、状态、错误和 snapshots
+- `_normalize_sub_stages()`：校验并防御性复制子阶段名称、实现类、耗时、输入输出数量、状态、错误、JSON-safe `details` 和 snapshots
 - `_normalize_transform_snapshots()`：校验每个快照只包含受限预览、chunk 标识、变化类型和截断标记
 - `TraceContext.finish_ingestion()`：写入 ingestion 汇总指标和评估指标，并生成完整结构化快照
 - `_validate_sha256()`：校验摄取源哈希纹
@@ -3287,7 +3288,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `_validate_optional_ratio()`：校验质量分数和 embedding 覆盖率
 - `_json_section()`：区分“缺省 section”与“嵌套 None 值”，避免破坏 skip_reason/error 语义
 
-验收标准：包含 ingestion 基础信息、阶段详情、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=ingestion`、`started_at`、`collection`、`source_uri`、`source_hash`；阶段详情必须限制在约定的摄取主阶段；主阶段可选携带 `sub_stages`，每项必须包含 `name`、`duration_ms`、`status`、`input_count`、`output_count`，并可包含 `method`、`provider`、结构化 `error` 和受限 `snapshots`；snapshot 只能保存 `chunk_id`、`chunk_index`、`change_type`、`before_preview`、`after_preview`、`before_truncated`、`after_truncated`，不得保存完整正文；汇总指标必须包含 `document_status`、`chunk_count`、`embedded_count`、`skipped_count`、`error`、`total_duration_ms`；评估指标支持 `chunk_quality_score`、`noise_reduction_summary`、`embedding_coverage`、`index_ready`。
+验收标准：包含 ingestion 基础信息、阶段详情、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=ingestion`、`started_at`、`collection`、`source_uri`、`source_hash`；阶段详情必须限制在约定的摄取主阶段；主阶段可选携带 `sub_stages`，每项必须包含 `name`、`duration_ms`、`status`、`input_count`、`output_count`，并可包含 `method`、`provider`、结构化 `error`、JSON-safe `details` 和受限 `snapshots`；`details` 必须被完整持久化，用于记录 `image_captioner` 的 provider、model、输入图片数、成功 caption 数和失败/降级原因；snapshot 只能保存 `chunk_id`、`chunk_index`、`change_type`、`before_preview`、`after_preview`、`before_truncated`、`after_truncated`，不得保存完整正文；汇总指标必须包含 `document_status`、`chunk_count`、`embedded_count`、`skipped_count`、`error`、`total_duration_ms`；评估指标支持 `chunk_quality_score`、`noise_reduction_summary`、`embedding_coverage`、`index_ready`。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
@@ -3341,7 +3342,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `TraceController.flush_ingestion()`：按 ingestion trace 契约 flush 汇总指标
 - `TraceController.flush_query()`：按 query trace 契约 flush 顶层 `query_result`、`top_score` 和汇总指标
 - `IngestionPipeline.run()` trace 打点：注入链路追踪点
-- `TransformPipeline.run()` trace observer：按配置顺序测量每个具体 Transform 实现，成功和失败都生成子阶段记录；记录 `changed_count/unchanged_count` 解释实际处理结果；开启 `observability.transform_snapshots.enabled` 时记录变化 chunk 的受限 before/after 预览
+- `TransformPipeline.run()` trace observer：按配置顺序测量每个具体 Transform 实现，成功和失败都生成子阶段记录；记录 `changed_count/unchanged_count` 解释实际处理结果；开启 `observability.transform_snapshots.enabled` 时记录变化 chunk 的受限 before/after 预览；`image_captioner` 必须额外记录 provider、model、image_count、caption_count 和失败/降级原因
 - `IngestionPipeline.run_indexing()` trace 打点：注入索引子链路追踪点
 - `HybridSearch.search()` trace 打点：将 RRF 阶段统一记录为 `fusion`
 - `QueryRuntime.execute()` trace 打点：注入 query_processing、rerank 跳过、response 和最终 flush；将实际返回给 Agent/调用方的 content、contexts 及精简后的 citations/images 快照写入 `query_result`
@@ -3350,7 +3351,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - Trace writer CLI 注入：`ingest.py` 和 `query.py` 默认使用 `settings.observability.trace_jsonl_path`；当 `settings.observability.persist_to_postgresql=true` 时同时写入 PostgreSQL
 - Trace 状态约束迁移：Query/Ingestion trace 表接受 `degraded`，且 `init_schema()` 可幂等升级已存在的本地数据库约束
 
-验收标准：ingestion 链路记录 dedup、load、split、transform、image_caption、embed、upsert；顶层 `transform.duration_ms` 保留整个 Transform Pipeline 总耗时，`transform.sub_stages` 按实际执行顺序记录每个启用实现的名称、具体类、耗时、输入输出 chunk 数、`changed_count`、`unchanged_count` 和状态，使 Dashboard 能区分“执行但未改变”与“未执行”；某个实现失败时必须先记录该失败子阶段，再让主链路按原错误语义失败；Transform snapshots 必须由配置控制，默认只记录变化 chunk、每步最多 20 个、每段预览最多 800 字，不额外调用 LLM 或数据库；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response，并在结束时保存顶层 `query_result`；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
+验收标准：ingestion 链路记录 dedup、load、split、transform、embed、upsert；图片 caption 不得重复记录为顶层 stage，只能记录在 `transform.sub_stages.image_captioner`；顶层 `transform.duration_ms` 保留整个 Transform Pipeline 总耗时，`transform.sub_stages` 按实际执行顺序记录每个启用实现的名称、具体类、耗时、输入输出 chunk 数、`changed_count`、`unchanged_count` 和状态，使 Dashboard 能区分“执行但未改变”与“未执行”；`image_captioner` 子阶段必须记录图片 caption 的 provider/model、输入图片数、成功 caption 数和失败/降级原因；某个实现失败时必须先记录该失败子阶段，再让主链路按原错误语义失败；Transform snapshots 必须由配置控制，默认只记录变化 chunk、每步最多 20 个、每段预览最多 800 字，不额外调用 LLM 或数据库；query 链路记录 query_processing、dense、sparse、fusion、filter、rerank、response，并在结束时保存顶层 `query_result`；正常、失败、跳过和降级结束都会 flush 同一种 trace snapshot；启用 PostgreSQL 持久化时，真实 ingestion/query 链路的最终 snapshot 同时进入 JSONL 与对应 trace 表，Dashboard 可直接读取；不得仅在去重跳过等特殊分支单独写入数据库。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
@@ -3461,7 +3462,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `build_evaluation_page_model()`：读取 evaluation run 历史、选中 run detail 和 metric trends，生成评估页面模型
 - `render_evaluation_page()`：渲染评估运行入口、run 历史、指标详情、settings snapshot 和趋势图，并返回运行评估意图 DTO
 
-验收标准：可展示阶段耗时和评估趋势；Transform 主阶段存在 `sub_stages` 时，页面必须按执行顺序展示每个 Transform 实现的名称、实现类、耗时、输入输出 chunk 数、变化数量、未变化数量、状态和错误，避免将“没有 diff”误解为“没有执行”；存在 snapshots 时展示 Transform Result Diff，用专属颜色区分 `metadata_enrich`、`rewrite_chunk`、`semantic_merge`、`denoise` 和 `image_to_text`，并以浅红背景标注 before 中被删除或替换的内容、以浅绿背景标注 after 中新增或替换的内容；Diff 必须采用兼容中英文混排的细粒度 token 对比，不能将无空格的整段中文直接判定为单个替换块，也不能使用影响长文本可读性的整段删除线；未变化文本必须使用独立的显式深色前景样式，不能依赖 Streamlit `pre`/代码块主题继承，确保浅色和深色主题下都可读；同时展示 before/after 预览、变化类型和截断标记；旧 trace 不包含 `sub_stages/snapshots` 或变化计数时页面保持兼容且不显示空明细区；选择任意 Ingestion Trace 后阶段耗时、Transform Breakdown、Result Diff、处理统计和错误详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
+验收标准：可展示阶段耗时和评估趋势；Transform 主阶段存在 `sub_stages` 时，页面必须按执行顺序展示每个 Transform 实现的名称、实现类、耗时、输入输出 chunk 数、变化数量、未变化数量、状态和错误，避免将“没有 diff”误解为“没有执行”；`image_captioner` 子阶段详情必须展示 provider/model、图片数量、caption 数量和失败/降级原因；存在 snapshots 时展示 Transform Result Diff，用专属颜色区分 `metadata_enrich`、`rewrite_chunk`、`semantic_merge`、`denoise` 和 `image_captioner`，并以浅红背景标注 before 中被删除或替换的内容、以浅绿背景标注 after 中新增或替换的内容；Diff 必须采用兼容中英文混排的细粒度 token 对比，不能将无空格的整段中文直接判定为单个替换块，也不能使用影响长文本可读性的整段删除线；未变化文本必须使用独立的显式深色前景样式，不能依赖 Streamlit `pre`/代码块主题继承，确保浅色和深色主题下都可读；同时展示 before/after 预览、变化类型和截断标记；旧 trace 不包含 `sub_stages/snapshots` 或变化计数时页面保持兼容且不显示空明细区；选择任意 Ingestion Trace 后阶段耗时、Transform Breakdown、Result Diff、处理统计和错误详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 

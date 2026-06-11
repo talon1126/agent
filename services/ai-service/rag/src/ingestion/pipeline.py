@@ -436,6 +436,7 @@ class IngestionPipeline:
                 "title": document.metadata.get("title"),
                 "document_summary": document.summary,
                 "document_context": document.text,
+                "document_images": document.metadata.get("images", []),
             }
             transform_started = perf_counter()
             transform_sub_stages: list[dict[str, Any]] = []
@@ -473,22 +474,6 @@ class IngestionPipeline:
                 method="transform_pipeline",
                 provider=type(self._transform_pipeline).__name__,
                 sub_stages=transform_sub_stages,
-            )
-            image_caption_summary = _image_caption_summary(transformed_chunks)
-            trace_controller.record_stage(
-                "image_caption",
-                duration_ms=0,
-                input_summary={
-                    "image_ref_count": image_caption_summary["image_ref_count"],
-                },
-                output_summary=image_caption_summary,
-                method="image_to_text",
-                provider=type(self._transform_pipeline).__name__,
-                status=(
-                    "success"
-                    if image_caption_summary["caption_count"] > 0
-                    else "skipped"
-                ),
             )
 
             indexing_result, upsert_result = self.run_indexing(
@@ -720,37 +705,6 @@ def _document_image_count(document: Document) -> int:
 
     images = document.metadata.get("images", [])
     return len(images) if isinstance(images, list) else 0
-
-
-def _image_caption_summary(chunks: list[Chunk]) -> dict[str, Any]:
-    """Summarize Image-to-Text transform output across final chunks.
-
-    Args:
-        chunks: Final chunks after the transform pipeline has run.
-
-    Returns:
-        Trace-safe counts used by the ingestion Dashboard to compare image
-        references with generated caption records and quality states.
-    """
-
-    image_refs: set[str] = set()
-    captions: list[dict[str, Any]] = []
-    status_counts: dict[str, int] = {}
-    for chunk in chunks:
-        refs = chunk.metadata.get("image_refs", [])
-        if isinstance(refs, list):
-            image_refs.update(str(ref) for ref in refs if str(ref))
-        for caption in chunk.metadata.get("image_captions", []):
-            if not isinstance(caption, dict):
-                continue
-            captions.append(caption)
-            status = str(caption.get("status") or "unknown")
-            status_counts[status] = status_counts.get(status, 0) + 1
-    return {
-        "image_ref_count": len(image_refs),
-        "caption_count": len(captions),
-        "status_counts": status_counts,
-    }
 
 
 def _record_stage_best_effort(

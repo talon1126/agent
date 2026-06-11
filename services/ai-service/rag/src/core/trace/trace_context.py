@@ -41,7 +41,6 @@ _INGESTION_STAGES = {
     "load",
     "split",
     "transform",
-    "image_caption",
     "embed",
     "upsert",
 }
@@ -188,6 +187,8 @@ def _normalize_sub_stages(
             child_record["snapshots"] = _normalize_transform_snapshots(
                 item.get("snapshots")
             )
+        if item.get("details") is not None:
+            child_record["details"] = _json_safe_copy(item.get("details"))
         normalized.append(child_record)
     return normalized
 
@@ -810,7 +811,7 @@ class TraceContext:
 
         Args:
             stage: One of ``dedup``, ``load``, ``split``, ``transform``,
-                ``image_caption``, ``embed``, or ``upsert``.
+                ``embed``, or ``upsert``.
             duration_ms: Stage duration in milliseconds.
             input_summary: Source or stage input digest.
             output_summary: Document/chunk/index output digest.

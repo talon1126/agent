@@ -139,7 +139,7 @@ def test_default_component_selection_matches_the_spec() -> None:
 
     assert settings["llm"]["default"] == "deepseek"
     assert settings["llm"]["providers"]["deepseek"]["model"] == "deepseek-v4-flash"
-    assert settings["vision_llm"]["providers"]["qwen_vl_max"]["model"] == "Qwen-VL-Max"
+    assert settings["vision_llm"]["providers"]["qwen_vl_max"]["model"] == "qwen-vl-max"
     assert settings["embedding"]["default"] == "dashscope"
     assert settings["embedding"]["providers"]["dashscope"]["model"] == (
         "text-embedding-v4"
@@ -227,11 +227,11 @@ def test_retrieval_and_transform_defaults_are_complete() -> None:
         "rewrite_chunk",
         "semantic_merge",
         "denoise",
-        "image_to_text",
+        "image_captioner",
     ]
     assert all(step["enabled"] for step in transform_steps)
     assert all("provider" not in step for step in transform_steps)
-    assert transform_steps[-1]["prompt_path"] == "config/prompts/image_to_text_prompt.yaml"
+    assert transform_steps[-1]["prompt_path"] == "config/prompts/image_caption_prompt.yaml"
 
 
 def test_prompt_definitions_share_a_stable_contract() -> None:
@@ -247,7 +247,7 @@ def test_prompt_definitions_share_a_stable_contract() -> None:
         "rerank_prompt.yaml",
         "rewrite_chunk_prompt.yaml",
         "semantic_merge_prompt.yaml",
-        "image_to_text_prompt.yaml",
+        "image_caption_prompt.yaml",
     )
 
     for file_name in prompt_files:
@@ -287,7 +287,7 @@ def test_prompt_instruction_content_is_written_in_english() -> None:
         "rerank_prompt.yaml",
         "rewrite_chunk_prompt.yaml",
         "semantic_merge_prompt.yaml",
-        "image_to_text_prompt.yaml",
+        "image_caption_prompt.yaml",
     )
     cjk_pattern = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]")
 
@@ -355,7 +355,7 @@ def test_image_prompt_defines_quality_fallback_and_type_strategies() -> None:
     deterministic fallback when an image is unreadable or has no retrieval
     value, preventing poor captions from contaminating the index.
     """
-    prompt = load_prompt_document("image_to_text_prompt.yaml")
+    prompt = load_prompt_document("image_caption_prompt.yaml")
 
     assert prompt["input_variables"] == ["image_type", "document_context"]
     assert "Simplified Chinese" in prompt["system_prompt"]

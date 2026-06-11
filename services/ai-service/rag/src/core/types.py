@@ -30,20 +30,17 @@ class DomainModel(BaseModel):
 
 
 class ImageMetadata(DomainModel):
-    """Describe one extracted image and its position in the source document.
+    """Describe one extracted image exposed by the public document contract.
 
-    ``text_offset`` and ``text_length`` locate the image placeholder within the
-    canonical ``Document.text``. ``position`` preserves loader-specific physical
-    coordinates such as x/y/width/height or bbox without forcing one PDF parser's
-    geometry schema on every loader.
+    Loaders may use page numbers, physical positions, text anchors, and source
+    offsets internally while inserting ``[[image:...]]`` placeholders. The
+    final ``Document.metadata.images`` payload intentionally stores only the
+    stable image ID and managed file path so chunk metadata stays small and
+    source-position details remain trace/debug concerns.
     """
 
     id: str = Field(min_length=1)
     path: str = Field(min_length=1)
-    page: int | None = Field(default=None, ge=0)
-    text_offset: int = Field(ge=0)
-    text_length: int = Field(gt=0)
-    position: dict[str, Any] = Field(min_length=1)
 
     @field_validator("id", "path")
     @classmethod
@@ -187,29 +184,6 @@ class Document(DomainModel):
         if not isinstance(value, dict):
             raise ValueError("Document metadata must be a mapping")
         return _normalize_metadata(value)
-
-    @model_validator(mode="after")
-    def validate_image_ranges(self) -> Self:
-        """Ensure every image placeholder range fits inside document text.
-
-        Returns:
-            The validated document.
-
-        Raises:
-            ValueError: If an image placeholder extends beyond
-                ``Document.text``.
-        """
-
-        text_length = len(self.text)
-        for image in self.metadata.get("images", []):
-            placeholder_end = image["text_offset"] + image["text_length"]
-            if placeholder_end > text_length:
-                raise ValueError(
-                    f"Image '{image['id']}' placeholder range exceeds document "
-                    f"text length {text_length}"
-                )
-        return self
-
 
 class Chunk(DomainModel):
     """Represent one ordered, source-addressable unit of retrievable text.

@@ -91,7 +91,6 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
     source_image.write_bytes(b"fake-png-content")
     placeholder = f"[[image:{image_id}]]"
     document_text = f"Wireless headphones guide.\n{placeholder}\nOffice stress toy guide."
-    image_offset = document_text.index(placeholder)
     document = Document(
         id=document_id,
         text=document_text,
@@ -101,10 +100,6 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
                 {
                     "id": image_id,
                     "path": str(source_image),
-                    "page": 1,
-                    "text_offset": image_offset,
-                    "text_length": len(placeholder),
-                    "position": {"width": 640, "height": 480},
                 }
             ],
         },
@@ -112,17 +107,14 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
     chunks = [
         Chunk(
             id=f"chunk-{uuid4().hex}",
-            text="Wireless headphones guide.",
+            text=(
+                f"Wireless headphones guide.\n[[image_caption:{image_id}]]\n"
+                "Black wireless headphones.\n\n"
+                "This paragraph should remain normal chunk content."
+            ),
             metadata={
                 "source_path": source_path,
                 "image_refs": [image_id],
-                "image_captions": [
-                    {
-                        "image_id": image_id,
-                        "status": "success",
-                        "description": "Black wireless headphones.",
-                    }
-                ],
             },
             chunk_index=0,
             start_offset=0,
@@ -186,6 +178,9 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
         assert first.bm25_chunk_ids == first.chunk_ids
         assert first.image_ids == [image_id]
         assert repeated == first
+        first_image_record = image_storage.find_by_collection(collection_id)[0]
+        assert first_image_record.quality_status == "ok"
+        assert first_image_record.metadata["caption"] == "Black wireless headphones."
 
         replacement = chunks[0].model_copy(
             update={
@@ -244,8 +239,7 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
         image_record = image_storage.find_by_collection(collection_id)[0]
         assert Path(image_record.file_path).parent.name == collection_id
         assert Path(image_record.file_path).read_bytes() == b"fake-png-content"
-        assert image_record.quality_status == "ok"
-        assert image_record.metadata["caption"] == "Black wireless headphones."
+        assert image_record.quality_status == "pending"
     finally:
         with pool.transaction() as connection:
             connection.execute(
@@ -296,10 +290,6 @@ def test_upsert_step_rolls_back_database_snapshot_when_vector_write_fails(
                 {
                     "id": image_id,
                     "path": str(source_image),
-                    "page": 0,
-                    "text_offset": document_text.index(placeholder),
-                    "text_length": len(placeholder),
-                    "position": {"width": 10, "height": 10},
                 }
             ],
         },
@@ -397,6 +387,7 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
     if not database_url:
         pytest.skip("DATABASE_URL is required for ingestion pipeline integration")
 
+    from src.core.config import load_prompt
     from src.ingestion import IngestionPipeline, IngestionPipelineResult
     from src.ingestion.chunk import DocumentChunker, SplitterStep
     from src.ingestion.embedding import (
@@ -423,27 +414,32 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
         DocumentRepository,
     )
 
-    class FakeImageTransform:
+    class FakeVisionLLM:
         """Return a deterministic caption without an external Vision provider."""
 
-        def transform(
+        def caption_image(
             self,
-            image: dict[str, object],
+            image_path: str,
             *,
+            prompt: object | None = None,
+            image_type: str = "product",
             document_context: str = "",
-        ) -> dict[str, object]:
+        ) -> object:
             """Generate one stable success caption for the referenced image."""
 
-            assert image["id"]
+            from src.libs.llm import VisionCaptionResponse
+
+            assert image_path
+            assert prompt is not None
+            assert image_type == "product"
             assert document_context
-            return {
-                "status": "success",
-                "description": "Product comparison image for wireless headphones.",
-                "extracted_text": "wireless headphones",
-                "key_facts": ["product comparison"],
-                "provider": "fake",
-                "model": "fake-vision",
-            }
+            return VisionCaptionResponse(
+                status="success",
+                description="Product comparison image for wireless headphones.",
+                reason="",
+                provider="fake",
+                model="fake-vision",
+            )
 
     collection_id = f"c10-{uuid4().hex}"
     source_image = tmp_path / "product.png"
@@ -479,7 +475,8 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
                 [
                     MetadataEnricher(),
                     ImageCaptioner(
-                        image_transform=FakeImageTransform(),
+                        vision_llm=FakeVisionLLM(),
+                        prompt=load_prompt("config/prompts/image_caption_prompt.yaml"),
                         enabled=True,
                     ),
                 ]
@@ -512,7 +509,9 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
         assert first.status == "indexed"
         assert first.document is not None
         assert len(first.chunks) == 1
-        assert first.chunks[0].metadata["image_caption_status"] == "success"
+        assert "[[image_caption:" in first.chunks[0].text
+        assert "Product comparison image for wireless headphones." in first.chunks[0].text
+        assert "image_caption_status" not in first.chunks[0].metadata
         assert first.indexing_result is not None
         assert first.indexing_result.bm25_index.chunk_count == 1
         assert first.upsert_result is not None
@@ -537,7 +536,6 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
             "load",
             "split",
             "transform",
-            "image_caption",
             "embed",
             "upsert",
         ]
@@ -556,7 +554,7 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
         )
         assert [
             step["name"] for step in transform_stage["sub_stages"]
-        ] == ["metadata_enrich", "image_to_text"]
+        ] == ["metadata_enrich", "image_captioner"]
         assert [
             step["provider"] for step in transform_stage["sub_stages"]
         ] == ["MetadataEnricher", "ImageCaptioner"]

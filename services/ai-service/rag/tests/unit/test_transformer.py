@@ -9,6 +9,7 @@ behavior execute through the real transform implementations.
 
 from __future__ import annotations
 
+import base64
 import importlib
 import json
 import sys
@@ -33,13 +34,15 @@ transform_module = importlib.import_module("src.ingestion.transform")
 Chunk = types_module.Chunk
 Document = types_module.Document
 IngestionError = errors_module.IngestionError
+ProviderError = errors_module.ProviderError
 LLMResponse = llm_module.LLMResponse
+VisionCaptionResponse = llm_module.VisionCaptionResponse
+DashScopeVisionLLM = llm_module.DashScopeVisionLLM
 BaseTransform = transform_contract_module.BaseTransform
 DocumentSummarizer = document_summarizer_module.DocumentSummarizer
 ChunkRewriter = transform_module.ChunkRewriter
 DenoiseTransform = transform_module.DenoiseTransform
 ImageCaptioner = transform_module.ImageCaptioner
-ImageToTextTransform = transform_module.ImageToTextTransform
 MetadataEnricher = transform_module.MetadataEnricher
 SemanticMergeTransform = transform_module.SemanticMergeTransform
 TransformPipeline = transform_module.TransformPipeline
@@ -333,10 +336,10 @@ def test_metadata_enricher_adds_context_without_mutating_input() -> None:
     )
 
     assert result[0] is not source
-    assert result[0].metadata["title"] == "Stress Toy Guide"
     assert result[0].metadata["topic"] == "quiet office stress relief"
     assert result[0].metadata["collection"] == "shopping_guides"
     assert "title" not in source.metadata
+    assert "title" not in result[0].metadata
 
 
 def test_chunk_rewriter_uses_llm_and_is_idempotent() -> None:
@@ -368,10 +371,11 @@ def test_chunk_rewriter_uses_llm_and_is_idempotent() -> None:
     assert rewritten[0].id != source.id
     assert rewritten[0].start_offset == source.start_offset
     assert rewritten[0].end_offset == source.end_offset
-    assert rewritten[0].metadata["rewrite"]["provider"] == "fake"
-    assert repeated == rewritten
-    llm.chat.assert_called_once()
-    user_message = llm.chat.call_args.args[0][1].content
+    assert "rewrite" not in rewritten[0].metadata
+    assert repeated[0].text == rewritten[0].text
+    assert "rewrite" not in repeated[0].metadata
+    assert llm.chat.call_count == 2
+    user_message = llm.chat.call_args_list[0].args[0][1].content
     assert "Document summary:" in user_message
     assert "quiet stress-relief products" in user_message
     assert "Metadata:" not in user_message
@@ -461,8 +465,7 @@ def test_chunk_rewriter_skips_image_placeholder_only_chunk() -> None:
     assert rewritten[0].text == source.text
     assert rewritten[0].id == source.id
     assert rewritten[0].metadata["image_refs"] == ["image-one", "image-two"]
-    assert rewritten[0].metadata["rewrite"]["status"] == "skipped"
-    assert rewritten[0].metadata["rewrite"]["reason"] == "image_placeholder_only"
+    assert "rewrite" not in rewritten[0].metadata
     llm.chat.assert_not_called()
 
 
@@ -646,7 +649,7 @@ def test_denoise_transform_cleans_typical_parser_noise_and_preserves_images() ->
     assert "--------------------" not in cleaned[0].text
     assert "suitable for quiet office use." in cleaned[0].text
     assert "[[image:image-stress-ball]]" in cleaned[0].text
-    assert cleaned[0].metadata["denoise"]["removed_line_count"] >= 4
+    assert "denoise" not in cleaned[0].metadata
     assert repeated == cleaned
 
 
@@ -670,99 +673,130 @@ def test_denoise_preserves_repeated_content_outside_document_boundaries() -> Non
     assert "2026" in cleaned[0].text
 
 
-def test_image_captioner_generates_metadata_for_referenced_images() -> None:
-    """Require enabled image captioning to enrich chunks with structured metadata.
-
-    The ingestion pipeline keeps image captions in metadata so later Dense and
-    BM25 steps can decide how to compose searchable text without coupling the
-    captioner to indexing internals. A failure here means image references are
-    no longer converted into retrievable caption data.
-    """
+def test_image_captioner_replaces_placeholders_and_records_trace_details() -> None:
+    """Require image captions to become searchable text, not chunk metadata."""
 
     source = make_chunk(
         text="[[image:image-stress-ball]]\nSoft silicone models are quiet.",
         metadata={
             "image_refs": ["image-stress-ball"],
-            "images": [
+        },
+    )
+    vision_llm = Mock()
+    vision_llm.caption_image.return_value = VisionCaptionResponse(
+        status="success",
+        description="图片展示一个蓝色硅胶解压球，表面为磨砂材质。",
+        reason="",
+        provider="fake-vision",
+        model="fake-vl",
+    )
+
+    captioner = ImageCaptioner(
+        vision_llm=vision_llm,
+        prompt=config_module.load_prompt("config/prompts/image_caption_prompt.yaml"),
+        enabled=True,
+    )
+    captioned = captioner.caption(
+        [source],
+        context={
+            "document_context": "stress toy guide",
+            "document_images": [
                 {
                     "id": "image-stress-ball",
                     "path": "data/images/shopping_guides/image-stress-ball.png",
-                    "page": 1,
-                    "text_offset": 0,
-                    "text_length": len("[[image:image-stress-ball]]"),
-                    "position": {"width": 640, "height": 480},
                 }
             ],
         },
     )
-    vision_llm = Mock()
-    vision_llm.chat.return_value = LLMResponse(
-        content=json.dumps(
-            {
-                "status": "success",
-                "description": "图片展示一个蓝色硅胶解压球，表面为磨砂材质。",
-                "extracted_text": "",
-                "key_facts": ["蓝色硅胶", "磨砂材质"],
-                "reason": "",
-            },
-            ensure_ascii=False,
-        ),
-        provider="fake-vision",
-        model="fake-vl",
-    )
-    prompt = config_module.load_prompt("config/prompts/image_to_text_prompt.yaml")
-
-    captioner = ImageCaptioner(
-        image_transform=ImageToTextTransform(vision_llm=vision_llm, prompt=prompt),
-        enabled=True,
-    )
-    captioned = captioner.caption([source], context={"document_context": "stress toy guide"})
 
     assert captioned[0] is not source
-    assert captioned[0].text == source.text
-    assert captioned[0].metadata["image_caption_status"] == "success"
-    assert captioned[0].metadata["image_captions"] == [
-        {
-            "image_id": "image-stress-ball",
-            "status": "success",
-            "description": "图片展示一个蓝色硅胶解压球，表面为磨砂材质。",
-            "extracted_text": "",
-            "key_facts": ["蓝色硅胶", "磨砂材质"],
-            "reason": "",
-            "provider": "fake-vision",
-            "model": "fake-vl",
-        }
+    assert captioned[0].text == (
+        "[[image_caption:image-stress-ball]]\n"
+        "图片展示一个蓝色硅胶解压球，表面为磨砂材质。\n\n"
+        "Soft silicone models are quiet."
+    )
+    assert captioned[0].metadata == source.metadata
+    assert "image_caption_status" not in captioned[0].metadata
+    assert "image_captions" not in captioned[0].metadata
+    assert captioner.trace_details() == {
+        "provider": "fake-vision",
+        "model": "fake-vl",
+        "image_count": 1,
+        "caption_count": 1,
+        "status_counts": {"success": 1},
+        "failures": [],
+    }
+    vision_llm.caption_image.assert_called_once()
+
+
+def test_dashscope_vision_llm_sends_local_image_as_base64_data_url(
+    tmp_path: Path,
+) -> None:
+    """Require the provider adapter to encode local images before API calls."""
+
+    image_bytes = b"\x89PNG\r\n\x1a\nfake-image-content"
+    image_path = tmp_path / "product.png"
+    image_path.write_bytes(image_bytes)
+    response = Mock()
+    response.choices = [
+        Mock(
+            message=Mock(
+                content=json.dumps(
+                    {
+                        "status": "success",
+                        "description": "A product comparison image.",
+                        "reason": "",
+                    }
+                )
+            )
+        )
     ]
-    vision_llm.chat.assert_called_once()
+    client = Mock()
+    client.chat.completions.create.return_value = response
+
+    result = DashScopeVisionLLM(model="qwen-vl-max", client=client).caption_image(
+        image_path,
+        document_context="shopping guide",
+    )
+
+    messages = client.chat.completions.create.call_args.kwargs["messages"]
+    image_url = messages[1]["content"][1]["image_url"]["url"]
+    assert image_url == (
+        "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
+    )
+    assert result.description == "A product comparison image."
 
 
 def test_image_captioner_skips_when_disabled_without_calling_vision_llm() -> None:
     """Require disabled vision captioning to be visible and side-effect free."""
 
     source = make_chunk(metadata={"image_refs": ["image-1"], "images": []})
-    image_transform = Mock()
-    captioner = ImageCaptioner(image_transform=image_transform, enabled=False)
+    vision_llm = Mock()
+    captioner = ImageCaptioner(vision_llm=vision_llm, prompt=None, enabled=False)
 
     captioned = captioner.caption([source])
 
     assert captioner.should_caption(source) is False
-    assert captioned[0].metadata["image_caption_status"] == "skipped"
-    image_transform.transform.assert_not_called()
+    assert captioned[0].text == source.text
+    assert "image_caption_status" not in captioned[0].metadata
+    assert captioner.trace_details()["status_counts"] == {"skipped": 1}
+    vision_llm.caption_image.assert_not_called()
 
 
 def test_image_captioner_ignores_chunks_without_image_refs() -> None:
     """Require text-only chunks to avoid noisy caption metadata."""
 
     source = make_chunk(metadata={"image_refs": []})
-    image_transform = Mock()
+    vision_llm = Mock()
 
-    captioned = ImageCaptioner(image_transform=image_transform, enabled=True).caption(
+    captioned = ImageCaptioner(vision_llm=vision_llm, prompt=None, enabled=True).caption(
         [source]
     )
 
     assert "image_caption_status" not in captioned[0].metadata
     assert "image_captions" not in captioned[0].metadata
-    image_transform.transform.assert_not_called()
+    assert captioned[0].text == source.text
+    vision_llm.caption_image.assert_not_called()
 
 
 def test_transform_pipeline_respects_disabled_vision_settings() -> None:
@@ -788,17 +822,9 @@ def test_transform_pipeline_respects_disabled_vision_settings() -> None:
         ),
     ]
     vision_llm = Mock()
-    vision_llm.chat.return_value = LLMResponse(
-        content=json.dumps(
-            {
-                "status": "success",
-                "description": "图片展示一个蓝色硅胶解压球。",
-                "extracted_text": "",
-                "key_facts": [],
-                "reason": "",
-            },
-            ensure_ascii=False,
-        ),
+    vision_llm.caption_image.return_value = VisionCaptionResponse(
+        status="success",
+        description="图片展示一个蓝色硅胶解压球。",
         provider="fake-vision",
         model="fake-vl",
     )
@@ -806,16 +832,6 @@ def test_transform_pipeline_respects_disabled_vision_settings() -> None:
         text="[[image:image-1]]\nSoft silicone models are quiet.",
         metadata={
             "image_refs": ["image-1"],
-            "images": [
-                {
-                    "id": "image-1",
-                    "path": "data/images/shopping_guides/image-1.png",
-                    "page": 1,
-                    "text_offset": 0,
-                    "text_length": len("[[image:image-1]]"),
-                    "position": {"width": 640, "height": 480},
-                }
-            ],
         },
     )
 
@@ -826,8 +842,9 @@ def test_transform_pipeline_respects_disabled_vision_settings() -> None:
     )
     transformed = pipeline.run([source])
 
-    assert transformed[0].metadata["image_caption_status"] == "skipped"
-    vision_llm.chat.assert_not_called()
+    assert "image_caption_status" not in transformed[0].metadata
+    assert "[[image:image-1]]" in transformed[0].text
+    vision_llm.caption_image.assert_not_called()
 
 
 def test_image_captioner_records_failed_and_low_quality_results() -> None:
@@ -835,56 +852,109 @@ def test_image_captioner_records_failed_and_low_quality_results() -> None:
 
     failed_chunk = make_chunk(
         chunk_id="chunk-failed",
+        text="[[image:image-1]]\nFailed image context.",
         metadata={
             "image_refs": ["image-1"],
-            "images": [
-                {
-                    "id": "image-1",
-                    "path": "data/images/shopping_guides/image-1.png",
-                    "page": 1,
-                    "text_offset": 0,
-                    "text_length": 17,
-                    "position": {"width": 640, "height": 480},
-                }
-            ],
         },
     )
     low_quality_chunk = make_chunk(
         chunk_id="chunk-low-quality",
+        text="[[image:image-2]]\nLow quality image context.",
         metadata={
             "image_refs": ["image-2"],
-            "images": [
-                {
-                    "id": "image-2",
-                    "path": "data/images/shopping_guides/image-2.png",
-                    "page": 2,
-                    "text_offset": 0,
-                    "text_length": 17,
-                    "position": {"width": 20, "height": 20},
-                }
-            ],
         },
     )
-    image_transform = Mock()
-    image_transform.transform.side_effect = [
+    vision_llm = Mock()
+    vision_llm.caption_image.side_effect = [
         RuntimeError("vision unavailable"),
-        {
-            "status": "success",
-            "description": "太短",
-            "extracted_text": "",
-            "key_facts": [],
-            "reason": "",
-            "provider": "fake-vision",
-            "model": "fake-vl",
-        },
+        VisionCaptionResponse(
+            status="success",
+            description="太短",
+            reason="",
+            provider="fake-vision",
+            model="fake-vl",
+        ),
     ]
 
-    captioned = ImageCaptioner(image_transform=image_transform, enabled=True).caption(
-        [failed_chunk, low_quality_chunk]
+    captioner = ImageCaptioner(vision_llm=vision_llm, prompt=None, enabled=True)
+    captioned = captioner.caption(
+        [failed_chunk, low_quality_chunk],
+        context={
+            "document_images": [
+                {"id": "image-1", "path": "data/images/shopping_guides/image-1.png"},
+                {"id": "image-2", "path": "data/images/shopping_guides/image-2.png"},
+            ]
+        },
     )
 
-    assert captioned[0].metadata["image_caption_status"] == "failed"
-    assert captioned[0].metadata["image_captions"][0]["status"] == "failed"
     assert captioned[0].text == failed_chunk.text
-    assert captioned[1].metadata["image_caption_status"] == "low_quality"
-    assert captioned[1].metadata["image_captions"][0]["status"] == "low_quality"
+    assert captioned[1].text == low_quality_chunk.text
+    assert "image_caption_status" not in captioned[0].metadata
+    assert "image_captions" not in captioned[1].metadata
+    assert captioner.trace_details()["status_counts"] == {
+        "failed": 1,
+        "low_quality": 1,
+    }
+
+
+def test_image_captioner_reuses_duplicate_image_failure_and_records_safe_cause() -> None:
+    """Require one Vision call per image ID and actionable trace-safe failures."""
+
+    chunks = [
+        make_chunk(
+            chunk_id="chunk-1",
+            text="First context.\n[[image:image-shared]]",
+            metadata={"image_refs": ["image-shared"]},
+        ),
+        make_chunk(
+            chunk_id="chunk-2",
+            text="Second context.\n[[image:image-shared]]",
+            chunk_index=1,
+            metadata={"image_refs": ["image-shared"]},
+        ),
+    ]
+    vision_llm = Mock()
+    vision_llm.caption_image.side_effect = ProviderError(
+        "Unable to caption image with DashScope Vision LLM",
+        context={"provider": "dashscope", "model": "qwen-vl-max"},
+        cause=RuntimeError(
+            "HTTP 400 invalid model; api_key=SECRET_KEY; "
+            "payload=data:image/png;base64,SECRET_IMAGE"
+        ),
+    )
+    captioner = ImageCaptioner(vision_llm=vision_llm, prompt=None, enabled=True)
+
+    output = captioner.caption(
+        chunks,
+        context={
+            "document_images": [
+                {
+                    "id": "image-shared",
+                    "path": "data/images/shopping_guides/image-shared.png",
+                }
+            ]
+        },
+    )
+
+    assert [chunk.text for chunk in output] == [chunk.text for chunk in chunks]
+    vision_llm.caption_image.assert_called_once()
+    assert captioner.trace_details() == {
+        "provider": "dashscope",
+        "model": "qwen-vl-max",
+        "image_count": 1,
+        "caption_count": 0,
+        "status_counts": {"failed": 1},
+        "failures": [
+            {
+                "image_id": "image-shared",
+                "status": "failed",
+                "reason": (
+                    "Unable to caption image with DashScope Vision LLM: "
+                    "RuntimeError: HTTP 400 invalid model; "
+                    "api_key=[redacted-secret]; "
+                    "payload=[redacted-base64-image]"
+                ),
+                "error_type": "RuntimeError",
+            }
+        ],
+    }

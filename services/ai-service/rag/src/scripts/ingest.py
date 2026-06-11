@@ -23,6 +23,7 @@ from typing import Any
 from dotenv import find_dotenv, load_dotenv
 
 from src.core.config import RAG_ROOT, DatabaseSettings, RagSettings, load_prompt, load_settings
+from src.core.errors import ConfigurationError
 from src.ingestion import DocumentSummarizer, IngestionPipeline
 from src.ingestion.chunk import DocumentChunker, SplitterStep
 from src.ingestion.embedding import (
@@ -34,7 +35,7 @@ from src.ingestion.embedding import (
 from src.ingestion.storage import UpsertStep
 from src.ingestion.transform import TransformPipeline
 from src.libs.embedding import EmbeddingFactory
-from src.libs.llm import LLMFactory
+from src.libs.llm import DashScopeVisionLLM, LLMFactory
 from src.libs.loader import LoaderFactory
 from src.libs.splitter import SplitterFactory
 from src.libs.vector_store import VectorStoreFactory
@@ -280,7 +281,10 @@ def _build_pipeline(
         splitter_step=SplitterStep(
             DocumentChunker(splitter=SplitterFactory.create(settings=settings))
         ),
-        transform_pipeline=TransformPipeline.from_settings(settings),
+        transform_pipeline=TransformPipeline.from_settings(
+            settings,
+            vision_llm=_build_vision_llm(settings),
+        ),
         transform_snapshot_options=settings.observability.transform_snapshots.model_dump(),
         embedding_step=EmbeddingStep(
             dense_encoder=DenseEncoder(embedding=embedding),
@@ -338,6 +342,41 @@ def _build_document_summarizer(
         llm=llm or LLMFactory.create(settings=settings, provider=llm_provider),
         prompt=load_prompt(prompt_path),
         max_document_chars=max_document_chars,
+    )
+
+
+def _build_vision_llm(settings: RagSettings) -> DashScopeVisionLLM | None:
+    """Create the optional Vision LLM used by ImageCaptioner.
+
+    Args:
+        settings: Validated runtime settings containing the selected Vision
+            provider and environment-variable references.
+
+    Returns:
+        A configured DashScope Vision client when enabled; otherwise ``None``.
+
+    Raises:
+        ConfigurationError: If Vision is enabled with an unsupported provider.
+    """
+
+    if not settings.vision_llm.enabled:
+        return None
+    provider_name = settings.vision_llm.default
+    provider = settings.vision_llm.selected_provider
+    if provider_name not in {"qwen_vl_max", "dashscope"}:
+        raise ConfigurationError(
+            "Unsupported Vision LLM provider",
+            context={
+                "provider": provider_name,
+                "supported": ["qwen_vl_max", "dashscope"],
+            },
+        )
+    return DashScopeVisionLLM(
+        model=str(provider.model),
+        api_key_env=provider.api_key_env,
+        base_url_env=provider.base_url_env,
+        base_url=provider.base_url,
+        timeout_seconds=provider.timeout_seconds or 90,
     )
 
 

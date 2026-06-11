@@ -51,9 +51,8 @@ class ChunkRewriter(BaseTransform):
             context: Optional runtime context reserved for trace orchestration.
 
         Returns:
-            Rewritten chunks with regenerated IDs and rewrite provenance.
-            Chunks already produced by the same Prompt version are copied
-            without another model request.
+            Rewritten chunks with regenerated IDs. Execution provenance is
+            reported by the Transform Pipeline sub-stage, not chunk metadata.
 
         Raises:
             IngestionError: If the LLM request fails or returns unusable text.
@@ -66,7 +65,7 @@ class ChunkRewriter(BaseTransform):
         ]
 
     def _rewrite_chunk(self, chunk: Chunk, *, document_summary: str) -> Chunk:
-        """Rewrite one chunk unless its provenance proves idempotent output.
+        """Rewrite one chunk while keeping metadata free of provenance.
 
         Args:
             chunk: Source-addressable chunk to enhance.
@@ -74,35 +73,19 @@ class ChunkRewriter(BaseTransform):
                 restore global context that may be absent from the chunk text.
 
         Returns:
-            A rewritten chunk with regenerated ID and provider provenance, or a
-            deep copy when the current text already matches this Prompt version.
+            A rewritten chunk with regenerated ID, or a deep copy for chunks
+            that only contain image placeholders.
 
         Raises:
             IngestionError: If prompt rendering, model execution, or response
                 validation fails.
         """
 
-        current_hash = _content_hash(chunk.text)
-        rewrite_metadata = chunk.metadata.get("rewrite")
-        if (
-            isinstance(rewrite_metadata, dict)
-            and rewrite_metadata.get("version") == self._version
-            and rewrite_metadata.get("output_hash") == current_hash
-        ):
-            return chunk.model_copy(deep=True)
         if _is_image_placeholder_only(chunk.text):
-            metadata = deepcopy(chunk.metadata)
-            metadata["rewrite"] = {
-                "version": self._version,
-                "status": "skipped",
-                "reason": "image_placeholder_only",
-                "input_hash": current_hash,
-                "output_hash": current_hash,
-            }
-            return chunk.model_copy(update={"metadata": metadata}, deep=True)
+            return chunk.model_copy(deep=True)
 
         try:
-            rewritten_text, responses = self._rewrite_text_nodes(
+            rewritten_text, _responses = self._rewrite_text_nodes(
                 chunk.text,
                 document_summary=document_summary,
             )
@@ -117,16 +100,7 @@ class ChunkRewriter(BaseTransform):
                 cause=error,
             ) from error
 
-        response = responses[-1]
         metadata = deepcopy(chunk.metadata)
-        metadata["rewrite"] = {
-            "version": self._version,
-            "provider": response.provider,
-            "model": response.model,
-            "segment_count": len(responses),
-            "input_hash": current_hash,
-            "output_hash": _content_hash(rewritten_text),
-        }
         return chunk.model_copy(
             update={
                 "id": _chunk_id_for_text(chunk, rewritten_text),
