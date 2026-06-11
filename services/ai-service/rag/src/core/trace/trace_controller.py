@@ -161,7 +161,8 @@ class TraceController:
         self,
         *,
         status: TraceStatus,
-        top_k_results: list[dict[str, Any]],
+        query_result: dict[str, Any],
+        top_score: float | int | None,
         candidate_count_by_stage: dict[str, int],
         fallback_used: bool,
         error: dict[str, Any] | None = None,
@@ -174,7 +175,8 @@ class TraceController:
 
         Args:
             status: Final query trace lifecycle status.
-            top_k_results: Public-safe final ranked result summaries.
+            query_result: Public RAG output sent to the Agent or caller.
+            top_score: Highest final retrieval/rerank score, or ``None``.
             candidate_count_by_stage: Candidate counts for Dashboard charts.
             fallback_used: Whether retrieval or rerank degraded gracefully.
             error: Optional trace-level error object.
@@ -190,7 +192,8 @@ class TraceController:
         snapshot = self._context.finish_query(
             status=status,
             finished_at=self._clock(),
-            top_k_results=top_k_results,
+            query_result=query_result,
+            top_score=top_score,
             candidate_count_by_stage=candidate_count_by_stage,
             fallback_used=fallback_used,
             error=error,

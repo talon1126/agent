@@ -261,7 +261,7 @@ CREATE INDEX IF NOT EXISTS idx_image_index_document_id
 CREATE INDEX IF NOT EXISTS idx_image_index_image_hash
     ON image_index (image_hash);
 
--- Store query traces as four independent JSONB sections. Commonly filtered
+-- Store query traces with an independent public result snapshot. Commonly filtered
 -- values remain first-class columns so Dashboard list views do not need to
 -- scan nested JSON for collection, status, time range, or request source.
 CREATE TABLE IF NOT EXISTS rag_query_traces (
@@ -274,6 +274,7 @@ CREATE TABLE IF NOT EXISTS rag_query_traces (
     status TEXT NOT NULL DEFAULT 'running',
     basic_info JSONB NOT NULL DEFAULT '{}'::jsonb,
     stages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    query_result JSONB NOT NULL DEFAULT '{}'::jsonb,
     summary_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     evaluation_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     error JSONB,
@@ -296,6 +297,8 @@ CREATE TABLE IF NOT EXISTS rag_query_traces (
         CHECK (jsonb_typeof(basic_info) = 'object'),
     CONSTRAINT chk_rag_query_traces_stages_array
         CHECK (jsonb_typeof(stages) = 'array'),
+    CONSTRAINT chk_rag_query_traces_query_result_object
+        CHECK (jsonb_typeof(query_result) = 'object'),
     CONSTRAINT chk_rag_query_traces_summary_metrics_object
         CHECK (jsonb_typeof(summary_metrics) = 'object'),
     CONSTRAINT chk_rag_query_traces_evaluation_metrics_object
@@ -310,6 +313,9 @@ CREATE INDEX IF NOT EXISTS idx_rag_query_traces_status_started_at
     ON rag_query_traces (status, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_query_traces_request_source
     ON rag_query_traces (request_source);
+
+ALTER TABLE rag_query_traces
+    ADD COLUMN IF NOT EXISTS query_result JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- Store ingestion traces using the same four-section contract. Source columns
 -- support document-oriented history views and SHA256-based trace lookup.

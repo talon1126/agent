@@ -263,7 +263,8 @@ class QueryRuntime:
             fallback_used = hybrid.fallback_used or rerank_fallback
             trace_controller.flush_query(
                 status="degraded" if fallback_used else "success",
-                top_k_results=_result_summaries(final_results),
+                query_result=_query_result_snapshot(response, final_results),
+                top_score=_top_score(final_results),
                 candidate_count_by_stage=_candidate_counts(
                     dense_results=hybrid.dense_results,
                     sparse_results=hybrid.sparse_results,
@@ -289,7 +290,8 @@ class QueryRuntime:
             if trace_controller.context.finished_at is None:
                 trace_controller.flush_query(
                     status="failed",
-                    top_k_results=_result_summaries(final_results),
+                    query_result=_empty_query_result(),
+                    top_score=_top_score(final_results),
                     candidate_count_by_stage=_candidate_counts(
                         dense_results=hybrid.dense_results if hybrid else [],
                         sparse_results=hybrid.sparse_results if hybrid else [],
@@ -567,6 +569,58 @@ def _result_summaries(
         {"chunk_id": result.chunk_id, "score": result.score}
         for result in results
     ]
+
+
+def _query_result_snapshot(
+    response: KnowledgeHubResponse,
+    results: Sequence[RetrievalResult],
+) -> dict[str, Any]:
+    """Build the compact public result snapshot persisted with a Query Trace.
+
+    The public response retains complete citation and image records for caller
+    features such as source navigation and image delivery. Query Trace stores
+    only the fields required for evaluation, auditing, and result correlation.
+    """
+
+    return {
+        "contexts": [
+            {"chunk_id": result.chunk_id, "score": result.score, "rank": rank}
+            for rank, result in enumerate(results, start=1)
+        ],
+        "content": response.content,
+        "citations": [
+            {
+                "document_id": citation.document_id,
+                "chunk_id": citation.chunk_id,
+                "title": citation.title,
+                "section_path": list(citation.section_path),
+                "score": citation.score,
+                "trace_id": citation.trace_id,
+            }
+            for citation in response.citations
+        ],
+        "images": [
+            {
+                "image_id": image.image_id,
+                "chunk_ids": list(image.chunk_ids),
+                "caption": image.caption,
+                "quality_status": image.quality_status,
+            }
+            for image in response.images
+        ],
+    }
+
+
+def _empty_query_result() -> dict[str, Any]:
+    """Return a valid empty result snapshot for failed queries."""
+
+    return {"contexts": [], "content": "", "citations": [], "images": []}
+
+
+def _top_score(results: Sequence[RetrievalResult]) -> float | None:
+    """Return the first final result's score for compact summary reporting."""
+
+    return results[0].score if results else None
 
 
 def _candidate_counts(

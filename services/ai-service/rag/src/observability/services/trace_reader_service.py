@@ -123,10 +123,10 @@ class TraceHistoryItem:
 class TraceDetail:
     """Represent the complete Dashboard detail view for one trace.
 
-    Detail rows preserve the four trace sections required by the DEV_SPEC while
-    adding Dashboard-specific projections: waterfall rows, candidate-count
-    comparisons, and rerank delta. Page modules should consume this DTO instead
-    of reaching into PostgreSQL repository records directly.
+    Detail rows preserve the trace sections required by the DEV_SPEC, including
+    the Query-only public result snapshot, while adding Dashboard-specific
+    projections. Page modules consume this DTO instead of reaching into
+    PostgreSQL repository records directly.
     """
 
     trace_id: str
@@ -140,6 +140,7 @@ class TraceDetail:
     waterfall: tuple[TraceStageWaterfallItem, ...]
     transform_steps: tuple[TraceTransformStepItem, ...] = ()
     candidate_counts: Mapping[str, int] = field(default_factory=dict)
+    query_result: Mapping[str, Any] = field(default_factory=dict)
     summary_metrics: Mapping[str, Any] = field(default_factory=dict)
     evaluation_metrics: Mapping[str, Any] = field(default_factory=dict)
     rerank_delta: Mapping[str, Any] = field(default_factory=dict)
@@ -278,6 +279,7 @@ def _query_detail(record: QueryTraceRecord) -> TraceDetail:
         duration_ms=_duration(record),
         waterfall=_waterfall(record.stages),
         candidate_counts=_candidate_counts(record.summary_metrics, record.stages),
+        query_result=record.query_result,
         summary_metrics=record.summary_metrics,
         evaluation_metrics=record.evaluation_metrics,
         rerank_delta=dict(record.evaluation_metrics.get("rerank_delta") or {}),

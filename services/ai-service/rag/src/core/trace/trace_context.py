@@ -9,8 +9,8 @@ services without changing retrieval and ingestion business code.
 This module does not configure Python logging, open files, write PostgreSQL
 rows, inspect provider SDK responses, or decide Dashboard rendering. It owns
 only validation, defensive copying, timestamp normalization, and the stable
-four-section trace structure: basic information, stage details, summary
-metrics, and evaluation metrics.
+shared trace structure. Query traces additionally own a public ``query_result``
+snapshot between stage details and metric sections.
 """
 
 from __future__ import annotations
@@ -285,27 +285,173 @@ def _validate_bool(value: bool, *, field_name: str) -> bool:
     return value
 
 
-def _validate_top_k_results(value: list[dict[str, Any]], *, field_name: str) -> list[Any]:
-    """Validate and copy the query trace Top-k result summary list.
+def _validate_query_result(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate the public RAG result snapshot stored by a Query Trace.
 
     Args:
-        value: Public-safe summaries of final ranked results. The trace stores
-            only compact objects supplied by query/response builders, not full
-            internal provider payloads.
-        field_name: Metric name used in validation errors.
+        value: Result payload containing ranked context identities, formatted
+            content, citations, and public image projections.
 
     Returns:
-        A JSON-safe defensive copy of the result list.
+        A JSON-safe defensive copy with normalized context ranks and scores.
 
     Raises:
-        ValueError: If the value is not a list of dictionaries.
+        ValueError: If the result shape is incomplete or invalid.
     """
 
-    if not isinstance(value, list):
-        raise ValueError(f"{field_name} must be a list of result summaries")
-    if any(not isinstance(item, dict) for item in value):
-        raise ValueError(f"{field_name} must contain dictionaries only")
-    return _json_safe_copy(value)
+    if not isinstance(value, dict):
+        raise ValueError("query_result must be a dictionary")
+    required = {"contexts", "content", "citations", "images"}
+    if set(value) != required:
+        raise ValueError(f"query_result must contain exactly {sorted(required)}")
+    if not isinstance(value["content"], str):
+        raise ValueError("query_result content must be a string")
+    for field_name in ("contexts", "citations", "images"):
+        if not isinstance(value[field_name], list):
+            raise ValueError(f"query_result {field_name} must be a list")
+    contexts: list[dict[str, Any]] = []
+    for context in value["contexts"]:
+        if not isinstance(context, dict):
+            raise ValueError("query_result contexts must contain dictionaries")
+        contexts.append(
+            {
+                "chunk_id": _validate_non_blank(
+                    context.get("chunk_id"),
+                    field_name="query_result context chunk_id",
+                ),
+                "score": _validate_optional_finite_float(
+                    context.get("score"),
+                    field_name="query_result context score",
+                ),
+                "rank": _validate_positive_int(
+                    context.get("rank"),
+                    field_name="query_result context rank",
+                ),
+            }
+        )
+    citations = [
+        _validate_query_result_citation(citation)
+        for citation in value["citations"]
+    ]
+    images = [_validate_query_result_image(image) for image in value["images"]]
+    return {
+        "contexts": contexts,
+        "content": value["content"],
+        "citations": citations,
+        "images": images,
+    }
+
+
+def _validate_query_result_citation(value: Any) -> dict[str, Any]:
+    """Validate one compact citation stored in a Query Trace result.
+
+    Query Trace deliberately omits ``source_uri`` because the complete public
+    response and document storage already own source navigation details.
+    """
+
+    fields = {
+        "document_id",
+        "chunk_id",
+        "title",
+        "section_path",
+        "score",
+        "trace_id",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError(
+            f"query_result citation must contain exactly {sorted(fields)}"
+        )
+    section_path = value["section_path"]
+    if not isinstance(section_path, list) or any(
+        not isinstance(section, str) or not section.strip()
+        for section in section_path
+    ):
+        raise ValueError("query_result citation section_path must contain strings")
+    return {
+        "document_id": _validate_non_blank(
+            value["document_id"],
+            field_name="query_result citation document_id",
+        ),
+        "chunk_id": _validate_non_blank(
+            value["chunk_id"],
+            field_name="query_result citation chunk_id",
+        ),
+        "title": _validate_non_blank(
+            value["title"],
+            field_name="query_result citation title",
+        ),
+        "section_path": list(section_path),
+        "score": _validate_finite_float(
+            value["score"],
+            field_name="query_result citation score",
+        ),
+        "trace_id": _validate_non_blank(
+            value["trace_id"],
+            field_name="query_result citation trace_id",
+        ),
+    }
+
+
+def _validate_query_result_image(value: Any) -> dict[str, Any]:
+    """Validate one compact image reference stored in a Query Trace result."""
+
+    fields = {"image_id", "chunk_ids", "caption", "quality_status"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError(f"query_result image must contain exactly {sorted(fields)}")
+    chunk_ids = value["chunk_ids"]
+    if not isinstance(chunk_ids, list) or not chunk_ids:
+        raise ValueError("query_result image chunk_ids must be a non-empty list")
+    normalized_chunk_ids = [
+        _validate_non_blank(
+            chunk_id,
+            field_name="query_result image chunk_id",
+        )
+        for chunk_id in chunk_ids
+    ]
+    if len(set(normalized_chunk_ids)) != len(normalized_chunk_ids):
+        raise ValueError("query_result image chunk_ids must be unique")
+    caption = value["caption"]
+    if caption is not None and not isinstance(caption, str):
+        raise ValueError("query_result image caption must be a string or null")
+    return {
+        "image_id": _validate_non_blank(
+            value["image_id"],
+            field_name="query_result image image_id",
+        ),
+        "chunk_ids": normalized_chunk_ids,
+        "caption": caption,
+        "quality_status": _validate_non_blank(
+            value["quality_status"],
+            field_name="query_result image quality_status",
+        ),
+    }
+
+
+def _validate_positive_int(value: Any, *, field_name: str) -> int:
+    """Validate a strictly positive integer."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return value
+
+
+def _validate_optional_finite_float(value: Any, *, field_name: str) -> float | None:
+    """Validate an optional finite numeric value."""
+
+    if value is None:
+        return None
+    return _validate_finite_float(value, field_name=field_name)
+
+
+def _validate_finite_float(value: Any, *, field_name: str) -> float:
+    """Validate a required finite numeric value."""
+
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{field_name} must be a finite number")
+    normalized = float(value)
+    if normalized != normalized or normalized in {float("inf"), float("-inf")}:
+        raise ValueError(f"{field_name} must be a finite number")
+    return normalized
 
 
 def _validate_candidate_count_by_stage(
@@ -382,6 +528,7 @@ class TraceContext:
     status: TraceStatus = "running"
     finished_at: datetime | None = None
     stages: list[dict[str, Any]] = field(default_factory=list)
+    query_result: dict[str, Any] = field(default_factory=dict)
     summary_metrics: dict[str, Any] = field(default_factory=dict)
     evaluation_metrics: dict[str, Any] = field(default_factory=dict)
     error: dict[str, Any] | None = None
@@ -507,6 +654,7 @@ class TraceContext:
             allowed=_VALID_TRACE_STATUSES,
         )
         self.summary_metrics = _json_section(self.summary_metrics)
+        self.query_result = _json_section(self.query_result)
         self.evaluation_metrics = _json_section(self.evaluation_metrics)
         self.error = _json_safe_copy(self.error) if self.error is not None else None
 
@@ -797,7 +945,8 @@ class TraceContext:
         self,
         *,
         status: TraceStatus,
-        top_k_results: list[dict[str, Any]],
+        query_result: dict[str, Any],
+        top_score: float | int | None,
         candidate_count_by_stage: dict[str, int],
         fallback_used: bool,
         finished_at: datetime | None = None,
@@ -811,7 +960,9 @@ class TraceContext:
 
         Args:
             status: Final trace lifecycle status.
-            top_k_results: Public-safe final Top-k result summaries.
+            query_result: Public RAG output sent to the Agent or caller.
+            top_score: Highest final retrieval or rerank score, or ``None``
+                when no context was returned.
             candidate_count_by_stage: Candidate counts for Dense, Sparse,
                 Fusion, Filter, and Rerank comparison views.
             fallback_used: Whether the query path used a degradation path, such
@@ -831,10 +982,11 @@ class TraceContext:
 
         if self.trace_type != "query":
             raise ValueError("finish_query requires a query trace")
+        self.query_result = _validate_query_result(query_result)
         summary_metrics = {
-            "top_k_results": _validate_top_k_results(
-                top_k_results,
-                field_name="top_k_results",
+            "top_score": _validate_optional_finite_float(
+                top_score,
+                field_name="top_score",
             ),
             "candidate_count_by_stage": _validate_candidate_count_by_stage(
                 candidate_count_by_stage,
@@ -921,7 +1073,7 @@ class TraceContext:
         """Return a JSON-compatible snapshot of the current trace state."""
 
         basic_info = self._basic_info()
-        return {
+        snapshot = {
             "trace_id": self.trace_id,
             "trace_type": self.trace_type,
             "collection": self.collection,
@@ -934,6 +1086,9 @@ class TraceContext:
             "evaluation_metrics": deepcopy(self.evaluation_metrics),
             "error": deepcopy(self.error),
         }
+        if self.trace_type == "query":
+            snapshot["query_result"] = deepcopy(self.query_result)
+        return snapshot
 
     def _basic_info(self) -> dict[str, Any]:
         """Build the trace-type-specific identity section."""

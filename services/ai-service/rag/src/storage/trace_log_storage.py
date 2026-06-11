@@ -157,6 +157,7 @@ def _query_record(snapshot: dict[str, Any]) -> QueryTraceRecord:
         status=_required_string(snapshot, "status"),
         basic_info=basic_info,
         stages=tuple(_required_stage_list(snapshot)),
+        query_result=_required_mapping(snapshot, "query_result"),
         summary_metrics=_required_mapping(snapshot, "summary_metrics"),
         evaluation_metrics=_required_mapping(snapshot, "evaluation_metrics"),
         error=_optional_mapping(snapshot, "error"),

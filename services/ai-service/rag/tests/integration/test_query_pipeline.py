@@ -31,7 +31,7 @@ from src.core.query_engine import (
     RerankController,
     SparseRoute,
 )
-from src.core.response import KnowledgeHubResponseBuilder
+from src.core.response import KnowledgeHubResponseBuilder, MultimodalAssembler
 from src.core.types import Chunk, Document
 from src.ingestion.embedding import BM25Indexer
 from src.libs.embedding.base_embedding import BaseEmbedding
@@ -116,6 +116,42 @@ class RetrievalFixture:
     query_vector: list[float]
 
 
+@dataclass(frozen=True, slots=True)
+class _ImageRecord:
+    """Provide one persisted-image-shaped record for response assembly."""
+
+    image_id: str
+    file_path: str
+    mime_type: str | None
+    page_num: int | None
+    width: int | None
+    height: int | None
+    quality_status: str
+    metadata: dict[str, object]
+
+
+class _ImageResolver:
+    """Resolve the integration fixture image without external storage."""
+
+    def find_by_ids(self, image_ids: list[str]) -> list[_ImageRecord]:
+        """Return the fixture image when its stable ID was requested."""
+
+        if "image-headphones" not in image_ids:
+            return []
+        return [
+            _ImageRecord(
+                image_id="image-headphones",
+                file_path="data/images/shopping_guides/headphones.png",
+                mime_type="image/png",
+                page_num=1,
+                width=640,
+                height=480,
+                quality_status="success",
+                metadata={"caption": "无线耳机佩戴示意图"},
+            )
+        ]
+
+
 def _database_url() -> str:
     """Return the integration database URL or skip when unavailable."""
 
@@ -162,6 +198,7 @@ def _chunk(
     text: str,
     chunk_index: int,
     doc_type: str,
+    image_refs: list[str] | None = None,
 ) -> Chunk:
     """Build one citation-ready chunk persisted by the integration fixture."""
 
@@ -175,6 +212,7 @@ def _chunk(
             "document_status": "published",
             "lifecycle_status": "success",
             "permissions": ["public"],
+            **({"image_refs": image_refs} if image_refs else {}),
         },
         chunk_index=chunk_index,
         start_offset=chunk_index * 100,
@@ -225,6 +263,7 @@ def _persist_fixture(
         text="办公场景可以选择安静的解压玩具，并比较材质和耐用性。",
         chunk_index=1,
         doc_type="comparison",
+        image_refs=["image-headphones"],
     )
     filtered_chunk = _chunk(
         chunk_id=f"chunk-{uuid4().hex}",
@@ -356,7 +395,9 @@ def _runtime(
         query_processor=processor,
         hybrid_search=hybrid,
         rerank_controller=controller,
-        response_builder=KnowledgeHubResponseBuilder(),
+        response_builder=KnowledgeHubResponseBuilder(
+            multimodal_assembler=MultimodalAssembler(resolver=_ImageResolver())
+        ),
         trace_sink=trace_sink,
     )
 
@@ -478,9 +519,42 @@ def test_query_pipeline_hybrid() -> None:
         query_evaluation = query_trace["evaluation_metrics"]
         assert isinstance(query_summary, dict)
         assert isinstance(query_evaluation, dict)
+        query_result = query_trace["query_result"]
+        assert isinstance(query_result, dict)
+        assert query_result["content"] == execution.response.content
+        assert [context["chunk_id"] for context in query_result["contexts"]] == [
+            fixture.rerank_chunk.id,
+            fixture.primary_chunk.id,
+        ]
+        assert query_result["contexts"][0]["rank"] == 1
+        assert len(query_result["citations"]) == 2
+        assert set(query_result["citations"][0]) == {
+            "document_id",
+            "chunk_id",
+            "title",
+            "section_path",
+            "score",
+            "trace_id",
+        }
+        assert "source_uri" not in query_result["citations"][0]
+        assert query_result["images"]
+        assert set(query_result["images"][0]) == {
+            "image_id",
+            "chunk_ids",
+            "caption",
+            "quality_status",
+        }
+        assert query_result["images"][0] == {
+            "image_id": "image-headphones",
+            "chunk_ids": [fixture.rerank_chunk.id],
+            "caption": "无线耳机佩戴示意图",
+            "quality_status": "success",
+        }
         query_counts = query_summary["candidate_count_by_stage"]
         assert isinstance(query_counts, dict)
         assert query_summary["fallback_used"] is False
+        assert query_summary["top_score"] == execution.final_results[0].score
+        assert "top_k_results" not in query_summary
         assert query_counts["rerank"] == 2
         assert query_evaluation["empty_result"] is False
 

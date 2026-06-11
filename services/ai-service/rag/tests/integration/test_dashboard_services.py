@@ -336,11 +336,17 @@ def test_trace_reader_service_lists_query_and_ingestion_details() -> None:
                         "details": {"fallback_reason": "reranker unavailable"},
                     },
                 ),
+                query_result={
+                    "contexts": [{"chunk_id": "chunk-1", "score": 0.91, "rank": 1}],
+                    "content": "[1] context",
+                    "citations": [],
+                    "images": [],
+                },
                 summary_metrics={
                     "total_duration_ms": 180.0,
                     "candidate_count_by_stage": {"dense": 4, "rerank": 2},
                     "fallback_used": True,
-                    "top_k_results": [{"chunk_id": "chunk-1"}],
+                    "top_score": 0.91,
                 },
                 evaluation_metrics={
                     "query_document_relevance": 0.91,
@@ -1492,7 +1498,13 @@ def test_query_trace_page_builds_and_renders_retrieval_comparisons() -> None:
             ),
         ),
         candidate_counts={"dense": 5, "sparse": 4, "fusion": 6, "rerank": 3},
-        summary_metrics={"top_k_results": [{"chunk_id": "chunk-data", "rank": 1}]},
+        query_result={
+            "contexts": [{"chunk_id": "chunk-data", "score": 0.92, "rank": 1}],
+            "content": "[1] context",
+            "citations": [],
+            "images": [],
+        },
+        summary_metrics={"top_score": 0.92},
         evaluation_metrics={"query_document_relevance": 0.92},
         rerank_delta={"chunk-data": -2},
     )

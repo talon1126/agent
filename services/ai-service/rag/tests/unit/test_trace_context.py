@@ -92,7 +92,13 @@ def test_jsonl_trace_writer_appends_valid_trace_snapshots(tmp_path) -> None:
         request_source="aimodel",
     ).finish_query(
         status="success",
-        top_k_results=[{"chunk_id": "chunk-a", "rank": 1}],
+        query_result={
+            "contexts": [{"chunk_id": "chunk-a", "score": 0.9, "rank": 1}],
+            "content": "[1] context",
+            "citations": [],
+            "images": [],
+        },
+        top_score=0.9,
         candidate_count_by_stage={"dense": 1, "sparse": 0, "fusion": 1},
         fallback_used=False,
         empty_result=False,
@@ -141,7 +147,7 @@ def test_trace_controller_flush_can_use_jsonl_trace_writer(tmp_path) -> None:
     flushed = controller.flush(
         status="success",
         summary_metrics={
-            "top_k_results": [],
+            "top_score": None,
             "candidate_count_by_stage": {"dense": 0},
             "fallback_used": False,
         },
@@ -180,7 +186,13 @@ def test_postgres_trace_writer_converts_query_snapshot_to_repository_record() ->
     ).finish_query(
         status="success",
         finished_at=datetime(2026, 6, 10, 8, 0, 1, tzinfo=UTC),
-        top_k_results=[{"chunk_id": "chunk-1", "score": 0.9}],
+        query_result={
+            "contexts": [{"chunk_id": "chunk-1", "score": 0.9, "rank": 1}],
+            "content": "[1] context",
+            "citations": [],
+            "images": [],
+        },
+        top_score=0.9,
         candidate_count_by_stage={"dense": 1, "sparse": 1, "fusion": 1},
         fallback_used=False,
         empty_result=False,
@@ -196,6 +208,7 @@ def test_postgres_trace_writer_converts_query_snapshot_to_repository_record() ->
     assert record.started_at == datetime(2026, 6, 10, 8, 0, tzinfo=UTC)
     assert record.finished_at == datetime(2026, 6, 10, 8, 0, 1, tzinfo=UTC)
     assert record.status == "success"
+    assert record.query_result["contexts"][0]["chunk_id"] == "chunk-1"
     assert record.summary_metrics["fallback_used"] is False
     repository.upsert_ingestion_trace.assert_not_called()
 
@@ -319,10 +332,16 @@ def test_query_trace_finish_adds_summary_and_evaluation_sections() -> None:
     snapshot = context.finish_query(
         status="success",
         finished_at=finished_at,
-        top_k_results=[
-            {"chunk_id": "chunk-a", "rank": 1, "score": 0.96},
-            {"chunk_id": "chunk-b", "rank": 2, "score": 0.91},
-        ],
+        query_result={
+            "contexts": [
+                {"chunk_id": "chunk-a", "rank": 1, "score": 0.96},
+                {"chunk_id": "chunk-b", "rank": 2, "score": 0.91},
+            ],
+            "content": "[1] First context\n\n[2] Second context",
+            "citations": [],
+            "images": [],
+        },
+        top_score=0.96,
         candidate_count_by_stage={
             "dense": 20,
             "sparse": 14,
@@ -338,11 +357,17 @@ def test_query_trace_finish_adds_summary_and_evaluation_sections() -> None:
         empty_result=False,
     )
 
-    assert snapshot["summary_metrics"] == {
-        "top_k_results": [
+    assert snapshot["query_result"] == {
+        "contexts": [
             {"chunk_id": "chunk-a", "rank": 1, "score": 0.96},
             {"chunk_id": "chunk-b", "rank": 2, "score": 0.91},
         ],
+        "content": "[1] First context\n\n[2] Second context",
+        "citations": [],
+        "images": [],
+    }
+    assert snapshot["summary_metrics"] == {
+        "top_score": 0.96,
         "candidate_count_by_stage": {
             "dense": 20,
             "sparse": 14,
@@ -374,21 +399,24 @@ def test_query_trace_rejects_invalid_summary_metrics() -> None:
     with pytest.raises(ValueError, match="candidate_count_by_stage"):
         context.finish_query(
             status="success",
-            top_k_results=[],
+            query_result={"contexts": [], "content": "", "citations": [], "images": []},
+            top_score=None,
             candidate_count_by_stage={"dense": -1},
             fallback_used=False,
         )
     with pytest.raises(ValueError, match="fallback_used"):
         context.finish_query(
             status="success",
-            top_k_results=[],
+            query_result={"contexts": [], "content": "", "citations": [], "images": []},
+            top_score=None,
             candidate_count_by_stage={"dense": 0},
             fallback_used="false",
         )
     with pytest.raises(ValueError, match="query_document_relevance"):
         context.finish_query(
             status="success",
-            top_k_results=[],
+            query_result={"contexts": [], "content": "", "citations": [], "images": []},
+            top_score=None,
             candidate_count_by_stage={"dense": 0},
             fallback_used=False,
             query_document_relevance=1.2,
@@ -396,10 +424,72 @@ def test_query_trace_rejects_invalid_summary_metrics() -> None:
     with pytest.raises(ValueError, match="empty_result"):
         context.finish_query(
             status="success",
-            top_k_results=[],
+            query_result={"contexts": [], "content": "", "citations": [], "images": []},
+            top_score=None,
             candidate_count_by_stage={"dense": 0},
             fallback_used=False,
             empty_result="no",
+        )
+
+
+def test_query_trace_rejects_non_compact_citation_and_image_snapshots() -> None:
+    """Keep Query Trace results smaller than the full public response models."""
+
+    context = TraceContext.query(
+        collection="shopping_guides",
+        raw_query="无线耳机怎么选",
+        request_source="mcp",
+    )
+
+    with pytest.raises(ValueError, match="query_result citation"):
+        context.finish_query(
+            status="success",
+            query_result={
+                "contexts": [],
+                "content": "",
+                "citations": [{"chunk_id": "chunk-1", "source_uri": "guide.pdf"}],
+                "images": [],
+            },
+            top_score=None,
+            candidate_count_by_stage={},
+            fallback_used=False,
+        )
+
+    with pytest.raises(ValueError, match="query_result image"):
+        context.finish_query(
+            status="success",
+            query_result={
+                "contexts": [],
+                "content": "",
+                "citations": [],
+                "images": [{"image_id": "image-1", "width": 100}],
+            },
+            top_score=None,
+            candidate_count_by_stage={},
+            fallback_used=False,
+        )
+
+    with pytest.raises(ValueError, match="query_result citation score"):
+        context.finish_query(
+            status="success",
+            query_result={
+                "contexts": [],
+                "content": "",
+                "citations": [
+                    {
+                        "document_id": "document-1",
+                        "chunk_id": "chunk-1",
+                        "title": "Guide",
+                        "section_path": [],
+                        "score": None,
+                        "trace_id": "query-1",
+                    }
+                ],
+                "images": [],
+            },
+            top_score=None,
+            candidate_count_by_stage={},
+            fallback_used=False,
         )
 
 

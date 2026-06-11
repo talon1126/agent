@@ -3,8 +3,8 @@
 This module is the relational repository boundary between ingestion/business
 code and the PostgreSQL schema. ``DocumentRepository`` owns collection-aware
 document persistence, while ``ChunkRepository`` owns ordered chunk persistence
-and content-hash calculation. ``TraceRepository`` stores the four structured
-Query/Ingestion Trace sections, and ``EvaluationRepository`` stores evaluation
+and content-hash calculation. ``TraceRepository`` stores Query/Ingestion trace
+sections plus the Query-only result snapshot, and ``EvaluationRepository`` stores evaluation
 runs plus independently queryable metric rows.
 
 The repositories do not open database connections, initialize schema, create
@@ -974,6 +974,7 @@ class QueryTraceRecord:
         status: Schema-supported lifecycle state.
         basic_info: Request identity and static context.
         stages: Ordered Query Pipeline stage observations.
+        query_result: Public RAG response and ranked context identities.
         summary_metrics: End-to-end latency, result count, and error summary.
         evaluation_metrics: Query/document relevance and related quality data.
         error: Structured failure information when the query fails.
@@ -989,6 +990,7 @@ class QueryTraceRecord:
     status: str = "running"
     basic_info: Mapping[str, Any] = field(default_factory=dict)
     stages: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    query_result: Mapping[str, Any] = field(default_factory=dict)
     summary_metrics: Mapping[str, Any] = field(default_factory=dict)
     evaluation_metrics: Mapping[str, Any] = field(default_factory=dict)
     error: Mapping[str, Any] | None = None
@@ -999,6 +1001,7 @@ class QueryTraceRecord:
 
         object.__setattr__(self, "basic_info", _freeze_mapping(self.basic_info))
         object.__setattr__(self, "stages", _freeze_stages(self.stages))
+        object.__setattr__(self, "query_result", _freeze_mapping(self.query_result))
         object.__setattr__(
             self,
             "summary_metrics",
@@ -1174,11 +1177,12 @@ class TraceRepository:
                     status,
                     basic_info,
                     stages,
+                    query_result,
                     summary_metrics,
                     evaluation_metrics,
                     error
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (trace_id) DO UPDATE SET
                     collection_id = EXCLUDED.collection_id,
                     raw_query = EXCLUDED.raw_query,
@@ -1188,6 +1192,7 @@ class TraceRepository:
                     status = EXCLUDED.status,
                     basic_info = EXCLUDED.basic_info,
                     stages = EXCLUDED.stages,
+                    query_result = EXCLUDED.query_result,
                     summary_metrics = EXCLUDED.summary_metrics,
                     evaluation_metrics = EXCLUDED.evaluation_metrics,
                     error = EXCLUDED.error
@@ -1201,6 +1206,7 @@ class TraceRepository:
                     status,
                     basic_info,
                     stages,
+                    query_result,
                     summary_metrics,
                     evaluation_metrics,
                     error,
@@ -1216,6 +1222,7 @@ class TraceRepository:
                     trace.status,
                     Jsonb(_json_compatible(trace.basic_info)),
                     Jsonb(_json_compatible(trace.stages)),
+                    Jsonb(_json_compatible(trace.query_result)),
                     Jsonb(_json_compatible(trace.summary_metrics)),
                     Jsonb(_json_compatible(trace.evaluation_metrics)),
                     Jsonb(_json_compatible(trace.error)) if trace.error is not None else None,
@@ -1425,6 +1432,7 @@ class TraceRepository:
             status,
             basic_info,
             stages,
+            query_result,
             summary_metrics,
             evaluation_metrics,
             error,

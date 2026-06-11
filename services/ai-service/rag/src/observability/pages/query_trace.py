@@ -117,10 +117,8 @@ def render_query_trace_page(
         streamlit.metric(stage, count)
     streamlit.write(
         {
-            "top_k_results": model.selected_trace.summary_metrics.get(
-                "top_k_results",
-                [],
-            ),
+            "contexts": model.selected_trace.query_result.get("contexts", []),
+            "top_score": model.selected_trace.summary_metrics.get("top_score"),
             "candidate_counts": dict(model.selected_trace.candidate_counts),
         }
     )

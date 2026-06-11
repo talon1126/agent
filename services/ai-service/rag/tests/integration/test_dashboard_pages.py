@@ -534,6 +534,14 @@ def _seed_trace_rows(
                     "status": "success",
                 },
             ),
+            query_result={
+                "contexts": [
+                    {"chunk_id": "chunk-dashboard", "score": 0.93, "rank": 1}
+                ],
+                "content": "[1] context",
+                "citations": [],
+                "images": [],
+            },
             summary_metrics={
                 "total_duration_ms": 150.0,
                 "candidate_count_by_stage": {
@@ -542,7 +550,7 @@ def _seed_trace_rows(
                     "fusion": 4,
                     "rerank": 2,
                 },
-                "top_k_results": [{"chunk_id": "chunk-dashboard"}],
+                "top_score": 0.93,
             },
             evaluation_metrics={"query_document_relevance": 0.93},
         )

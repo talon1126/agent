@@ -607,6 +607,11 @@ def test_trace_tables_store_four_part_trace_contracts() -> None:
     ingestion_trace = _table_definition(sql, "rag_ingestion_traces")
     assert re.search(r"\braw_query\s+TEXT\s+NOT\s+NULL\b", query_trace, re.IGNORECASE)
     assert re.search(
+        r"\bquery_result\s+JSONB\s+NOT\s+NULL\s+DEFAULT\s+'\{\}'::jsonb\b",
+        query_trace,
+        re.IGNORECASE,
+    )
+    assert re.search(
         r"\brequest_source\s+TEXT\s+NOT\s+NULL\b",
         query_trace,
         re.IGNORECASE,
@@ -1255,7 +1260,13 @@ def test_trace_repository_upserts_and_lists_query_and_ingestion_traces() -> None
                 query_trace,
                 finished_at=started_at + timedelta(seconds=2),
                 status="degraded",
-                summary_metrics={"duration_ms": 2000, "top_k_results": 5},
+                query_result={
+                    "contexts": [{"chunk_id": "chunk-1", "score": 0.9, "rank": 1}],
+                    "content": "[1] context",
+                    "citations": [],
+                    "images": [],
+                },
+                summary_metrics={"duration_ms": 2000, "top_score": 0.9},
                 evaluation_metrics={"query_document_relevance": 0.91},
             )
         )
