@@ -1,7 +1,11 @@
 from typing import Any
 
 from app.routers.AImodel.schemas import AiModelToolResult
-from app.routers.AImodel.service import _query_trace_ids_from_tool_results, build_rag_tool
+from app.routers.AImodel.service import (
+    SYSTEM_PROMPT,
+    _query_trace_ids_from_tool_results,
+    build_rag_tool,
+)
 from app.routers.AImodel.tools import StdioMcpRagKnowledgeClient, search_shopping_guides
 
 
@@ -195,3 +199,17 @@ def test_query_trace_ids_from_tool_results_deduplicates_rag_traces() -> None:
     ]
 
     assert _query_trace_ids_from_tool_results(tool_results) == ["query-a"]
+
+
+def test_system_prompt_separates_product_api_facts_from_rag_knowledge() -> None:
+    assert "商品事实" in SYSTEM_PROMPT
+    assert "价格" in SYSTEM_PROMPT
+    assert "库存" in SYSTEM_PROMPT
+    assert "商品链接" in SYSTEM_PROMPT
+    assert "商品搜索工具" in SYSTEM_PROMPT
+    assert "商品详情工具" in SYSTEM_PROMPT
+    assert "RAG" in SYSTEM_PROMPT
+    assert "选购指南" in SYSTEM_PROMPT
+    assert "政策 FAQ" in SYSTEM_PROMPT
+    assert "不能使用 RAG" in SYSTEM_PROMPT
+    assert "不能编造引用" in SYSTEM_PROMPT

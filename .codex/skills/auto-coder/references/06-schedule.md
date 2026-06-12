@@ -60,7 +60,7 @@
 | Phase E | MCP 工具服务 | MCP stdio 工具服务可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
 | Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作可用 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
 | Phase G | 质量评估体系 | 质量评估体系支持黄金测试集、检索指标、Ragas 生成质量适配、真实 Query Pipeline 评估入口、策略对比 runner 和评估趋势持久化 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、Ragas faithfulness、Ragas answer_relevancy adapter、`run_evaluation.py`、hybrid/dense_only/sparse_only/rerank 策略对比、evaluation run/results 持久化、Agent-ready final context 评估输入 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_response_builder.py services\ai-service\rag\tests\unit\test_evaluation.py -q` | 2026-06-12 |
-| Phase H | AImodel 联调集成 | RAG 独立模块已通过集成前验收，shopping guide RAG 工具已接入 AImodel Agent 工具集合，可进入商品 API 与 RAG 边界协同验证 | Dashboard 六大页面 service-backed 渲染测试、离线摄取到 Hybrid Query 的全链路 E2E、MCP stdio 子进程工具发现、`search_shopping_guides` 工具适配、Agent tool list 接入、message-query-trace 逻辑关联 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_agent.py -v` |  |
+| Phase H | AImodel 联调集成 | RAG 独立模块已通过集成前验收，shopping guide RAG 工具已接入 AImodel Agent 工具集合，商品 API 与 RAG 的职责边界已写入 Agent system prompt | Dashboard 六大页面 service-backed 渲染测试、离线摄取到 Hybrid Query 的全链路 E2E、MCP stdio 子进程工具发现、`search_shopping_guides` 工具适配、Agent tool list 接入、商品事实/API 与知识补充/RAG 边界、message-query-trace 逻辑关联 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_agent.py -v` |  |
 
 #### 阶段 A 交付里程碑：配置与项目骨架
 
@@ -341,7 +341,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | H1 | 执行 AImodel 集成前验收门禁 | [✔] | 2026-06-12 | Dashboard 六大页面、RAG 全链路 E2E 和 MCP stdio 可连接验收通过；3 个 H1 目标测试通过，ruff 通过，可进入 H2 AImodel 工具适配 |
 | H2 | 实现 AImodel RAG 工具适配 | [✔] | 2026-06-12 | 新增 `search_shopping_guides` 和 `StdioMcpRagKnowledgeClient`，默认通过 `uv run --project services/ai-service/rag` 启动 stdio MCP 并调用 `query_knowledge_hub`，只返回 content、citations、images、is_empty、trace_id 等公共字段；保留可注入 client 以便单元测试和后续长期连接优化；MemoryStore 已支持 assistant message 与多个 query trace 的去重逻辑关联；27 个 AImodel 目标测试通过，ruff 通过 |
 | H3 | 将 RAG 工具接入 Agent 工具列表 | [✔] | 2026-06-12 | 新增 `build_rag_tool()`，将 `search_shopping_guides` 包装成 LangChain Agent 工具并加入同步/流式 Agent tools 列表；工具调用结果进入 per-request `tool_results`，最终 assistant message 可关联去重后的 RAG query trace id；测试环境缺少 LangChain 时使用轻量 fallback tool 保持单元测试可运行；29 个 AImodel 目标测试通过，ruff 通过 |
-| H4 | 验证商品 API 工具与 RAG 工具协同 | [ ] |  | 商品事实走 API，知识补充走 RAG |
+| H4 | 验证商品 API 工具与 RAG 工具协同 | [✔] | 2026-06-12 | System prompt 明确商品事实必须来自商品搜索/详情工具，覆盖价格、库存、优惠、规格、可购买商品和商品链接；RAG 只用于选购指南、品类知识、政策 FAQ、售后规则和文档知识上下文；禁止把 RAG 当实时商品事实来源或编造引用；22 个 AImodel 边界回归测试通过，ruff 通过 |
 | H5 | 验证简单询问和商品链接场景 | [ ] |  | 推荐、对比、选购指南、政策 FAQ |
 | H6 | 完成前后端联调和端到端测试 | [ ] |  | AImodel 工具响应不暴露 tool result |
 
@@ -356,8 +356,8 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | Phase E | 4 | 4 | 100% |
 | Phase F | 12 | 12 | 100% |
 | Phase G | 5 | 5 | 100% |
-| Phase H | 6 | 3 | 50% |
-| **总计** | **70** | **67** | **96%** |
+| Phase H | 6 | 4 | 67% |
+| **总计** | **70** | **68** | **97%** |
 
 ### 6.5 阶段实施明细
 
@@ -1760,11 +1760,11 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- system prompt 工具边界
+- `SYSTEM_PROMPT`：明确商品事实/API 与知识补充/RAG 的职责边界
 
-验收标准：商品事实走 API，知识补充走 RAG。
+验收标准：商品价格、库存、优惠、规格、可购买商品和商品链接等商品事实只能来自商品搜索工具或商品详情工具；RAG 只用于选购指南、品类知识、政策 FAQ、售后规则和文档知识上下文；Agent 不得把 RAG 内容当作实时商品事实来源，不得用 RAG 生成价格、库存、优惠、可购买商品或商品链接，不得编造引用。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\tests\test_aimodel_agent.py -v`；`uv run --project services/ai-service/rag ruff check services\ai-service\app\routers\AImodel\service.py services\ai-service\tests\test_aimodel_rag_tool.py`
 
 ##### H5：验证简单询问和链接场景
 
