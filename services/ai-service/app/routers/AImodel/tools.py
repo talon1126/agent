@@ -3,6 +3,8 @@ import json
 import os
 import threading
 from collections.abc import Coroutine
+from collections.abc import Callable
+from collections.abc import Awaitable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -145,11 +147,221 @@ class StdioMcpRagKnowledgeClient:
         return _mcp_result_to_payload(result)
 
 
+McpPayloadCaller = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+class PersistentMcpRagKnowledgeClient:
+    """Reuse one RAG MCP stdio session for process-wide AImodel tool calls.
+
+    LangChain tools call AImodel helpers from synchronous code, while the MCP
+    Python SDK is asynchronous. This client owns a background event loop thread
+    and lazily creates one MCP stdio session on that loop. Subsequent
+    ``query_knowledge_hub`` calls schedule ``session.call_tool`` on the same
+    loop, avoiding a fresh RAG subprocess for every user question.
+
+    Tests can inject ``session_factory`` so unit coverage verifies lifecycle
+    behavior without starting the real MCP server.
+    """
+
+    def __init__(
+        self,
+        *,
+        command: str | None = None,
+        args: list[str] | None = None,
+        cwd: str | Path | None = None,
+        env: dict[str, str] | None = None,
+        session_factory: Callable[[], McpPayloadCaller] | None = None,
+        on_session_start: Callable[[], None] | None = None,
+        on_session_close: Callable[[], None] | None = None,
+    ) -> None:
+        """Configure the persistent MCP client without opening a session.
+
+        Args:
+            command: Optional executable used to start the MCP server.
+            args: Optional command arguments for the MCP server.
+            cwd: RAG project working directory.
+            env: Environment overlay passed to the MCP server process.
+            session_factory: Optional test hook returning an async payload
+                caller. Production leaves this as ``None`` to use stdio MCP.
+            on_session_start: Optional lifecycle hook used by tests.
+            on_session_close: Optional lifecycle hook used by tests.
+        """
+
+        delegate = StdioMcpRagKnowledgeClient(
+            command=command,
+            args=args,
+            cwd=cwd,
+            env=env,
+        )
+        self._command = delegate._command
+        self._args = delegate._args
+        self._cwd = delegate._cwd
+        self._env = delegate._env
+        self._session_factory = session_factory
+        self._on_session_start = on_session_start
+        self._on_session_close = on_session_close
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._caller: McpPayloadCaller | None = None
+        self._cleanup: Callable[[], Awaitable[None]] | None = None
+        self._lock = threading.RLock()
+
+    def query_knowledge_hub(
+        self,
+        *,
+        query: str,
+        collection: str,
+        top_k: int,
+        no_rerank: bool,
+        include_image_base64: bool,
+    ) -> dict[str, Any]:
+        """Synchronously call RAG through the persistent MCP session.
+
+        Args:
+            query: User question sent to the RAG knowledge hub.
+            collection: Target RAG collection.
+            top_k: Number of final contexts requested.
+            no_rerank: Whether RAG should skip reranking.
+            include_image_base64: Whether image bytes should be returned.
+
+        Returns:
+            Public RAG MCP payload returned by ``query_knowledge_hub``.
+        """
+
+        payload = {
+            "query": query,
+            "collection": collection,
+            "top_k": top_k,
+            "no_rerank": no_rerank,
+            "include_image_base64": include_image_base64,
+        }
+        loop, caller = self._ensure_session()
+        future = asyncio.run_coroutine_threadsafe(caller(payload), loop)
+        return future.result()
+
+    def close(self) -> None:
+        """Close the persistent MCP session and stop its background loop."""
+
+        with self._lock:
+            loop = self._loop
+            cleanup = self._cleanup
+            thread = self._thread
+            self._caller = None
+            self._cleanup = None
+            self._loop = None
+            self._thread = None
+
+        if loop is not None and cleanup is not None:
+            asyncio.run_coroutine_threadsafe(cleanup(), loop).result()
+        if self._on_session_close is not None and loop is not None:
+            self._on_session_close()
+        if loop is not None:
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None:
+            thread.join(timeout=5)
+
+    def _ensure_session(self) -> tuple[asyncio.AbstractEventLoop, McpPayloadCaller]:
+        """Return the active loop and caller, creating them once per lifecycle."""
+
+        with self._lock:
+            if self._loop is not None and self._caller is not None:
+                return self._loop, self._caller
+
+            loop = asyncio.new_event_loop()
+            ready = threading.Event()
+
+            def run_loop() -> None:
+                asyncio.set_event_loop(loop)
+                ready.set()
+                loop.run_forever()
+                loop.close()
+
+            thread = threading.Thread(
+                target=run_loop,
+                name="aimodel-rag-mcp-client",
+                daemon=True,
+            )
+            thread.start()
+            ready.wait(timeout=5)
+            if not ready.is_set():
+                raise RuntimeError("RAG MCP event loop did not start")
+
+            try:
+                caller, cleanup = asyncio.run_coroutine_threadsafe(
+                    self._create_session_caller(),
+                    loop,
+                ).result()
+            except Exception:
+                loop.call_soon_threadsafe(loop.stop)
+                thread.join(timeout=5)
+                raise
+            self._loop = loop
+            self._thread = thread
+            self._caller = caller
+            self._cleanup = cleanup
+            if self._on_session_start is not None:
+                self._on_session_start()
+            return loop, caller
+
+    async def _create_session_caller(
+        self,
+    ) -> tuple[McpPayloadCaller, Callable[[], Awaitable[None]]]:
+        """Create either an injected fake caller or a real stdio MCP caller."""
+
+        if self._session_factory is not None:
+            async def noop_cleanup() -> None:
+                return None
+
+            return self._session_factory(), noop_cleanup
+
+        from contextlib import AsyncExitStack
+
+        from mcp import ClientSession
+        from mcp.client.stdio import StdioServerParameters, stdio_client
+
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(self._cwd),
+            **(self._env or {}),
+        }
+        stack = AsyncExitStack()
+        try:
+            server = StdioServerParameters(
+                command=self._command,
+                args=self._args,
+                cwd=self._cwd,
+                env=env,
+            )
+            read_stream, write_stream = await stack.enter_async_context(stdio_client(server))
+            session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+            await session.initialize()
+        except Exception:
+            await stack.aclose()
+            raise
+
+        async def call_query_knowledge_hub(payload: dict[str, Any]) -> dict[str, Any]:
+            result = await session.call_tool("query_knowledge_hub", payload)
+            return _mcp_result_to_payload(result)
+
+        return call_query_knowledge_hub, stack.aclose
+
+
 @lru_cache(maxsize=1)
 def get_rag_knowledge_client() -> RagKnowledgeClient:
     """Return the process-wide RAG knowledge client used by AImodel tools."""
 
-    return StdioMcpRagKnowledgeClient()
+    return PersistentMcpRagKnowledgeClient()
+
+
+def close_rag_knowledge_client() -> None:
+    """Close and clear the process-wide persistent RAG MCP client."""
+
+    if get_rag_knowledge_client.cache_info().currsize == 0:
+        return
+    client = get_rag_knowledge_client()
+    if hasattr(client, "close"):
+        client.close()
+    get_rag_knowledge_client.cache_clear()
 
 
 def _python_mcp_args() -> list[str]:

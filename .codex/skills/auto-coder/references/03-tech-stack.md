@@ -166,7 +166,7 @@ uv run --project services/ai-service/rag python -m src.mcp_server.server --trans
 
 stdio 协议要求 stdout/stdin 只承载 MCP 协议帧，业务日志不得写入 stdout。RAG MCP 普通运行日志写入 `src/logs/app.log`，错误诊断可以写 stderr；Trace 仍按可观测性阶段写入结构化日志。MCP 启动入口必须加载本地 `.env`，并读取 `DATABASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`RAG_SETTINGS_PATH`、`RAG_DEFAULT_COLLECTION` 等环境变量。
 
-AImodel 集成时不让 Agent 直接依赖 RAG 检索内部实现。H2 在 `services/ai-service/app/routers/AImodel/tools.py` 提供 AImodel 侧 RAG 工具适配：`StdioMcpRagKnowledgeClient` 负责通过 stdio MCP 调用 `query_knowledge_hub`，`search_shopping_guides` 负责把 MCP 公共响应转换为 AImodel 工具结果。H3 再把该工具包装进 LangChain Agent 工具集合，Agent 只依赖业务工具边界。
+AImodel 集成时不让 Agent 直接依赖 RAG 检索内部实现。`services/ai-service/app/routers/AImodel/tools.py` 提供 AImodel 侧 RAG 工具适配：`PersistentMcpRagKnowledgeClient` 负责通过 stdio MCP 启动并长期复用一个 RAG MCP 子进程，调用 `query_knowledge_hub`；`search_shopping_guides` 负责把 MCP 公共响应转换为 AImodel 工具结果。H3 再把该工具包装进 LangChain Agent 工具集合，Agent 只依赖业务工具边界。
 
 MCP 工具一：`query_knowledge_hub`
 

@@ -1,4 +1,6 @@
 from typing import Any
+import importlib
+import threading
 
 from app.routers.AImodel.memory import NoopAiModelMemoryStore
 from app.routers.AImodel.schemas import AiModelChatRequest, AiModelToolResult
@@ -8,7 +10,16 @@ from app.routers.AImodel.service import (
     build_rag_tool,
     stream_chat_events,
 )
-from app.routers.AImodel.tools import StdioMcpRagKnowledgeClient, search_shopping_guides
+from app.routers.AImodel.tools import (
+    PersistentMcpRagKnowledgeClient,
+    StdioMcpRagKnowledgeClient,
+    close_rag_knowledge_client,
+    get_rag_knowledge_client,
+    search_shopping_guides,
+)
+import app.routers.AImodel.tools as aimodel_tools
+
+aimodel_app_main = importlib.import_module("app.main")
 
 
 class FakeRagKnowledgeClient:
@@ -152,6 +163,153 @@ def test_stdio_mcp_rag_client_defaults_to_rag_uv_project(tmp_path) -> None:
         "--transport",
         "stdio",
     ]
+
+
+def test_persistent_mcp_rag_client_reuses_session_until_close(tmp_path) -> None:
+    """Verify the production RAG MCP client keeps one session across calls."""
+
+    calls: list[dict[str, Any]] = []
+    starts: list[str] = []
+    closes: list[str] = []
+
+    async def fake_call_tool(payload: dict[str, Any]) -> dict[str, Any]:
+        calls.append(payload)
+        return {
+            "ok": True,
+            "trace_id": f"query-{len(calls)}",
+            "content": "RAG context",
+            "citations": [],
+            "images": [],
+            "is_empty": False,
+        }
+
+    client = PersistentMcpRagKnowledgeClient(
+        cwd=tmp_path,
+        session_factory=lambda: fake_call_tool,
+        on_session_start=lambda: starts.append("start"),
+        on_session_close=lambda: closes.append("close"),
+    )
+
+    first = client.query_knowledge_hub(
+        query="无线耳机怎么选",
+        collection="shopping_guides",
+        top_k=5,
+        no_rerank=False,
+        include_image_base64=False,
+    )
+    second = client.query_knowledge_hub(
+        query="办公室安静解压玩具",
+        collection="shopping_guides",
+        top_k=3,
+        no_rerank=True,
+        include_image_base64=False,
+    )
+    client.close()
+    third = client.query_knowledge_hub(
+        query="人体工学键盘怎么选",
+        collection="shopping_guides",
+        top_k=2,
+        no_rerank=False,
+        include_image_base64=False,
+    )
+    client.close()
+
+    assert first["trace_id"] == "query-1"
+    assert second["trace_id"] == "query-2"
+    assert third["trace_id"] == "query-3"
+    assert starts == ["start", "start"]
+    assert closes == ["close", "close"]
+    assert calls == [
+        {
+            "query": "无线耳机怎么选",
+            "collection": "shopping_guides",
+            "top_k": 5,
+            "no_rerank": False,
+            "include_image_base64": False,
+        },
+        {
+            "query": "办公室安静解压玩具",
+            "collection": "shopping_guides",
+            "top_k": 3,
+            "no_rerank": True,
+            "include_image_base64": False,
+        },
+        {
+            "query": "人体工学键盘怎么选",
+            "collection": "shopping_guides",
+            "top_k": 2,
+            "no_rerank": False,
+            "include_image_base64": False,
+        },
+    ]
+
+
+def test_fastapi_shutdown_closes_persistent_rag_client(monkeypatch) -> None:
+    """Ensure ai-service shutdown releases the long-lived RAG MCP client."""
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        aimodel_app_main,
+        "close_rag_knowledge_client",
+        lambda: calls.append("closed"),
+    )
+
+    aimodel_app_main.close_aimodel_rag_client()
+
+    assert calls == ["closed"]
+
+
+def test_close_rag_knowledge_client_does_not_create_unused_client(monkeypatch) -> None:
+    """Closing an unused process-wide RAG client must not start MCP resources."""
+
+    get_rag_knowledge_client.cache_clear()
+
+    def fail_if_constructed(*args: Any, **kwargs: Any) -> PersistentMcpRagKnowledgeClient:
+        raise AssertionError("shutdown should not create a new RAG MCP client")
+
+    monkeypatch.setattr(aimodel_tools, "PersistentMcpRagKnowledgeClient", fail_if_constructed)
+
+    close_rag_knowledge_client()
+
+    assert get_rag_knowledge_client.cache_info().currsize == 0
+
+
+def test_persistent_mcp_rag_client_cleans_loop_when_session_start_fails(tmp_path) -> None:
+    """A failed MCP startup must not leave the background event loop alive."""
+
+    before_count = sum(
+        1
+        for thread in threading.enumerate()
+        if thread.name == "aimodel-rag-mcp-client"
+    )
+
+    def fail_to_create_session() -> Any:
+        raise RuntimeError("mcp startup failed")
+
+    client = PersistentMcpRagKnowledgeClient(
+        cwd=tmp_path,
+        session_factory=fail_to_create_session,
+    )
+
+    try:
+        client.query_knowledge_hub(
+            query="无线耳机怎么选",
+            collection="shopping_guides",
+            top_k=5,
+            no_rerank=False,
+            include_image_base64=False,
+        )
+    except RuntimeError as error:
+        assert str(error) == "mcp startup failed"
+    else:
+        raise AssertionError("query_knowledge_hub should propagate startup failure")
+
+    after_count = sum(
+        1
+        for thread in threading.enumerate()
+        if thread.name == "aimodel-rag-mcp-client"
+    )
+    assert after_count == before_count
 
 
 def test_build_rag_tool_invokes_search_shopping_guides_and_tracks_trace() -> None:
