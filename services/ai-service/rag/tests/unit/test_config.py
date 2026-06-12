@@ -357,9 +357,11 @@ def test_image_prompt_defines_quality_fallback_and_type_strategies() -> None:
     """
     prompt = load_prompt_document("image_caption_prompt.yaml")
 
-    assert prompt["input_variables"] == ["image_type", "document_context"]
+    assert prompt["input_variables"] == ["image_type"]
     assert "Simplified Chinese" in prompt["system_prompt"]
     assert "verbatim" in prompt["system_prompt"]
+    assert "document_context" not in prompt["user_prompt"]
+    assert "Document context" not in prompt["user_prompt"]
     assert prompt["output_schema"]["low_quality_value"] == "low_quality"
     assert {
         "product",

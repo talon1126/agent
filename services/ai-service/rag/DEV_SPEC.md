@@ -843,8 +843,8 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
   -> 输出 Document(id + text + summary + metadata.images[])
   -> Splitter 保留图片引用标记到对应 chunk
   -> ImageCaptioner 判断 vision_llm 和 image_refs
-  -> 满足条件时生成 caption 并替换 chunk 正文中的图片占位符
-  -> Storage 存储增强后的 chunk 和原始图片
+  -> 满足条件时生成 caption，写入 image_caption_artifacts，并替换 chunk 正文中的图片占位符
+  -> Storage 存储增强后的 chunk、原始图片和 artifacts 中的原始 caption
 ```
 
 各阶段输出：
@@ -853,8 +853,8 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
 | --- | --- |
 | Loader | `Document(id + text + summary + metadata.images[])`，其中 `summary` 是顶层可空字段，`text` 包含图片占位符，`metadata.images[]` 只保存图片 `id/path` |
 | Splitter | chunk 文本保留图片引用标记，chunk metadata 增加 `image_refs: List[image_id]`；`Chunk.metadata` 不复制 `Document.metadata.images[]` |
-| ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption，并把 `[[image:image_id]]` 替换为 `[[image_caption:image_id]] + caption` |
-| Storage | 向量库存储增强后的 chunk，文件系统保存原始图片，PostgreSQL `image_index` 表保存图片索引信息 |
+| ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption；把原始 caption 写入运行时 `image_caption_artifacts`，并把 `[[image:image_id]]` 替换为可被后续 rewrite 融入正文的 caption 文本 |
+| Storage | 向量库存储增强后的 chunk，文件系统保存原始图片，PostgreSQL `image_index` 表优先使用 `image_caption_artifacts` 保存原始 caption 和质量状态 |
 
 #### 3.7.2 Loader 技术要点
 
@@ -880,7 +880,7 @@ Splitter 必须保留图片引用和文本上下文之间的关联，不能在�
 
 #### 3.7.4 ImageCaptioner 技术要点
 
-ImageCaptioner 是图片 caption 的业务编排层。它只在 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时调用 Vision LLM；底层图片理解能力由 `BaseVisionLLM` 的具体实现提供。ImageCaptioner 负责读取图片引用、定位 `Document.metadata.images[]` 中的图片路径、调用图片描述能力、把 caption 写回 chunk 正文，并把 skipped、failed、low_quality、provider、model、耗时和快照写入 ingestion trace 的 `transform.sub_stages`。同一轮摄取中相同 `image_id` 即使被多个 chunk 引用，也只能调用一次 Vision LLM，后续 chunk 复用同一 caption 或失败结果；Provider 失败时必须记录经过脱敏和长度限制的底层错误类型与错误信息，禁止记录 API Key、base64 图片正文或完整请求体。
+ImageCaptioner 是图片 caption 的业务编排层。它只在 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时调用 Vision LLM；底层图片理解能力由 `BaseVisionLLM` 的具体实现提供。ImageCaptioner 负责读取图片引用、定位 `Document.metadata.images[]` 中的图片路径、调用图片描述能力、把 caption 写回 chunk 正文，并把原始 caption、状态、provider、model 和关联 chunk 写入运行时 `image_caption_artifacts`，供统一 upsert 写入 `image_index`。ImageCaptioner 不向 Vision LLM 发送完整 `document_context`，避免把整篇文档作为图片理解上下文造成额外 token 消耗；图片理解只使用图片本身、图片类型和 Prompt 策略。同一轮摄取中相同 `image_id` 即使被多个 chunk 引用，也只能调用一次 Vision LLM，后续 chunk 复用同一 caption 或失败结果；Provider 失败时必须记录经过脱敏和长度限制的底层错误类型与错误信息，禁止记录 API Key、base64 图片正文或完整请求体。skipped、failed、low_quality、provider、model、耗时和快照写入 ingestion trace 的 `transform.sub_stages`，但 trace 不作为 upsert 的业务数据源。
 
 Vision LLM 选型：
 
@@ -925,7 +925,7 @@ Storage 负责同时保存增强后的 chunk 和原始图片索引。
 
 - 增强后的 chunk 写入 PostgreSQL + pgvector，chunk metadata 包含 `image_refs`。
 - 原始图片文件保存在本地文件系统。
-- PostgreSQL 使用 `image_index` 表保存图片索引信息。
+- PostgreSQL 使用 `image_index` 表保存图片索引信息；`image_index.metadata.caption` 优先来自运行时 `image_caption_artifacts`，仅在 artifacts 不存在时兼容解析最终 chunk 正文中的 `[[image_caption:...]]`。
 - 检索命中 chunk 后，如果 chunk metadata 中包含 `image_refs`，响应可以返回相关图片信息，供 Dashboard 或前端展示。
 
 `image_index` 表建议字段：
@@ -1049,7 +1049,7 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `contexts` | 最终进入响应构造的结果列表，每项包含 `chunk_id`、最终 `score` 和 `rank` |
 | `content` | RAG 实际返回给 Agent 或调用方的格式化知识文本快照 |
 | `citations` | 与最终 contexts 对齐的轻量引用快照，仅保存 `document_id`、`chunk_id`、`title`、`section_path`、`score`、`trace_id`；不重复记录由完整公共响应和文档存储负责的 `source_uri` |
-| `images` | 与最终 contexts 关联的轻量图片快照，仅保存 `image_id`、`chunk_ids`、`caption`、`quality_status`；图片路径、页码、尺寸和 MIME 类型仍由完整公共响应与图片索引负责 |
+| `images` | 与最终 contexts 关联的轻量图片快照，仅保存 `image_id`、`chunk_ids`、`quality_status`；图片 caption、路径、页码、尺寸和 MIME 类型仍由完整公共响应与图片索引负责 |
 
 汇总指标：
 
@@ -2240,7 +2240,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | --- | --- | --- | --- | --- |
 | F1 | 实现 TraceContext 和 TraceController | [✔] | 2026-06-08 | `src/core/trace` 包导出、内存 TraceContext、TraceController、阶段耗时/输入输出摘要记录、flush sink、错误/fallback 详情和防御性快照；4 个 TraceContext 单元测试通过 |
 | F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-10 | `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、摄取阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；顶层阶段支持结构化 `sub_stages`，用于保存 Transform Pipeline 内每个具体实现的独立耗时、状态和受限 snapshots |
-| F3 | 实现 query trace 数据结构 | [✔] | 2026-06-11 | Query 五段式结构；Dense/Sparse 记录命中的 chunk IDs，Fusion/Filter/Rerank 记录轻量候选快照和排序变化；顶层 `query_result` 保存 contexts/content 及轻量 citations/images 快照，其中 citation 不记录 source_uri、image 仅记录 image_id/chunk_ids/caption/quality_status；summary 使用 `top_score` 代替重复的 `top_k_results`，并完成结构校验和 Dashboard DTO 透传 |
+| F3 | 实现 query trace 数据结构 | [✔] | 2026-06-11 | Query 五段式结构；Dense/Sparse 记录命中的 chunk IDs，Fusion/Filter/Rerank 记录轻量候选快照和排序变化；顶层 `query_result` 保存 contexts/content 及轻量 citations/images 快照，其中 citation 不记录 source_uri、image 仅记录 image_id/chunk_ids/quality_status；summary 使用 `top_score` 代替重复的 `top_k_results`，并完成结构校验和 Dashboard DTO 透传 |
 | F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；`src/logs/.gitkeep` 纳入版本控制，运行时 `*.log/*.jsonl` 由 Git 忽略；15 个 TraceContext/TraceWriter 单元测试通过 |
 | F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-11 | JSONL/PostgreSQL 双写、Transform 子阶段打点、Query 阶段候选快照打点，并将 QueryRuntime 实际返回给 Agent/调用方的结果投影为轻量快照写入 Query Trace 顶层 `query_result`，完整 citation/image 响应契约保持不变；真实查询验证 `top_score/query_result` 正常写入 |
 | F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
@@ -2760,12 +2760,12 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 - `BaseVisionLLM.caption_image()`：定义 Vision LLM 图片 caption 的最小统一接口
 - `DashScopeVisionLLM.caption_image()`：调用百炼 Qwen-VL-Max 生成图片 caption
-- `ImageCaptioner.caption()`：读取 chunk 的 `image_refs` 并生成图片描述
+- `ImageCaptioner.caption()`：读取 chunk 的 `image_refs` 并生成图片描述，同时把原始 caption 写入运行时 `image_caption_artifacts`
 - `ImageCaptioner.should_caption()`：判断是否满足 `vision_llm.enabled=true` 且存在 `image_refs`
 - `ImageCaptioner.replace_placeholder()`：把原始图片占位符替换为 caption 节点并保留 `image_refs`
 - `ImageCaptioner.trace_details()`：输出 image_captioner 的执行状态、provider、model、图片数量、caption 数量和失败原因，供 Transform sub_stage 使用
 
-验收标准：启用 `vision_llm` 且存在 `image_refs` 时会生成 caption 并替换 chunk 正文中的图片占位符；替换后的文本包含 `[[image_caption:image_id]]` 和可检索 caption，原相对位置保持不变；未启用 `vision_llm` 时不调用 Vision LLM，并通过 trace 记录 skipped；没有 `image_refs` 的 chunk 不生成 caption；同一轮摄取中相同 `image_id` 只调用一次 Vision LLM，并在所有引用该图片的 chunk 中复用结果；Vision LLM 失败或低质量时保留原图片占位符并通过 trace 记录 failed/low_quality、provider、model、底层错误类型和经过脱敏/截断的错误信息；chunk metadata 不写入 `image_captions`、`image_caption_status` 或 provider/model；caption 文本可被后续 DenseEncoder 和 BM25Indexer 使用。
+验收标准：启用 `vision_llm` 且存在 `image_refs` 时会生成 caption 并替换 chunk 正文中的图片占位符；替换后的文本包含 `[[image_caption:image_id]]` 和可检索 caption，原相对位置保持不变；ImageCaptioner 不向 Vision LLM 传递完整 `document_context`；生成成功、低质量或失败结果时都要把结构化结果写入运行时 `image_caption_artifacts`，至少包含 `image_id`、`caption`、`status`、`provider`、`model`、`reason` 和 `source_chunk_ids`；未启用 `vision_llm` 时不调用 Vision LLM，并通过 trace 记录 skipped；没有 `image_refs` 的 chunk 不生成 caption；同一轮摄取中相同 `image_id` 只调用一次 Vision LLM，并在所有引用该图片的 chunk 中复用结果；Vision LLM 失败或低质量时保留原图片占位符并通过 trace 记录 failed/low_quality、provider、model、底层错误类型和经过脱敏/截断的错误信息；chunk metadata 不写入 `image_captions`、`image_caption_status` 或 provider/model；caption 文本可被后续 DenseEncoder 和 BM25Indexer 使用。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_transformer.py -v`
 
@@ -2826,7 +2826,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 实现类/函数：
 
-- `UpsertStep.run()`：校验完整索引快照，并在一个 PostgreSQL 事务内统一写入 document、chunk、向量、BM25 和图片索引
+- `UpsertStep.run()`：校验完整索引快照，并在一个 PostgreSQL 事务内统一写入 document、chunk、向量、BM25 和图片索引；图片 caption 优先读取 `image_caption_artifacts`
 - `BM25Storage.upsert_index()`：按 document 替换完整 BM25 posting 快照
 - `DocumentRepository.upsert_in_transaction()`：复用调用方事务写入 document
 - `ChunkRepository.upsert_many_in_transaction()`：复用调用方事务替换完整 chunk 快照
@@ -2834,7 +2834,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `ImageStorage.image_path()`：安全解析 `data/images/{collection}/` 下的受管图片路径
 - `ImageStorage.upsert_index_in_transaction()`：复用调用方事务写入图片索引
 
-验收标准：同一完整快照重复 upsert 不产生重复记录且返回相同有序 ID；Transform 基于新 content_hash 生成新 chunk_id 后，统一 upsert 清理旧 chunk 及其 BM25 posting；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 在同一个 PostgreSQL 事务内一致写入；向量或数据库写入失败时所有数据库记录回滚，事务前被替换的受管图片恢复原内容。
+验收标准：同一完整快照重复 upsert 不产生重复记录且返回相同有序 ID；Transform 基于新 content_hash 生成新 chunk_id 后，统一 upsert 清理旧 chunk 及其 BM25 posting；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 在同一个 PostgreSQL 事务内一致写入；`image_index.metadata.caption` 优先使用 `image_caption_artifacts` 中的原始 caption，即使最终 chunk 正文被 rewrite 移除 `[[image_caption:...]]` 节点也必须保留 caption；没有 artifacts 时兼容解析最终 chunk 正文；向量或数据库写入失败时所有数据库记录回滚，事务前被替换的受管图片恢复原内容。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 
@@ -2846,13 +2846,13 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 实现类/函数：
 
-- `IngestionPipeline.run_indexing()`：编排索引 MVP 子链路
+- `IngestionPipeline.run_indexing()`：编排索引 MVP 子链路，并把 transform runtime artifacts 显式传递给统一 upsert
 - `IngestionPipeline.run()`：串联摄取与索引主链路
 - `IngestionPipelineResult`：定义统一摄取与索引流程返回结果
 - `ChunkRepository.get_dense_vectors_by_content_hashes()`：读取同一 collection 中成功文档的可复用 Dense 向量
 - `EmbeddingStep.run_batch()`：复用已有 content_hash 向量，避免重复模型调用并恢复每个 chunk 的有序 Dense 结果
 
-验收标准：给定原始文档路径，可以完成去重、Loader、Splitter、包含 ImageCaptioner 条件 caption 的 Transform Pipeline、DenseEncoder 编码、BM25Indexer 索引、BatchProcessor 批处理、统一 upsert 和 lifecycle success；同一路径同内容重复执行时命中 successful source hash 并直接 skipped，不重复调用 Loader、Embedding 或 upsert；文档局部变化时，数据库中成功文档已有的 content_hash 必须复用 Dense 向量，仅对新增或变化内容调用 embedding；当前批次重复内容只调用一次模型，但仍为每个 chunk 返回独立且有序的 Dense 结果；Loader-only 模式保持 C1 兼容；部分后置组件配置必须启动失败；Splitter/Transform 产生空 chunk 时不得写入成功文档。
+验收标准：给定原始文档路径，可以完成去重、Loader、Splitter、包含 ImageCaptioner 条件 caption 的 Transform Pipeline、DenseEncoder 编码、BM25Indexer 索引、BatchProcessor 批处理、统一 upsert 和 lifecycle success；Transform runtime context 中的 `image_caption_artifacts` 必须从 ImageCaptioner 传递到 `run_indexing()` 和 `UpsertStep.run()`；同一路径同内容重复执行时命中 successful source hash 并直接 skipped，不重复调用 Loader、Embedding 或 upsert；文档局部变化时，数据库中成功文档已有的 content_hash 必须复用 Dense 向量，仅对新增或变化内容调用 embedding；当前批次重复内容只调用一次模型，但仍为每个 chunk 返回独立且有序的 Dense 结果；Loader-only 模式保持 C1 兼容；部分后置组件配置必须启动失败；Splitter/Transform 产生空 chunk 时不得写入成功文档。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 
@@ -3312,7 +3312,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `_validate_candidate_count_by_stage()`：校验 Dense、Sparse、Fusion、Filter、Rerank 阶段候选数量
 - `_validate_bool()`：校验 fallback、empty_result 等布尔指标，避免字符串 truthy 值污染结构化日志
 
-验收标准：包含 query 基础信息、阶段详情、顶层 `query_result`、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=query`、`started_at`、`collection`、`raw_query`，并在存在时记录 `request_source`；阶段详情必须限制在 `query_processing/dense/sparse/fusion/filter/rerank/response`；Dense/Sparse 阶段 details 必须记录命中的 `chunk_ids`，Fusion/Filter/Rerank 阶段 details 必须记录轻量候选快照和排序/过滤变化；`query_result` 必须包含 `contexts/content/citations/images`，contexts 每项包含 `chunk_id/score/rank`，citations 不包含 `source_uri`，images 仅包含 `image_id/chunk_ids/caption/quality_status`；汇总指标仅保存 `top_score`、`candidate_count_by_stage`、`fallback_used`、`error`、`total_duration_ms`；评估指标支持 `query_document_relevance`、`citation_hit_rate`、`rerank_delta`、`empty_result`。
+验收标准：包含 query 基础信息、阶段详情、顶层 `query_result`、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=query`、`started_at`、`collection`、`raw_query`，并在存在时记录 `request_source`；阶段详情必须限制在 `query_processing/dense/sparse/fusion/filter/rerank/response`；Dense/Sparse 阶段 details 必须记录命中的 `chunk_ids`，Fusion/Filter/Rerank 阶段 details 必须记录轻量候选快照和排序/过滤变化；`query_result` 必须包含 `contexts/content/citations/images`，contexts 每项包含 `chunk_id/score/rank`，citations 不包含 `source_uri`，images 仅包含 `image_id/chunk_ids/quality_status`；汇总指标仅保存 `top_score`、`candidate_count_by_stage`、`fallback_used`、`error`、`total_duration_ms`；评估指标支持 `query_document_relevance`、`citation_hit_rate`、`rerank_delta`、`empty_result`。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 

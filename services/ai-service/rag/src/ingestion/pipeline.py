@@ -435,8 +435,8 @@ class IngestionPipeline:
                 "source_path": source_uri,
                 "title": document.metadata.get("title"),
                 "document_summary": document.summary,
-                "document_context": document.text,
                 "document_images": document.metadata.get("images", []),
+                "image_caption_artifacts": {},
             }
             transform_started = perf_counter()
             transform_sub_stages: list[dict[str, Any]] = []
@@ -483,6 +483,10 @@ class IngestionPipeline:
                 source_path=source_uri,
                 source_hash=source_hash,
                 trace_controller=trace_controller,
+                image_caption_artifacts=transform_context.get(
+                    "image_caption_artifacts",
+                    {},
+                ),
             )
             self._document_repository.mark_success(document.id)
             trace_controller.flush_ingestion(
@@ -544,6 +548,7 @@ class IngestionPipeline:
         source_path: str,
         source_hash: str,
         trace_controller: TraceController | None = None,
+        image_caption_artifacts: Mapping[str, Mapping[str, object]] | None = None,
     ) -> tuple[EmbeddingBatchResult, UpsertResult]:
         """Run the C8 indexing stage followed by the C9 persistence stage.
 
@@ -555,6 +560,8 @@ class IngestionPipeline:
             source_hash: SHA256 digest of original source bytes.
             trace_controller: Optional request trace controller used to record
                 ``embed`` and ``upsert`` stages in the complete pipeline.
+            image_caption_artifacts: Optional structured captions emitted by
+                ImageCaptioner before downstream transforms rewrite chunk text.
 
         Returns:
             A tuple containing the in-memory indexing result and durable upsert
@@ -643,6 +650,7 @@ class IngestionPipeline:
                 source_path=source_path,
                 source_hash=source_hash,
                 title=_optional_title(document.metadata.get("title")),
+                image_caption_artifacts=image_caption_artifacts,
             )
         except Exception as error:
             _record_stage_best_effort(

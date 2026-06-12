@@ -87,10 +87,17 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
     document_id = f"doc-{uuid4().hex}"
     source_path = f"fixtures/{document_id}.md"
     image_id = f"image-{uuid4().hex}"
+    legacy_image_id = f"image-{uuid4().hex}"
     source_image = tmp_path / "source-product.png"
     source_image.write_bytes(b"fake-png-content")
+    legacy_source_image = tmp_path / "legacy-product.png"
+    legacy_source_image.write_bytes(b"legacy-png-content")
     placeholder = f"[[image:{image_id}]]"
-    document_text = f"Wireless headphones guide.\n{placeholder}\nOffice stress toy guide."
+    legacy_placeholder = f"[[image:{legacy_image_id}]]"
+    document_text = (
+        f"Wireless headphones guide.\n{placeholder}\n"
+        f"Office stress toy guide.\n{legacy_placeholder}"
+    )
     document = Document(
         id=document_id,
         text=document_text,
@@ -100,7 +107,11 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
                 {
                     "id": image_id,
                     "path": str(source_image),
-                }
+                },
+                {
+                    "id": legacy_image_id,
+                    "path": str(legacy_source_image),
+                },
             ],
         },
     )
@@ -108,8 +119,7 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
         Chunk(
             id=f"chunk-{uuid4().hex}",
             text=(
-                f"Wireless headphones guide.\n[[image_caption:{image_id}]]\n"
-                "Black wireless headphones.\n\n"
+                "Wireless headphones guide rewritten as natural searchable text.\n\n"
                 "This paragraph should remain normal chunk content."
             ),
             metadata={
@@ -123,14 +133,29 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
         ),
         Chunk(
             id=f"chunk-{uuid4().hex}",
-            text="Office stress toy guide.",
-            metadata={"source_path": source_path},
+            text=(
+                "Office stress toy guide.\n"
+                f"[[image_caption:{legacy_image_id}]]\n"
+                "Legacy caption from final chunk text."
+            ),
+            metadata={"source_path": source_path, "image_refs": [legacy_image_id]},
             chunk_index=1,
             start_offset=document_text.index("Office"),
             end_offset=len(document_text),
             source_ref={"document_id": document_id},
         ),
     ]
+    caption_artifacts = {
+        image_id: {
+            "image_id": image_id,
+            "caption": "Original artifact caption for black wireless headphones.",
+            "status": "success",
+            "provider": "fake-vision",
+            "model": "fake-vl",
+            "reason": "",
+            "source_chunk_ids": [chunks[0].id],
+        }
+    }
 
     pool = PostgresPool.from_settings(
         _database_settings(),
@@ -162,6 +187,7 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
             source_path=source_path,
             source_hash=sha256(document_text.encode("utf-8")).hexdigest(),
             title="C9 fixture",
+            image_caption_artifacts=caption_artifacts,
         )
         repeated = step.run(
             document=document,
@@ -171,16 +197,28 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
             source_path=source_path,
             source_hash=sha256(document_text.encode("utf-8")).hexdigest(),
             title="C9 fixture",
+            image_caption_artifacts=caption_artifacts,
         )
 
         assert first.chunk_ids == [chunk.id for chunk in chunks]
         assert first.vector_chunk_ids == first.chunk_ids
         assert first.bm25_chunk_ids == first.chunk_ids
-        assert first.image_ids == [image_id]
+        assert first.image_ids == [image_id, legacy_image_id]
         assert repeated == first
-        first_image_record = image_storage.find_by_collection(collection_id)[0]
+        records_by_id = {
+            record.image_id: record
+            for record in image_storage.find_by_collection(collection_id)
+        }
+        first_image_record = records_by_id[image_id]
         assert first_image_record.quality_status == "ok"
-        assert first_image_record.metadata["caption"] == "Black wireless headphones."
+        assert first_image_record.metadata["caption"] == (
+            "Original artifact caption for black wireless headphones."
+        )
+        legacy_image_record = records_by_id[legacy_image_id]
+        assert legacy_image_record.quality_status == "ok"
+        assert legacy_image_record.metadata["caption"] == (
+            "Legacy caption from final chunk text."
+        )
 
         replacement = chunks[0].model_copy(
             update={
@@ -197,6 +235,7 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
             source_path=source_path,
             source_hash=sha256(b"document-v2").hexdigest(),
             title="C9 fixture updated",
+            image_caption_artifacts=caption_artifacts,
         )
 
         assert changed.chunk_ids == [replacement.id, chunks[1].id]
@@ -234,12 +273,24 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
             assert counts[1] == 2
             assert counts[2] == 2
             assert counts[3] > 0
-            assert counts[4] == 1
+            assert counts[4] == 2
 
-        image_record = image_storage.find_by_collection(collection_id)[0]
+        image_records = {
+            record.image_id: record
+            for record in image_storage.find_by_collection(collection_id)
+        }
+        image_record = image_records[image_id]
         assert Path(image_record.file_path).parent.name == collection_id
         assert Path(image_record.file_path).read_bytes() == b"fake-png-content"
-        assert image_record.quality_status == "pending"
+        assert image_record.quality_status == "ok"
+        assert image_record.metadata["caption"] == (
+            "Original artifact caption for black wireless headphones."
+        )
+        legacy_image_record = image_records[legacy_image_id]
+        assert legacy_image_record.quality_status == "ok"
+        assert legacy_image_record.metadata["caption"] == (
+            "Legacy caption from final chunk text."
+        )
     finally:
         with pool.transaction() as connection:
             connection.execute(
@@ -423,7 +474,6 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
             *,
             prompt: object | None = None,
             image_type: str = "product",
-            document_context: str = "",
         ) -> object:
             """Generate one stable success caption for the referenced image."""
 
@@ -432,7 +482,6 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
             assert image_path
             assert prompt is not None
             assert image_type == "product"
-            assert document_context
             return VisionCaptionResponse(
                 status="success",
                 description="Product comparison image for wireless headphones.",
@@ -600,6 +649,13 @@ def test_ingestion_pipeline_runs_complete_mvp_and_skips_unchanged_source(
         assert counts[0] == 1
         assert counts[1] > 0
         assert counts[2] == 1
+        image_record = ImageStorage(
+            pool,
+            root_dir=tmp_path / "managed-images",
+        ).find_by_collection(collection_id)[0]
+        assert image_record.metadata["caption"] == (
+            "Product comparison image for wireless headphones."
+        )
     finally:
         with pool.transaction() as connection:
             connection.execute(

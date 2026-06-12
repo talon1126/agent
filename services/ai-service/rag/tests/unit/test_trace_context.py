@@ -462,12 +462,45 @@ def test_query_trace_rejects_non_compact_citation_and_image_snapshots() -> None:
                 "contexts": [],
                 "content": "",
                 "citations": [],
-                "images": [{"image_id": "image-1", "width": 100}],
+                "images": [
+                    {
+                        "image_id": "image-1",
+                        "chunk_ids": ["chunk-1"],
+                        "caption": "无线耳机佩戴示意图",
+                        "quality_status": "success",
+                    }
+                ],
             },
             top_score=None,
             candidate_count_by_stage={},
             fallback_used=False,
         )
+
+    snapshot = context.finish_query(
+        status="success",
+        query_result={
+            "contexts": [],
+            "content": "",
+            "citations": [],
+            "images": [
+                {
+                    "image_id": "image-1",
+                    "chunk_ids": ["chunk-1"],
+                    "quality_status": "success",
+                }
+            ],
+        },
+        top_score=None,
+        candidate_count_by_stage={},
+        fallback_used=False,
+    )
+    assert snapshot["query_result"]["images"] == [
+        {
+            "image_id": "image-1",
+            "chunk_ids": ["chunk-1"],
+            "quality_status": "success",
+        }
+    ]
 
     with pytest.raises(ValueError, match="query_result citation score"):
         context.finish_query(

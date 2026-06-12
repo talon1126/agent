@@ -396,7 +396,7 @@ def _validate_query_result_citation(value: Any) -> dict[str, Any]:
 def _validate_query_result_image(value: Any) -> dict[str, Any]:
     """Validate one compact image reference stored in a Query Trace result."""
 
-    fields = {"image_id", "chunk_ids", "caption", "quality_status"}
+    fields = {"image_id", "chunk_ids", "quality_status"}
     if not isinstance(value, dict) or set(value) != fields:
         raise ValueError(f"query_result image must contain exactly {sorted(fields)}")
     chunk_ids = value["chunk_ids"]
@@ -411,16 +411,12 @@ def _validate_query_result_image(value: Any) -> dict[str, Any]:
     ]
     if len(set(normalized_chunk_ids)) != len(normalized_chunk_ids):
         raise ValueError("query_result image chunk_ids must be unique")
-    caption = value["caption"]
-    if caption is not None and not isinstance(caption, str):
-        raise ValueError("query_result image caption must be a string or null")
     return {
         "image_id": _validate_non_blank(
             value["image_id"],
             field_name="query_result image image_id",
         ),
         "chunk_ids": normalized_chunk_ids,
-        "caption": caption,
         "quality_status": _validate_non_blank(
             value["quality_status"],
             field_name="query_result image quality_status",

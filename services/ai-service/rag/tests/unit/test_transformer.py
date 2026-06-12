@@ -696,18 +696,16 @@ def test_image_captioner_replaces_placeholders_and_records_trace_details() -> No
         prompt=config_module.load_prompt("config/prompts/image_caption_prompt.yaml"),
         enabled=True,
     )
-    captioned = captioner.caption(
-        [source],
-        context={
-            "document_context": "stress toy guide",
-            "document_images": [
-                {
-                    "id": "image-stress-ball",
-                    "path": "data/images/shopping_guides/image-stress-ball.png",
-                }
-            ],
-        },
-    )
+    context = {
+        "document_images": [
+            {
+                "id": "image-stress-ball",
+                "path": "data/images/shopping_guides/image-stress-ball.png",
+            }
+        ],
+        "image_caption_artifacts": {},
+    }
+    captioned = captioner.caption([source], context=context)
 
     assert captioned[0] is not source
     assert captioned[0].text == (
@@ -727,6 +725,19 @@ def test_image_captioner_replaces_placeholders_and_records_trace_details() -> No
         "failures": [],
     }
     vision_llm.caption_image.assert_called_once()
+    call_kwargs = vision_llm.caption_image.call_args.kwargs
+    assert "document_context" not in call_kwargs
+    assert context["image_caption_artifacts"] == {
+        "image-stress-ball": {
+            "image_id": "image-stress-ball",
+            "caption": "图片展示一个蓝色硅胶解压球，表面为磨砂材质。",
+            "status": "success",
+            "provider": "fake-vision",
+            "model": "fake-vl",
+            "reason": "",
+            "source_chunk_ids": ["chunk-1"],
+        }
+    }
 
 
 def test_dashscope_vision_llm_sends_local_image_as_base64_data_url(
@@ -755,12 +766,14 @@ def test_dashscope_vision_llm_sends_local_image_as_base64_data_url(
     client.chat.completions.create.return_value = response
 
     result = DashScopeVisionLLM(model="qwen-vl-max", client=client).caption_image(
-        image_path,
-        document_context="shopping guide",
+        image_path
     )
 
     messages = client.chat.completions.create.call_args.kwargs["messages"]
+    prompt_text = messages[1]["content"][0]["text"]
     image_url = messages[1]["content"][1]["image_url"]["url"]
+    assert "Document context" not in prompt_text
+    assert "shopping guide" not in prompt_text
     assert image_url == (
         "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
     )

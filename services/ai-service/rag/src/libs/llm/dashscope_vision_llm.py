@@ -96,7 +96,6 @@ class DashScopeVisionLLM(BaseVisionLLM):
         *,
         prompt: Any | None = None,
         image_type: str = "product",
-        document_context: str = "",
     ) -> VisionCaptionResponse:
         """Generate one normalized caption for a local image.
 
@@ -105,7 +104,6 @@ class DashScopeVisionLLM(BaseVisionLLM):
             prompt: Prompt document loaded from settings. The object may be a
                 local PromptTemplate or a plain mapping.
             image_type: Image strategy key rendered into the prompt.
-            document_context: Nearby document text used as visual context.
 
         Returns:
             A provider-independent caption response.
@@ -122,7 +120,6 @@ class DashScopeVisionLLM(BaseVisionLLM):
             user_prompt = _render_user_prompt(
                 prompt,
                 image_type=image_type,
-                document_context=document_context,
             )
             system_prompt = _system_prompt(prompt)
             response = self._client.chat.completions.create(
@@ -204,13 +201,11 @@ def _render_user_prompt(
     prompt: Any | None,
     *,
     image_type: str,
-    document_context: str,
 ) -> str:
     """Render the configured user prompt with image strategy inputs."""
 
     variables = {
         "image_type": image_type,
-        "document_context": document_context,
     }
     if hasattr(prompt, "render_user_prompt"):
         return str(prompt.render_user_prompt(**variables))
@@ -220,7 +215,6 @@ def _render_user_prompt(
         return str(prompt.get("user_prompt") or "").format(**variables)
     return (
         f"Image type:\n{image_type}\n\n"
-        f"Document context:\n{document_context}\n\n"
         "Return JSON with status, description, extracted_text, key_facts, and reason."
     )
 

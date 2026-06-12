@@ -600,7 +600,6 @@ def _query_result_snapshot(
             {
                 "image_id": image.image_id,
                 "chunk_ids": list(image.chunk_ids),
-                "caption": image.caption,
                 "quality_status": image.quality_status,
             }
             for image in response.images

@@ -666,8 +666,8 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
   -> 输出 Document(id + text + summary + metadata.images[])
   -> Splitter 保留图片引用标记到对应 chunk
   -> ImageCaptioner 判断 vision_llm 和 image_refs
-  -> 满足条件时生成 caption 并替换 chunk 正文中的图片占位符
-  -> Storage 存储增强后的 chunk 和原始图片
+  -> 满足条件时生成 caption，写入 image_caption_artifacts，并替换 chunk 正文中的图片占位符
+  -> Storage 存储增强后的 chunk、原始图片和 artifacts 中的原始 caption
 ```
 
 各阶段输出：
@@ -676,8 +676,8 @@ CREATE INDEX idx_doc_hash ON image_index(doc_hash);
 | --- | --- |
 | Loader | `Document(id + text + summary + metadata.images[])`，其中 `summary` 是顶层可空字段，`text` 包含图片占位符，`metadata.images[]` 只保存图片 `id/path` |
 | Splitter | chunk 文本保留图片引用标记，chunk metadata 增加 `image_refs: List[image_id]`；`Chunk.metadata` 不复制 `Document.metadata.images[]` |
-| ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption，并把 `[[image:image_id]]` 替换为 `[[image_caption:image_id]] + caption` |
-| Storage | 向量库存储增强后的 chunk，文件系统保存原始图片，PostgreSQL `image_index` 表保存图片索引信息 |
+| ImageCaptioner | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时生成 caption；把原始 caption 写入运行时 `image_caption_artifacts`，并把 `[[image:image_id]]` 替换为可被后续 rewrite 融入正文的 caption 文本 |
+| Storage | 向量库存储增强后的 chunk，文件系统保存原始图片，PostgreSQL `image_index` 表优先使用 `image_caption_artifacts` 保存原始 caption 和质量状态 |
 
 #### 3.7.2 Loader 技术要点
 
@@ -703,7 +703,7 @@ Splitter 必须保留图片引用和文本上下文之间的关联，不能在�
 
 #### 3.7.4 ImageCaptioner 技术要点
 
-ImageCaptioner 是图片 caption 的业务编排层。它只在 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时调用 Vision LLM；底层图片理解能力由 `BaseVisionLLM` 的具体实现提供。ImageCaptioner 负责读取图片引用、定位 `Document.metadata.images[]` 中的图片路径、调用图片描述能力、把 caption 写回 chunk 正文，并把 skipped、failed、low_quality、provider、model、耗时和快照写入 ingestion trace 的 `transform.sub_stages`。同一轮摄取中相同 `image_id` 即使被多个 chunk 引用，也只能调用一次 Vision LLM，后续 chunk 复用同一 caption 或失败结果；Provider 失败时必须记录经过脱敏和长度限制的底层错误类型与错误信息，禁止记录 API Key、base64 图片正文或完整请求体。
+ImageCaptioner 是图片 caption 的业务编排层。它只在 `vision_llm.enabled=true` 且 chunk metadata 中存在 `image_refs` 时调用 Vision LLM；底层图片理解能力由 `BaseVisionLLM` 的具体实现提供。ImageCaptioner 负责读取图片引用、定位 `Document.metadata.images[]` 中的图片路径、调用图片描述能力、把 caption 写回 chunk 正文，并把原始 caption、状态、provider、model 和关联 chunk 写入运行时 `image_caption_artifacts`，供统一 upsert 写入 `image_index`。ImageCaptioner 不向 Vision LLM 发送完整 `document_context`，避免把整篇文档作为图片理解上下文造成额外 token 消耗；图片理解只使用图片本身、图片类型和 Prompt 策略。同一轮摄取中相同 `image_id` 即使被多个 chunk 引用，也只能调用一次 Vision LLM，后续 chunk 复用同一 caption 或失败结果；Provider 失败时必须记录经过脱敏和长度限制的底层错误类型与错误信息，禁止记录 API Key、base64 图片正文或完整请求体。skipped、failed、low_quality、provider、model、耗时和快照写入 ingestion trace 的 `transform.sub_stages`，但 trace 不作为 upsert 的业务数据源。
 
 Vision LLM 选型：
 
@@ -748,7 +748,7 @@ Storage 负责同时保存增强后的 chunk 和原始图片索引。
 
 - 增强后的 chunk 写入 PostgreSQL + pgvector，chunk metadata 包含 `image_refs`。
 - 原始图片文件保存在本地文件系统。
-- PostgreSQL 使用 `image_index` 表保存图片索引信息。
+- PostgreSQL 使用 `image_index` 表保存图片索引信息；`image_index.metadata.caption` 优先来自运行时 `image_caption_artifacts`，仅在 artifacts 不存在时兼容解析最终 chunk 正文中的 `[[image_caption:...]]`。
 - 检索命中 chunk 后，如果 chunk metadata 中包含 `image_refs`，响应可以返回相关图片信息，供 Dashboard 或前端展示。
 
 `image_index` 表建议字段：
@@ -872,7 +872,7 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `contexts` | 最终进入响应构造的结果列表，每项包含 `chunk_id`、最终 `score` 和 `rank` |
 | `content` | RAG 实际返回给 Agent 或调用方的格式化知识文本快照 |
 | `citations` | 与最终 contexts 对齐的轻量引用快照，仅保存 `document_id`、`chunk_id`、`title`、`section_path`、`score`、`trace_id`；不重复记录由完整公共响应和文档存储负责的 `source_uri` |
-| `images` | 与最终 contexts 关联的轻量图片快照，仅保存 `image_id`、`chunk_ids`、`caption`、`quality_status`；图片路径、页码、尺寸和 MIME 类型仍由完整公共响应与图片索引负责 |
+| `images` | 与最终 contexts 关联的轻量图片快照，仅保存 `image_id`、`chunk_ids`、`quality_status`；图片 caption、路径、页码、尺寸和 MIME 类型仍由完整公共响应与图片索引负责 |
 
 汇总指标：
 

@@ -3,7 +3,6 @@ version: 1
 description: Generate retrieval-oriented captions for document images.
 input_variables:
   - image_type
-  - document_context
 system_prompt: |
   You are the image captioning component of a RAG document ingestion system.
   Generate a retrieval-oriented description from the visible image content,
@@ -21,9 +20,6 @@ system_prompt: |
 user_prompt: |
   Image type:
   {image_type}
-
-  Document context:
-  {document_context}
 
   Return a structured caption using the strategy for the supplied image type.
 image_type_strategies:

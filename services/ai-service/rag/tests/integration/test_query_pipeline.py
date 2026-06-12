@@ -586,13 +586,11 @@ def test_query_pipeline_hybrid() -> None:
         assert set(query_result["images"][0]) == {
             "image_id",
             "chunk_ids",
-            "caption",
             "quality_status",
         }
         assert query_result["images"][0] == {
             "image_id": "image-headphones",
             "chunk_ids": [fixture.rerank_chunk.id],
-            "caption": "无线耳机佩戴示意图",
             "quality_status": "success",
         }
         query_counts = query_summary["candidate_count_by_stage"]

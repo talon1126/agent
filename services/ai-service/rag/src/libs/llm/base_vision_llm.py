@@ -1,9 +1,10 @@
 """Define provider-independent Vision LLM contracts for image captioning.
 
 The ingestion pipeline only needs one multimodal capability: turn a local
-image file plus nearby document context into a retrieval-oriented caption.
-This module keeps that contract separate from the text-only ``BaseLLM`` chat
-interface so ImageCaptioner can depend on a small, explicit API.
+image file into a retrieval-oriented caption. This module keeps that contract
+separate from the text-only ``BaseLLM`` chat interface so ImageCaptioner can
+depend on a small, explicit API and avoid sending full document text to
+multimodal providers.
 """
 
 from __future__ import annotations
@@ -60,7 +61,6 @@ class BaseVisionLLM(ABC):
         *,
         prompt: Any | None = None,
         image_type: str = "product",
-        document_context: str = "",
     ) -> VisionCaptionResponse:
         """Generate a retrieval-oriented caption for one local image.
 
@@ -69,8 +69,6 @@ class BaseVisionLLM(ABC):
             prompt: Optional prompt document loaded from configuration.
             image_type: Strategy key used by the prompt, such as ``product`` or
                 ``table``.
-            document_context: Nearby document text that helps the provider
-                interpret the image without inventing unseen facts.
 
         Returns:
             Provider-independent caption response.

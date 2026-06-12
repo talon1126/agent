@@ -4,7 +4,10 @@
 uses ``image_refs`` on chunks and document-level ``images`` supplied through
 the transform context to find local image files, call a Vision LLM, and replace
 ``[[image:...]]`` placeholders with ``[[image_caption:...]]`` nodes plus the
-caption text. Execution details are exposed through ``trace_details()`` so
+caption text. Original provider captions are also written into
+``image_caption_artifacts`` on the runtime context so persistence can keep an
+auditable caption even when later rewrite steps merge the caption into natural
+chunk text. Execution details are exposed through ``trace_details()`` so
 Transform Pipeline can attach them to ``transform.sub_stages``.
 """
 
@@ -76,16 +79,18 @@ class ImageCaptioner(BaseTransform):
         Args:
             chunks: Ordered chunks whose metadata may include ``image_refs``.
             context: Runtime context. ``document_images`` should contain the
-                parent ``Document.metadata.images`` list, and
-                ``document_context`` supplies nearby text for the Vision model.
+                parent ``Document.metadata.images`` list. When provided,
+                ``image_caption_artifacts`` receives provider captions keyed by
+                image ID for the later upsert stage.
 
         Returns:
             New chunk objects. Successful captions update chunk text; skipped,
             failed, and low-quality captions preserve original text.
         """
 
-        runtime_context = context or {}
+        runtime_context = context if context is not None else {}
         image_index = _document_image_index(runtime_context.get("document_images"))
+        artifacts = _artifact_store(runtime_context)
         self._last_events = []
         result_cache: dict[str, VisionCaptionResponse] = {}
         output: list[Chunk] = []
@@ -94,8 +99,8 @@ class ImageCaptioner(BaseTransform):
                 self._caption_chunk(
                     chunk,
                     image_index=image_index,
-                    document_context=str(runtime_context.get("document_context") or ""),
                     result_cache=result_cache,
+                    artifacts=artifacts,
                 )
             )
         return output
@@ -127,8 +132,8 @@ class ImageCaptioner(BaseTransform):
         chunk: Chunk,
         *,
         image_index: dict[str, dict[str, Any]],
-        document_context: str,
         result_cache: dict[str, VisionCaptionResponse],
+        artifacts: dict[str, dict[str, Any]],
     ) -> Chunk:
         """Caption every placeholder referenced by one chunk."""
 
@@ -157,7 +162,6 @@ class ImageCaptioner(BaseTransform):
                         image["path"],
                         prompt=self._prompt,
                         image_type=str(image.get("image_type") or "product"),
-                        document_context=document_context or chunk.text,
                     )
                     normalized = _normalize_response(response)
                 except Exception as error:
@@ -171,6 +175,12 @@ class ImageCaptioner(BaseTransform):
                     model=normalized.model,
                     error_type=str(normalized.raw.get("error_type") or ""),
                 )
+            _record_caption_artifact(
+                artifacts,
+                image_id=image_id,
+                response=normalized,
+                chunk_id=chunk.id,
+            )
             if normalized.status == "success":
                 replacements[image_id] = _caption_node(
                     image_id=image_id,
@@ -241,6 +251,70 @@ def _document_image_index(value: Any) -> dict[str, dict[str, Any]]:
         and image.get("path")
         and Path(str(image.get("path"))).name
     }
+
+
+def _artifact_store(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return the mutable caption-artifact store for the current run.
+
+    Args:
+        context: Runtime transform context shared by configured transform
+            steps during one ingestion run.
+
+    Returns:
+        A dictionary keyed by image ID. The store is created when missing so
+        ImageCaptioner can publish structured caption data without requiring
+        the pipeline to pre-populate the optional key in focused unit tests.
+    """
+
+    value = context.setdefault("image_caption_artifacts", {})
+    if isinstance(value, dict):
+        return value
+    replacement: dict[str, dict[str, Any]] = {}
+    context["image_caption_artifacts"] = replacement
+    return replacement
+
+
+def _record_caption_artifact(
+    artifacts: dict[str, dict[str, Any]],
+    *,
+    image_id: str,
+    response: VisionCaptionResponse,
+    chunk_id: str,
+) -> None:
+    """Store one provider caption result for persistence after Transform.
+
+    Args:
+        artifacts: Mutable runtime artifact store shared with the pipeline.
+        image_id: Stable image identifier referenced by the current chunk.
+        response: Provider-independent caption response.
+        chunk_id: Chunk identity before ImageCaptioner rewrites the chunk text
+            and therefore before downstream transforms may derive new IDs.
+
+    Side Effects:
+        Updates ``artifacts`` in place. Repeated references to the same image
+        merge their source chunk IDs while preserving the first provider
+        caption payload.
+    """
+
+    existing = artifacts.get(image_id)
+    source_chunk_ids: list[str]
+    if existing is None:
+        source_chunk_ids = []
+        artifacts[image_id] = {
+            "image_id": image_id,
+            "caption": response.description,
+            "status": response.status,
+            "provider": response.provider,
+            "model": response.model,
+            "reason": response.reason,
+            "source_chunk_ids": source_chunk_ids,
+        }
+    else:
+        raw_ids = existing.setdefault("source_chunk_ids", [])
+        source_chunk_ids = raw_ids if isinstance(raw_ids, list) else []
+        existing["source_chunk_ids"] = source_chunk_ids
+    if chunk_id not in source_chunk_ids:
+        source_chunk_ids.append(chunk_id)
 
 
 def _normalize_response(response: VisionCaptionResponse | Any) -> VisionCaptionResponse:

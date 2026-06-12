@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import mimetypes
 import re
+from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
@@ -109,6 +110,7 @@ class UpsertStep:
         source_path: str,
         source_hash: str,
         title: str | None = None,
+        image_caption_artifacts: Mapping[str, Mapping[str, object]] | None = None,
     ) -> UpsertResult:
         """Persist one validated complete ingestion snapshot.
 
@@ -120,6 +122,8 @@ class UpsertStep:
             source_path: Stable logical source path.
             source_hash: SHA256 digest of the original source bytes.
             title: Optional Dashboard display title.
+            image_caption_artifacts: Optional structured captions emitted by
+                ImageCaptioner before later transforms rewrite chunk text.
 
         Returns:
             Ordered durable identifiers for every written subsystem.
@@ -144,6 +148,7 @@ class UpsertStep:
                 document,
                 chunks=ordered_chunks,
                 collection_id=collection_id,
+                image_caption_artifacts=image_caption_artifacts,
             )
             with self._pool.transaction() as connection:
                 self._document_repository.upsert_in_transaction(
@@ -274,10 +279,14 @@ class UpsertStep:
         *,
         chunks: list[Chunk],
         collection_id: str,
+        image_caption_artifacts: Mapping[str, Mapping[str, object]] | None = None,
     ) -> list[_PreparedImage]:
         """Copy document images into managed storage and enrich index metadata."""
 
-        caption_by_image = _captions_by_image(chunks)
+        caption_by_image = _captions_by_image(
+            chunks,
+            image_caption_artifacts=image_caption_artifacts,
+        )
         prepared: list[_PreparedImage] = []
         images = document.metadata.get("images", [])
         image_ids = [str(image["id"]) for image in images]
@@ -322,6 +331,12 @@ class UpsertStep:
                             "position": position,
                             "caption": str(caption.get("description") or ""),
                             "caption_status": caption_status,
+                            "caption_provider": str(caption.get("provider") or ""),
+                            "caption_model": str(caption.get("model") or ""),
+                            "caption_reason": str(caption.get("reason") or ""),
+                            "caption_source_chunk_ids": list(
+                                caption.get("source_chunk_ids") or []
+                            ),
                             "source_path": str(source),
                         },
                         previous_content=previous_content,
@@ -367,8 +382,25 @@ class UpsertStep:
                 continue
 
 
-def _captions_by_image(chunks: list[Chunk]) -> dict[str, dict[str, object]]:
-    """Collect the latest caption text injected into chunk content."""
+def _captions_by_image(
+    chunks: list[Chunk],
+    *,
+    image_caption_artifacts: Mapping[str, Mapping[str, object]] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Collect image captions from artifacts or final chunk content.
+
+    Args:
+        chunks: Final transformed chunks. These are only used as a compatibility
+            fallback because rewrite steps may remove ``[[image_caption:...]]``
+            nodes after the caption text has been merged into natural prose.
+        image_caption_artifacts: Structured provider captions emitted by
+            ImageCaptioner before downstream rewrite or denoise transforms.
+
+    Returns:
+        Caption records keyed by image ID. Artifact data wins over text parsing
+        because it preserves the original provider caption even when final
+        chunk text no longer contains a marker.
+    """
 
     captions: dict[str, dict[str, object]] = {}
     for chunk in chunks:
@@ -378,7 +410,55 @@ def _captions_by_image(chunks: list[Chunk]) -> dict[str, dict[str, object]]:
                 "status": "success",
                 "description": description,
             }
+    if image_caption_artifacts:
+        for image_id, artifact in image_caption_artifacts.items():
+            normalized = _caption_from_artifact(image_id, artifact)
+            if normalized is not None:
+                captions[normalized["image_id"]] = normalized
     return captions
+
+
+def _caption_from_artifact(
+    image_id: object,
+    artifact: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Normalize one runtime caption artifact for image-index metadata.
+
+    Args:
+        image_id: Mapping key supplied by the pipeline.
+        artifact: Caption payload written by ImageCaptioner.
+
+    Returns:
+        A normalized caption mapping or ``None`` when the artifact does not
+        identify an image. Unknown status values degrade to ``pending`` through
+        the existing image quality mapping.
+    """
+
+    normalized_image_id = str(artifact.get("image_id") or image_id).strip()
+    if not normalized_image_id:
+        return None
+    caption = artifact.get("caption")
+    if caption is None:
+        caption = artifact.get("description")
+    return {
+        "image_id": normalized_image_id,
+        "status": str(artifact.get("status") or "pending"),
+        "description": " ".join(str(caption or "").split()),
+        "provider": str(artifact.get("provider") or ""),
+        "model": str(artifact.get("model") or ""),
+        "reason": str(artifact.get("reason") or ""),
+        "source_chunk_ids": _string_list(artifact.get("source_chunk_ids")),
+    }
+
+
+def _string_list(value: object) -> list[str]:
+    """Normalize optional artifact list values without splitting strings."""
+
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list | tuple):
+        return [str(item) for item in value if str(item).strip()]
+    return []
 
 
 def _caption_nodes(text: str) -> list[tuple[str, str]]:
