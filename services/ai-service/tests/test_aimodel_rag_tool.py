@@ -213,3 +213,13 @@ def test_system_prompt_separates_product_api_facts_from_rag_knowledge() -> None:
     assert "政策 FAQ" in SYSTEM_PROMPT
     assert "不能使用 RAG" in SYSTEM_PROMPT
     assert "不能编造引用" in SYSTEM_PROMPT
+
+
+def test_system_prompt_covers_recommendation_comparison_guide_and_policy_faq_scenarios() -> None:
+    assert "推荐场景" in SYSTEM_PROMPT
+    assert "商品搜索工具" in SYSTEM_PROMPT
+    assert "商品链接对比场景" in SYSTEM_PROMPT
+    assert "商品详情工具" in SYSTEM_PROMPT
+    assert "选购指南场景" in SYSTEM_PROMPT
+    assert "必须使用 RAG 工具" in SYSTEM_PROMPT
+    assert "政策 FAQ 场景" in SYSTEM_PROMPT
