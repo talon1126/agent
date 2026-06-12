@@ -134,6 +134,7 @@ class QueryRuntime:
         top_k: int,
         no_rerank: bool,
         trace_id: str,
+        request_source: str = "query_cli",
     ) -> QueryExecutionResult:
         """Run the complete query path and return public/debug projections.
 
@@ -143,6 +144,7 @@ class QueryRuntime:
             top_k: Positive final result limit.
             no_rerank: Explicit caller request to bypass reranking.
             trace_id: Stable query identifier included in every citation.
+            request_source: Calling surface written to query trace metadata.
 
         Returns:
             Public response plus immutable stage snapshots used by verbose CLI
@@ -157,7 +159,7 @@ class QueryRuntime:
             trace_id=trace_id,
             collection=collection,
             raw_query=query,
-            request_source="query_cli",
+            request_source=request_source,
         )
         trace_controller = TraceController(trace_context, sink=self._trace_sink)
         hybrid = None
@@ -415,6 +417,7 @@ def run_query_cli(
             top_k=args.top_k,
             no_rerank=args.no_rerank,
             trace_id=active_trace_id_factory(),
+            request_source="query_cli",
         )
         payload: dict[str, Any] = {
             "query": args.query,

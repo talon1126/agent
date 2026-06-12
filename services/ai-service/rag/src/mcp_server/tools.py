@@ -46,6 +46,7 @@ class QueryRuntimeLike(Protocol):
         top_k: int,
         no_rerank: bool,
         trace_id: str,
+        request_source: str = "query_cli",
     ) -> QueryExecutionLike:
         """Execute one query and return a public response wrapper."""
 
@@ -118,6 +119,7 @@ class QueryKnowledgeHubTool:
         top_k: int | None = None,
         no_rerank: bool = False,
         include_image_base64: bool = False,
+        request_source: str | None = None,
     ) -> dict[str, Any]:
         """Query the knowledge hub and return public MCP-safe JSON.
 
@@ -130,6 +132,10 @@ class QueryKnowledgeHubTool:
             no_rerank: Whether to preserve filtered RRF order and skip rerank.
             include_image_base64: When true, attach bounded image bytes to each
                 returned image with an existing managed file path.
+            request_source: Optional caller label written to query traces.
+                Omitted MCP calls default to ``mcp``; AImodel passes
+                ``aimodel`` so Dashboard filters can separate user chats from
+                direct CLI and evaluation traces.
 
         Returns:
             ``ok=true`` public RAG response or ``ok=false`` structured business
@@ -147,6 +153,7 @@ class QueryKnowledgeHubTool:
             top_k=top_k,
             no_rerank=no_rerank,
             include_image_base64=include_image_base64,
+            request_source=request_source,
         )
         if validation_error is not None:
             return validation_error
@@ -160,6 +167,11 @@ class QueryKnowledgeHubTool:
         active_top_k = (
             settings.retrieval.final_top_k if top_k is None else top_k
         )
+        active_request_source = (
+            request_source.strip()
+            if isinstance(request_source, str) and request_source.strip()
+            else "mcp"
+        )
         pool = self._pool_factory(settings.database)
         try:
             pool.open()
@@ -171,6 +183,7 @@ class QueryKnowledgeHubTool:
                 top_k=active_top_k,
                 no_rerank=no_rerank,
                 trace_id=self._trace_id_factory(),
+                request_source=active_request_source,
             )
             payload = execution.response.model_dump(mode="json")
             if include_image_base64:
@@ -189,6 +202,7 @@ class QueryKnowledgeHubTool:
         top_k: int | None,
         no_rerank: bool,
         include_image_base64: bool,
+        request_source: str | None,
     ) -> dict[str, Any] | None:
         """Validate MCP request primitives before opening external resources."""
 
@@ -211,6 +225,13 @@ class QueryKnowledgeHubTool:
             return _business_error(
                 "invalid_request",
                 "include_image_base64 must be a boolean",
+            )
+        if request_source is not None and (
+            not isinstance(request_source, str) or not request_source.strip()
+        ):
+            return _business_error(
+                "invalid_request",
+                "request_source must be a non-blank string when provided",
             )
         return None
 

@@ -234,6 +234,7 @@ class PersistentMcpRagKnowledgeClient:
             "top_k": top_k,
             "no_rerank": no_rerank,
             "include_image_base64": include_image_base64,
+            "request_source": "aimodel",
         }
         loop, caller = self._ensure_session()
         future = asyncio.run_coroutine_threadsafe(caller(payload), loop)

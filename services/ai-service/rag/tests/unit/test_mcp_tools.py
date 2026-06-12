@@ -93,6 +93,7 @@ class FakeRuntime:
         top_k: int,
         no_rerank: bool,
         trace_id: str,
+        request_source: str | None = None,
     ) -> FakeQueryExecution:
         """Capture normalized tool arguments and return the fixture response."""
 
@@ -103,6 +104,7 @@ class FakeRuntime:
                 "top_k": top_k,
                 "no_rerank": no_rerank,
                 "trace_id": trace_id,
+                "request_source": request_source,
             }
         )
         return FakeQueryExecution(response=self.response)
@@ -319,11 +321,13 @@ async def test_mcp_tool_schemas_match_documented_contract() -> None:
         "top_k",
         "no_rerank",
         "include_image_base64",
+        "request_source",
     }
     assert query_schema["properties"]["query"]["type"] == "string"
     assert query_schema["properties"]["top_k"]["default"] is None
     assert query_schema["properties"]["no_rerank"]["default"] is False
     assert query_schema["properties"]["include_image_base64"]["default"] is False
+    assert query_schema["properties"]["request_source"]["default"] is None
 
     collection_schema = tools["list_collections"]["inputSchema"]
     assert collection_schema["properties"] == {}
@@ -479,9 +483,26 @@ async def test_query_knowledge_hub_returns_public_response_and_closes_pool() -> 
             "top_k": 3,
             "no_rerank": True,
             "trace_id": "trace-mcp-test",
+            "request_source": "mcp",
         }
     ]
     assert pool.closed is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_query_knowledge_hub_accepts_aimodel_request_source() -> None:
+    """Keep AImodel-triggered RAG traces separate from direct MCP or CLI traces."""
+
+    tool, _pool, runtime = _query_tool()
+
+    await tool.query_knowledge_hub(
+        "无线耳机怎么选",
+        collection="shopping_guides",
+        request_source="aimodel",
+    )
+
+    assert runtime.calls[0]["request_source"] == "aimodel"
 
 
 @pytest.mark.unit
@@ -504,6 +525,7 @@ async def test_query_knowledge_hub_uses_defaults_and_preserves_empty_success() -
     assert runtime.calls[0]["collection"] == "shopping_guides"
     assert runtime.calls[0]["top_k"] == 5
     assert runtime.calls[0]["no_rerank"] is False
+    assert runtime.calls[0]["request_source"] == "mcp"
 
 
 @pytest.mark.unit

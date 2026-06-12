@@ -226,6 +226,7 @@ def test_persistent_mcp_rag_client_reuses_session_until_close(tmp_path) -> None:
             "top_k": 5,
             "no_rerank": False,
             "include_image_base64": False,
+            "request_source": "aimodel",
         },
         {
             "query": "办公室安静解压玩具",
@@ -233,6 +234,7 @@ def test_persistent_mcp_rag_client_reuses_session_until_close(tmp_path) -> None:
             "top_k": 3,
             "no_rerank": True,
             "include_image_base64": False,
+            "request_source": "aimodel",
         },
         {
             "query": "人体工学键盘怎么选",
@@ -240,6 +242,7 @@ def test_persistent_mcp_rag_client_reuses_session_until_close(tmp_path) -> None:
             "top_k": 2,
             "no_rerank": False,
             "include_image_base64": False,
+            "request_source": "aimodel",
         },
     ]
 

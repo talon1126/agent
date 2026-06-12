@@ -43,7 +43,15 @@ def _settings(*, rewrite_enabled: bool = True) -> SimpleNamespace:
             sparse_top_k=25,
             final_top_k=5,
             filters=SimpleNamespace(default_collection="shopping_guides"),
-        )
+        ),
+        response=SimpleNamespace(
+            evidence_context_optimizer=SimpleNamespace(
+                enabled=False,
+                llm_provider="deepseek",
+                prompt_path="config/prompts/evidence_context_optimizer.md",
+                fallback_to_raw=True,
+            )
+        ),
     )
 
 
@@ -1317,6 +1325,7 @@ def test_run_query_cli_emits_public_response_and_verbose_stage_summaries() -> No
         top_k=3,
         no_rerank=False,
         trace_id="query-test-001",
+        request_source="query_cli",
     )
     payload = json.loads(output[0])
     assert payload["response"] == response.model_dump(mode="json")
@@ -1369,6 +1378,7 @@ def test_run_query_cli_forwards_no_rerank_and_closes_pool_after_failure() -> Non
         top_k=10,
         no_rerank=True,
         trace_id="query-test-failure",
+        request_source="query_cli",
     )
     pool.close.assert_called_once_with()
     assert errors == ["Query failed: query failed"]
@@ -1529,6 +1539,7 @@ def test_query_runtime_skips_reranker_and_preserves_filtered_order() -> None:
     response_builder.build.assert_called_once_with(
         list(execution.final_results),
         trace_id="query-runtime-no-rerank",
+        query=processed.normalized_query,
     )
     assert execution.rerank_applied is False
     assert execution.fallback_used is False
@@ -1597,6 +1608,7 @@ def test_query_runtime_applies_reranker_before_response_construction() -> None:
     response_builder.build.assert_called_once_with(
         reranked,
         trace_id="query-runtime-rerank",
+        query=processed.normalized_query,
     )
     assert execution.final_results == tuple(reranked)
     assert execution.rerank_applied is True
