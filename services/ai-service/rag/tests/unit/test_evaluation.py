@@ -18,6 +18,9 @@ from typing import Any
 
 import pytest
 
+from src.core.types import Chunk
+from src.libs.evaluator import EvaluatorFactory
+from src.libs.evaluator import ragas_evaluator as ragas_evaluator_module
 from src.observability.evaluation import RetrievalStrategy as ExportedRetrievalStrategy
 from src.observability.evaluation.metrics import HitRateMetric, MRRMetric, NDCGMetric
 from src.observability.evaluation.ragas_adapter import RagasEvaluator
@@ -26,10 +29,15 @@ from src.observability.evaluation.runner import (
     RetrievalStrategy,
     StrategyComparisonResult,
 )
+from src.scripts.run_evaluation import (
+    build_prediction_from_query_result,
+    select_single_collection,
+)
 from src.storage.repositories import EvaluationResultRecord, EvaluationRunRecord
 
 RAG_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_SET_PATH = RAG_ROOT / "tests" / "fixtures" / "golden_set.json"
+SETTINGS_PATH = RAG_ROOT / "config" / "settings.example.yaml"
 
 
 @pytest.mark.unit
@@ -233,6 +241,43 @@ def test_ragas_evaluator_validates_generation_metric_contracts() -> None:
         )
 
 
+@pytest.mark.unit
+def test_ragas_evaluator_skips_non_finite_metric_values() -> None:
+    """Keep usable Ragas metrics when one provider metric returns NaN."""
+
+    evaluator = RagasEvaluator(
+        evaluate_fn=lambda rows, *, metrics: {
+            "faithfulness": math.nan,
+            "answer_relevancy": 0.82,
+        }
+    )
+
+    scores = evaluator.evaluate(
+        [{"question": "q", "golden_answer": "reference"}],
+        [{"answer": "generated answer", "contexts": ["retrieved context"]}],
+    )
+
+    assert scores == {"answer_relevancy": pytest.approx(0.82)}
+
+
+@pytest.mark.unit
+def test_ragas_evaluator_fails_when_all_metric_values_are_non_finite() -> None:
+    """Reject runs where Ragas cannot produce any finite metric."""
+
+    evaluator = RagasEvaluator(
+        evaluate_fn=lambda rows, *, metrics: {
+            "faithfulness": math.nan,
+            "answer_relevancy": math.nan,
+        }
+    )
+
+    with pytest.raises(ValueError, match="no finite metrics"):
+        evaluator.evaluate(
+            [{"question": "q", "golden_answer": "reference"}],
+            [{"answer": "generated answer", "contexts": ["retrieved context"]}],
+        )
+
+
 @pytest.mark.external
 @pytest.mark.skipif(
     os.getenv("RUN_RAG_EXTERNAL_TESTS") != "1",
@@ -246,6 +291,161 @@ def test_ragas_evaluator_real_backend_import_is_external_only() -> None:
     evaluator = RagasEvaluator()
 
     assert evaluator.metric_names == ("faithfulness", "answer_relevancy")
+
+
+@pytest.mark.unit
+def test_evaluator_factory_registers_ragas_provider_with_lazy_backend() -> None:
+    """Require production evaluation orchestration to resolve the Ragas provider."""
+
+    captured: dict[str, Any] = {}
+
+    def fake_ragas_evaluate(
+        rows: list[dict[str, Any]],
+        *,
+        metrics: tuple[str, ...],
+    ) -> dict[str, float]:
+        """Capture rows so the factory test avoids importing real Ragas."""
+
+        captured["rows"] = rows
+        captured["metrics"] = metrics
+        return {"faithfulness": 0.93, "answer_relevancy": 0.89}
+
+    evaluator = EvaluatorFactory.create(
+        provider="ragas",
+        evaluate_fn=fake_ragas_evaluate,
+    )
+
+    scores = evaluator.evaluate(
+        [{"question": "q", "golden_answer": "reference"}],
+        [{"answer": "generated", "contexts": ["retrieved context"]}],
+    )
+
+    assert scores == {"faithfulness": pytest.approx(0.93), "answer_relevancy": pytest.approx(0.89)}
+    assert "ragas" in EvaluatorFactory.list_providers()
+    assert captured["rows"][0]["ground_truth"] == "reference"
+
+
+@pytest.mark.unit
+def test_evaluator_factory_injects_configured_ragas_model_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require Ragas to use configured DashScope/DeepSeek providers."""
+
+    from src.core.config import load_settings
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    llm_calls: list[dict[str, Any]] = []
+    embedding_calls: list[dict[str, Any]] = []
+
+    def fake_llm_create(**kwargs: Any) -> object:
+        """Capture LLMFactory arguments without creating network clients."""
+
+        llm_calls.append(kwargs)
+        return object()
+
+    def fake_embedding_create(**kwargs: Any) -> object:
+        """Capture EmbeddingFactory arguments without creating network clients."""
+
+        embedding_calls.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        ragas_evaluator_module.LLMFactory,
+        "create",
+        fake_llm_create,
+    )
+    monkeypatch.setattr(
+        ragas_evaluator_module.EmbeddingFactory,
+        "create",
+        fake_embedding_create,
+    )
+
+    evaluator = EvaluatorFactory.create(provider="ragas", settings=settings)
+
+    assert evaluator.__class__.__name__ == "RagasEvaluatorClient"
+    assert llm_calls == [
+        {
+            "settings": settings,
+            "provider": "deepseek",
+        }
+    ]
+    assert embedding_calls == [
+        {
+            "settings": settings,
+            "provider": "dashscope",
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_build_prediction_from_query_result_uses_ranked_chunk_text_for_contexts() -> None:
+    """Convert query_result identities into the text contexts required by Ragas."""
+
+    lookup = _FakeChunkLookup(
+        [
+            Chunk(
+                id="chunk-b",
+                text="Second ranked text.",
+                chunk_index=2,
+                start_offset=10,
+                end_offset=29,
+                metadata={},
+            ),
+            Chunk(
+                id="chunk-a",
+                text="First ranked text.",
+                chunk_index=1,
+                start_offset=0,
+                end_offset=18,
+                metadata={},
+            ),
+        ]
+    )
+
+    prediction = build_prediction_from_query_result(
+        {
+            "id": "sample-1",
+            "question": "How should I choose headphones?",
+            "golden_answer": "Reference answer.",
+        },
+        {
+            "contexts": [
+                {"chunk_id": "chunk-a", "score": 0.9, "rank": 1},
+                {"chunk_id": "chunk-b", "score": 0.8, "rank": 2},
+            ],
+            "content": "Agent-ready final context.",
+            "citations": [],
+            "images": [],
+        },
+        chunk_lookup=lookup,
+        query_trace_id="query-trace-1",
+    )
+
+    assert lookup.requests == [("chunk-a", "chunk-b")]
+    assert prediction == {
+        "sample_id": "sample-1",
+        "question": "How should I choose headphones?",
+        "answer": "Agent-ready final context.",
+        "contexts": ["First ranked text.", "Second ranked text."],
+        "retrieved_contexts": ["First ranked text.", "Second ranked text."],
+        "query_trace_id": "query-trace-1",
+        "context_chunk_ids": ["chunk-a", "chunk-b"],
+    }
+
+
+@pytest.mark.unit
+def test_select_single_collection_rejects_mixed_golden_sets_without_filter() -> None:
+    """Prevent evaluation from silently running samples against the wrong collection."""
+
+    with pytest.raises(ValueError, match="multiple collections"):
+        select_single_collection(
+            [
+                {"collection": "shopping_guides"},
+                {"collection": "policy_faq"},
+            ]
+        )
+
+    assert select_single_collection([{"collection": "shopping_guides"}]) == "shopping_guides"
 
 
 @pytest.mark.unit
@@ -491,6 +691,22 @@ class _FakeEvaluationRepository:
 
         self.result_batches.append((run_id, results))
         return results
+
+
+class _FakeChunkLookup:
+    """Return configured chunks while recording requested chunk ID order."""
+
+    def __init__(self, chunks: list[Chunk]) -> None:
+        """Store chunks in intentionally arbitrary order for order tests."""
+
+        self._chunks = chunks
+        self.requests: list[tuple[str, ...]] = []
+
+    def get_by_ids(self, chunk_ids: list[str]) -> list[Chunk]:
+        """Return existing chunks and capture the caller's ranked IDs."""
+
+        self.requests.append(tuple(chunk_ids))
+        return list(self._chunks)
 
 
 def _load_golden_set() -> list[dict[str, Any]]:

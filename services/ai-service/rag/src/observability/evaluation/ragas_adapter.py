@@ -11,18 +11,21 @@ The adapter does not run retrieval, generate answers, persist results, or
 choose strategy variants. Those responsibilities belong to the future
 ``EvaluationRunner`` and ``EvaluationService``. This file only validates
 aligned golden/prediction records, converts them into Ragas-compatible rows,
-invokes a supplied or lazily imported backend, and normalizes numeric metric
-values.
+invokes a supplied or lazily imported backend, and normalizes usable numeric
+metric values.
 """
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from src.core.errors import ProviderError
+from src.libs.embedding.base_embedding import BaseEmbedding
+from src.libs.llm.base_llm import BaseLLM, ChatMessage
 
 EvaluationRecord = Mapping[str, Any]
 DEFAULT_RAGAS_METRICS = ("faithfulness", "answer_relevancy")
@@ -55,16 +58,24 @@ class RagasEvaluator:
         evaluate_fn: Optional backend callable. Tests should inject a fake
             callable; production code leaves this as ``None`` so the adapter
             lazily imports ``ragas`` when evaluation actually runs.
+        llm_client: Optional project LLM client wrapped and passed to Ragas so
+            generation metrics do not rely on Ragas defaults.
+        embedding_client: Optional project embedding client wrapped and passed
+            to Ragas for metrics such as answer relevancy.
     """
 
     metric_names: tuple[str, ...] = DEFAULT_RAGAS_METRICS
     evaluate_fn: RagasEvaluateFn | None = field(default=None, repr=False, compare=False)
+    llm_client: BaseLLM | None = field(default=None, repr=False, compare=False)
+    embedding_client: BaseEmbedding | None = field(default=None, repr=False, compare=False)
 
     def __init__(
         self,
         *,
         metric_names: Sequence[str] | None = None,
         evaluate_fn: RagasEvaluateFn | None = None,
+        llm_client: BaseLLM | None = None,
+        embedding_client: BaseEmbedding | None = None,
     ) -> None:
         """Create a Ragas adapter with deterministic metric-name validation.
 
@@ -73,6 +84,10 @@ class RagasEvaluator:
                 rejected because downstream persistence uses names as stable
                 metric keys.
             evaluate_fn: Optional callable replacing the real Ragas backend.
+            llm_client: Optional project LLM client for Ragas generation
+                metric prompts.
+            embedding_client: Optional project embedding client for Ragas
+                semantic metrics.
         """
 
         object.__setattr__(
@@ -83,6 +98,8 @@ class RagasEvaluator:
             ),
         )
         object.__setattr__(self, "evaluate_fn", evaluate_fn)
+        object.__setattr__(self, "llm_client", llm_client)
+        object.__setattr__(self, "embedding_client", embedding_client)
 
     def evaluate(
         self,
@@ -107,7 +124,10 @@ class RagasEvaluator:
         """
 
         rows = _build_ragas_rows(dataset, predictions)
-        backend = self.evaluate_fn or _load_ragas_backend()
+        backend = self.evaluate_fn or _load_ragas_backend(
+            llm_client=self.llm_client,
+            embedding_client=self.embedding_client,
+        )
         try:
             raw_result = backend(rows, metrics=self.metric_names)
         except Exception as error:
@@ -153,8 +173,17 @@ def _build_ragas_rows(
     return rows
 
 
-def _load_ragas_backend() -> RagasEvaluateFn:
+def _load_ragas_backend(
+    *,
+    llm_client: BaseLLM | None = None,
+    embedding_client: BaseEmbedding | None = None,
+) -> RagasEvaluateFn:
     """Load the optional Ragas package only when a real evaluation runs.
+
+    Args:
+        llm_client: Optional project LLM client wrapped as a Ragas LLM.
+        embedding_client: Optional project embedding client wrapped as Ragas
+            embeddings.
 
     Returns:
         A callable that accepts project-normalized rows and forwards them to
@@ -167,8 +196,12 @@ def _load_ragas_backend() -> RagasEvaluateFn:
 
     try:
         from datasets import Dataset
+        from langchain_core.outputs import Generation, LLMResult
         from ragas import evaluate as ragas_evaluate
         from ragas import metrics as ragas_metrics
+        from ragas.embeddings.base import BaseRagasEmbeddings
+        from ragas.llms.base import BaseRagasLLM
+        from ragas.run_config import RunConfig
     except ImportError as error:
         raise ProviderError(
             "Ragas is not installed. Install the evaluation extra before running "
@@ -177,14 +210,143 @@ def _load_ragas_backend() -> RagasEvaluateFn:
             cause=error,
         ) from error
 
+    class ProjectRagasLLM(BaseRagasLLM):
+        """Adapt the project ``BaseLLM`` contract to Ragas LLM prompts."""
+
+        def __init__(self, client: BaseLLM) -> None:
+            """Store the project client and initialize Ragas retry settings."""
+
+            super().__init__()
+            self._client = client
+            self.set_run_config(RunConfig())
+
+        def generate_text(
+            self,
+            prompt: Any,
+            n: int = 1,
+            temperature: float = 0.01,
+            stop: list[str] | None = None,
+            callbacks: Any = None,
+        ) -> Any:
+            """Generate one or more Ragas completions synchronously."""
+
+            del temperature, callbacks
+            prompt_text = _prompt_to_text(prompt)
+            generations: list[Generation] = []
+            for _ in range(max(n, 1)):
+                response = self._client.chat(
+                    [ChatMessage(role="user", content=prompt_text)]
+                )
+                text = _apply_stop_tokens(response.content, stop)
+                generations.append(
+                    Generation(
+                        text=text,
+                        generation_info={
+                            "finish_reason": "stop",
+                            "provider": response.provider,
+                            "model": response.model,
+                        },
+                    )
+                )
+            return LLMResult(generations=[generations])
+
+        async def agenerate_text(
+            self,
+            prompt: Any,
+            n: int = 1,
+            temperature: float | None = 0.01,
+            stop: list[str] | None = None,
+            callbacks: Any = None,
+        ) -> Any:
+            """Generate Ragas completions without blocking the event loop."""
+
+            return await asyncio.to_thread(
+                self.generate_text,
+                prompt,
+                n=n,
+                temperature=0.01 if temperature is None else temperature,
+                stop=stop,
+                callbacks=callbacks,
+            )
+
+        def is_finished(self, response: Any) -> bool:
+            """Treat project LLM calls as complete when they return text."""
+
+            return bool(getattr(response, "generations", None))
+
+    class ProjectRagasEmbeddings(BaseRagasEmbeddings):
+        """Adapt the project ``BaseEmbedding`` contract to Ragas embeddings."""
+
+        def __init__(self, client: BaseEmbedding) -> None:
+            """Store the project embedding client and initialize Ragas retries."""
+
+            super().__init__()
+            self._client = client
+            self.set_run_config(RunConfig())
+
+        def embed_query(self, text: str) -> list[float]:
+            """Embed one Ragas query string with the project embedding client."""
+
+            return self._client.embed(text)
+
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            """Embed Ragas context strings in one provider batch."""
+
+            return self._client.embed_batch(list(texts))
+
+        async def aembed_query(self, text: str) -> list[float]:
+            """Embed one Ragas query string asynchronously."""
+
+            return await asyncio.to_thread(self.embed_query, text)
+
+        async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+            """Embed Ragas context strings asynchronously."""
+
+            return await asyncio.to_thread(self.embed_documents, list(texts))
+
+    ragas_llm = ProjectRagasLLM(llm_client) if llm_client is not None else None
+    ragas_embeddings = (
+        ProjectRagasEmbeddings(embedding_client)
+        if embedding_client is not None
+        else None
+    )
+
     def _run_ragas(rows: list[dict[str, Any]], *, metrics: tuple[str, ...]) -> Any:
         """Convert rows to a Hugging Face dataset and call ``ragas.evaluate``."""
 
         dataset = Dataset.from_list([_to_ragas_v02_row(row) for row in rows])
         metric_objects = [_metric_object(ragas_metrics, metric_name) for metric_name in metrics]
-        return ragas_evaluate(dataset, metrics=metric_objects)
+        return ragas_evaluate(
+            dataset,
+            metrics=metric_objects,
+            llm=ragas_llm,
+            embeddings=ragas_embeddings,
+            show_progress=False,
+        )
 
     return _run_ragas
+
+
+def _prompt_to_text(prompt: Any) -> str:
+    """Convert a Ragas/LangChain prompt value into non-empty text."""
+
+    if hasattr(prompt, "to_string"):
+        text = prompt.to_string()
+    else:
+        text = str(prompt)
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Ragas prompt must render to non-empty text")
+    return text.strip()
+
+
+def _apply_stop_tokens(text: str, stop: Sequence[str] | None) -> str:
+    """Apply optional Ragas stop tokens to project LLM output."""
+
+    output = text
+    for token in stop or ():
+        if token:
+            output = output.split(token, 1)[0]
+    return output
 
 
 def _to_ragas_v02_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -240,10 +402,14 @@ def _normalize_ragas_result(
         metric_names: Metrics that must be present in the result.
 
     Returns:
-        Finite float scores keyed by requested metric name.
+        Finite float scores keyed by requested metric name. Metrics that Ragas
+        reports as ``NaN`` or infinite are skipped because individual
+        generation metrics can be unavailable for a sample set even when other
+        metrics are still useful.
 
     Raises:
-        ValueError: If a required metric is missing or non-numeric.
+        ValueError: If a required metric is missing, non-numeric, or every
+            requested metric is unavailable.
     """
 
     metric_values: dict[str, Any] = {}
@@ -257,17 +423,30 @@ def _normalize_ragas_result(
         raise ValueError("Ragas result must be a mapping, expose scores, or support to_pandas()")
 
     normalized: dict[str, float] = {}
+    unavailable_metrics: dict[str, str] = {}
     for metric_name in metric_names:
         if metric_name not in metric_values:
             raise ValueError(f"Ragas result is missing metric: {metric_name}")
-        normalized[metric_name] = _finite_float(metric_values[metric_name], field_name=metric_name)
+        try:
+            normalized[metric_name] = _finite_float(
+                metric_values[metric_name],
+                field_name=metric_name,
+            )
+        except ValueError as error:
+            unavailable_metrics[metric_name] = str(error)
+    if not normalized:
+        joined = "; ".join(
+            f"{metric_name}: {reason}"
+            for metric_name, reason in unavailable_metrics.items()
+        )
+        raise ValueError(f"Ragas returned no finite metrics: {joined}")
     return normalized
 
 
 def _metrics_from_dataframe(dataframe: Any, metric_names: Sequence[str]) -> dict[str, float]:
     """Read metric averages from a pandas-like Ragas result dataframe."""
 
-    values: dict[str, float] = {}
+    values: dict[str, Any] = {}
     for metric_name in metric_names:
         try:
             column = dataframe[metric_name]
@@ -278,15 +457,25 @@ def _metrics_from_dataframe(dataframe: Any, metric_names: Sequence[str]) -> dict
 
 
 def _average_numeric(values: Any, *, field_name: str) -> float:
-    """Return the arithmetic mean for a pandas Series or sequence of numbers."""
+    """Return the arithmetic mean while preserving Ragas ``NaN`` values.
+
+    Args:
+        values: Pandas Series, sequence, or scalar metric values.
+        field_name: Metric name used in validation messages.
+
+    Returns:
+        Numeric average. Non-finite values are intentionally returned so the
+        outer normalization step can decide whether to skip a single metric or
+        fail the full evaluation when every metric is unavailable.
+    """
 
     if hasattr(values, "mean"):
-        return _finite_float(values.mean(), field_name=field_name)
+        return _numeric_float(values.mean(), field_name=field_name)
     if not isinstance(values, Sequence) or isinstance(values, str):
-        return _finite_float(values, field_name=field_name)
+        return _numeric_float(values, field_name=field_name)
     if not values:
         raise ValueError(f"{field_name} must contain at least one score")
-    return sum(_finite_float(value, field_name=field_name) for value in values) / len(values)
+    return sum(_numeric_float(value, field_name=field_name) for value in values) / len(values)
 
 
 def _normalize_metric_names(metric_names: Sequence[str]) -> tuple[str, ...]:
@@ -350,10 +539,17 @@ def _required_text(record: Mapping[str, Any], field_name: str) -> str:
 def _finite_float(value: Any, *, field_name: str) -> float:
     """Convert one metric value to a finite float."""
 
+    numeric_value = _numeric_float(value, field_name=field_name)
+    if not math.isfinite(numeric_value):
+        raise ValueError(f"{field_name} must be finite")
+    return numeric_value
+
+
+def _numeric_float(value: Any, *, field_name: str) -> float:
+    """Convert one metric value to a float without finite-value validation."""
+
     try:
         numeric_value = float(value)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{field_name} must be numeric") from error
-    if not math.isfinite(numeric_value):
-        raise ValueError(f"{field_name} must be finite")
     return numeric_value

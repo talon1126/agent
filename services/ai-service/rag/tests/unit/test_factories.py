@@ -208,7 +208,7 @@ def test_factories_register_builtin_providers_through_explicit_method() -> None:
     assert {"fake", "none", "rrf", "fallback"}.issubset(
         RerankerFactory.list_providers()
     )
-    assert EvaluatorFactory.list_providers() == ["fake"]
+    assert {"fake", "ragas"}.issubset(EvaluatorFactory.list_providers())
 
 
 def test_llm_factory_creates_fake_llm_with_unified_chat_interface() -> None:

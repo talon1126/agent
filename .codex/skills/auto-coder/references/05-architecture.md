@@ -75,7 +75,8 @@ services/ai-service/rag/
 │       ├── document_summary_prompt.yaml           # 文档级语义摘要提示词模板
 │       ├── rewrite_chunk_prompt.yaml              # chunk 语义改写与增强提示词模板
 │       ├── semantic_merge_prompt.yaml              # 相邻 chunk 语义合并判断提示词模板
-│       └── image_caption_prompt.yaml              # 图片 caption 生成提示词模板
+│       ├── image_caption_prompt.yaml              # 图片 caption 生成提示词模板
+│       └── evidence_context_prompt.yaml           # 查询结果最终上下文优化提示词模板
 ├── data/
 │   ├── raw/                                       # 按 collection 分类存放原始测试文档和本地摄取文件
 │   │   └── shopping_guides/                       # shopping_guides collection 的原始文档
@@ -102,7 +103,8 @@ services/ai-service/rag/
 │   │   │   ├── __init__.py                        # 导出 Citation、KnowledgeHubResponse 等响应层公共契约
 │   │   │   ├── response_builder.py                # 构建格式化上下文、引用、图片和空结果标记
 │   │   │   ├── citation_builder.py                # 组装引用来源和文档出处
-│   │   │   └── multimodal_assembler.py            # 批量解析 image_refs 并组装公开图片信息
+│   │   │   ├── multimodal_assembler.py            # 批量解析 image_refs 并组装公开图片信息
+│   │   │   └── evidence_context_optimizer.py      # 将编号证据整理为 Agent-ready final context
 │   │   └── trace/
 │   │       ├── trace_context.py                   # 单次 ingestion/query 的 trace 上下文
 │   │       └── trace_controller.py                # trace 阶段记录和 flush 编排
@@ -289,7 +291,8 @@ services/ai-service/rag/
 | `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
 | `src/core/query_engine/trace_snapshots.py` | 构造 Query Trace 候选快照 | 输出不含正文的轻量候选快照；Dense/Sparse 只记录 chunk IDs，Fusion/Filter/Rerank 记录排序与过滤变化 |
 | `src/core/query_engine/reranker.py` | 编排过滤后候选的精排与降级 | `RerankController` 调用 Cross-Encoder/LLM Reranker；provider 缺失、超时、异常或返回过滤集外候选时 fallback 到调用前保存的过滤后 RRF 顺序；`RerankOutcome` 显式返回最终结果、fallback 状态和原因，禁止从 provider metadata 推断控制流；输出和 fallback 均使用防御性副本并记录低侵入 rerank trace |
-| `src/core/response/response_builder.py` | 构建 RAG 工具公开响应 | `KnowledgeHubResponseBuilder` 只从最终排序 chunk 文本生成编号上下文，组合 citations、images、trace_id 和 `is_empty`；不序列化内部 route/tool metadata |
+| `src/core/response/response_builder.py` | 构建 RAG 工具公开响应 | `KnowledgeHubResponseBuilder` 先从最终排序 chunk 文本生成编号证据块，再调用可选 `EvidenceContextOptimizer` 生成 Agent-ready final context；优化失败时按配置 fallback 到原始编号证据块；不序列化内部 route/tool metadata |
+| `src/core/response/evidence_context_optimizer.py` | 优化最终上下文 | 读取 `evidence_context_prompt.yaml`，调用统一 `BaseLLM.chat()` 将编号证据压缩、去重和结构化为供 AImodel 直接使用的上下文；禁止生成最终答案或动态商品事实 |
 | `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 Citation、KnowledgeHubResponse、ResponseImage 及其 Builder/Assembler |
 | `src/core/response/citation_builder.py` | 从最终排序结果构建引用来源 | `source_ref` 优先、顶层 metadata 兼容、标题文件名回退、section_path 归一化、trace_id 关联、缺失来源 fail fast、不从 chunk 正文猜测 citation |
 | `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 按最终检索顺序收集、去重 `image_refs`，通过最小 `ImageResolver.find_by_ids()` 接口批量读取图片索引，恢复首次引用顺序，只投影 file_path、caption、尺寸、质量状态和关联 chunk IDs |

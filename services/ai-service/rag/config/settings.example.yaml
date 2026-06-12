@@ -129,6 +129,14 @@ rerank:
       model: BAAI/bge-reranker-base
       device: cpu
 
+# Response context optimization turns ranked evidence into Agent-ready context.
+response:
+  evidence_context_optimizer:
+    enabled: true
+    llm_provider: deepseek
+    prompt_path: config/prompts/evidence_context_prompt.yaml
+    fallback_to_raw: true
+
 # Ingestion paths and document lifecycle behavior are configuration-driven.
 ingestion:
   raw_data_dir: data/raw
@@ -181,6 +189,8 @@ dashboard:
 # Evaluation supports retrieval and generation quality metrics.
 evaluation:
   golden_set_path: tests/fixtures/golden_set.json
+  llm_provider: deepseek
+  embedding_provider: dashscope
   metrics:
     retrieval:
       hit_rate_at_k: true

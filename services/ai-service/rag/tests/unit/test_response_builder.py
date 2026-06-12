@@ -18,10 +18,12 @@ import pytest
 from src.core.response import (
     Citation,
     CitationBuilder,
+    EvidenceContextOptimizer,
     KnowledgeHubResponseBuilder,
     MultimodalAssembler,
 )
 from src.core.types import RetrievalResult
+from src.libs.llm import ChatMessage, LLMResponse
 
 
 def _result(
@@ -418,6 +420,142 @@ def test_response_builder_formats_context_and_assembles_ranked_images() -> None:
     assert "tool_result" not in serialized
     assert "dense_score" not in serialized
     assert "raw_vector" not in serialized
+
+
+class _RecordingOptimizer:
+    """Capture response-builder optimization input and return fixed content."""
+
+    def __init__(self, *, result: str = "Optimized Agent context.") -> None:
+        """Store deterministic optimized content for assertions.
+
+        Args:
+            result: Text returned when the builder asks for optimization.
+        """
+
+        self.result = result
+        self.calls: list[dict[str, str]] = []
+
+    def optimize(self, *, query: str, evidence: str) -> str:
+        """Record the query and raw evidence passed by the response builder."""
+
+        self.calls.append({"query": query, "evidence": evidence})
+        return self.result
+
+
+class _FailingOptimizer:
+    """Raise during optimization so fallback behavior is observable."""
+
+    def optimize(self, *, query: str, evidence: str) -> str:
+        """Always fail to simulate provider, parsing, or prompt errors."""
+
+        raise RuntimeError("optimizer unavailable")
+
+
+class _PromptLLM:
+    """Return configured JSON content through the BaseLLM chat contract."""
+
+    def __init__(self, content: str) -> None:
+        """Store the provider response and capture normalized messages."""
+
+        self.content = content
+        self.messages: list[list[ChatMessage]] = []
+
+    def chat(self, messages: list[ChatMessage]) -> LLMResponse:
+        """Return one deterministic provider response for optimizer tests."""
+
+        self.messages.append(messages)
+        return LLMResponse(content=self.content, provider="fake", model="fake-model")
+
+
+def test_response_builder_optimizes_content_for_agent_context() -> None:
+    """Require response content to become Agent-ready while contexts remain traceable."""
+
+    optimizer = _RecordingOptimizer(result="Agent-ready context\n\n[1] Use battery evidence.")
+    candidate = _result(
+        "chunk-a",
+        metadata={"document_id": "doc-a", "source_path": "shopping_guides/a.md"},
+    )
+
+    response = KnowledgeHubResponseBuilder(
+        evidence_context_optimizer=optimizer,
+    ).build(
+        [candidate],
+        trace_id="query-trace-optimized",
+        query="How should the Agent answer?",
+    )
+
+    assert response.content == "Agent-ready context\n\n[1] Use battery evidence."
+    assert optimizer.calls == [
+        {
+            "query": "How should the Agent answer?",
+            "evidence": "[1] Retrieved content for chunk-a.",
+        }
+    ]
+
+
+def test_response_builder_falls_back_to_raw_evidence_when_optimization_fails() -> None:
+    """Keep query execution available when the optional context optimizer fails."""
+
+    candidate = _result(
+        "chunk-a",
+        metadata={"document_id": "doc-a", "source_path": "shopping_guides/a.md"},
+    )
+
+    response = KnowledgeHubResponseBuilder(
+        evidence_context_optimizer=_FailingOptimizer(),
+        fallback_to_raw_content=True,
+    ).build(
+        [candidate],
+        trace_id="query-trace-optimizer-fallback",
+        query="How should the Agent answer?",
+    )
+
+    assert response.content == "[1] Retrieved content for chunk-a."
+
+
+def test_evidence_context_optimizer_parses_json_and_preserves_evidence_numbers() -> None:
+    """Verify the prompt-backed optimizer returns only the final context field."""
+
+    llm = _PromptLLM('{"content": "Agent context.\\n\\n[1] Battery evidence."}')
+    optimizer = EvidenceContextOptimizer(llm_client=llm)
+
+    content = optimizer.optimize(
+        query="How should I choose headphones?",
+        evidence="[1] Battery evidence.",
+    )
+
+    assert content == "Agent context.\n\n[1] Battery evidence."
+    assert [message.role for message in llm.messages[0]] == ["system", "user"]
+
+
+def test_evidence_context_optimizer_rejects_outputs_that_drop_citation_numbers() -> None:
+    """Prevent the optimizer from breaking source alignment required by Agent citations."""
+
+    optimizer = EvidenceContextOptimizer(
+        llm_client=_PromptLLM('{"content": "Agent context without source labels."}')
+    )
+
+    with pytest.raises(ValueError, match="evidence label"):
+        optimizer.optimize(
+            query="How should I choose headphones?",
+            evidence="[1] Battery evidence.",
+        )
+
+
+def test_evidence_context_optimizer_rejects_repeated_citation_numbers() -> None:
+    """Reject sentence-level citation reuse in Agent-ready context output."""
+
+    optimizer = EvidenceContextOptimizer(
+        llm_client=_PromptLLM(
+            '{"content": "Battery evidence [1]. Comfort evidence [1]."}'
+        )
+    )
+
+    with pytest.raises(ValueError, match="repeated evidence label"):
+        optimizer.optimize(
+            query="How should I choose headphones?",
+            evidence="[1] Battery and comfort evidence.",
+        )
 
 
 def test_multimodal_assembler_skips_missing_records_without_mutating_results() -> None:

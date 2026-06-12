@@ -13,6 +13,7 @@ entry continues to provide a stable launch target for local operators and tests.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
 from importlib import import_module
 from typing import Any
@@ -51,6 +52,7 @@ from src.observability.services import (
     IngestionOperationService,
     TraceReaderService,
 )
+from src.scripts.run_evaluation import run_evaluation_cli
 from src.storage.postgres import PostgresPool, init_schema
 
 DASHBOARD_PAGE_MODULES: tuple[str, ...] = (
@@ -266,6 +268,7 @@ def render_dashboard_page(page_name: str, ui: Any) -> None:
                     collection_id=collection_id,
                 ),
                 ui=ui,
+                evaluation_runner=run_dashboard_evaluation,
             )
             return
         raise ValueError(f"Unknown Dashboard page: {page_name}")
@@ -292,6 +295,63 @@ def _selected_trace_id(ui: Any, widget_key: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return value.strip()
+
+
+def run_dashboard_evaluation(collection_id: str) -> dict[str, Any]:
+    """Run the configured golden-set evaluation from the Dashboard.
+
+    Args:
+        collection_id: Collection selected by Dashboard settings.
+
+    Returns:
+        JSON-safe status payload rendered by the Evaluation page.
+
+    Notes:
+        The runner delegates to ``run_evaluation_cli`` so Dashboard execution
+        observes the same Query Pipeline, Ragas adapter, trace writing, and
+        PostgreSQL persistence behavior as command-line evaluation.
+    """
+
+    outputs: list[str] = []
+    errors: list[str] = []
+    exit_code = run_evaluation_cli(
+        ["--collection", collection_id],
+        output=outputs.append,
+        error_output=errors.append,
+    )
+    payload = _parse_evaluation_output(outputs)
+    status = str(payload.get("status") or ("success" if exit_code == 0 else "failed"))
+    result: dict[str, Any] = {
+        "collection": collection_id,
+        "status": status if exit_code == 0 else "failed",
+        "exit_code": exit_code,
+    }
+    result.update(payload)
+    if errors:
+        result["errors"] = errors
+    if outputs and not payload:
+        result["output"] = outputs
+    return result
+
+
+def _parse_evaluation_output(outputs: Sequence[str]) -> dict[str, Any]:
+    """Parse the JSON payload emitted by ``run_evaluation_cli``.
+
+    Args:
+        outputs: Messages captured from the CLI success output callback.
+
+    Returns:
+        Parsed JSON object from the last output line, or an empty mapping when
+        the runner failed before emitting structured JSON.
+    """
+
+    if not outputs:
+        return {}
+    try:
+        payload = json.loads(outputs[-1])
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _load_streamlit() -> Any:

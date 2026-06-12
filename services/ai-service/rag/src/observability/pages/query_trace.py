@@ -124,6 +124,14 @@ def render_query_trace_page(
         }
     )
 
+    streamlit.subheader("Final Context")
+    streamlit.text_area(
+        "query_result.content",
+        value=_query_result_content(model.selected_trace),
+        height=240,
+        disabled=True,
+    )
+
     streamlit.subheader("Chunk Frequency Summary")
     streamlit.dataframe(_chunk_frequency_rows(model.selected_trace))
 
@@ -347,6 +355,21 @@ def _query_contexts(trace: TraceDetail) -> list[_CandidateView]:
 
     contexts = trace.query_result.get("contexts", ())
     return _candidate_views(contexts)
+
+
+def _query_result_content(trace: TraceDetail) -> str:
+    """Return the Agent-ready final context recorded in Query Trace.
+
+    Args:
+        trace: Selected Query Trace detail.
+
+    Returns:
+        ``query_result.content`` when present, otherwise an empty string. Old
+        traces without this field should remain renderable.
+    """
+
+    content = trace.query_result.get("content")
+    return content if isinstance(content, str) else ""
 
 
 def _candidate_views(raw_candidates: Any) -> list[_CandidateView]:

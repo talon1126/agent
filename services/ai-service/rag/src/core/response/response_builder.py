@@ -1,20 +1,21 @@
 """Build the public knowledge-hub response from ranked retrieval results.
 
 ``KnowledgeHubResponseBuilder`` is the final core-layer projection before MCP,
-CLI, Dashboard, or AImodel adapters serialize data. It formats retrieved text,
-delegates grounded citations to ``CitationBuilder``, and delegates optional
-image resolution to ``MultimodalAssembler``. The resulting model intentionally
-contains no route diagnostics, vectors, provider payloads, or internal tool
-JSON.
+CLI, Dashboard, or AImodel adapters serialize data. It formats retrieved text
+as numbered evidence, optionally optimizes that evidence into Agent-ready final
+context, delegates grounded citations to ``CitationBuilder``, and delegates
+optional image resolution to ``MultimodalAssembler``. The resulting model
+intentionally contains no route diagnostics, vectors, provider payloads, or
+internal tool JSON.
 
-This module does not generate a natural-language answer. The returned content
-is ranked evidence that an Agent or caller can summarize while preserving
-citations.
+This module does not generate a final natural-language answer. The returned
+content is context for an Agent or caller to use while preserving citations.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -24,6 +25,13 @@ from src.core.response.multimodal_assembler import (
     ResponseImage,
 )
 from src.core.types import Citation, RetrievalResult
+
+
+class EvidenceContextOptimizerLike(Protocol):
+    """Describe the response-builder boundary for optional context optimization."""
+
+    def optimize(self, *, query: str, evidence: str) -> str:
+        """Return Agent-ready context for one user query and evidence block."""
 
 
 class KnowledgeHubResponse(BaseModel):
@@ -75,6 +83,8 @@ class KnowledgeHubResponseBuilder:
         *,
         citation_builder: CitationBuilder | None = None,
         multimodal_assembler: MultimodalAssembler | None = None,
+        evidence_context_optimizer: EvidenceContextOptimizerLike | None = None,
+        fallback_to_raw_content: bool = True,
     ) -> None:
         """Configure replaceable response-layer collaborators.
 
@@ -84,24 +94,33 @@ class KnowledgeHubResponseBuilder:
             multimodal_assembler: Optional image resolver. ``None`` creates a
                 text-only assembler so RAG remains usable without image
                 storage wiring.
+            evidence_context_optimizer: Optional component that turns raw
+                numbered evidence into Agent-ready final context.
+            fallback_to_raw_content: Whether optimizer failures should degrade
+                to raw evidence instead of failing the whole query.
         """
 
         self._citation_builder = citation_builder or CitationBuilder()
         self._multimodal_assembler = (
             multimodal_assembler or MultimodalAssembler()
         )
+        self._evidence_context_optimizer = evidence_context_optimizer
+        self._fallback_to_raw_content = fallback_to_raw_content
 
     def build(
         self,
         candidates: Sequence[RetrievalResult],
         *,
         trace_id: str,
+        query: str | None = None,
     ) -> KnowledgeHubResponse:
         """Build one immutable public response from final ranked candidates.
 
         Args:
             candidates: Results after hybrid retrieval, filtering, and rerank.
             trace_id: Non-blank query trace identifier.
+            query: Optional user query used by the context optimizer. When the
+                optimizer is absent this value is ignored.
 
         Returns:
             Stable response containing formatted evidence, citations, optional
@@ -112,14 +131,15 @@ class KnowledgeHubResponseBuilder:
                 references violate their ingestion contract.
 
         Notes:
-            Content is derived only from ``RetrievalResult.text``. Arbitrary
-            metadata is never serialized, which prevents internal route/tool
-            payloads from leaking into Agent-visible output.
+            Raw evidence is derived only from ``RetrievalResult.text``.
+            Arbitrary metadata is never serialized, which prevents internal
+            route/tool payloads from leaking into Agent-visible output.
         """
 
         citations = self._citation_builder.build(candidates, trace_id=trace_id)
         images = self._multimodal_assembler.assemble(candidates)
-        content = self._format_content(candidates)
+        raw_content = self._format_content(candidates)
+        content = self._optimize_content(query=query, raw_content=raw_content)
         return KnowledgeHubResponse(
             content=content,
             citations=tuple(citations),
@@ -144,3 +164,29 @@ class KnowledgeHubResponseBuilder:
             f"[{index}] {candidate.text.strip()}"
             for index, candidate in enumerate(candidates, start=1)
         )
+
+    def _optimize_content(self, *, query: str | None, raw_content: str) -> str:
+        """Return optimized Agent context or a configured raw fallback.
+
+        Args:
+            query: User query supplied by ``QueryRuntime``.
+            raw_content: Numbered evidence generated from final candidates.
+
+        Returns:
+            Optimized context when available, otherwise raw numbered evidence.
+
+        Raises:
+            RuntimeError: Re-raises optimizer failures when fallback is disabled.
+        """
+
+        if not raw_content or self._evidence_context_optimizer is None:
+            return raw_content
+        try:
+            return self._evidence_context_optimizer.optimize(
+                query=query or "",
+                evidence=raw_content,
+            )
+        except Exception:
+            if self._fallback_to_raw_content:
+                return raw_content
+            raise

@@ -299,6 +299,27 @@ class RerankSettings(ConfigSection):
         return self
 
 
+class EvidenceContextOptimizerSettings(ConfigSection):
+    """Configure final-context optimization for public RAG responses.
+
+    The response layer may call an LLM to turn ranked evidence blocks into an
+    Agent-ready context. The switch and fallback flag live in settings so local
+    evaluation can compare raw evidence against optimized context without code
+    changes.
+    """
+
+    enabled: bool = True
+    llm_provider: str = Field(min_length=1)
+    prompt_path: str
+    fallback_to_raw: bool = True
+
+
+class ResponseSettings(ConfigSection):
+    """Describe public response shaping after retrieval and reranking."""
+
+    evidence_context_optimizer: EvidenceContextOptimizerSettings
+
+
 class IngestionSettings(ConfigSection):
     """Describe source, Markdown, image, deduplication, and lifecycle settings."""
 
@@ -358,6 +379,8 @@ class EvaluationSettings(ConfigSection):
     """Describe the golden dataset and configured quality metrics."""
 
     golden_set_path: str
+    llm_provider: str = Field(min_length=1)
+    embedding_provider: str = Field(min_length=1)
     metrics: dict[str, Any]
 
 
@@ -390,6 +413,7 @@ class RagSettings(BaseModel):
     transform: TransformPipelineSettings
     retrieval: RetrievalSettings
     rerank: RerankSettings
+    response: ResponseSettings
     ingestion: IngestionSettings
     storage: StorageSettings
     observability: ObservabilitySettings
@@ -416,6 +440,26 @@ class RagSettings(BaseModel):
                 f"embedding={embedding_dimensions}, "
                 f"vector_store={self.vector_store.embedding_dimensions}"
             )
+        optimizer = self.response.evidence_context_optimizer
+        if optimizer.enabled and optimizer.llm_provider not in self.llm.providers:
+            raise ValueError(
+                "response.evidence_context_optimizer.llm_provider must reference "
+                f"a configured llm provider; provider={optimizer.llm_provider}, "
+                f"available={sorted(self.llm.providers)}"
+            )
+        if self.evaluation.llm_provider not in self.llm.providers:
+            raise ValueError(
+                "evaluation.llm_provider must reference a configured llm provider; "
+                f"provider={self.evaluation.llm_provider}, "
+                f"available={sorted(self.llm.providers)}"
+            )
+        if self.evaluation.embedding_provider not in self.embedding.providers:
+            raise ValueError(
+                "evaluation.embedding_provider must reference a configured "
+                "embedding provider; "
+                f"provider={self.evaluation.embedding_provider}, "
+                f"available={sorted(self.embedding.providers)}"
+            )
         return self
 
     def required_environment_variables(self) -> set[str]:
@@ -433,6 +477,17 @@ class RagSettings(BaseModel):
         required = {self.database.url_env}
         required.update(self.llm.selected_provider.environment_references())
         required.update(self.embedding.selected_provider.environment_references())
+        optimizer = self.response.evidence_context_optimizer
+        if optimizer.enabled:
+            required.update(self.llm.providers[optimizer.llm_provider].environment_references())
+        required.update(
+            self.llm.providers[self.evaluation.llm_provider].environment_references()
+        )
+        required.update(
+            self.embedding.providers[
+                self.evaluation.embedding_provider
+            ].environment_references()
+        )
         if self.vision_llm.enabled:
             required.update(self.vision_llm.selected_provider.environment_references())
         return required

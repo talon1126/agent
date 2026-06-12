@@ -9,6 +9,7 @@ Dashboard application code.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,8 @@ from src.observability.services import (
     EvaluationRunSummary,
     EvaluationService,
 )
+
+EvaluationRunExecutor = Callable[[str], Mapping[str, Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +84,7 @@ def render_evaluation_page(
     model: EvaluationPageModel,
     *,
     ui: Any | None = None,
+    evaluation_runner: EvaluationRunExecutor | None = None,
 ) -> EvaluationPageSelection:
     """Render evaluation history/detail/trends and return operator intent.
 
@@ -88,14 +92,18 @@ def render_evaluation_page(
         model: Render-ready evaluation page model.
         ui: Optional Streamlit-like module. ``None`` imports ``streamlit`` at
             call time for real Dashboard usage.
+        evaluation_runner: Optional callable that executes a real golden-set
+            evaluation for the current collection. Tests pass a fake runner;
+            the Dashboard app passes the CLI-backed runner.
 
     Returns:
         Selection DTO containing the selected run ID and whether the operator
         requested a new evaluation run.
 
     Side Effects:
-        Emits Streamlit calls only. It does not execute evaluator backends or
-        write evaluation rows.
+        Emits Streamlit calls. When ``evaluation_runner`` is supplied and the
+        operator clicks ``Run evaluation``, it executes evaluation and may
+        write evaluation rows through the configured runner.
     """
 
     streamlit = ui or _streamlit()
@@ -105,12 +113,19 @@ def render_evaluation_page(
     streamlit.subheader("Evaluation Run")
     request_run = bool(streamlit.button("Run evaluation"))
     if request_run:
-        streamlit.info(
-            {
-                "collection": model.collection_id,
-                "status": "pending evaluation orchestration",
-            }
-        )
+        if evaluation_runner is None:
+            streamlit.warning(
+                {
+                    "collection": model.collection_id,
+                    "status": "service_unavailable",
+                    "error": "Evaluation runner is not configured.",
+                }
+            )
+        else:
+            _render_evaluation_result(
+                streamlit,
+                evaluation_runner(model.collection_id),
+            )
 
     streamlit.subheader("History")
     streamlit.dataframe([_run_row(run) for run in model.runs])
@@ -152,6 +167,24 @@ def render_evaluation_page(
         run_id=selected_run_id,
         request_run=request_run,
     )
+
+
+def _render_evaluation_result(
+    streamlit: Any,
+    result: Mapping[str, Any],
+) -> None:
+    """Render the result of a real Dashboard evaluation run.
+
+    Args:
+        streamlit: Streamlit-compatible renderer.
+        result: JSON-safe result returned by ``EvaluationRunExecutor``.
+    """
+
+    payload = dict(result)
+    if payload.get("status") == "success":
+        streamlit.success(payload)
+    else:
+        streamlit.warning(payload)
 
 
 def _run_row(run: EvaluationRunSummary) -> dict[str, object]:

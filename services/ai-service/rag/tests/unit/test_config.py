@@ -103,6 +103,7 @@ def test_settings_contains_required_sections() -> None:
         "transform",
         "retrieval",
         "rerank",
+        "response",
         "ingestion",
         "storage",
         "observability",
@@ -149,6 +150,8 @@ def test_default_component_selection_matches_the_spec() -> None:
     assert settings["splitter"]["default"] == "recursive_character"
     assert settings["rerank"]["fallback"] == "rrf"
     assert settings["ingestion"]["document_summary"]["llm_provider"] == "deepseek"
+    assert settings["evaluation"]["llm_provider"] == "deepseek"
+    assert settings["evaluation"]["embedding_provider"] == "dashscope"
 
 
 def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:
@@ -234,6 +237,19 @@ def test_retrieval_and_transform_defaults_are_complete() -> None:
     assert transform_steps[-1]["prompt_path"] == "config/prompts/image_caption_prompt.yaml"
 
 
+def test_response_context_optimizer_defaults_are_complete() -> None:
+    """Protect the Agent-ready final context optimization configuration."""
+
+    settings = load_settings_document()
+
+    assert settings["response"]["evidence_context_optimizer"] == {
+        "enabled": True,
+        "llm_provider": "deepseek",
+        "prompt_path": "config/prompts/evidence_context_prompt.yaml",
+        "fallback_to_raw": True,
+    }
+
+
 def test_prompt_definitions_share_a_stable_contract() -> None:
     """Verify every prompt follows one versioned, renderer-friendly schema.
 
@@ -248,6 +264,7 @@ def test_prompt_definitions_share_a_stable_contract() -> None:
         "rewrite_chunk_prompt.yaml",
         "semantic_merge_prompt.yaml",
         "image_caption_prompt.yaml",
+        "evidence_context_prompt.yaml",
     )
 
     for file_name in prompt_files:
@@ -394,6 +411,8 @@ def test_load_settings_returns_typed_configuration() -> None:
     assert settings.project.default_collection == "shopping_guides"
     assert settings.llm.selected_provider.model == "deepseek-v4-flash"
     assert settings.embedding.selected_provider.dimensions == 1536
+    assert settings.evaluation.llm_provider == "deepseek"
+    assert settings.evaluation.embedding_provider == "dashscope"
     assert settings.dashboard.pages[-1] == "evaluation"
 
 

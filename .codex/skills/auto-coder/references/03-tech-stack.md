@@ -33,10 +33,10 @@ RAG 流水线分为两条主链路：**数据摄取流水线** 和 **检索流�
 Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform（包含 ImageCaptioner） -> DenseEncoder/BM25Indexer -> BatchProcessor -> Upsert -> 文档生命周期管理
 ```
 
-检索流水线负责把用户问题变成可引用的上下文结果：
+检索流水线负责把用户问题变成可引用、可直接供 AImodel 使用的最终上下文：
 
 ```text
-查询预处理 -> 双路混合检索 -> 候选过滤 -> 重排 -> 引用结果构造
+查询预处理 -> 双路混合检索 -> 候选过滤 -> 重排 -> 最终上下文构造
 ```
 
 流水线要支持 **可组合**：不同 Loader、Splitter、Transform、Embedding 和 VectorStore 可以通过配置组合成不同策略。例如首版使用 PDF/Markdown Loader + RecursiveCharacterTextSplitter + 包含 ImageCaptioner 的 Transform Pipeline + DashScope Embedding + pgvector，后续可以替换某一层而不重写整条链路。
@@ -150,7 +150,7 @@ Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Quer
 | 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery`，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
 | Rerank 前候选过滤 | 在精排前过滤候选 | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker |
 | 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
-| 引用结果构造 | 输出可被 Agent 使用的上下文和引用 | 返回答案上下文、来源标题、文档路径、章节、score、trace id；Agent 只能基于命中内容总结，不编造来源 |
+| 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 先基于最终候选生成编号证据块，再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
 
 RRF 融合不直接比较 Dense 分数和 BM25 分数，因为两类分数的量纲不同。融合时基于候选在各自检索结果中的排名进行倒数加权，排名越靠前贡献越大，从而让语义召回和关键词召回都能公平参与最终排序。
 
@@ -187,7 +187,7 @@ MCP 工具一：`query_knowledge_hub`
 ```json
 {
   "ok": true,
-  "content": "[1] 可用于回答的第一段知识上下文\n\n[2] 可用于回答的第二段知识上下文",
+  "content": "Knowledge context for the Agent...\n\n[1] 可用于回答的第一段整理后知识上下文\n\n[2] 可用于回答的第二段整理后知识上下文",
   "citations": [
     {
       "document_id": "doc_wireless_earbuds",
@@ -217,12 +217,15 @@ MCP 工具一：`query_knowledge_hub`
 }
 ```
 
-`content` 只由最终排序后的 chunk 文本按 `[1]`、`[2]` 编号格式化，不直接序列化
-Dense/Sparse 分数、向量、Provider 返回、过滤报告或内部 tool result。`citations` 和
-`images` 使用独立公共契约；默认只返回图片 metadata 与受管 `file_path`，不默认返回
-base64，避免 stdio tool payload 过大。若调用方明确传入 `include_image_base64=true`，
-后续工具实现可以附加受限大小的 `base64_content` 字段。没有检索命中时返回
-`ok=true`、`is_empty=true`、空 `content`、空引用和空图片列表。
+`content` 是 RAG 实际返回给 Agent 或调用方的最终上下文。默认先由最终排序后的
+chunk 文本按 `[1]`、`[2]` 编号生成证据块，再按 `response.evidence_context_optimizer`
+配置使用 Prompt 整理为 Agent-ready final context；禁用优化或优化失败时 fallback 到
+原始编号证据块。`content` 不直接序列化 Dense/Sparse 分数、向量、Provider 返回、
+过滤报告或内部 tool result。`citations` 和 `images` 使用独立公共契约；默认只返回图片
+metadata 与受管 `file_path`，不默认返回 base64，避免 stdio tool payload 过大。若调用方
+明确传入 `include_image_base64=true`，后续工具实现可以附加受限大小的
+`base64_content` 字段。没有检索命中时返回 `ok=true`、`is_empty=true`、空
+`content`、空引用和空图片列表。
 
 业务可恢复错误不直接抛出给 Agent，而是返回结构化错误：
 
@@ -390,7 +393,7 @@ Transform 不创建 Factory，也不作为 Provider 选项。Transform 由 inges
 
 - **模板与运行配置分离**：仓库提交完整的 `settings.example.yaml`；开发者复制为本地 `settings.yaml` 后按环境修改，`settings.yaml` 必须被 Git 忽略。
 - **统一入口**：所有可插拔组件都从本地 `settings.yaml` 读取配置，不在业务代码中写死 Provider、模型名和参数。
-- **分层清晰**：按 `llm`、`embedding`、`splitter`、`vector_store`、`reranker`、`retrieval`、`ingestion`、`observability` 等模块组织。
+- **分层清晰**：按 `llm`、`embedding`、`splitter`、`vector_store`、`reranker`、`retrieval`、`response`、`ingestion`、`observability` 等模块组织。
 - **环境变量隔离敏感信息**：API Key、数据库连接串等敏感信息只写环境变量名，不直接写入配置文件。
 - **支持默认与降级**：每类组件都允许配置 fallback，便于组件不可用时回退到安全方案。
 - **适合 Dashboard 展示**：Dashboard 可以直接读取配置，展示当前启用的 LLM、Embedding、Splitter、Reranker、VectorStore 和 Evaluator。
@@ -518,6 +521,13 @@ rerank:
       model: BAAI/bge-reranker-base
       device: cpu
 
+response:
+  evidence_context_optimizer:
+    enabled: true
+    llm_provider: deepseek
+    prompt_path: config/prompts/evidence_context_prompt.yaml
+    fallback_to_raw: true
+
 ingestion:
   raw_data_dir: data/raw
   markdown_dir: data/markdown
@@ -560,6 +570,8 @@ dashboard:
 
 evaluation:
   golden_set_path: tests/fixtures/golden_set.json
+  llm_provider: deepseek
+  embedding_provider: dashscope
   metrics:
     retrieval:
       hit_rate_at_k: true
@@ -870,7 +882,7 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | 字段 | 记录内容 |
 | --- | --- |
 | `contexts` | 最终进入响应构造的结果列表，每项包含 `chunk_id`、最终 `score` 和 `rank` |
-| `content` | RAG 实际返回给 Agent 或调用方的格式化知识文本快照 |
+| `content` | RAG 实际返回给 Agent 或调用方的 Agent-ready final context；禁用优化或优化失败时保存原始编号证据块 |
 | `citations` | 与最终 contexts 对齐的轻量引用快照，仅保存 `document_id`、`chunk_id`、`title`、`section_path`、`score`、`trace_id`；不重复记录由完整公共响应和文档存储负责的 `source_uri` |
 | `images` | 与最终 contexts 关联的轻量图片快照，仅保存 `image_id`、`chunk_ids`、`quality_status`；图片 caption、路径、页码、尺寸和 MIME 类型仍由完整公共响应与图片索引负责 |
 

@@ -659,6 +659,11 @@ class _FakeStreamlit:
 
         self.calls.append(("markdown", args, kwargs))
 
+    def text_area(self, *args: object, **kwargs: object) -> None:
+        """Record read-only text blocks used for longer trace content."""
+
+        self.calls.append(("text_area", args, kwargs))
+
     def info(self, *args: object, **kwargs: object) -> None:
         """Record informational state shown to an operator."""
 
@@ -1621,9 +1626,18 @@ def test_query_trace_page_builds_and_renders_retrieval_comparisons() -> None:
     subheaders = [args[0] for name, args, _kwargs in fake_ui.calls if name == "subheader"]
     assert "Chunk Frequency Summary" in subheaders
     assert "Chunk Flow Matrix" in subheaders
+    assert "Final Context" in subheaders
     history_rows = _dataframe_payload(fake_ui, 0)
     assert history_rows[0]["started_at"] == history.started_at
     assert history_rows[0]["finished_at"] is None
+    text_area_call = next(
+        (args, kwargs)
+        for name, args, kwargs in fake_ui.calls
+        if name == "text_area"
+    )
+    assert text_area_call[0] == ("query_result.content",)
+    assert text_area_call[1]["value"] == "[1] context"
+    assert text_area_call[1]["disabled"] is True
     dataframe_payloads = [
         args[0] for name, args, _kwargs in fake_ui.calls if name == "dataframe"
     ]
@@ -2111,18 +2125,41 @@ def test_evaluation_page_builds_and_renders_metric_trends() -> None:
     )
     fake_ui = _FakeStreamlit()
     fake_ui.button_value = True
-    selection = render_evaluation_page(model, ui=fake_ui)
+    runner_calls: list[str] = []
+
+    def _run_evaluation(collection_id: str) -> dict[str, object]:
+        """Return a deterministic Dashboard evaluation result."""
+
+        runner_calls.append(collection_id)
+        return {
+            "collection": collection_id,
+            "status": "success",
+            "run_id": "eval-new",
+            "summary": {"sample_count": 3},
+        }
+
+    selection = render_evaluation_page(
+        model,
+        ui=fake_ui,
+        evaluation_runner=_run_evaluation,
+    )
 
     assert model.runs == (run,)
     assert model.selected_run == detail
     assert model.metric_trends == trends
     assert selection.run_id == "eval-page"
     assert selection.request_run is True
+    assert runner_calls == ["shopping_guides"]
     run_rows = _dataframe_payload(fake_ui, 0)
     trend_rows = _dataframe_payload(fake_ui, 2)
     assert run_rows[0]["started_at"] == run.started_at
     assert run_rows[0]["created_at"] == run.created_at
     assert trend_rows[0]["created_at"] == run.created_at
+    success_payload = next(
+        args[0] for name, args, _kwargs in fake_ui.calls if name == "success"
+    )
+    assert success_payload["run_id"] == "eval-new"
+    assert success_payload["summary"]["sample_count"] == 3
     call_names = [name for name, _, _ in fake_ui.calls]
     assert "title" in call_names
     assert call_names.count("dataframe") >= 3
@@ -2143,7 +2180,10 @@ def test_dashboard_app_loads_all_configured_page_modules() -> None:
 
     fake_ui = _FakeStreamlit()
 
-    loaded_pages = main(ui=fake_ui)
+    loaded_pages = main(
+        ui=fake_ui,
+        page_renderer=lambda _page_name, _ui: None,
+    )
 
     assert loaded_pages == DASHBOARD_PAGE_MODULES
     assert DASHBOARD_PAGE_MODULES == (
@@ -2265,6 +2305,48 @@ def test_dashboard_trace_dispatch_uses_session_state_selection(
     )
     renderer.assert_called_once_with(page_model, ui=ui)
     pool.close.assert_called_once_with()
+
+
+@pytest.mark.integration
+def test_dashboard_evaluation_runner_executes_collection_golden_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require Dashboard Evaluation to delegate to the real CLI orchestration."""
+
+    from src.observability.dashboard import app as dashboard_app
+
+    calls: list[list[str]] = []
+
+    def _fake_cli(
+        argv: list[str],
+        *,
+        output: object,
+        error_output: object,
+    ) -> int:
+        """Capture CLI arguments and emit a JSON run payload."""
+
+        calls.append(argv)
+        output(
+            json.dumps(
+                {
+                    "run_id": "eval-cli",
+                    "collection": "shopping_guides",
+                    "status": "success",
+                    "summary": {"sample_count": 3},
+                }
+            )
+        )
+        return 0
+
+    monkeypatch.setattr(dashboard_app, "run_evaluation_cli", _fake_cli)
+
+    result = dashboard_app.run_dashboard_evaluation("shopping_guides")
+
+    assert calls == [["--collection", "shopping_guides"]]
+    assert result["status"] == "success"
+    assert result["run_id"] == "eval-cli"
+    assert result["summary"]["sample_count"] == 3
+    assert result["exit_code"] == 0
 
 
 @pytest.mark.integration

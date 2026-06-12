@@ -114,8 +114,11 @@ RAG 项目不能只靠人工体验判断效果，需要有可重复的质量评�
 
 本项目设计了 **可插拔评估体系**：
 
-- 使用 Ragas 评估回答的忠实度、上下文相关性等生成质量。
+- 使用 Ragas 评估 RAG 输出上下文或 Agent 最终回答的忠实度、上下文相关性等生成质量。
 - 使用自定义指标评估检索质量，例如 `hit_rate`、`MRR`、引用命中率、空结果率。
+- 评估入口从 golden set 读取问题和标准答案，调用真实 Query Pipeline 生成
+  `query_result`，再按 `query_result.contexts[*].chunk_id` 回查 chunk 正文构造
+  Ragas `retrieved_contexts`。
 - 评估结果写入 PostgreSQL，并在 Dashboard 中展示趋势。
 
 这样可以把 RAG 从“能跑的功能”提升为“能持续优化的系统”。

@@ -42,6 +42,7 @@ from src.core.query_engine import (
 )
 from src.core.query_engine.trace_snapshots import candidate_snapshots
 from src.core.response import (
+    EvidenceContextOptimizer,
     KnowledgeHubResponse,
     KnowledgeHubResponseBuilder,
     MultimodalAssembler,
@@ -243,6 +244,7 @@ class QueryRuntime:
             response = self._response_builder.build(
                 final_results,
                 trace_id=trace_id,
+                query=processed.normalized_query,
             )
             trace_controller.record_stage(
                 "response",
@@ -502,6 +504,17 @@ def _build_runtime(
             ),
         )
 
+    optimizer_settings = settings.response.evidence_context_optimizer
+    evidence_context_optimizer = None
+    if optimizer_settings.enabled:
+        evidence_context_optimizer = EvidenceContextOptimizer(
+            llm_client=LLMFactory.create(
+                settings=settings,
+                provider=optimizer_settings.llm_provider,
+            ),
+            prompt_path=optimizer_settings.prompt_path,
+        )
+
     return QueryRuntime(
         query_processor=query_processor,
         hybrid_search=hybrid_search,
@@ -514,7 +527,9 @@ def _build_runtime(
                         settings.ingestion.image_dir
                     ),
                 )
-            )
+            ),
+            evidence_context_optimizer=evidence_context_optimizer,
+            fallback_to_raw_content=optimizer_settings.fallback_to_raw,
         ),
         trace_sink=_trace_sink_from_settings(settings, pool),
     )

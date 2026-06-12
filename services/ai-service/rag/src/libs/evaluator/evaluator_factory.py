@@ -1,8 +1,9 @@
 """Create evaluation backends through an explicit provider registry.
 
-B11 registers only the deterministic fake evaluator. Custom retrieval metrics
-and Ragas are implemented and registered in Phase G, so selecting those names
-early produces a clear configuration error instead of fabricated scores.
+The factory is the single creation boundary for Dashboard services and
+evaluation scripts. It registers deterministic fake metrics for unit tests and
+Ragas for real generation-quality evaluation while keeping Ragas itself lazy
+inside the concrete provider.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from src.core.config import RagSettings
 from src.core.errors import ConfigurationError
 from src.libs.evaluator.base_evaluator import BaseEvaluator
 from src.libs.evaluator.fake_evaluator import FakeEvaluator
+from src.libs.evaluator.ragas_evaluator import RagasEvaluatorClient
 
 
 class EvaluatorFactory:
@@ -26,12 +28,14 @@ class EvaluatorFactory:
         """Register project-owned evaluator implementations once.
 
         Side Effects:
-            Registers the deterministic fake provider used by unit tests.
+            Registers the deterministic fake provider used by unit tests and
+            the Ragas provider used by Phase G generation-quality evaluation.
         """
 
         if cls._builtins_registered:
             return
         cls.register("fake", FakeEvaluator)
+        cls.register("ragas", RagasEvaluatorClient)
         cls._builtins_registered = True
 
     @classmethod
@@ -75,8 +79,8 @@ class EvaluatorFactory:
         """Create an evaluator from an explicit provider.
 
         Args:
-            settings: Reserved for signature consistency. Current evaluation
-                settings define datasets and metrics but no provider selector.
+            settings: Optional runtime settings passed to evaluators that need
+                configured model providers, such as Ragas.
             provider: Explicit evaluator provider such as ``fake``.
             **override_options: Constructor arguments for the evaluator.
 
@@ -89,7 +93,6 @@ class EvaluatorFactory:
         """
 
         cls.register_builtin_providers()
-        del settings
         provider_name = (provider or "").strip().lower()
         if not provider_name:
             raise ConfigurationError("Evaluator provider must be supplied")
@@ -101,12 +104,16 @@ class EvaluatorFactory:
                 context={"provider": provider_name, "available": sorted(cls._REGISTRY)},
             )
 
+        options = dict(override_options)
+        if settings is not None and evaluator_class is RagasEvaluatorClient:
+            options.setdefault("settings", settings)
+
         try:
-            return evaluator_class(**override_options)
+            return evaluator_class(**options)
         except TypeError as error:
             raise ConfigurationError(
                 "Unable to create evaluator provider",
-                context={"provider": provider_name, "options": sorted(override_options)},
+                context={"provider": provider_name, "options": sorted(options)},
                 cause=error,
             ) from error
 
