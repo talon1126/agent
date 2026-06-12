@@ -109,6 +109,17 @@ class FakeStreamlit:
 
         self.calls.append(("write", args, kwargs))
 
+    def text_area(self, *args: object, **kwargs: object) -> str:
+        """Record a multiline read-only text area and return its value.
+
+        Query Trace displays ``query_result.content`` in a text area so long
+        final contexts remain readable. The fake returns the supplied value to
+        match Streamlit's widget contract without requiring browser state.
+        """
+
+        self.calls.append(("text_area", args, kwargs))
+        return str(kwargs.get("value", ""))
+
     def info(self, *args: object, **kwargs: object) -> None:
         """Record informational empty or pending states."""
 
@@ -170,7 +181,7 @@ def _database_settings() -> object:
 
 
 @pytest.mark.integration
-def test_dashboard_six_pages_render_from_services_and_test_database(
+def test_dashboard_six_pages_render(
     tmp_path: Path,
 ) -> None:
     """Require all six Dashboard pages to render from real service DTOs.

@@ -16,7 +16,7 @@
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [✔] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [✔] |
 | Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、真实 Query Pipeline 评估入口、策略对比和评估趋势 | [✔] |
-| Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调和端到端测试 | [ ] |
+| Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调和端到端测试 | [~] |
 
 ### 6.2 交付里程碑
 
@@ -60,7 +60,7 @@
 | Phase E | MCP 工具服务 | MCP stdio 工具服务可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
 | Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作可用 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
 | Phase G | 质量评估体系 | 质量评估体系支持黄金测试集、检索指标、Ragas 生成质量适配、真实 Query Pipeline 评估入口、策略对比 runner 和评估趋势持久化 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、Ragas faithfulness、Ragas answer_relevancy adapter、`run_evaluation.py`、hybrid/dense_only/sparse_only/rerank 策略对比、evaluation run/results 持久化、Agent-ready final context 评估输入 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_response_builder.py services\ai-service\rag\tests\unit\test_evaluation.py -q` | 2026-06-12 |
-| Phase H | AImodel 联调集成 | 未完成 | 暂无 | 暂无 |  |
+| Phase H | AImodel 联调集成 | RAG 独立模块已通过 AImodel 集成前验收门禁，可进入 AImodel 工具适配 | Dashboard 六大页面 service-backed 渲染测试、离线摄取到 Hybrid Query 的全链路 E2E、MCP stdio 子进程工具发现和核心 tool contract 调用 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v` |  |
 
 #### 阶段 A 交付里程碑：配置与项目骨架
 
@@ -338,7 +338,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| H1 | 执行 AImodel 集成前验收门禁 | [ ] |  | Dashboard 六大页面测试和 RAG 全链路 E2E 通过后才进入集成 |
+| H1 | 执行 AImodel 集成前验收门禁 | [✔] | 2026-06-12 | Dashboard 六大页面、RAG 全链路 E2E 和 MCP stdio 可连接验收通过；3 个 H1 目标测试通过，ruff 通过，可进入 H2 AImodel 工具适配 |
 | H2 | 实现 AImodel RAG 工具适配 | [ ] |  | 已提前完成 `message_query_trace` 逻辑关联表和 MemoryStore 原子写入能力；仍需实现 RAG MCP/LangChain 工具适配 |
 | H3 | 将 RAG 工具接入 Agent 工具列表 | [ ] |  | 已提前完成工具结果 trace id 收集和 assistant message 关联；仍需将真实 RAG 工具加入 Agent 工具列表 |
 | H4 | 验证商品 API 工具与 RAG 工具协同 | [ ] |  | 商品事实走 API，知识补充走 RAG |
@@ -356,8 +356,8 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | Phase E | 4 | 4 | 100% |
 | Phase F | 12 | 12 | 100% |
 | Phase G | 5 | 5 | 100% |
-| Phase H | 6 | 0 | 0% |
-| **总计** | **70** | **64** | **91%** |
+| Phase H | 6 | 1 | 17% |
+| **总计** | **70** | **65** | **93%** |
 
 ### 6.5 阶段实施明细
 
@@ -1708,8 +1708,8 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 实现类/函数：
 
-- `test_dashboard_six_pages_render()`：验证对应行为
-- `test_full_rag_flow_before_aimodel_integration()`：验证对应行为
+- `test_dashboard_six_pages_render()`：验证六大 Dashboard 页面可以基于 service-backed PostgreSQL 测试数据完成渲染，覆盖系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace 和评估面板
+- `test_full_rag_flow_before_aimodel_integration()`：使用 fake LLM/Vision/Embedding provider 运行真实离线摄取、Indexing Pipeline、Hybrid Query、Trace PostgreSQL 写入、Dashboard service 读取和引用结果构造
 - `test_rag_mcp_stdio_before_aimodel_integration()`：启动 stdio MCP server 子进程并验证 MCP client 可 `list_tools` 和调用核心 tool 契约
 
 验收标准：Dashboard 六大页面测试通过；全链路 E2E 覆盖离线摄取、Indexing Pipeline、Hybrid Query、Trace 写入、Dashboard 可读和引用结果构造；stdio MCP 子进程可由测试 client 启动、列出 `query_knowledge_hub`、`list_collections`、`get_document_summary`，并能按 tool contract 返回结构化结果或结构化业务错误。
