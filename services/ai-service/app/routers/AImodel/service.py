@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from collections.abc import Callable
 from collections.abc import Iterable, Iterator
 from typing import Any
@@ -167,6 +168,7 @@ def stream_chat_events(
 
     try:
         tool_json_filter = _ToolJsonStreamFilter()
+        visible_output_filter = _AgentVisibleStreamFilter()
         chunks = (
             streaming_agent_runner(request, tool_results)
             if streaming_agent_runner
@@ -183,11 +185,16 @@ def stream_chat_events(
             if not chunk:
                 continue
             for safe_chunk in tool_json_filter.feed(chunk):
-                answer_parts.append(safe_chunk)
-                yield _format_sse("delta", {"content": safe_chunk})
+                for visible_chunk in visible_output_filter.feed(safe_chunk):
+                    answer_parts.append(visible_chunk)
+                    yield _format_sse("delta", {"content": visible_chunk})
         for safe_chunk in tool_json_filter.flush():
-            answer_parts.append(safe_chunk)
-            yield _format_sse("delta", {"content": safe_chunk})
+            for visible_chunk in visible_output_filter.feed(safe_chunk):
+                answer_parts.append(visible_chunk)
+                yield _format_sse("delta", {"content": visible_chunk})
+        for visible_chunk in visible_output_filter.flush():
+            answer_parts.append(visible_chunk)
+            yield _format_sse("delta", {"content": visible_chunk})
     except HTTPException:
         raise
     except Exception as error:
@@ -626,6 +633,119 @@ def _is_tool_result_json(text: str) -> bool:
         }
         or {"ok", "input"}.issubset(data.keys())
     )
+
+
+_INTERNAL_OUTPUT_MARKER_PATTERN = re.compile(
+    r"\b(?:chunk_id|trace_id|query_trace_id|chunk\s+id|trace\s+id)\b",
+    flags=re.IGNORECASE,
+)
+_INTERNAL_OUTPUT_MARKERS = (
+    "chunk_id",
+    "trace_id",
+    "query_trace_id",
+    "chunk id",
+    "trace id",
+)
+
+
+class _AgentVisibleStreamFilter:
+    """Filter internal identifiers from streamed answer text across chunks.
+
+    The system prompt already tells the model not to expose chunk IDs, trace
+    IDs, or raw tool fields, but streamed model output can still include those
+    internals as ordinary text. Streaming boundaries may also split a field name
+    such as ``chunk_id`` into ``chunk_`` and ``id``. This filter therefore keeps
+    a small pending buffer for unfinished lines and marker prefixes before text
+    is emitted to the frontend.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty pending buffer for the current streamed line."""
+
+        self.pending = ""
+
+    def feed(self, chunk: str) -> list[str]:
+        """Accept one post-tool-json text fragment and return safe fragments.
+
+        Args:
+            chunk: A text fragment that has already passed raw tool JSON
+                filtering.
+
+        Returns:
+            User-visible fragments whose complete lines have no internal RAG
+            markers. Incomplete suspicious lines are buffered until more text or
+            final flush decides whether they should be emitted or dropped.
+        """
+
+        self.pending += chunk
+        return self._drain(final=False)
+
+    def flush(self) -> list[str]:
+        """Return the final safe fragments and drop any remaining internal line."""
+
+        return self._drain(final=True)
+
+    def _drain(self, *, final: bool) -> list[str]:
+        output: list[str] = []
+        while True:
+            newline_index = self.pending.find("\n")
+            if newline_index == -1:
+                break
+            line = self.pending[: newline_index + 1]
+            self.pending = self.pending[newline_index + 1 :]
+            if not _contains_internal_output_marker(line):
+                output.append(line)
+
+        if not self.pending:
+            return [chunk for chunk in output if chunk]
+
+        if _contains_internal_output_marker(self.pending):
+            if final:
+                self.pending = ""
+            return [chunk for chunk in output if chunk]
+
+        marker_prefix_start = _internal_marker_prefix_start(self.pending)
+        if marker_prefix_start is not None:
+            safe_prefix = self.pending[:marker_prefix_start]
+            self.pending = self.pending[marker_prefix_start:]
+            if safe_prefix:
+                output.append(safe_prefix)
+            return [chunk for chunk in output if chunk]
+
+        if final:
+            output.append(self.pending)
+            self.pending = ""
+        else:
+            output.append(self.pending)
+            self.pending = ""
+
+        return [chunk for chunk in output if chunk]
+
+
+def _contains_internal_output_marker(text: str) -> bool:
+    """Return whether text contains a user-hidden RAG identifier marker."""
+
+    return bool(_INTERNAL_OUTPUT_MARKER_PATTERN.search(text))
+
+
+def _internal_marker_prefix_start(text: str) -> int | None:
+    """Find a trailing partial internal marker that may complete next chunk.
+
+    Args:
+        text: Current incomplete streamed line.
+
+    Returns:
+        The start index of the trailing marker prefix that must be buffered, or
+        ``None`` when the text can be safely emitted now.
+    """
+
+    lowered = text.lower()
+    max_marker_length = max(len(marker) for marker in _INTERNAL_OUTPUT_MARKERS)
+    for length in range(min(max_marker_length - 1, len(lowered)), 0, -1):
+        suffix = lowered[-length:]
+        if any(marker.startswith(suffix) for marker in _INTERNAL_OUTPUT_MARKERS):
+            return len(text) - length
+    return None
 
 
 def _format_sse(event: str, data: dict[str, Any]) -> str:

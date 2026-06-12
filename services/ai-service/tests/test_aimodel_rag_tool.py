@@ -1,10 +1,12 @@
 from typing import Any
 
-from app.routers.AImodel.schemas import AiModelToolResult
+from app.routers.AImodel.memory import NoopAiModelMemoryStore
+from app.routers.AImodel.schemas import AiModelChatRequest, AiModelToolResult
 from app.routers.AImodel.service import (
     SYSTEM_PROMPT,
     _query_trace_ids_from_tool_results,
     build_rag_tool,
+    stream_chat_events,
 )
 from app.routers.AImodel.tools import StdioMcpRagKnowledgeClient, search_shopping_guides
 
@@ -223,3 +225,88 @@ def test_system_prompt_covers_recommendation_comparison_guide_and_policy_faq_sce
     assert "选购指南场景" in SYSTEM_PROMPT
     assert "必须使用 RAG 工具" in SYSTEM_PROMPT
     assert "政策 FAQ 场景" in SYSTEM_PROMPT
+
+
+def test_stream_chat_hides_rag_tool_payload_and_internal_ids_from_frontend(
+    monkeypatch,
+) -> None:
+    """Protect the frontend SSE contract from raw RAG tool and trace internals."""
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    leaked_rag_json = (
+        '{"tool": "search_shopping_guides", "ok": true, "input": "无线耳机怎么选", '
+        '"data": {"trace_id": "query-secret", "content": "[1] 关注佩戴舒适度", '
+        '"citations": [{"chunk_id": "chunk-secret", "title": "无线耳机选购指南"}]}, '
+        '"error": null}'
+    )
+
+    def fake_streaming_agent_runner(
+        request: AiModelChatRequest,
+        tool_results: list[AiModelToolResult],
+    ) -> list[str]:
+        tool_results.append(
+            AiModelToolResult(
+                tool="search_shopping_guides",
+                ok=True,
+                input=request.message,
+                data={"trace_id": "query-secret"},
+            )
+        )
+        return [
+            "我先检索选购指南。\n",
+            leaked_rag_json[:80],
+            leaked_rag_json[80:],
+            "可以参考选购指南的佩戴舒适度和续航建议。\n",
+            "内部记录 chunk_id: chunk-secret, trace_id: query-secret。",
+        ]
+
+    events = list(
+        stream_chat_events(
+            AiModelChatRequest(user_id=1, message="无线耳机怎么选", links=[]),
+            mock_api_url="http://mock-api",
+            streaming_agent_runner=fake_streaming_agent_runner,
+            memory_store=NoopAiModelMemoryStore(),
+        )
+    )
+    response_text = "".join(events)
+
+    assert "可以参考选购指南" in response_text
+    assert "search_shopping_guides" not in response_text
+    assert "chunk_id" not in response_text
+    assert "chunk-secret" not in response_text
+    assert "trace_id" not in response_text
+    assert "query-secret" not in response_text
+    assert "tool_results" not in response_text
+
+
+def test_stream_chat_hides_internal_ids_split_across_stream_chunks(monkeypatch) -> None:
+    """Ensure token-level streaming cannot split internal field names past filtering."""
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+
+    def fake_streaming_agent_runner(
+        request: AiModelChatRequest,
+        tool_results: list[AiModelToolResult],
+    ) -> list[str]:
+        return [
+            "可以参考选购指南。\n",
+            "内部记录 chunk_",
+            "id: chunk-secret, trace_",
+            "id: query-secret。",
+        ]
+
+    events = list(
+        stream_chat_events(
+            AiModelChatRequest(user_id=1, message="无线耳机怎么选", links=[]),
+            mock_api_url="http://mock-api",
+            streaming_agent_runner=fake_streaming_agent_runner,
+            memory_store=NoopAiModelMemoryStore(),
+        )
+    )
+    response_text = "".join(events)
+
+    assert "可以参考选购指南" in response_text
+    assert "chunk_id" not in response_text
+    assert "chunk-secret" not in response_text
+    assert "trace_id" not in response_text
+    assert "query-secret" not in response_text
