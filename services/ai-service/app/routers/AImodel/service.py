@@ -37,8 +37,10 @@ from app.routers.AImodel.schemas import (
     AiModelToolResult,
 )
 from app.routers.AImodel.tools import (
+    RagKnowledgeClient,
     fetch_product_detail_from_link,
     recommended_links_from_tool_results,
+    search_shopping_guides as run_search_shopping_guides,
     search_products,
 )
 
@@ -248,6 +250,7 @@ def _run_langchain_agent(
         tool_results.append(result)
         return result.model_dump()
 
+    rag_tool = build_rag_tool(tool_results)
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
         base_url=os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
@@ -257,7 +260,7 @@ def _run_langchain_agent(
     )
     agent = create_agent(
         model=model,
-        tools=[get_product_detail_from_link, search_product_catalog],
+        tools=[get_product_detail_from_link, search_product_catalog, rag_tool],
         system_prompt=SYSTEM_PROMPT,
     )
     result = agent.invoke({"messages": _build_langchain_messages(request)})
@@ -299,6 +302,7 @@ def _run_langchain_agent_stream(
         tool_results.append(result)
         return result.model_dump()
 
+    rag_tool = build_rag_tool(tool_results)
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
         base_url=os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
@@ -309,7 +313,7 @@ def _run_langchain_agent_stream(
     )
     agent = create_agent(
         model=model,
-        tools=[get_product_detail_from_link, search_product_catalog],
+        tools=[get_product_detail_from_link, search_product_catalog, rag_tool],
         system_prompt=SYSTEM_PROMPT,
     )
     # 中文注释：这里只向前端流式输出可见回答文本，不暴露模型内部隐藏推理链路。
@@ -320,6 +324,114 @@ def _run_langchain_agent_stream(
         chunk = _extract_stream_token(update)
         if chunk:
             yield chunk
+
+
+def build_rag_tool(
+    tool_results: list[AiModelToolResult],
+    *,
+    rag_client: RagKnowledgeClient | None = None,
+) -> Any:
+    """Build the LangChain tool that exposes shopping-guide RAG knowledge.
+
+    Args:
+        tool_results: Mutable per-request tool result buffer. The returned tool
+            appends its ``AiModelToolResult`` here so the final assistant
+            message can be associated with every consumed RAG query trace.
+        rag_client: Optional injectable client used by tests. Production leaves
+            this as ``None`` so the H2 MCP stdio client is used.
+
+    Returns:
+        A LangChain tool named ``search_shopping_guides``. The tool returns the
+        same public dictionary shape as other AImodel tools, allowing the
+        existing stream filter and trace-id collector to work without special
+        cases.
+    """
+
+    try:
+        from langchain.tools import tool
+    except ModuleNotFoundError:
+        return _SimpleAImodelTool(
+            name="search_shopping_guides",
+            handler=lambda query: _run_rag_tool(
+                query,
+                tool_results=tool_results,
+                rag_client=rag_client,
+            ),
+        )
+
+    @tool("search_shopping_guides")
+    def search_shopping_guides_tool(query: str) -> dict[str, Any]:
+        """Search shopping guide knowledge and return grounded context."""
+
+        return _run_rag_tool(
+            query,
+            tool_results=tool_results,
+            rag_client=rag_client,
+        )
+
+    return search_shopping_guides_tool
+
+
+class _SimpleAImodelTool:
+    """Small test fallback that mimics the LangChain tool surface we use.
+
+    The RAG auto-coder tests execute through the RAG uv environment, which does
+    not install the full ai-service LangChain dependency set. This fallback
+    keeps ``build_rag_tool`` unit-testable without changing production behavior:
+    when LangChain is installed, ``build_rag_tool`` returns a real LangChain
+    tool object.
+    """
+
+    def __init__(self, *, name: str, handler: Callable[[str], dict[str, Any]]) -> None:
+        """Store the tool name and synchronous handler.
+
+        Args:
+            name: Public tool name exposed to the Agent.
+            handler: Function invoked with the user query and returning the
+                public tool payload.
+        """
+
+        self.name = name
+        self._handler = handler
+
+    def invoke(self, payload: dict[str, Any] | str) -> dict[str, Any]:
+        """Invoke the fallback tool using LangChain-like arguments.
+
+        Args:
+            payload: Either a raw query string or a dictionary containing the
+                ``query`` key, matching the call shape used by tests.
+
+        Returns:
+            Public AImodel tool-result dictionary.
+        """
+
+        query = payload.get("query", "") if isinstance(payload, dict) else payload
+        return self._handler(str(query))
+
+
+def _run_rag_tool(
+    query: str,
+    *,
+    tool_results: list[AiModelToolResult],
+    rag_client: RagKnowledgeClient | None,
+) -> dict[str, Any]:
+    """Execute ``search_shopping_guides`` and record its result for memory.
+
+    Args:
+        query: User query passed by the Agent.
+        tool_results: Per-request mutable tool result buffer.
+        rag_client: Optional injectable RAG client.
+
+    Returns:
+        Serializable AImodel tool result dictionary returned to the Agent.
+    """
+
+    result = run_search_shopping_guides(
+        query,
+        rag_client=rag_client,
+    )
+    tool_results.append(result)
+    return result.model_dump()
 
 
 def _build_user_prompt(request: AiModelChatRequest) -> str:
@@ -335,6 +447,8 @@ def _query_trace_ids_from_tool_results(
 
     trace_ids: list[str] = []
     for result in tool_results:
+        if result.tool != "search_shopping_guides":
+            continue
         trace_id = result.data.get("trace_id") if isinstance(result.data, dict) else None
         if isinstance(trace_id, str) and trace_id.strip() and trace_id.strip() not in trace_ids:
             trace_ids.append(trace_id.strip())

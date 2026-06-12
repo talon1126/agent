@@ -1,5 +1,7 @@
 from typing import Any
 
+from app.routers.AImodel.schemas import AiModelToolResult
+from app.routers.AImodel.service import _query_trace_ids_from_tool_results, build_rag_tool
 from app.routers.AImodel.tools import StdioMcpRagKnowledgeClient, search_shopping_guides
 
 
@@ -144,3 +146,52 @@ def test_stdio_mcp_rag_client_defaults_to_rag_uv_project(tmp_path) -> None:
         "--transport",
         "stdio",
     ]
+
+
+def test_build_rag_tool_invokes_search_shopping_guides_and_tracks_trace() -> None:
+    tool_results: list[AiModelToolResult] = []
+    client = FakeRagKnowledgeClient(
+        {
+            "ok": True,
+            "trace_id": "query-trace-agent",
+            "content": "[1] 降噪耳机应关注佩戴舒适度。",
+            "citations": [],
+            "images": [],
+            "is_empty": False,
+        }
+    )
+
+    rag_tool = build_rag_tool(tool_results, rag_client=client)
+    payload = rag_tool.invoke({"query": "降噪耳机怎么选"})
+
+    assert rag_tool.name == "search_shopping_guides"
+    assert payload["tool"] == "search_shopping_guides"
+    assert payload["ok"] is True
+    assert payload["data"]["trace_id"] == "query-trace-agent"
+    assert [result.tool for result in tool_results] == ["search_shopping_guides"]
+    assert _query_trace_ids_from_tool_results(tool_results) == ["query-trace-agent"]
+
+
+def test_query_trace_ids_from_tool_results_deduplicates_rag_traces() -> None:
+    tool_results = [
+        AiModelToolResult(
+            tool="search_shopping_guides",
+            ok=True,
+            input="无线耳机",
+            data={"trace_id": "query-a"},
+        ),
+        AiModelToolResult(
+            tool="search_shopping_guides",
+            ok=True,
+            input="蓝牙耳机",
+            data={"trace_id": "query-a"},
+        ),
+        AiModelToolResult(
+            tool="search_products",
+            ok=True,
+            input="蓝牙耳机",
+            data={"items": [], "trace_id": "product-api-trace"},
+        ),
+    ]
+
+    assert _query_trace_ids_from_tool_results(tool_results) == ["query-a"]
