@@ -495,7 +495,13 @@ def _is_tool_result_json(text: str) -> bool:
 
     tool_name = data.get("tool")
     return isinstance(tool_name, str) and (
-        tool_name in {"search_products", "search_product_catalog", "get_product_detail_from_link"}
+        tool_name
+        in {
+            "search_products",
+            "search_product_catalog",
+            "get_product_detail_from_link",
+            "search_shopping_guides",
+        }
         or {"ok", "input"}.issubset(data.keys())
     )
 

@@ -408,7 +408,7 @@ services/ai-service/rag/
 | --- | --- | --- |
 | `src/mcp_server/server.py` | 启动 MCP Server | Python 官方 MCP SDK、stdio/http 生命周期 |
 | `src/mcp_server/tools.py` | 暴露 MCP tools | `query_knowledge_hub`、`list_collections`、`get_document_summary` |
-| `src/adapter/aimodel_tool.py` | AImodel 工具适配 | 封装 `search_shopping_guides`，隐藏内部工具 JSON |
+| `services/ai-service/app/routers/AImodel/tools.py` | AImodel 工具适配 | 封装 `StdioMcpRagKnowledgeClient` 和 `search_shopping_guides`，隐藏内部 RAG/MCP JSON |
 
 ### 5.4 数据流设计
 

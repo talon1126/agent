@@ -142,3 +142,17 @@ def test_noop_store_associates_assistant_message_with_multiple_query_traces() ->
 
     assert message_id == 1
     assert store.list_message_query_traces(message_id) == ["query-a", "query-b"]
+
+
+def test_noop_store_does_not_create_fake_query_trace_without_rag_tool() -> None:
+    store = NoopAiModelMemoryStore()
+    conversation_id = store.ensure_conversation(None, user_id=1, first_message="你好")
+
+    message_id = store.append_assistant_message(
+        conversation_id,
+        user_id=1,
+        content="你好，我可以帮你选购商品。",
+        recommended_links=[],
+    )
+
+    assert store.list_message_query_traces(message_id) == []
