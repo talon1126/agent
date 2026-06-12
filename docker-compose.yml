@@ -39,6 +39,8 @@ services:
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       DASHSCOPE_BASE_URL: ${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       AIMODEL_MODEL: ${AIMODEL_MODEL:-deepseek-v4-flash}
+      RAG_PROJECT_DIR: /app/rag
+      RAG_MCP_COMMAND: python
       FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:5173}
       POLICY_PATH: /app/fixtures/policies/after_sales_policy.md
       MOCK_API_URL: http://mock-api:8000

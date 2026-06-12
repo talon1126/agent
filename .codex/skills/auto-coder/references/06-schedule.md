@@ -344,7 +344,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | H4 | 验证商品 API 工具与 RAG 工具协同 | [✔] | 2026-06-12 | System prompt 明确商品事实必须来自商品搜索/详情工具，覆盖价格、库存、优惠、规格、可购买商品和商品链接；RAG 只用于选购指南、品类知识、政策 FAQ、售后规则和文档知识上下文；禁止把 RAG 当实时商品事实来源或编造引用；22 个 AImodel 边界回归测试通过，ruff 通过 |
 | H5 | 验证简单询问和商品链接场景 | [✔] | 2026-06-12 | System prompt 明确推荐场景使用商品搜索工具、商品链接对比场景使用商品详情工具、选购指南和政策 FAQ 场景使用 RAG 工具；新增场景测试覆盖四类入口；23 个 AImodel 场景回归测试通过，ruff 通过 |
 | H6 | 完成前后端联调和端到端测试 | [✔] | 2026-06-12 | AImodel SSE 输出过滤原始 RAG tool JSON，并移除普通文本和跨流片段形式的 `chunk_id`、`trace_id` 等内部标识；前端可见 delta、done answer 和持久化 assistant message 均使用清洗后的回答；25 个 AImodel 目标测试通过，ruff 通过 |
-| H7 | 优化 AImodel MCP 长连接 | [✔] | 2026-06-12 | `get_rag_knowledge_client()` 返回进程级 `PersistentMcpRagKnowledgeClient`，RAG stdio MCP 子进程和 `ClientSession` 在多次 RAG 查询间复用；FastAPI shutdown 调用 `close_rag_knowledge_client()` 释放资源，未创建过 client 时 shutdown 不会启动新 MCP 资源，session 启动失败会清理后台事件循环；14 个 H7 目标测试通过，ruff 通过 |
+| H7 | 优化 AImodel MCP 长连接 | [✔] | 2026-06-12 | `get_rag_knowledge_client()` 返回进程级 `PersistentMcpRagKnowledgeClient`，RAG stdio MCP 子进程和 `ClientSession` 在多次 RAG 查询间复用；FastAPI shutdown 调用 `close_rag_knowledge_client()` 释放资源，未创建过 client 时 shutdown 不会启动新 MCP 资源，session 启动失败会清理后台事件循环；ai-service Docker 镜像包含 RAG 子项目并可在 `/app/rag` 浅路径启动 MCP；14 个 H7 目标测试通过，MCP server 单元测试通过，ruff 通过 |
 
 ### 6.4 总体进度表
 
@@ -1802,7 +1802,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 目标：将 AImodel 侧 RAG MCP client 从“每次查询打开一次 stdio MCP session”升级为“进程级长期复用一个 RAG MCP 子进程和一个 `ClientSession`”。
 
-修改文件：`services/ai-service/app/routers/AImodel/tools.py`、`services/ai-service/app/main.py`、`services/ai-service/tests/test_aimodel_rag_tool.py`
+修改文件：`services/ai-service/app/routers/AImodel/tools.py`、`services/ai-service/app/main.py`、`services/ai-service/tests/test_aimodel_rag_tool.py`、`services/ai-service/Dockerfile`、`docker-compose.yml`、`services/ai-service/rag/src/mcp_server/server.py`、`services/ai-service/rag/tests/unit/test_mcp_tools.py`
 
 实现类/函数：
 
@@ -1811,7 +1811,10 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `PersistentMcpRagKnowledgeClient.close()`：显式关闭 MCP session、stdio 资源和后台事件循环。
 - `get_rag_knowledge_client()`：返回进程级 persistent client，保留 `RagKnowledgeClient` 抽象边界。
 - `close_aimodel_rag_client()`：FastAPI shutdown hook，释放进程级 persistent MCP client。
+- `services/ai-service/Dockerfile`：将 RAG 子项目打包进 ai-service 镜像并安装 RAG 运行依赖。
+- `RAG_MCP_COMMAND=python`：容器内直接通过 Python 模块入口启动 MCP server，避免依赖 `uv` 二次启动。
+- `_default_env_paths()`：兼容 `/app/rag` 这类独立 Docker 部署浅路径。
 
-验收标准：同一个 client 连续两次 `query_knowledge_hub()` 只初始化一次 MCP session；调用 `close()` 后再次查询会重新创建 session；未创建过进程级 client 时 shutdown 不会创建新 MCP 资源；session 启动失败时不会残留后台事件循环线程；`search_shopping_guides()` 仍只返回公共 RAG 字段；单元测试不得启动真实 RAG 子进程。
+验收标准：同一个 client 连续两次 `query_knowledge_hub()` 只初始化一次 MCP session；调用 `close()` 后再次查询会重新创建 session；未创建过进程级 client 时 shutdown 不会创建新 MCP 资源；session 启动失败时不会残留后台事件循环线程；`search_shopping_guides()` 仍只返回公共 RAG 字段；单元测试不得启动真实 RAG 子进程；Docker 启动的 `ai-service` 容器内存在 `/app/rag`，并可通过 AImodel 前端代理请求触发 RAG query trace。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`；`uv run --project services/ai-service/rag ruff check services\ai-service\app\routers\AImodel\tools.py services\ai-service\app\main.py services\ai-service\tests\test_aimodel_rag_tool.py`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -q`；`uv run --project services/ai-service/rag ruff check services\ai-service\app\routers\AImodel\tools.py services\ai-service\app\main.py services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\rag\src\mcp_server\server.py services\ai-service\rag\tests\unit\test_mcp_tools.py`

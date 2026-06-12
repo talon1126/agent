@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
 from mcp.server.fastmcp import FastMCP
 
+import src.mcp_server.server as mcp_server_module
 from src.core.config import load_settings
 from src.core.errors import McpError
 from src.core.response import KnowledgeHubResponse, ResponseImage
@@ -435,6 +437,18 @@ async def test_run_stdio_server_loads_env_configures_file_logging_and_runs(
     assert log_path.exists()
     assert log_path.read_text(encoding="utf-8")
     assert os.environ["RAG_MCP_TEST_VALUE"] == "loaded-from-env"
+
+
+@pytest.mark.unit
+def test_default_env_paths_support_container_rag_root(monkeypatch) -> None:
+    """Allow the MCP server to start when RAG is copied to /app/rag in Docker."""
+
+    monkeypatch.setattr(mcp_server_module, "RAG_ROOT", Path("/app/rag"))
+
+    paths = mcp_server_module._default_env_paths()
+
+    assert Path("/app/rag/.env") in paths
+    assert Path("/app/.env") in paths
 
 
 @pytest.mark.unit

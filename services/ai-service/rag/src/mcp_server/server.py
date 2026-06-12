@@ -284,7 +284,7 @@ def _load_local_environment(
 def _default_env_paths() -> tuple[Path, ...]:
     """Return ordered local ``.env`` candidates for stdio child processes."""
 
-    repository_root = RAG_ROOT.parents[2]
+    repository_root = RAG_ROOT.parents[2] if len(RAG_ROOT.parents) > 2 else RAG_ROOT.parent
     return (
         Path.cwd() / ".env",
         RAG_ROOT / ".env",
