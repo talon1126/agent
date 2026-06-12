@@ -312,9 +312,9 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | --- | --- | --- | --- | --- |
 | F1 | 实现 TraceContext 和 TraceController | [✔] | 2026-06-08 | `src/core/trace` 包导出、内存 TraceContext、TraceController、阶段耗时/输入输出摘要记录、flush sink、错误/fallback 详情和防御性快照；4 个 TraceContext 单元测试通过 |
 | F2 | 实现 ingestion trace 数据结构 | [✔] | 2026-06-10 | `TraceContext.ingestion()`、source_uri/source_hash 基础信息校验、摄取阶段 allowlist、ingestion summary/evaluation 指标和 JSON-safe None 语义；顶层阶段支持结构化 `sub_stages`，用于保存 Transform Pipeline 内每个具体实现的独立耗时、状态和受限 snapshots |
-| F3 | 实现 query trace 数据结构 | [✔] | 2026-06-11 | Query 五段式结构；顶层 `query_result` 保存 contexts/content 及轻量 citations/images 快照，其中 citation 不记录 source_uri、image 仅记录 image_id/chunk_ids/caption/quality_status；summary 使用 `top_score` 代替重复的 `top_k_results`，并完成结构校验和 Dashboard DTO 透传 |
+| F3 | 实现 query trace 数据结构 | [✔] | 2026-06-11 | Query 五段式结构；Dense/Sparse 记录命中的 chunk IDs，Fusion/Filter/Rerank 记录轻量候选快照和排序变化；顶层 `query_result` 保存 contexts/content 及轻量 citations/images 快照，其中 citation 不记录 source_uri、image 仅记录 image_id/chunk_ids/caption/quality_status；summary 使用 `top_score` 代替重复的 `top_k_results`，并完成结构校验和 Dashboard DTO 透传 |
 | F4 | 实现 Python logging + JSONFormatter | [✔] | 2026-06-08 | `JsonFormatter`、`configure_jsonl_logger()` 和 `JsonlTraceWriter`，支持创建父目录、单行合法 JSON、trace snapshot 顶层 JSON 写入和 TraceController sink 集成；`src/logs/.gitkeep` 纳入版本控制，运行时 `*.log/*.jsonl` 由 Git 忽略；15 个 TraceContext/TraceWriter 单元测试通过 |
-| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-11 | JSONL/PostgreSQL 双写、Transform 子阶段打点，并将 QueryRuntime 实际返回给 Agent/调用方的结果投影为轻量快照写入 Query Trace 顶层 `query_result`，完整 citation/image 响应契约保持不变；真实查询验证 `top_score/query_result` 正常写入 |
+| F5 | 将 Trace 打点注入 ingestion 和 query 链路 | [✔] | 2026-06-11 | JSONL/PostgreSQL 双写、Transform 子阶段打点、Query 阶段候选快照打点，并将 QueryRuntime 实际返回给 Agent/调用方的结果投影为轻量快照写入 Query Trace 顶层 `query_result`，完整 citation/image 响应契约保持不变；真实查询验证 `top_score/query_result` 正常写入 |
 | F6 | 实现配置读取和数据浏览服务 | [✔] | 2026-06-08 | Dashboard 配置概览服务和数据浏览服务，可读取组件配置、文档、chunk、图片和索引状态；2 个 Dashboard service 集成测试和 ruff 通过 |
 | F7 | 实现 Trace 读取和评估服务 | [✔] | 2026-06-08 | Dashboard trace 历史/详情读取、阶段瀑布图 DTO、候选数量/降级信息投影、同步评估运行和指标趋势读取；4 个 Dashboard service 集成测试和 ruff 通过 |
 | F8 | 实现系统总览、Ingestion 管理页面和摄取操作 | [✔] | 2026-06-10 | `IngestionOperationService`，点击 Run ingestion 会复用 `run_ingest_cli()` 触发真实摄取并展示 success/skipped/failed 结果；支持多文件选择、目录上传、服务器文件夹候选发现和单文件取消摄入；22 个 Dashboard 集成测试和 ruff 通过 |
@@ -1384,7 +1384,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `_validate_candidate_count_by_stage()`：校验 Dense、Sparse、Fusion、Filter、Rerank 阶段候选数量
 - `_validate_bool()`：校验 fallback、empty_result 等布尔指标，避免字符串 truthy 值污染结构化日志
 
-验收标准：包含 query 基础信息、阶段详情、顶层 `query_result`、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=query`、`started_at`、`collection`、`raw_query`，并在存在时记录 `request_source`；阶段详情必须限制在 `query_processing/dense/sparse/fusion/filter/rerank/response`；`query_result` 必须包含 `contexts/content/citations/images`，contexts 每项包含 `chunk_id/score/rank`，citations 不包含 `source_uri`，images 仅包含 `image_id/chunk_ids/caption/quality_status`；汇总指标仅保存 `top_score`、`candidate_count_by_stage`、`fallback_used`、`error`、`total_duration_ms`；评估指标支持 `query_document_relevance`、`citation_hit_rate`、`rerank_delta`、`empty_result`。
+验收标准：包含 query 基础信息、阶段详情、顶层 `query_result`、汇总指标、评估指标；基础信息必须包含 `trace_id`、`trace_type=query`、`started_at`、`collection`、`raw_query`，并在存在时记录 `request_source`；阶段详情必须限制在 `query_processing/dense/sparse/fusion/filter/rerank/response`；Dense/Sparse 阶段 details 必须记录命中的 `chunk_ids`，Fusion/Filter/Rerank 阶段 details 必须记录轻量候选快照和排序/过滤变化；`query_result` 必须包含 `contexts/content/citations/images`，contexts 每项包含 `chunk_id/score/rank`，citations 不包含 `source_uri`，images 仅包含 `image_id/chunk_ids/caption/quality_status`；汇总指标仅保存 `top_score`、`candidate_count_by_stage`、`fallback_used`、`error`、`total_duration_ms`；评估指标支持 `query_document_relevance`、`citation_hit_rate`、`rerank_delta`、`empty_result`。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
@@ -1517,10 +1517,10 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `build_data_browser_page_model()`：读取文档、chunk、chunk detail 和图片列表，生成数据浏览页面模型
 - `render_data_browser_page()`：渲染文档列表、chunk 列表、chunk 详情、source_ref、image_refs 和图片表格
 - `build_query_trace_page_model()`：读取 Query Trace 历史和选中 trace 详情，生成 Query Trace 页面模型
-- `render_query_trace_page()`：渲染 Query Trace 历史、阶段瀑布图、Dense/Sparse/Fusion/Rerank 候选数量对比、`query_result.contexts`、`top_score` 和 rerank delta；Trace 下拉框使用固定 widget key 持久化选择
+- `render_query_trace_page()`：渲染 Query Trace 历史、阶段瀑布图、Dense/Sparse/Fusion/Rerank 候选数量对比、Chunk Frequency Summary、Chunk Flow Matrix、`query_result.contexts`、`top_score` 和 rerank delta；Trace 下拉框使用固定 widget key 持久化选择
 - Dashboard Query Trace 分发：每次 Streamlit 重跑从 `session_state` 读取已选 Query Trace ID，并传入 `build_query_trace_page_model()`
 
-验收标准：可展示文档、chunk、召回对比、rerank 变化；选择任意 Query Trace 后详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
+验收标准：可展示文档、chunk、召回对比、rerank 变化；Query Trace 页面必须基于 Dense/Sparse 的 `chunk_ids`、Fusion/Filter/Rerank 的轻量候选快照和 `query_result.contexts` 展示 Chunk Frequency Summary，字段包含 `chunk_id`、`appeared_count`、`stages`、`final_rank`、`best_score`、`filtered_reason`，并按出现次数、最终命中、最高分稳定排序；Query Trace 页面必须展示 Chunk Flow Matrix，字段包含 `chunk_id`、`dense`、`sparse`、`fusion_rank`、`filter`、`rerank_rank`、`final_rank`，用于观察同一 chunk 在 dense、sparse、fusion、filter、rerank 和最终结果中的流转；旧 trace 缺少新增字段时页面不得报错，应展示空表或已有可用信息；选择任意 Query Trace 后详情必须同步切换；已选 ID 不属于当前 collection 时自动回退到最新记录。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_services.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 

@@ -24,6 +24,10 @@ from src.core.query_engine.dense_route import DenseRoute
 from src.core.query_engine.fusion import reciprocal_rank_fusion
 from src.core.query_engine.query_processor import ProcessedQuery
 from src.core.query_engine.sparse_route import SparseRoute
+from src.core.query_engine.trace_snapshots import (
+    candidate_snapshots,
+    rejected_candidate_snapshots,
+)
 from src.core.types import RetrievalResult
 
 _FILTER_KEYS = {
@@ -283,6 +287,7 @@ class HybridSearch:
                 status="failed",
                 dense_results=dense_results,
                 sparse_results=sparse_results,
+                fused_results=[],
                 fallback_reasons=fallback_reasons,
             )
             raise RetrievalError(
@@ -308,6 +313,7 @@ class HybridSearch:
                 status="failed",
                 dense_results=dense_results,
                 sparse_results=sparse_results,
+                fused_results=[],
                 fallback_reasons=fallback_reasons,
             )
             raise RetrievalError(
@@ -324,6 +330,7 @@ class HybridSearch:
             status="degraded" if fallback_used else "success",
             dense_results=dense_results,
             sparse_results=sparse_results,
+            fused_results=fused_results,
             fallback_reasons=fallback_reasons,
         )
         filter_report = self.apply_metadata_filter(
@@ -367,6 +374,7 @@ class HybridSearch:
         self._record_filter_trace(
             trace_context,
             started_at=started_at,
+            before_candidates=candidates,
             filters=dict(filters or {}),
             report=report,
         )
@@ -381,6 +389,7 @@ class HybridSearch:
         status: str,
         dense_results: list[RetrievalResult],
         sparse_results: list[RetrievalResult],
+        fused_results: list[RetrievalResult],
         fallback_reasons: dict[str, str],
     ) -> None:
         """Write one trace stage when observability is available.
@@ -392,6 +401,7 @@ class HybridSearch:
             status: Hybrid orchestration completion status.
             dense_results: Dense route candidates that survived route errors.
             sparse_results: Sparse route candidates that survived route errors.
+            fused_results: RRF output candidates in rank order.
             fallback_reasons: Mapping of failed route name to readable reason.
         """
 
@@ -408,6 +418,7 @@ class HybridSearch:
                 details={
                     "dense_candidate_count": len(dense_results),
                     "sparse_candidate_count": len(sparse_results),
+                    "fused_candidates": candidate_snapshots(fused_results),
                     "failed_routes": sorted(fallback_reasons),
                     "fallback_reasons": dict(fallback_reasons),
                 },
@@ -422,6 +433,7 @@ class HybridSearch:
         trace_context: HybridTraceContext | None,
         *,
         started_at: float,
+        before_candidates: list[RetrievalResult],
         filters: dict[str, Any],
         report: CandidateFilterReport,
     ) -> None:
@@ -430,6 +442,7 @@ class HybridSearch:
         Args:
             trace_context: Optional TraceContext-compatible recorder.
             started_at: ``perf_counter`` value captured before filtering.
+            before_candidates: RRF candidates before exact metadata filtering.
             filters: Filter parameters supplied by query or CLI callers.
             report: Metadata filtering report.
         """
@@ -448,6 +461,11 @@ class HybridSearch:
                     "filters": filters,
                     "before_count": report.before_count,
                     "after_count": report.after_count,
+                    "before_candidates": candidate_snapshots(before_candidates),
+                    "after_candidates": candidate_snapshots(report.results),
+                    "rejected_candidates": rejected_candidate_snapshots(
+                        report.rejected_chunk_ids
+                    ),
                     "rejected_counts": dict(report.rejected_counts),
                     "rejected_chunk_ids": {
                         reason: list(chunk_ids)

@@ -857,11 +857,13 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | 阶段 | 记录内容 |
 | --- | --- |
 | `query_processing` | 原始 query、改写 query（若有）、query normalize 方法、意图识别结果、耗时 |
-| `dense` | Query Embedding 模型、向量库 Provider、Top-k 语义候选、候选分数、候选数量、耗时 |
-| `sparse` | BM25 方法、倒排索引命中词、Top-k 关键词候选、候选分数、候选数量、耗时 |
-| `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后排名、重复候选合并结果、耗时 |
-| `filter` | 过滤参数、过滤前候选数量、过滤后候选数量、被过滤原因、耗时 |
-| `rerank` | Reranker Provider、过滤后 rerank 前排名、rerank 后排名、fallback 原因（若有）、耗时 |
+| `dense` | Query Embedding 模型、向量库 Provider、命中的 chunk ID 列表、候选数量、耗时 |
+| `sparse` | BM25 方法、倒排索引命中词、命中的 chunk ID 列表、候选数量、缺失 chunk ID、耗时 |
+| `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果、耗时 |
+| `filter` | 过滤参数、过滤前候选快照、过滤后候选快照、被过滤候选与原因、耗时 |
+| `rerank` | Reranker Provider、过滤后 rerank 前候选快照、rerank 后候选快照、fallback 原因（若有）、耗时 |
+
+候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank 阶段记录排序变化和过滤变化，用于后续 Hit Rate、MRR、NDCG、rerank delta 与空结果原因分析。
 
 查询结果：
 
@@ -908,7 +910,7 @@ Trace 结构化日志基于 **Python logging + JSONFormatter** 实现。日志�
 Trace 事件示例：
 
 ```json
-{"trace_id":"query_xxx","stage":"dense","method":"pgvector_search","provider":"pgvector","duration_ms":42,"candidate_count":30,"status":"success","details":{"top_k":30}}
+{"trace_id":"query_xxx","stage":"dense","method":"pgvector_search","provider":"pgvector","duration_ms":42,"candidate_count":30,"status":"success","details":{"top_k":30,"chunk_ids":["chunk_001","chunk_002"]}}
 ```
 
 #### 3.8.5 Dashboard 功能设计

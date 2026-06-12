@@ -171,6 +171,7 @@ class SparseRoute:
                     "keyword_count": 0,
                     "reason": "empty_keywords",
                     "missing_chunk_ids": [],
+                    "chunk_ids": [],
                 },
             )
             return []
@@ -222,6 +223,7 @@ class SparseRoute:
                     "keyword_count": len(keywords),
                     "bm25_candidate_count": 0,
                     "missing_chunk_ids": [],
+                    "chunk_ids": [],
                 },
             )
             return []
@@ -245,6 +247,7 @@ class SparseRoute:
                     "bm25_candidate_count": len(chunk_ids),
                     "operation": "chunk_hydration",
                     "error_type": type(error).__name__,
+                    "chunk_ids": chunk_ids,
                 },
             )
             raise RetrievalError(
@@ -272,6 +275,7 @@ class SparseRoute:
                 "keyword_count": len(keywords),
                 "bm25_candidate_count": len(chunk_ids),
                 "missing_chunk_ids": missing_chunk_ids,
+                "chunk_ids": [result.chunk_id for result in results],
             },
         )
         return results

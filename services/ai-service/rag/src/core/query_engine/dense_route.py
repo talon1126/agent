@@ -188,7 +188,10 @@ class DenseRoute:
             provider=provider,
             candidate_count=len(results),
             status="success",
-            details={"top_k": candidate_limit},
+            details={
+                "top_k": candidate_limit,
+                "chunk_ids": [result.chunk_id for result in results],
+            },
         )
         return results
 

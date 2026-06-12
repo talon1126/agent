@@ -96,6 +96,7 @@ services/ai-service/rag/
 │   │   │   ├── dense_route.py                     # Query Embedding 和 pgvector 语义召回
 │   │   │   ├── sparse_route.py                    # BM25 和倒排索引关键词召回
 │   │   │   ├── fusion.py                          # RRF 排名倒数融合
+│   │   │   ├── trace_snapshots.py                 # Query Trace 候选快照构造
 │   │   │   └── reranker.py                        # 调用 reranker 并处理 fallback
 │   │   ├── response/
 │   │   │   ├── __init__.py                        # 导出 Citation、KnowledgeHubResponse 等响应层公共契约
@@ -286,6 +287,7 @@ services/ai-service/rag/
 | `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
 | `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，并将 `Chunk.source_ref` 深拷贝到 result metadata 供 CitationBuilder 使用 |
 | `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
+| `src/core/query_engine/trace_snapshots.py` | 构造 Query Trace 候选快照 | 输出不含正文的轻量候选快照；Dense/Sparse 只记录 chunk IDs，Fusion/Filter/Rerank 记录排序与过滤变化 |
 | `src/core/query_engine/reranker.py` | 编排过滤后候选的精排与降级 | `RerankController` 调用 Cross-Encoder/LLM Reranker；provider 缺失、超时、异常或返回过滤集外候选时 fallback 到调用前保存的过滤后 RRF 顺序；`RerankOutcome` 显式返回最终结果、fallback 状态和原因，禁止从 provider metadata 推断控制流；输出和 fallback 均使用防御性副本并记录低侵入 rerank trace |
 | `src/core/response/response_builder.py` | 构建 RAG 工具公开响应 | `KnowledgeHubResponseBuilder` 只从最终排序 chunk 文本生成编号上下文，组合 citations、images、trace_id 和 `is_empty`；不序列化内部 route/tool metadata |
 | `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 Citation、KnowledgeHubResponse、ResponseImage 及其 Builder/Assembler |

@@ -9,6 +9,7 @@ storage.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -123,6 +124,12 @@ def render_query_trace_page(
         }
     )
 
+    streamlit.subheader("Chunk Frequency Summary")
+    streamlit.dataframe(_chunk_frequency_rows(model.selected_trace))
+
+    streamlit.subheader("Chunk Flow Matrix")
+    streamlit.dataframe(_chunk_flow_rows(model.selected_trace))
+
     streamlit.subheader("Rerank Delta")
     streamlit.dataframe(
         [
@@ -161,6 +168,287 @@ def _stage_row(stage: TraceStageWaterfallItem) -> dict[str, object]:
         "provider": stage.provider,
         "details": dict(stage.details),
     }
+
+
+def _chunk_frequency_rows(trace: TraceDetail) -> list[dict[str, object]]:
+    """Aggregate candidate appearances across Query Trace retrieval stages.
+
+    Args:
+        trace: Selected Query Trace detail from the Dashboard service layer.
+
+    Returns:
+        Table rows sorted for diagnosis: chunks seen in more stages appear
+        first, final contexts are preferred over rejected-only chunks, and score
+        ties are deterministic. Rows contain only IDs, ranks, scores, and
+        filter reasons so the Dashboard does not duplicate full chunk text.
+    """
+
+    appearances: dict[str, list[str]] = {}
+    best_scores: dict[str, float] = {}
+    final_ranks: dict[str, int] = {}
+    filtered_reasons = _filtered_reasons(trace)
+
+    def record(
+        chunk_id: str,
+        stage_label: str,
+        *,
+        score: float | None = None,
+        rank: int | None = None,
+        is_final: bool = False,
+    ) -> None:
+        """Record one stage-level observation for one chunk."""
+
+        appearances.setdefault(chunk_id, []).append(stage_label)
+        if score is not None:
+            best_scores[chunk_id] = max(score, best_scores.get(chunk_id, score))
+        if is_final and rank is not None:
+            final_ranks[chunk_id] = rank
+
+    for chunk_id in _stage_chunk_ids(trace, "dense"):
+        record(chunk_id, "dense")
+    for chunk_id in _stage_chunk_ids(trace, "sparse"):
+        record(chunk_id, "sparse")
+    for candidate in _stage_candidates(trace, "fusion", "fused_candidates"):
+        record(candidate.chunk_id, "fusion", score=candidate.score)
+    for candidate in _stage_candidates(trace, "filter", "before_candidates"):
+        record(candidate.chunk_id, "filter_before", score=candidate.score)
+    for candidate in _stage_candidates(trace, "filter", "after_candidates"):
+        record(candidate.chunk_id, "filter_after", score=candidate.score)
+    for candidate in _stage_candidates(trace, "rerank", "before_candidates"):
+        record(candidate.chunk_id, "rerank_before", score=candidate.score)
+    for candidate in _stage_candidates(trace, "rerank", "after_candidates"):
+        record(candidate.chunk_id, "rerank_after", score=candidate.score)
+    for context in _query_contexts(trace):
+        record(
+            context.chunk_id,
+            "final",
+            score=context.score,
+            rank=context.rank,
+            is_final=True,
+        )
+
+    rows = [
+        {
+            "chunk_id": chunk_id,
+            "appeared_count": len(stage_labels),
+            "stages": ", ".join(stage_labels),
+            "final_rank": final_ranks.get(chunk_id),
+            "best_score": best_scores.get(chunk_id),
+            "filtered_reason": ", ".join(filtered_reasons.get(chunk_id, ())),
+        }
+        for chunk_id, stage_labels in appearances.items()
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (
+            -int(row["appeared_count"]),
+            row["final_rank"] is None,
+            -_sortable_score(row["best_score"]),
+            str(row["chunk_id"]),
+        ),
+    )
+
+
+def _chunk_flow_rows(trace: TraceDetail) -> list[dict[str, object]]:
+    """Build one row per chunk showing its movement through query stages.
+
+    Args:
+        trace: Selected Query Trace detail from the Dashboard service layer.
+
+    Returns:
+        Matrix rows with hit markers and ranks for Dense, Sparse, Fusion,
+        Filter, Rerank, and final result stages. Missing fields from old traces
+        are treated as empty values instead of raising errors.
+    """
+
+    dense_ids = set(_stage_chunk_ids(trace, "dense"))
+    sparse_ids = set(_stage_chunk_ids(trace, "sparse"))
+    fusion_ranks = _rank_by_chunk(_stage_candidates(trace, "fusion", "fused_candidates"))
+    kept_ids = {
+        candidate.chunk_id
+        for candidate in _stage_candidates(trace, "filter", "after_candidates")
+    }
+    rejected_reasons = _filtered_reasons(trace)
+    rerank_ranks = _rank_by_chunk(_stage_candidates(trace, "rerank", "after_candidates"))
+    final_ranks = _rank_by_chunk(_query_contexts(trace))
+    chunk_ids = (
+        set(dense_ids)
+        | set(sparse_ids)
+        | set(fusion_ranks)
+        | set(kept_ids)
+        | set(rejected_reasons)
+        | set(rerank_ranks)
+        | set(final_ranks)
+    )
+
+    rows = [
+        {
+            "chunk_id": chunk_id,
+            "dense": "hit" if chunk_id in dense_ids else "",
+            "sparse": "hit" if chunk_id in sparse_ids else "",
+            "fusion_rank": fusion_ranks.get(chunk_id),
+            "filter": _filter_status(chunk_id, kept_ids, rejected_reasons),
+            "rerank_rank": rerank_ranks.get(chunk_id),
+            "final_rank": final_ranks.get(chunk_id),
+        }
+        for chunk_id in chunk_ids
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (
+            row["final_rank"] is None,
+            _rank_or_large(row["final_rank"]),
+            _rank_or_large(row["fusion_rank"]),
+            str(row["chunk_id"]),
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateView:
+    """Represent a trace candidate snapshot without full chunk text."""
+
+    chunk_id: str
+    rank: int | None = None
+    score: float | None = None
+
+
+def _stage_details(trace: TraceDetail, stage_name: str) -> Mapping[str, Any]:
+    """Return details for the first matching trace stage, or an empty mapping."""
+
+    for stage in trace.waterfall:
+        if stage.stage == stage_name:
+            return stage.details if isinstance(stage.details, Mapping) else {}
+    return {}
+
+
+def _stage_chunk_ids(trace: TraceDetail, stage_name: str) -> list[str]:
+    """Extract chunk IDs from a Dense/Sparse stage details payload."""
+
+    raw_chunk_ids = _stage_details(trace, stage_name).get("chunk_ids", ())
+    if not isinstance(raw_chunk_ids, list | tuple):
+        return []
+    return [chunk_id for chunk_id in raw_chunk_ids if isinstance(chunk_id, str)]
+
+
+def _stage_candidates(
+    trace: TraceDetail,
+    stage_name: str,
+    field_name: str,
+) -> list[_CandidateView]:
+    """Extract ordered candidate snapshots from one trace stage field."""
+
+    raw_candidates = _stage_details(trace, stage_name).get(field_name, ())
+    return _candidate_views(raw_candidates)
+
+
+def _query_contexts(trace: TraceDetail) -> list[_CandidateView]:
+    """Extract final context snapshots from ``query_result.contexts``."""
+
+    contexts = trace.query_result.get("contexts", ())
+    return _candidate_views(contexts)
+
+
+def _candidate_views(raw_candidates: Any) -> list[_CandidateView]:
+    """Normalize raw trace dictionaries into compact candidate view objects."""
+
+    if not isinstance(raw_candidates, list | tuple):
+        return []
+
+    views: list[_CandidateView] = []
+    for raw_candidate in raw_candidates:
+        if not isinstance(raw_candidate, Mapping):
+            continue
+        chunk_id = raw_candidate.get("chunk_id")
+        if not isinstance(chunk_id, str) or not chunk_id:
+            continue
+        views.append(
+            _CandidateView(
+                chunk_id=chunk_id,
+                rank=_optional_int(raw_candidate.get("rank")),
+                score=_optional_float(raw_candidate.get("score")),
+            )
+        )
+    return views
+
+
+def _filtered_reasons(trace: TraceDetail) -> dict[str, tuple[str, ...]]:
+    """Map rejected chunk IDs to deterministic filter rejection reasons."""
+
+    reasons: dict[str, list[str]] = {}
+    raw_rejections = _stage_details(trace, "filter").get("rejected_candidates", ())
+    if not isinstance(raw_rejections, list | tuple):
+        return {}
+    for raw_rejection in raw_rejections:
+        if not isinstance(raw_rejection, Mapping):
+            continue
+        chunk_id = raw_rejection.get("chunk_id")
+        reason = raw_rejection.get("reason")
+        if isinstance(chunk_id, str) and isinstance(reason, str):
+            reasons.setdefault(chunk_id, []).append(reason)
+    return {
+        chunk_id: tuple(sorted(set(chunk_reasons)))
+        for chunk_id, chunk_reasons in reasons.items()
+    }
+
+
+def _rank_by_chunk(candidates: list[_CandidateView]) -> dict[str, int]:
+    """Build a chunk-id to rank mapping from normalized candidate snapshots."""
+
+    return {
+        candidate.chunk_id: candidate.rank
+        for candidate in candidates
+        if candidate.rank is not None
+    }
+
+
+def _filter_status(
+    chunk_id: str,
+    kept_ids: set[str],
+    rejected_reasons: Mapping[str, tuple[str, ...]],
+) -> str:
+    """Return a compact filter status for the Chunk Flow Matrix."""
+
+    if chunk_id in kept_ids:
+        return "kept"
+    reasons = rejected_reasons.get(chunk_id)
+    if reasons:
+        return f"rejected:{','.join(reasons)}"
+    return ""
+
+
+def _optional_int(value: Any) -> int | None:
+    """Convert a trace numeric rank to ``int`` when possible."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _optional_float(value: Any) -> float | None:
+    """Convert a trace numeric score to ``float`` when possible."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+def _sortable_score(value: object) -> float:
+    """Return a numeric score for sorting rows with optional best scores."""
+
+    return float(value) if isinstance(value, int | float) else float("-inf")
+
+
+def _rank_or_large(value: object) -> int:
+    """Return an integer rank or a large sentinel for ``None`` values."""
+
+    return int(value) if isinstance(value, int) else 1_000_000
 
 
 def _select_trace(

@@ -477,12 +477,15 @@ def test_rerank_controller_returns_provider_order_and_records_success() -> None:
     assert results[0] is not candidates[1]
     assert trace.record_stage.call_args.kwargs["stage"] == "rerank"
     assert trace.record_stage.call_args.kwargs["status"] == "success"
-    assert trace.record_stage.call_args.kwargs["details"]["before_order"] == [
+    details = trace.record_stage.call_args.kwargs["details"]
+    assert "before_order" not in details
+    assert "after_order" not in details
+    assert [candidate["chunk_id"] for candidate in details["before_candidates"]] == [
         "chunk-a",
         "chunk-b",
         "chunk-c",
     ]
-    assert trace.record_stage.call_args.kwargs["details"]["after_order"] == [
+    assert [candidate["chunk_id"] for candidate in details["after_candidates"]] == [
         "chunk-b",
         "chunk-a",
     ]

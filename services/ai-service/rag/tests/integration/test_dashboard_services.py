@@ -1473,7 +1473,7 @@ def test_data_browser_page_builds_and_renders_document_chunk_details() -> None:
 
 @pytest.mark.integration
 def test_query_trace_page_builds_and_renders_retrieval_comparisons() -> None:
-    """Require Query Trace page to show history, candidates, and rerank deltas."""
+    """Require Query Trace page to show candidate frequency and stage flow."""
 
     from datetime import datetime
 
@@ -1514,30 +1514,78 @@ def test_query_trace_page_builds_and_renders_retrieval_comparisons() -> None:
                 duration_ms=30.0,
                 status="success",
                 candidate_count=5,
+                details={"chunk_ids": ["chunk-a", "chunk-b"]},
             ),
             TraceStageWaterfallItem(
                 stage="sparse",
                 duration_ms=18.0,
                 status="success",
                 candidate_count=4,
+                details={"chunk_ids": ["chunk-a", "chunk-c"]},
+            ),
+            TraceStageWaterfallItem(
+                stage="fusion",
+                duration_ms=12.0,
+                status="success",
+                candidate_count=3,
+                details={
+                    "fused_candidates": [
+                        {"chunk_id": "chunk-a", "rank": 1, "score": 0.81},
+                        {"chunk_id": "chunk-c", "rank": 2, "score": 0.72},
+                        {"chunk_id": "chunk-b", "rank": 3, "score": 0.61},
+                    ],
+                },
+            ),
+            TraceStageWaterfallItem(
+                stage="filter",
+                duration_ms=8.0,
+                status="success",
+                candidate_count=2,
+                details={
+                    "before_candidates": [
+                        {"chunk_id": "chunk-a", "rank": 1, "score": 0.81},
+                        {"chunk_id": "chunk-c", "rank": 2, "score": 0.72},
+                        {"chunk_id": "chunk-b", "rank": 3, "score": 0.61},
+                    ],
+                    "after_candidates": [
+                        {"chunk_id": "chunk-a", "rank": 1, "score": 0.81},
+                        {"chunk_id": "chunk-b", "rank": 2, "score": 0.61},
+                    ],
+                    "rejected_candidates": [
+                        {"chunk_id": "chunk-c", "reason": "doc_type_mismatch"},
+                    ],
+                },
             ),
             TraceStageWaterfallItem(
                 stage="rerank",
                 duration_ms=20.0,
                 status="success",
                 candidate_count=3,
+                details={
+                    "before_candidates": [
+                        {"chunk_id": "chunk-a", "rank": 1, "score": 0.81},
+                        {"chunk_id": "chunk-b", "rank": 2, "score": 0.61},
+                    ],
+                    "after_candidates": [
+                        {"chunk_id": "chunk-b", "rank": 1, "score": 0.95},
+                        {"chunk_id": "chunk-a", "rank": 2, "score": 0.91},
+                    ],
+                },
             ),
         ),
         candidate_counts={"dense": 5, "sparse": 4, "fusion": 6, "rerank": 3},
         query_result={
-            "contexts": [{"chunk_id": "chunk-data", "score": 0.92, "rank": 1}],
+            "contexts": [
+                {"chunk_id": "chunk-b", "score": 0.95, "rank": 1},
+                {"chunk_id": "chunk-a", "score": 0.91, "rank": 2},
+            ],
             "content": "[1] context",
             "citations": [],
             "images": [],
         },
-        summary_metrics={"top_score": 0.92},
+        summary_metrics={"top_score": 0.95},
         evaluation_metrics={"query_document_relevance": 0.92},
-        rerank_delta={"chunk-data": -2},
+        rerank_delta={"chunk-b": -1, "chunk-a": 1},
     )
 
     class _TraceReader:
@@ -1567,12 +1615,62 @@ def test_query_trace_page_builds_and_renders_retrieval_comparisons() -> None:
     assert selected_trace_id == "query-page"
     call_names = [name for name, _, _ in fake_ui.calls]
     assert "title" in call_names
-    assert call_names.count("dataframe") >= 3
+    assert call_names.count("dataframe") >= 5
     assert "bar_chart" in call_names
     assert "metric" in call_names
+    subheaders = [args[0] for name, args, _kwargs in fake_ui.calls if name == "subheader"]
+    assert "Chunk Frequency Summary" in subheaders
+    assert "Chunk Flow Matrix" in subheaders
     history_rows = _dataframe_payload(fake_ui, 0)
     assert history_rows[0]["started_at"] == history.started_at
     assert history_rows[0]["finished_at"] is None
+    dataframe_payloads = [
+        args[0] for name, args, _kwargs in fake_ui.calls if name == "dataframe"
+    ]
+    frequency_rows = next(
+        rows for rows in dataframe_payloads if rows and "appeared_count" in rows[0]
+    )
+    flow_rows = next(rows for rows in dataframe_payloads if rows and "fusion_rank" in rows[0])
+    assert frequency_rows[0] == {
+        "chunk_id": "chunk-a",
+        "appeared_count": 8,
+        "stages": (
+            "dense, sparse, fusion, filter_before, filter_after, "
+            "rerank_before, rerank_after, final"
+        ),
+        "final_rank": 2,
+        "best_score": 0.91,
+        "filtered_reason": "",
+    }
+    assert flow_rows == [
+        {
+            "chunk_id": "chunk-b",
+            "dense": "hit",
+            "sparse": "",
+            "fusion_rank": 3,
+            "filter": "kept",
+            "rerank_rank": 1,
+            "final_rank": 1,
+        },
+        {
+            "chunk_id": "chunk-a",
+            "dense": "hit",
+            "sparse": "hit",
+            "fusion_rank": 1,
+            "filter": "kept",
+            "rerank_rank": 2,
+            "final_rank": 2,
+        },
+        {
+            "chunk_id": "chunk-c",
+            "dense": "",
+            "sparse": "hit",
+            "fusion_rank": 2,
+            "filter": "rejected:doc_type_mismatch",
+            "rerank_rank": None,
+            "final_rank": None,
+        },
+    ]
     _args, selectbox_kwargs = next(
         (args, kwargs)
         for name, args, kwargs in fake_ui.calls

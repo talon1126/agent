@@ -20,6 +20,7 @@ from typing import Any, Protocol
 
 from src.core.config import RagSettings
 from src.core.errors import RagError
+from src.core.query_engine.trace_snapshots import candidate_snapshots
 from src.core.types import RetrievalResult
 from src.libs.reranker.base_reranker import BaseReranker
 
@@ -185,7 +186,7 @@ class RerankController:
                 provider=provider,
                 status="skipped",
                 results=[],
-                before_order=[],
+                before_candidates=[],
                 top_k=candidate_limit,
                 fallback_reason=None,
                 error=None,
@@ -200,12 +201,11 @@ class RerankController:
             return self._fallback(
                 trace_context=trace_context,
                 started_at=started_at,
-                provider=provider,
-                candidates=fallback_candidates,
-                before_order=before_order,
-                top_k=candidate_limit,
-                fallback_reason="reranker_unavailable",
-                error=None,
+            provider=provider,
+            candidates=fallback_candidates,
+            top_k=candidate_limit,
+            fallback_reason="reranker_unavailable",
+            error=None,
             )
 
         provider_candidates = [
@@ -223,7 +223,6 @@ class RerankController:
                 started_at=started_at,
                 provider=provider,
                 candidates=fallback_candidates,
-                before_order=before_order,
                 top_k=candidate_limit,
                 fallback_reason=(
                     "reranker_timeout"
@@ -245,7 +244,6 @@ class RerankController:
                 started_at=started_at,
                 provider=provider,
                 candidates=fallback_candidates,
-                before_order=before_order,
                 top_k=candidate_limit,
                 fallback_reason="invalid_reranker_output",
                 error=error,
@@ -257,7 +255,7 @@ class RerankController:
             provider=provider,
             status="success",
             results=results,
-            before_order=before_order,
+            before_candidates=fallback_candidates,
             top_k=candidate_limit,
             fallback_reason=None,
             error=None,
@@ -356,7 +354,6 @@ class RerankController:
         started_at: float,
         provider: str,
         candidates: list[RetrievalResult],
-        before_order: list[str],
         top_k: int,
         fallback_reason: str,
         error: Exception | None,
@@ -368,7 +365,6 @@ class RerankController:
             started_at: ``perf_counter`` value captured before reranking.
             provider: Reranker implementation name or ``none``.
             candidates: Pristine defensive copies captured before provider use.
-            before_order: Filtered RRF chunk order.
             top_k: Positive output limit.
             fallback_reason: Stable machine-readable degradation code.
             error: Optional provider or validation exception.
@@ -387,7 +383,7 @@ class RerankController:
             provider=provider,
             status="degraded",
             results=results,
-            before_order=before_order,
+            before_candidates=candidates,
             top_k=top_k,
             fallback_reason=fallback_reason,
             error=error,
@@ -406,7 +402,7 @@ class RerankController:
         provider: str,
         status: str,
         results: Sequence[RetrievalResult],
-        before_order: list[str],
+        before_candidates: Sequence[RetrievalResult],
         top_k: int,
         fallback_reason: str | None,
         error: Exception | None,
@@ -419,7 +415,7 @@ class RerankController:
             provider: Concrete reranker implementation name or ``none``.
             status: ``success``, ``degraded``, or ``skipped``.
             results: Final candidates returned by the controller.
-            before_order: Filtered candidate order before reranking.
+            before_candidates: Filtered candidates before reranking.
             top_k: Applied output limit.
             fallback_reason: Stable degradation code, when fallback occurred.
             error: Optional failure used only for trace-safe type and structured
@@ -430,8 +426,8 @@ class RerankController:
             return
         details: dict[str, Any] = {
             "top_k": top_k,
-            "before_order": list(before_order),
-            "after_order": [result.chunk_id for result in results],
+            "before_candidates": candidate_snapshots(before_candidates),
+            "after_candidates": candidate_snapshots(results),
             "fallback_used": fallback_reason is not None,
             "fallback_reason": fallback_reason,
         }

@@ -415,7 +415,7 @@ def test_dense_route_records_success_and_failure_trace_details() -> None:
     assert success_call.kwargs["method"] == "vector_search"
     assert success_call.kwargs["status"] == "success"
     assert success_call.kwargs["candidate_count"] == 0
-    assert success_call.kwargs["details"] == {"top_k": 30}
+    assert success_call.kwargs["details"] == {"top_k": 30, "chunk_ids": []}
     assert success_call.kwargs["duration_ms"] >= 0
 
     trace.reset_mock()

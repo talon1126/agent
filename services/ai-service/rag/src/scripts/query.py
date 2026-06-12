@@ -40,6 +40,7 @@ from src.core.query_engine import (
     RerankController,
     SparseRoute,
 )
+from src.core.query_engine.trace_snapshots import candidate_snapshots
 from src.core.response import (
     KnowledgeHubResponse,
     KnowledgeHubResponseBuilder,
@@ -233,12 +234,8 @@ class QueryRuntime:
                         "reason": "disabled_by_request"
                         if no_rerank
                         else "reranker_unavailable",
-                        "before_order": [
-                            candidate.chunk_id for candidate in hybrid.results
-                        ],
-                        "after_order": [
-                            candidate.chunk_id for candidate in final_results
-                        ],
+                        "before_candidates": candidate_snapshots(hybrid.results),
+                        "after_candidates": candidate_snapshots(final_results),
                     },
                 )
 

@@ -515,6 +515,51 @@ def test_query_pipeline_hybrid() -> None:
             "rerank",
             "response",
         ]
+        stage_by_name = {
+            stage["stage"]: stage
+            for stage in query_trace["stages"]  # type: ignore[index]
+        }
+        dense_chunk_ids = stage_by_name["dense"]["details"]["chunk_ids"]
+        sparse_chunk_ids = stage_by_name["sparse"]["details"]["chunk_ids"]
+        fusion_candidates = stage_by_name["fusion"]["details"]["fused_candidates"]
+        filter_details = stage_by_name["filter"]["details"]
+        rerank_details = stage_by_name["rerank"]["details"]
+        assert dense_chunk_ids == [
+            result.chunk_id for result in execution.dense_results
+        ]
+        assert sparse_chunk_ids == [
+            result.chunk_id for result in execution.sparse_results
+        ]
+        assert fusion_candidates
+        assert [candidate["chunk_id"] for candidate in fusion_candidates] == [
+            result.chunk_id for result in execution.fused_results
+        ]
+        assert [candidate["chunk_id"] for candidate in filter_details["before_candidates"]] == [
+            result.chunk_id for result in execution.fused_results
+        ]
+        assert [candidate["chunk_id"] for candidate in filter_details["after_candidates"]] == [
+            result.chunk_id for result in execution.filtered_results
+        ]
+        rejected_by_chunk_id = {
+            candidate["chunk_id"]: candidate["reason"]
+            for candidate in filter_details["rejected_candidates"]
+        }
+        before_chunk_ids = {
+            candidate["chunk_id"]
+            for candidate in filter_details["before_candidates"]
+        }
+        after_chunk_ids = {
+            candidate["chunk_id"]
+            for candidate in filter_details["after_candidates"]
+        }
+        assert rejected_by_chunk_id[fixture.filtered_chunk.id] == "collection"
+        assert set(rejected_by_chunk_id) == before_chunk_ids - after_chunk_ids
+        assert [candidate["chunk_id"] for candidate in rerank_details["before_candidates"]] == [
+            result.chunk_id for result in execution.filtered_results
+        ]
+        assert [candidate["chunk_id"] for candidate in rerank_details["after_candidates"]] == [
+            result.chunk_id for result in execution.final_results
+        ]
         query_summary = query_trace["summary_metrics"]
         query_evaluation = query_trace["evaluation_metrics"]
         assert isinstance(query_summary, dict)
