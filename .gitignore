@@ -6,4 +6,5 @@
 AGENTS.md
 *.egg-info/
 .pytest_cache/
+pytest-cache-files-*/
 __pycache__/

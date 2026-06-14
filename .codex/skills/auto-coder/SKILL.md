@@ -5,7 +5,8 @@ description: Autonomous spec-driven development agent. Use when the user says "a
 
 # Auto Coder
 
-Use this skill for autonomous, spec-driven implementation from `DEV_SPEC.md`.
+Use this skill for autonomous, spec-driven implementation from the relevant
+project `DEV_SPEC.md`.
 
 ## Trigger Intent
 
@@ -20,7 +21,7 @@ Run this workflow when the user wants one-shot automation from specification to 
 
 ## Non-Negotiable Rules
 
-- Treat `DEV_SPEC.md` as the single source of truth.
+- Treat the selected domain `DEV_SPEC.md` as the single source of truth.
 - Use uv as the only project environment and command runner. Do not activate
   `.venv` manually or invoke the system Python for project commands.
 - Before implementation or verification, run
@@ -36,6 +37,28 @@ Run this workflow when the user wants one-shot automation from specification to 
 - Mock external dependencies in unit tests.
 - Do not ask for confirmation during the normal flow unless prerequisites are missing, the spec conflicts with the codebase, or the task is blocked.
 - Pause only at the final commit confirmation step.
+
+## Spec Domain Selection
+
+Auto-coder supports two independent specification domains. Always choose the
+domain before syncing references or selecting a task:
+
+- `talonMart`: use for TalonMart, e-commerce frontend/backend, warehouse,
+  procurement, delivery, operations workflows, n8n workflow files, Feishu
+  adapter work, mock-api work, and AImodel integration work outside the RAG
+  subsystem.
+- `rag`: use for the standalone RAG subsystem under `services/ai-service/rag`,
+  including ingestion, retrieval, evaluation, dashboard, MCP server internals,
+  RAG storage, and RAG trace behavior.
+
+If the user request mentions both domains, split the work by ownership:
+
+- Caller-side integration from AImodel or TalonMart into RAG follows
+  `talonMart`.
+- Internal RAG behavior, APIs, tools, traces, and evaluation follows `rag`.
+
+If the ownership is ambiguous, stop and ask which DEV_SPEC should control the
+task before editing files.
 
 ## Project Optimization and Fix Mode
 
@@ -65,13 +88,13 @@ Run:
 
 ```powershell
 uv sync --project services/ai-service/rag --extra dev --frozen
-uv run --project services/ai-service/rag python .codex\skills\auto-coder\scripts\sync_spec.py
+uv run --project services/ai-service/rag python .codex\skills\auto-coder\scripts\sync_spec.py --domain all
 ```
 
-Then read:
+Then read the schedule from the selected domain:
 
 ```text
-.codex/skills/auto-coder/references/06-schedule.md
+.codex/skills/auto-coder/references/<domain>/06-schedule.md
 ```
 
 ### 2. Select Task
@@ -87,12 +110,12 @@ Before implementation, quickly check that prerequisite objects, files, and prior
 
 Load only the references needed for the selected task:
 
-- Architecture and module placement: `references/05-architecture.md`
-- Technology choices and implementation patterns: `references/03-tech-stack.md`
-- Testing expectations: `references/04-testing.md`
-- Feature behavior: `references/02-features.md`
-- Task status and implementation details: `references/06-schedule.md`
-- Development, feedback-sync, and commit rules: `references/07-development-rules.md`
+- Architecture and module placement: `references/<domain>/05-architecture.md`
+- Technology choices and implementation patterns: `references/<domain>/03-tech-stack.md`
+- Testing expectations: `references/<domain>/04-testing.md`
+- Feature behavior: `references/<domain>/02-features.md`
+- Task status and implementation details: `references/<domain>/06-schedule.md`
+- Development, feedback-sync, and commit rules: `references/<domain>/07-development-rules.md`
 
 Extract from the spec:
 
@@ -122,14 +145,18 @@ Before running tests, self-check:
 ### 5. Test and Auto-Repair
 
 Run the task-specific pytest command from `06-schedule.md` through
-`uv run --project services/ai-service/rag`.
+the command runner required by the selected domain.
 
-Standard command forms:
+Standard RAG command forms:
 
 ```powershell
 uv run --project services/ai-service/rag pytest <test-path> -v
 uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests
 ```
+
+For `talonMart` tasks, use the verification command specified in
+`references/talonMart/06-schedule.md`. Prefer `uv run --project <service>` for
+Python services and the existing package script for frontend work.
 
 Repair loop:
 
@@ -154,7 +181,7 @@ When tests pass:
 3. Re-sync references:
 
 ```powershell
-uv run --project services/ai-service/rag python .codex\skills\auto-coder\scripts\sync_spec.py --force
+uv run --project services/ai-service/rag python .codex\skills\auto-coder\scripts\sync_spec.py --domain all --force
 ```
 
 4. Review all staged, unstaged, and untracked changes belonging to the current
@@ -192,7 +219,10 @@ the same cycle.
 
 Use atomic commits. Stage only files related to the completed task and synchronized references. Do not include unrelated dirty files.
 
-Before committing, read `references/07-development-rules.md` and use the commit structure defined there. The commit subject must include the task ID. The body must include `Changes`, `Testing`, `Design Principles`, `Task`, `Spec`, and a fresh `Tests` result.
+Before committing, read `references/<domain>/07-development-rules.md` and use
+the commit structure defined there. The commit subject must include the task ID.
+The body must include `Changes`, `Testing`, `Design Principles`, `Task`, `Spec`,
+and a fresh `Tests` result.
 
 When the user corrects architecture, naming, workflow order, testing, documentation, or commit behavior, update `DEV_SPEC.md` before continuing. Re-sync references after the edit. Do not leave reusable decisions only in conversation context.
 
