@@ -1,29 +1,24 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import {
   BadgeDollarSign,
   ChevronDown,
-  ClipboardList,
   Home,
   LoaderCircle,
-  MapPin,
-  Menu,
   RefreshCw,
-  Search,
-  ShoppingCart,
   SlidersHorizontal,
+  Star,
   Truck,
-  UserRound,
 } from 'lucide-vue-next'
 
+import StoreHeader from '@/components/StoreHeader.vue'
 import { addCartItem, CART_USER_ID, fetchCart, removeCartItem } from '@/services/cartApi'
 import { searchProducts } from '@/services/searchApi'
 import type { CartItem } from '@/types/cart'
 import type { SearchProduct } from '@/types/search'
 
 const route = useRoute()
-const router = useRouter()
 
 const searchQuery = ref(String(route.query.q ?? ''))
 const searchedQuery = ref('')
@@ -35,7 +30,6 @@ const errorMessage = ref('')
 const cartErrorMessage = ref('')
 const pendingCartItemId = ref('')
 
-const topTabs = ['Departments', 'Services', 'Rollbacks & More', 'Fast delivery', 'Fresh food']
 const quickFilters = ['In-store', 'Get it fast', 'All deals', 'Price', 'Brand', 'Subscription']
 const departments = ['Dairy', 'Beverages', 'Paper Goods', 'Office Supplies']
 
@@ -99,6 +93,14 @@ function productPrice(product: SearchProduct) {
   }
 
   return prices[product.item_id] ?? 9.99
+}
+
+function productRating(product: SearchProduct) {
+  return product.rating
+}
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat('en-US').format(value)
 }
 
 function cartQuantityFor(itemId: string) {
@@ -185,12 +187,6 @@ async function loadResults(query: string) {
   }
 }
 
-function submitSearch() {
-  const normalized = searchQuery.value.trim()
-  if (!normalized) return
-  router.push({ name: 'search', query: { q: normalized } })
-}
-
 watch(
   () => route.query.q,
   (query) => {
@@ -207,90 +203,7 @@ onMounted(() => {
 
 <template>
   <main class="min-h-screen bg-white text-[#101828]">
-    <header class="sticky top-0 z-30 bg-[#0053E2] text-white shadow-sm">
-      <div class="mx-auto flex max-w-[1440px] items-center gap-4 px-6 py-4">
-        <RouterLink class="flex shrink-0 items-center gap-3" to="/" aria-label="TalonMart home">
-          <span
-            class="grid h-11 w-11 place-items-center rounded-full bg-[#FFC220] font-black text-[#0053E2]"
-          >
-            TM
-          </span>
-          <span class="text-2xl font-black">TalonMart</span>
-        </RouterLink>
-
-        <button
-          class="hidden min-h-12 items-center gap-3 rounded-full bg-[#003A9B] px-4 text-left text-sm font-semibold xl:flex"
-          type="button"
-        >
-          <MapPin class="h-5 w-5 text-[#FFC220]" aria-hidden="true" />
-          <span>
-            <span class="block text-xs text-white/75">Pickup or delivery?</span>
-            <span>Sacramento, 95829</span>
-          </span>
-          <ChevronDown class="h-4 w-4" aria-hidden="true" />
-        </button>
-
-        <form
-          class="flex min-h-12 flex-1 overflow-hidden rounded-full bg-white"
-          role="search"
-          @submit.prevent="submitSearch"
-        >
-          <input
-            v-model="searchQuery"
-            aria-label="Search products"
-            class="min-w-0 flex-1 px-6 text-lg text-[#101828] outline-none"
-            placeholder="Search everything at TalonMart"
-            type="search"
-          />
-          <button
-            class="grid w-14 place-items-center bg-[#FFC220] text-[#101828] transition hover:bg-[#FFD35A]"
-            type="submit"
-            aria-label="Submit search"
-          >
-            <Search class="h-5 w-5" aria-hidden="true" />
-          </button>
-        </form>
-
-        <RouterLink
-          class="hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex"
-          to="/"
-        >
-          <UserRound class="h-5 w-5" aria-hidden="true" />
-          Account
-        </RouterLink>
-        <RouterLink
-          class="relative hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex"
-          to="/cart"
-        >
-          <ShoppingCart class="h-5 w-5" aria-hidden="true" />
-          Cart
-          <span
-            v-if="cartQuantity"
-            class="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#FFC220] px-1 text-xs font-black text-[#101828]"
-          >
-            {{ cartQuantity }}
-          </span>
-        </RouterLink>
-      </div>
-
-      <nav class="border-t border-white/15 bg-[#F3F8FF] text-[#101828]">
-        <div class="mx-auto flex max-w-[1440px] gap-3 overflow-x-auto px-6 py-3">
-          <button
-            v-for="tab in topTabs"
-            :key="tab"
-            class="flex min-h-10 shrink-0 items-center gap-2 rounded-full bg-white px-5 text-sm font-bold shadow-sm transition hover:bg-[#EAF2FF]"
-            type="button"
-          >
-            {{ tab }}
-            <ChevronDown
-              v-if="tab === 'Departments' || tab === 'Services'"
-              class="h-4 w-4"
-              aria-hidden="true"
-            />
-          </button>
-        </div>
-      </nav>
-    </header>
+    <StoreHeader :initial-search-query="searchQuery" :cart-quantity="cartQuantity" />
 
     <section class="border-b border-[#D8E0E8] bg-white">
       <div class="mx-auto flex max-w-[1440px] gap-3 overflow-x-auto px-6 py-4">
@@ -468,7 +381,8 @@ onMounted(() => {
           <article
             v-for="product in products"
             :key="product.item_id"
-            class="group rounded-lg border border-transparent bg-white p-3 transition hover:border-[#D8E0E8] hover:shadow-md"
+            class="group rounded-lg bg-white p-3 transition hover:shadow-md"
+            :data-testid="`product-card-${product.item_id}`"
           >
             <RouterLink
               class="relative block aspect-square overflow-hidden rounded-lg bg-[#F1F5F9]"
@@ -497,6 +411,31 @@ onMounted(() => {
               >
                 {{ product.item_name }}
               </RouterLink>
+              <div
+                class="mt-2 flex items-center gap-1 text-sm font-semibold text-[#344054]"
+                :data-testid="`product-rating-${product.item_id}`"
+              >
+                <template v-if="productRating(product)">
+                  <span class="flex items-center gap-0.5 text-[#FFC220]" aria-hidden="true">
+                    <Star
+                      v-for="index in 5"
+                      :key="index"
+                      class="h-4 w-4"
+                      :fill="
+                        index <= Math.round(productRating(product)!.score)
+                          ? 'currentColor'
+                          : 'none'
+                      "
+                      :stroke-width="2.4"
+                    />
+                  </span>
+                  <span>{{ productRating(product)!.score.toFixed(1) }}</span>
+                  <span class="text-[#667085]">
+                    {{ formatCount(productRating(product)!.count) }} ratings
+                  </span>
+                </template>
+                <span v-else class="text-[#667085]">No ratings yet</span>
+              </div>
               <p class="mt-1 text-sm text-[#667085]">{{ product.spec }}</p>
 
               <p class="mt-3 text-2xl font-black text-[#101828]">{{ totalStock(product) }} units</p>
@@ -517,20 +456,20 @@ onMounted(() => {
                 class="mt-4 grid min-h-11 grid-cols-[44px_1fr_44px] items-center rounded-full bg-[#0053E2] font-black text-white"
               >
                 <button
-                  class="grid h-11 place-items-center rounded-l-full text-2xl transition hover:bg-[#003A9B] disabled:cursor-not-allowed disabled:opacity-60"
+                  class="grid h-11 place-items-center rounded-l-full hover:bg-[#003A9B]"
                   type="button"
-                  aria-label="Remove from cart"
                   :disabled="pendingCartItemId === product.item_id || isCartLoading"
+                  :aria-label="`Remove ${product.item_name} from cart`"
                   @click="handleRemoveFromCart(product)"
                 >
                   -
                 </button>
-                <span class="text-center">{{ cartQuantityFor(product.item_id) }} added</span>
+                <span class="text-center">{{ cartQuantityFor(product.item_id) }} in cart</span>
                 <button
-                  class="grid h-11 place-items-center rounded-r-full text-3xl transition hover:bg-[#003A9B] disabled:cursor-not-allowed disabled:opacity-60"
+                  class="grid h-11 place-items-center rounded-r-full hover:bg-[#003A9B]"
                   type="button"
-                  aria-label="Add one more"
                   :disabled="pendingCartItemId === product.item_id || isCartLoading"
+                  :aria-label="`Add another ${product.item_name}`"
                   @click="handleAddToCart(product)"
                 >
                   +

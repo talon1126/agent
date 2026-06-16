@@ -62,6 +62,21 @@ describe('HomeView', () => {
     expect(wrapper.text()).toContain('Cart')
   })
 
+  it('shows the first actionable departments and routes Electronics to its category page', async () => {
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Grocery')
+    expect(wrapper.text()).toContain('Clothing, Shoes & Accessories')
+    expect(wrapper.text()).toContain('Baby & Kids')
+    expect(wrapper.text()).toContain('Electronics')
+
+    await wrapper.get('[data-testid="store-header-departments-button"]').trigger('click')
+    await wrapper.get('[data-testid="store-header-department-electronics"]').trigger('click')
+
+    expect(routerPush).toHaveBeenCalledWith('/cp/electronics')
+  })
+
   it('loads flash sales on page render and purchases with default address', async () => {
     purchaseFlashSaleWithDefaultAddress.mockResolvedValue({
       ok: true,

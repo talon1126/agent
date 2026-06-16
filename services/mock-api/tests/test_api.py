@@ -23,7 +23,12 @@ from app.routers import product_details as product_details_router
 from app.routers import product_reviews as product_reviews_router
 from app.routers.warehouse.inventory import aggregate_stock_balance_snapshot_rows
 from app.store import FIXTURE_DIR
-from app.warehouse_store import WarehouseRepository, init_warehouse_schema, seed_warehouse_fixtures
+from app.warehouse_store import (
+    WarehouseRepository,
+    build_item_search_sql,
+    init_warehouse_schema,
+    seed_warehouse_fixtures,
+)
 
 client = TestClient(app)
 
@@ -133,11 +138,15 @@ class FakeFlashSaleRepository:
 class FakeProductDetailRepository:
     def __init__(self, item: dict | None = None):
         self.item = item
+        self.review_summaries: dict[str, dict[str, float | int]] = {}
 
     def get_item_detail(self, item_id: str):
         if self.item and self.item["item_id"] == item_id:
             return dict(self.item)
         return None
+
+    def item_review_summary(self, item_id: str):
+        return self.review_summaries.get(item_id, {"average_rating": 0, "review_count": 0})
 
 
 def active_flash_sale(**overrides):
@@ -206,8 +215,13 @@ def test_search_policy_returns_refund_clause_metadata():
 def test_product_search_returns_item_with_inventory_balances(monkeypatch):
     monkeypatch.setattr(
         search_router,
+        "load_item_rating",
+        lambda item_id: {"score": 4.5, "count": 2} if item_id == "item_milk_pure" else None,
+    )
+    monkeypatch.setattr(
+        search_router,
         "load_search_items",
-        lambda query=None: [
+        lambda query=None, category=None: [
             {
                 "item_id": "item_milk_pure",
                 "item_name": "纯牛奶",
@@ -254,6 +268,7 @@ def test_product_search_returns_item_with_inventory_balances(monkeypatch):
             "spec": "250ml*24盒",
             "category_id": "dairy",
             "price": 18.40,
+            "rating": {"score": 4.5, "count": 2},
             "balances": [
                 {
                     "id": 3,
@@ -275,7 +290,7 @@ def test_product_search_returns_item_with_inventory_balances(monkeypatch):
 
 
 def test_product_search_does_not_match_category_id(monkeypatch):
-    monkeypatch.setattr(search_router, "load_search_items", lambda query=None: [])
+    monkeypatch.setattr(search_router, "load_search_items", lambda query=None, category=None: [])
     monkeypatch.setattr(search_router, "load_search_balance_rows", lambda: [])
 
     response = client.get("/search", params={"q": "dairy"})
@@ -286,6 +301,65 @@ def test_product_search_does_not_match_category_id(monkeypatch):
     assert body["query"] == "dairy"
     assert body["count"] == 0
     assert body["items"] == []
+
+
+def test_product_search_returns_items_by_category_without_query(monkeypatch):
+    monkeypatch.setattr(
+        search_router,
+        "load_item_rating",
+        lambda item_id: {"score": 4.7, "count": 3}
+        if item_id == "item_wireless_earbuds"
+        else None,
+    )
+
+    def fake_load_search_items(query=None, category=None):
+        assert query is None
+        assert category == "electronics"
+        return [
+            {
+                "item_id": "item_wireless_earbuds",
+                "item_name": "Wireless Earbuds",
+                "brand": "Talon Audio",
+                "spec": "Bluetooth 5.3 noise cancelling",
+                "category_id": "electronics",
+                "price": 59.99,
+            }
+        ]
+
+    monkeypatch.setattr(search_router, "load_search_items", fake_load_search_items)
+    monkeypatch.setattr(
+        search_router,
+        "load_search_balance_rows",
+        lambda: [
+            {
+                "id": 9,
+                "warehouse_id": "wh_hk_1",
+                "item_id": "item_wireless_earbuds",
+                "quantity_on_hand": 42,
+                "storage_status": "available",
+            }
+        ],
+    )
+
+    response = client.get("/search", params={"category": "electronics"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["query"] == ""
+    assert body["category"] == "electronics"
+    assert body["count"] == 1
+    assert body["items"][0]["item_id"] == "item_wireless_earbuds"
+    assert body["items"][0]["category_id"] == "electronics"
+    assert body["items"][0]["rating"] == {"score": 4.7, "count": 3}
+    assert body["items"][0]["balances"][0]["quantity_on_hand"] == 42
+
+
+def test_product_keyword_search_sql_keeps_optional_category_filter():
+    statement = str(build_item_search_sql())
+
+    assert "CAST(:category_id AS TEXT) IS NULL" in statement
+    assert "category_id = CAST(:category_id AS TEXT)" in statement
 
 
 def test_product_search_requires_query():
@@ -313,10 +387,11 @@ def test_product_search_requires_postgres_search_backend(monkeypatch):
 
 
 def test_product_search_returns_matching_item_without_balances(monkeypatch):
+    monkeypatch.setattr(search_router, "load_item_rating", lambda item_id: None)
     monkeypatch.setattr(
         search_router,
         "load_search_items",
-        lambda query=None: [
+        lambda query=None, category=None: [
             {
                 "item_id": "item_no_stock",
                 "item_name": "无库存测试商品",
@@ -337,6 +412,7 @@ def test_product_search_returns_matching_item_without_balances(monkeypatch):
             "spec": "1件",
             "category_id": "paper",
             "price": 9.90,
+            "rating": None,
             "balances": [],
         }
     ]
@@ -355,6 +431,7 @@ def test_product_detail_returns_enriched_item_from_repository(monkeypatch):
             "barcode": "690000000001",
         }
     )
+    repository.review_summaries["item_milk_pure"] = {"average_rating": 4.5, "review_count": 2}
     monkeypatch.setattr(product_details_router, "get_warehouse_repository", lambda: repository)
 
     response = client.get("/ip/item_milk_pure")
@@ -370,7 +447,7 @@ def test_product_detail_returns_enriched_item_from_repository(monkeypatch):
     assert body["item"]["price"] == 18.4
     assert body["item"]["currency"] == "USD"
     assert body["item"]["images"][0]["alt"] == "纯牛奶 main product image"
-    assert body["item"]["rating"]["score"] >= 4
+    assert body["item"]["rating"] == {"score": 4.5, "count": 2}
     assert body["item"]["features"]
     assert body["item"]["ingredients"]
     assert body["item"]["description"]

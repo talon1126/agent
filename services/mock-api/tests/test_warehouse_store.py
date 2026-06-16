@@ -99,8 +99,8 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
 
     assert warehouse_count == 2
     assert location_count == 6
-    assert category_count == 5
-    assert item_count == 8
+    assert category_count == 9
+    assert item_count == 16
     assert batch_count == 10
     assert replenishment_count == 0
     assert delivery_provider_count == 3
@@ -286,6 +286,22 @@ def test_item_search_sql_uses_pg_search_bm25_without_like() -> None:
     assert "search_text &&&" in statement
     assert "pdb.score" in statement
     assert "LIKE" not in statement.upper()
+
+
+def test_warehouse_repository_searches_items_by_category_without_keyword(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    rows = repository.search_items(category_id="electronics")
+
+    assert [item["item_id"] for item in rows] == [
+        "item_smart_tv_43",
+        "item_wireless_earbuds",
+    ]
+    assert {item["category_id"] for item in rows} == {"electronics"}
+    assert all(isinstance(item["price"], float) for item in rows)
 
 
 def test_item_pg_search_index_uses_chinese_compatible_tokenizer() -> None:

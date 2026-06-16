@@ -23,5 +23,25 @@
     "category_id": "office_supply",
     "category_name": "办公耗材",
     "storage_requirement": "ambient"
+  },
+  {
+    "category_id": "grocery",
+    "category_name": "Grocery",
+    "storage_requirement": "ambient"
+  },
+  {
+    "category_id": "clothing_shoes_accessories",
+    "category_name": "Clothing, Shoes & Accessories",
+    "storage_requirement": "ambient"
+  },
+  {
+    "category_id": "baby_kids",
+    "category_name": "Baby & Kids",
+    "storage_requirement": "ambient"
+  },
+  {
+    "category_id": "electronics",
+    "category_name": "Electronics",
+    "storage_requirement": "ambient"
   }
 ]

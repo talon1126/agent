@@ -3,20 +3,33 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   BadgePercent,
-  ClipboardList,
   LoaderCircle,
-  MapPin,
-  Menu,
   PackageCheck,
-  Search,
-  ShoppingCart,
-  UserRound,
 } from 'lucide-vue-next'
+import StoreHeader from '@/components/StoreHeader.vue'
 import { CART_USER_ID } from '@/services/cartApi'
 import { fetchFlashSales, purchaseFlashSaleWithDefaultAddress } from '@/services/flashSaleApi'
 import type { FlashSale } from '@/types/flashSale'
 
-const categories = ['Paper Goods', 'Dairy', 'Beverages', 'Office Supplies']
+const departmentMenuItems = [
+  { label: 'All Departments' },
+  { label: 'Rollbacks & more' },
+  { label: "Father's Day" },
+  { label: 'Grocery', slug: 'grocery' },
+  { label: 'Clothing, Shoes & Accessories', slug: 'clothing-shoes-accessories' },
+  { label: 'Baby & Kids', slug: 'baby-kids' },
+  { label: 'Pharmacy' },
+  { label: 'Health & Wellness' },
+  { label: 'Home' },
+  { label: 'Garden & Tools' },
+  { label: 'Electronics', slug: 'electronics' },
+  { label: 'Gaming & Movies' },
+  { label: 'Auto & Tires' },
+  { label: 'Personal Care' },
+  { label: 'Beauty' },
+  { label: 'Toys & Outdoor Play' },
+  { label: 'Household Essentials' },
+]
 const router = useRouter()
 
 const deals = [
@@ -151,6 +164,15 @@ function handleSearch() {
   router.push({ name: 'search', query: { q: query } })
 }
 
+function openDepartment(slug?: string) {
+  // Department links are intentionally limited to categories backed by mock-api catalog data.
+  if (!slug) {
+    return
+  }
+
+  router.push(`/cp/${slug}`)
+}
+
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-US', {
     currency: 'USD',
@@ -242,99 +264,22 @@ onMounted(() => {
 
 <template>
   <main class="min-h-screen bg-[#F5F7FA] text-[#101828]">
-    <header class="bg-[#0F2A44] text-white">
-      <div class="mx-auto flex max-w-[1440px] flex-wrap items-center gap-4 px-6 py-4">
-        <a href="/" class="flex shrink-0 items-center gap-3" aria-label="TalonMart home">
-          <span
-            class="grid h-11 w-11 place-items-center rounded-md bg-[#00A6C8] font-bold text-[#0F2A44]"
-          >
-            TM
-          </span>
-          <span class="text-2xl font-bold">TalonMart</span>
-        </a>
-
-        <button
-          class="flex min-h-11 shrink-0 items-center gap-2 rounded-md px-3 text-left text-sm hover:bg-white/10"
-        >
-          <MapPin class="h-5 w-5 text-[#00A6C8]" aria-hidden="true" />
-          <span>
-            <span class="block text-xs text-white/70">Deliver to</span>
-            <span class="font-semibold">Hong Kong</span>
-          </span>
-        </button>
-
-        <form
-          class="order-3 flex min-h-11 w-full overflow-hidden rounded-md bg-white lg:order-none lg:min-w-[360px] lg:flex-1"
-          role="search"
-          @submit.prevent="handleSearch"
-        >
-          <input
-            v-model="searchQuery"
-            aria-label="Search products"
-            class="min-w-0 flex-1 px-4 text-base text-[#101828] outline-none"
-            placeholder="Search groceries, beverages, paper goods..."
-            type="search"
-          />
-          <button
-            class="grid w-14 place-items-center bg-[#00A6C8] text-[#0F2A44] transition hover:bg-[#28BEDB]"
-            type="submit"
-            aria-label="Submit search"
-          >
-            <Search class="h-5 w-5" aria-hidden="true" />
-          </button>
-        </form>
-
-        <a
-          class="flex min-h-11 shrink-0 items-center gap-2 rounded-md px-3 text-sm hover:bg-white/10"
-          href="#"
-        >
-          <UserRound class="h-5 w-5 text-[#00A6C8]" aria-hidden="true" />
-          Account
-        </a>
-        <a
-          class="flex min-h-11 shrink-0 items-center gap-2 rounded-md px-3 text-sm hover:bg-white/10"
-          href="#"
-        >
-          <ClipboardList class="h-5 w-5 text-[#00A6C8]" aria-hidden="true" />
-          Orders
-        </a>
-        <RouterLink
-          class="flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-md bg-white px-3 text-sm font-bold text-[#0F2A44]"
-          to="/cart"
-          style="color: #0f2a44"
-        >
-          <ShoppingCart class="h-5 w-5" aria-hidden="true" />
-          Cart
-        </RouterLink>
-      </div>
-
-      <nav class="border-t border-white/10 bg-[#123A5D]">
-        <div
-          class="mx-auto flex max-w-[1440px] flex-wrap items-center gap-x-6 gap-y-2 px-6 py-3 text-sm font-semibold"
-        >
-          <button class="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-white/10">
-            <Menu class="h-5 w-5 text-[#00A6C8]" aria-hidden="true" />
-            Departments
-          </button>
-          <a v-for="category in categories" :key="category" href="#" class="hover:text-[#8BE8F7]">
-            {{ category }}
-          </a>
-        </div>
-      </nav>
-    </header>
+    <StoreHeader :initial-search-query="searchQuery" />
 
     <section class="mx-auto grid max-w-[1440px] gap-5 px-6 py-6 xl:grid-cols-[280px_1fr]">
       <aside class="rounded-lg border border-[#D8E0E8] bg-white p-4">
         <h2 class="mb-3 text-base font-bold">Shop by department</h2>
         <div class="grid gap-2">
-          <a
-            v-for="category in categories"
-            :key="category"
+          <button
+            v-for="item in departmentMenuItems.filter((department) => department.slug)"
+            :key="item.label"
             class="rounded-md border border-transparent px-3 py-3 text-sm font-semibold hover:border-[#00A6C8] hover:bg-[#E6F8FB]"
-            href="#"
+            type="button"
+            :data-testid="item.slug ? `department-card-${item.slug}` : undefined"
+            @click="openDepartment(item.slug)"
           >
-            {{ category }}
-          </a>
+            {{ item.label }}
+          </button>
         </div>
       </aside>
 

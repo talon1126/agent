@@ -1013,6 +1013,15 @@ def build_item_pg_search_index_sql() -> str:
 
 
 def build_item_search_sql():
+    """Build the pg_search-backed keyword search statement for storefront search.
+
+    Args:
+        None.
+
+    Returns:
+        A SQLAlchemy text statement that ranks products by pg_search score and can
+        optionally constrain results to a department category.
+    """
     return text(
         """
         SELECT
@@ -1025,7 +1034,37 @@ def build_item_search_sql():
             pdb.score(item_id) AS score
         FROM items
         WHERE search_text &&& :query
+          AND (CAST(:category_id AS TEXT) IS NULL OR category_id = CAST(:category_id AS TEXT))
         ORDER BY score DESC, item_id
+        LIMIT :limit
+        """
+    )
+
+
+def build_item_category_search_sql():
+    """Build the deterministic category listing statement for Departments browsing.
+
+    Args:
+        None.
+
+    Returns:
+        A SQLAlchemy text statement that returns all products in one category in
+        stable item-id order. The constant score keeps the response shape aligned
+        with keyword search without implying a ranked relevance score.
+    """
+    return text(
+        """
+        SELECT
+            item_id,
+            item_name,
+            brand,
+            spec,
+            price,
+            category_id,
+            1.0 AS score
+        FROM items
+        WHERE category_id = :category_id
+        ORDER BY item_id
         LIMIT :limit
         """
     )
@@ -1192,10 +1231,40 @@ class WarehouseRepository:
             rows = connection.execute(statement).mappings().all()
         return [dict(row) for row in rows]
 
-    def search_items(self, query: str, *, limit: int = 50) -> list[dict[str, Any]]:
-        statement = build_item_search_sql()
+    def search_items(
+        self,
+        query: str | None = None,
+        *,
+        category_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return storefront products for keyword search or department browsing.
+
+        Args:
+            query: Optional storefront keyword. When present, pg_search BM25 ranks
+                matching rows by `search_text`.
+            category_id: Optional normalized category id used by the Departments
+                guide. It filters keyword searches and drives deterministic
+                category-only listings.
+            limit: Maximum number of product rows to return.
+
+        Returns:
+            Product rows with numeric prices. Inventory balances are joined by the
+            router because search results and balance snapshots have different
+            fallback sources.
+        """
+        if category_id and not (query or "").strip():
+            statement = build_item_category_search_sql()
+            params = {"category_id": category_id, "limit": limit}
+        else:
+            statement = build_item_search_sql()
+            params = {
+                "category_id": category_id,
+                "query": (query or "").strip(),
+                "limit": limit,
+            }
         with self.engine.connect() as connection:
-            rows = connection.execute(statement, {"query": query.strip(), "limit": limit}).mappings().all()
+            rows = connection.execute(statement, params).mappings().all()
         return [{**dict(row), "price": float(row["price"])} for row in rows]
 
     def user_exists(self, user_id: int) -> bool:

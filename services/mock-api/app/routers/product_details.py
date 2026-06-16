@@ -1,4 +1,3 @@
-import hashlib
 from typing import Any
 from urllib.parse import quote
 
@@ -33,11 +32,24 @@ CATEGORY_FEATURES = {
 }
 
 
-def item_rating(item_id: str) -> dict[str, Any]:
-    digest = int(hashlib.sha1(item_id.encode("utf-8")).hexdigest()[:8], 16)
+def item_rating_from_reviews(repository: Any, item_id: str) -> dict[str, Any] | None:
+    """Build a storefront rating from persisted product reviews.
+
+    Args:
+        repository: Warehouse repository that exposes `item_review_summary`.
+        item_id: Product id whose customer reviews should be summarized.
+
+    Returns:
+        A `{score, count}` rating when the item has reviews, otherwise `None`
+        so callers do not display fabricated stars.
+    """
+    summary = repository.item_review_summary(item_id)
+    review_count = int(summary.get("review_count") or 0)
+    if review_count <= 0:
+        return None
     return {
-        "score": round(4.2 + (digest % 7) / 10, 1),
-        "count": 240 + digest % 1800,
+        "score": round(float(summary.get("average_rating") or 0), 1),
+        "count": review_count,
     }
 
 
@@ -46,7 +58,10 @@ def product_image_url(item_id: str, item_name: str) -> str:
     return f"https://placehold.co/900x900/ffffff/111827?text={label}"
 
 
-def build_product_detail(item: dict[str, Any]) -> dict[str, Any]:
+def build_product_detail(
+    item: dict[str, Any],
+    rating: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     category_id = str(item["category_id"])
     category_defaults = CATEGORY_FEATURES.get(
         category_id,
@@ -74,7 +89,7 @@ def build_product_detail(item: dict[str, Any]) -> dict[str, Any]:
                 "sort_order": 1,
             }
         ],
-        "rating": item_rating(str(item["item_id"])),
+        "rating": rating,
         "badges": ["TalonMart pick"],
         "features": category_defaults["features"],
         "ingredients": category_defaults["ingredients"],
@@ -114,4 +129,5 @@ def get_product_detail(item_id: str):
             status_code=404,
             content={"ok": False, "error": "item_not_found", "message": "Item not found."},
         )
-    return {"ok": True, "item": build_product_detail(item)}
+    rating = item_rating_from_reviews(repository, item_id)
+    return {"ok": True, "item": build_product_detail(item, rating)}

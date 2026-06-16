@@ -14,7 +14,7 @@
 | 阶段 C | Procurement Workflow | 完成补货审批、采购单和采购飞书表闭环 | [✔] |
 | 阶段 D | Delivery Workflow | 完成物流查询、异常和 case 闭环 | [✔] |
 | 阶段 E | Operations Workflow | 完成跨领域只读摘要和运营建议闭环 | [✔] |
-| 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀和前端体验 | [~] |
+| 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀和前端体验 | [✔] |
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆和 RAG MCP 集成 | [✔] |
 | 阶段 H | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
 
@@ -93,7 +93,7 @@
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| F1 | 实现首页、搜索与 Departments 导购 | [~] |  | HomeView、SearchView、DepartmentCategoryView |
+| F1 | 实现首页、搜索与 Departments 导购 | [✔] | 2026-06-14 | HomeView、SearchView、DepartmentCategoryView |
 | F2 | 实现商品详情与评论 | [✔] |  | ProductDetailView |
 | F3 | 实现购物车页面 | [✔] |  | CartView |
 | F4 | 实现秒杀前端接口 | [✔] |  | flashSaleApi |
@@ -135,10 +135,10 @@
 | 阶段 C | 7 | 7 | 100% |
 | 阶段 D | 6 | 6 | 100% |
 | 阶段 E | 5 | 5 | 100% |
-| 阶段 F | 7 | 6 | 86% |
+| 阶段 F | 7 | 7 | 100% |
 | 阶段 G | 8 | 8 | 100% |
 | 阶段 H | 7 | 2 | 29% |
-| **总计** | **53** | **47** | **89%** |
+| **总计** | **53** | **48** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -818,22 +818,30 @@
 - 首页展示首版 Departments：Grocery、Clothing, Shoes & Accessories、Baby & Kids、Electronics。
 - 用户点击 Electronics 后跳转到 `/cp/electronics`。
 - `/cp/electronics` 页面应查询 electronics category 下的商品并展示列表。
+- Home、Search、Department、Product Detail、Cart 页面使用统一商城顶部导航：蓝色主栏、TM 标识、Pickup 定位、搜索框、Account、Cart。
+- 统一顶部导航第二行只保留 Departments 下拉入口，不展示 Services、Rollbacks、Father's Day、Get it Fast、Pharmacy、New Arrivals、TalonMart+ 等快捷入口。
+- Department 详情页使用统一顶部导航中的 Departments 下拉框切换分类，不使用独立横向分类按钮。
 - 空结果、加载中和接口失败状态都有明确页面反馈。
 
 测试方法：`pnpm --dir apps/talonmart-web test:unit -- HomeView SearchView DepartmentCategoryView`
 
 ##### F2：实现商品详情与评论
 
-目标：展示商品详情、卖点、规格和评论。
+目标：展示商品详情、卖点、规格、评论，以及商品展示卡片的评分体验。
 
 修改文件：
 
+- `apps/talonmart-web/src/views/SearchView.vue`
+- `apps/talonmart-web/src/views/DepartmentCategoryView.vue`
 - `apps/talonmart-web/src/views/ProductDetailView.vue`
 - `apps/talonmart-web/src/services/productDetailApi.ts`
 - `apps/talonmart-web/src/services/productReviewApi.ts`
+- `apps/talonmart-web/src/types/search.ts`
 
 实现类/函数：
 
+- `SearchView.vue`：展示搜索商品卡片。
+- `DepartmentCategoryView.vue`：展示 Departments 商品卡片。
 - `ProductDetailView.vue`：展示商品详情。
 - `fetchProductDetail()`：读取商品详情。
 - `fetchProductReviews()`：读取商品评论。
@@ -841,8 +849,10 @@
 验收标准：
 
 - 商品详情页包含商品信息和评论信息。
+- 搜索页和 Departments 页面商品卡片使用统一白色背景，不显示商品卡片边框。
+- 搜索页和 Departments 页面商品卡片显示星级评分与评分数量。
 
-测试方法：`pnpm --dir apps/talonmart-web test:unit -- ProductDetailView`
+测试方法：`pnpm --dir apps/talonmart-web test:unit -- SearchView DepartmentCategoryView ProductDetailView`
 
 ##### F3：实现购物车页面
 

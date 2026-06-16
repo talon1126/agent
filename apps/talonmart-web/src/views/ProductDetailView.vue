@@ -1,21 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import {
   ChevronDown,
   Heart,
   Info,
   LoaderCircle,
-  MapPin,
   PackageCheck,
-  Search,
   Share2,
   ShoppingCart,
   Star,
   Truck,
-  UserRound,
 } from 'lucide-vue-next'
 
+import StoreHeader from '@/components/StoreHeader.vue'
 import { addCartItem, CART_USER_ID } from '@/services/cartApi'
 import { fetchProductDetail } from '@/services/productDetailApi'
 import { createItemReview, fetchItemReviews } from '@/services/productReviewApi'
@@ -23,7 +21,6 @@ import type { ProductDetail, ProductImage } from '@/types/productDetail'
 import type { ItemReview, ItemReviewSummary } from '@/types/productReview'
 
 const route = useRoute()
-const router = useRouter()
 
 const product = ref<ProductDetail | null>(null)
 const selectedImageIndex = ref(0)
@@ -32,7 +29,6 @@ const isAddingToCart = ref(false)
 const errorMessage = ref('')
 const cartMessage = ref('')
 const cartErrorMessage = ref('')
-const searchQuery = ref('')
 const isZooming = ref(false)
 const zoomPosition = ref({ x: 50, y: 50 })
 const reviews = ref<ItemReview[]>([])
@@ -46,17 +42,6 @@ const reviewForm = ref({
   title: '',
   content: '',
 })
-
-const topTabs = [
-  'Departments',
-  'Services',
-  'Rollbacks & More',
-  "Father's Day",
-  'Get it Fast',
-  'Pharmacy',
-  'New Arrivals',
-  'TalonMart+',
-]
 
 const itemId = computed(() => String(route.params.item_id ?? ''))
 
@@ -236,12 +221,6 @@ async function handleAddToCart() {
   }
 }
 
-function submitSearch() {
-  const normalized = searchQuery.value.trim()
-  if (!normalized) return
-  router.push({ name: 'search', query: { q: normalized } })
-}
-
 watch(
   () => route.params.item_id,
   () => {
@@ -256,83 +235,7 @@ onMounted(() => {
 
 <template>
   <main class="min-h-screen bg-white text-[#101828]">
-    <header class="sticky top-0 z-30 bg-[#0053E2] text-white shadow-sm">
-      <div class="mx-auto flex max-w-[1440px] items-center gap-4 px-6 py-4">
-        <RouterLink
-          class="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#FFC220] font-black text-[#0053E2]"
-          to="/"
-          aria-label="TalonMart home"
-        >
-          TM
-        </RouterLink>
-
-        <button
-          class="hidden min-h-12 items-center gap-3 rounded-full bg-[#003A9B] px-4 text-left text-sm font-semibold xl:flex"
-          type="button"
-        >
-          <MapPin class="h-5 w-5 text-[#FFC220]" aria-hidden="true" />
-          <span>
-            <span class="block text-xs text-white/75">Pickup or delivery?</span>
-            <span>Sacramento, 95829</span>
-          </span>
-          <ChevronDown class="h-4 w-4" aria-hidden="true" />
-        </button>
-
-        <form
-          class="flex min-h-12 flex-1 overflow-hidden rounded-full bg-white"
-          role="search"
-          @submit.prevent="submitSearch"
-        >
-          <input
-            v-model="searchQuery"
-            aria-label="Search products"
-            class="min-w-0 flex-1 px-6 text-lg text-[#101828] outline-none"
-            placeholder="Search everything at TalonMart"
-            type="search"
-          />
-          <button
-            class="grid w-14 place-items-center bg-[#FFC220] text-[#101828] transition hover:bg-[#FFD35A]"
-            type="submit"
-            aria-label="Submit search"
-          >
-            <Search class="h-5 w-5" aria-hidden="true" />
-          </button>
-        </form>
-
-        <RouterLink
-          class="hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex"
-          to="/"
-        >
-          <UserRound class="h-5 w-5" aria-hidden="true" />
-          Account
-        </RouterLink>
-        <RouterLink
-          class="flex min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10"
-          to="/cart"
-        >
-          <ShoppingCart class="h-5 w-5" aria-hidden="true" />
-          Cart
-        </RouterLink>
-      </div>
-
-      <nav class="border-t border-white/15 bg-[#F3F8FF] text-[#101828]">
-        <div class="mx-auto flex max-w-[1440px] gap-3 overflow-x-auto px-6 py-3">
-          <button
-            v-for="tab in topTabs"
-            :key="tab"
-            class="flex min-h-10 shrink-0 items-center gap-2 rounded-full bg-white px-5 text-sm font-bold shadow-sm transition hover:bg-[#EAF2FF]"
-            type="button"
-          >
-            {{ tab }}
-            <ChevronDown
-              v-if="tab === 'Departments' || tab === 'Services'"
-              class="h-4 w-4"
-              aria-hidden="true"
-            />
-          </button>
-        </div>
-      </nav>
-    </header>
+    <StoreHeader />
 
     <section
       v-if="isLoading"
