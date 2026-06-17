@@ -37,7 +37,7 @@ uv run --project services/mock-api ruff check services\mock-api
 | TalonMart Web | `apps/talonmart-web` | 商品浏览、搜索、详情、购物车、秒杀、AI 模式 |
 | ai-service | `services/ai-service` | AImodel Agent、会话记忆、工具编排、RAG MCP 调用 |
 | mock-api | `services/mock-api` | 电商业务事实 API 和 fixtures/PostgreSQL fallback |
-| feishu-adapter | `services/feishu-adapter` | 飞书事件、n8n 转发、多维表格同步 |
+| feishu-adapter | `services/feishu-adapter` | 飞书事件、n8n 转发、多维表格同步、飞书应用数据支撑 |
 | postgres | `services/postgres` | PostgreSQL 镜像和初始化脚本 |
 | n8n | `n8n/workflows` | Workflow JSON 和定时任务编排 |
 
@@ -108,7 +108,7 @@ n8n Workflow
 | `inventory_batches` | 批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。 |
 | `inventory_location_balances` | 库位库存余额表，保存当前可售库存；飞书余额表使用数据库 `id` 作为 `Balance ID`，不展示 `category_id` 或 `item_id`。 |
 | `replenishment_requests` | 补货申请表，保存低库存触发后交给采购审核的结构化需求；飞书补货申请 read model 只展示业务可读字段，不展示 `category_id` 或 `item_id`。 |
-| `warehouse_inventory_sync_jobs` | 仓储库存同步任务表，保存采购到仓后需要同步飞书库存视图的待处理任务。 |
+| `warehouse_inventory_sync_jobs` | 仓储库存同步任务表，保存采购到仓后需要写入库存批次与库存余额的待处理任务。 |
 | `orders` | 订单主表，保存下单、发仓确认、付款、发货、到货、退款、退货和物流状态；状态统一使用英文枚举：`pending_fulfillment_review`、`unpaid`、`pending_shipment`、`shipped`、`arrived`、`refunded`、`returned`、`canceled`。 |
 | `order_items` | 订单明细表，保存订单命中的商品、仓库、库位、批次和数量。 |
 | `inventory_movements` | 库存流水表，记录员工确认发仓、退款和退货对库存余额的影响。 |

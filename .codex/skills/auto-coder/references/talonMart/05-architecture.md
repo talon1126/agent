@@ -298,16 +298,17 @@ agent/                                                      # 项目根目录
 | 业务 API | `services/mock-api/app/main.py` | mock-api 入口 | 路由注册、health、政策搜索、run log |
 | 业务 API | `services/mock-api/app/warehouse_store.py` | 仓储 repository | PostgreSQL 优先、fixtures fallback、库存事实 |
 | 业务 API | `services/mock-api/app/routers/category_rankings.py` | 分类排行榜路由 | PostgreSQL 事实/快照、Redis ZSET 缓存、Top 商品返回 |
-| 业务 API | `services/mock-api/app/routers/warehouse/router.py` | Warehouse 路由聚合 | 库存、订单、同步任务 |
-| 业务 API | `services/mock-api/app/routers/procurement/router.py` | Procurement 路由聚合 | 补货申请、采购单、到仓确认 |
+| 业务 API | `services/mock-api/app/routers/warehouse/router.py` | Warehouse 路由聚合 | 库存、订单、补货申请 |
+| 业务 API | `services/mock-api/app/routers/procurement/router.py` | Procurement 路由聚合 | 补货申请、采购单查询 |
 | 业务 API | `services/mock-api/app/routers/delivery/router.py` | Delivery 路由聚合 | 物流状态、异常、case |
 | 飞书 | `services/feishu-adapter/app/main.py` | 飞书服务入口 | 多机器人、事件转发、表格同步 |
 | 飞书 | `services/feishu-adapter/app/feishu_events.py` | 事件归一化 | 消息类型、mention、payload 转换 |
 | 飞书 | `services/feishu-adapter/app/intent_router.py` | 仓储 fast path | 明确同步/视图意图识别 |
 | 飞书 | `services/feishu-adapter/app/view_template_builder.py` | 视图模板 | 受控模板、字段映射、视图计划 |
-| Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约、补货、同步工具 |
+| 飞书应用 | 飞书多维表格应用页面配置 | 企业管理后台页面 | 运营驾驶舱、业务操作台、组件绑定和人工验收 |
+| Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约和补货工具 |
 | Workflow | `n8n/workflows/warehouse-purchase-arrival-notify.json` | 采购到货入库通知 | 定时扫描今日到货采购单并触发飞书群通知 |
-| Workflow | `n8n/workflows/procurement-workflow.json` | Procurement 编排 | 审批、采购单、到仓确认 |
+| Workflow | `n8n/workflows/procurement-workflow.json` | Procurement 编排 | 审批和采购单查询 |
 | Workflow | `n8n/workflows/delivery-workflow.json` | Delivery 编排 | 物流查询、异常、case |
 | Workflow | `n8n/workflows/operations-workflow.json` | Operations 编排 | 跨领域摘要和只读汇总 |
 | 测试 | `tests/test_department_workflows.py` | Workflow 结构测试 | webhook、工具节点、边界检查 |
@@ -333,7 +334,7 @@ mock-api warehouse router
 warehouse_store / PostgreSQL
     |
     v
-库存、履约风险、补货申请、飞书库存表同步结果
+库存、履约风险、补货申请
 ```
 
 #### 5.4.2 Procurement 业务流程
@@ -351,7 +352,7 @@ mock-api procurement router
 replenishment_requests / purchase_orders
     |
     v
-飞书采购表同步 / 到仓状态更新
+补货申请审批结果 / 采购单查询结果
 ```
 
 #### 5.4.3 Delivery 业务流程
@@ -415,3 +416,28 @@ AImodel service 读取记忆并调用工具
     v
 清洗后的流式回答 + message 持久化
 ```
+
+#### 5.4.6 飞书应用与协作后台业务流程
+
+```text
+飞书应用页面
+    |
+    v
+指标卡 / 图表 / 列表 / 按钮组件
+    |
+    v
+飞书多维表格 read model
+    |
+    v
+feishu-adapter 同步端点 / 主动通知端点
+    |
+    v
+mock-api / PostgreSQL 业务事实
+```
+
+设计约束：
+
+- 飞书应用使用当前已改名的应用，不新建应用。
+- 首页采用“运营驾驶舱 + 待办处理区”的均衡布局。
+- 缺失数据源先以明确空状态呈现，后续通过 H7-H9 任务补齐。
+- 飞书应用中的按钮只触发明确的同步接口、机器人指令或人工操作入口，不直接绕过后端业务规则。
