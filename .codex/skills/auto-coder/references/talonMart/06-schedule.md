@@ -30,7 +30,7 @@
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
 | 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
 | 阶段 G | AImodel 可用 | 流式聊天、工具调用、会话记忆、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 |  |
-| 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、应用首页设计 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
+| 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
 | 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
 
 ### 6.3 任务跟踪表
@@ -123,7 +123,7 @@
 | H4 | 实现订单发仓确认通知 | [✔] | 2026-06-17 | 支付后发仓确认、候选发仓、物流选择、员工确认后扣减 |
 | H5 | 实现采购到货入库确认通知 | [✔] | 2026-06-17 | 今日到货采购单、飞书通知、员工入库确认 |
 | H6 | 设计飞书应用信息架构和首页草图 | [✔] | 2026-06-17 | 运营驾驶舱 + 业务操作台 |
-| H7 | 搭建飞书应用首页运营驾驶舱 | [ ] |  | 指标卡、图表、排行榜、待办列表、快捷按钮 |
+| H7 | 搭建飞书应用首页运营驾驶舱 | [✔] | 2026-06-18 | 指标卡、图表、排行榜、待办列表、快捷按钮 |
 | H8 | 搭建飞书应用业务操作页 | [ ] |  | 订单、库存、采购、商品运营页面 |
 | H9 | 实现飞书应用联调与验收门禁 | [ ] |  | Chrome 验证、表格数据校验、关键按钮动作验证 |
 
@@ -150,9 +150,9 @@
 | 阶段 E | 5 | 5 | 100% |
 | 阶段 F | 8 | 8 | 100% |
 | 阶段 G | 8 | 8 | 100% |
-| 阶段 H | 9 | 6 | 67% |
+| 阶段 H | 9 | 7 | 78% |
 | 阶段 I | 7 | 2 | 29% |
-| **总计** | **59** | **51** | **86%** |
+| **总计** | **59** | **52** | **88%** |
 
 ### 6.5 阶段实施明细
 
