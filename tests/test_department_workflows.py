@@ -52,6 +52,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_replenishment_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
             "warehouse_inventory_sync_jobs_tool",
+            "warehouse_order_tool",
         },
         "forbidden_tools": {
             "order_status_tool",
@@ -100,6 +101,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_replenishment_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
             "warehouse_inventory_sync_jobs_tool",
+            "warehouse_order_tool",
             "operations_mock_tool",
             "delivery_status_tool",
             "delivery_exception_tool",
@@ -449,6 +451,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             replenishment_tool = node_by_name(workflow, "warehouse_replenishment_request_tool")
             purchase_order_sync_tool = node_by_name(workflow, "warehouse_purchase_order_arrival_sync_tool")
             sync_jobs_tool = node_by_name(workflow, "warehouse_inventory_sync_jobs_tool")
+            order_tool = node_by_name(workflow, "warehouse_order_tool")
             for tool in (inventory_tool, exception_tool, fulfillment_tool, table_sync_tool):
                 tool_code = tool["parameters"]["jsCode"]
                 assert "extractItemId" in tool_code
@@ -472,6 +475,11 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "/fail" in sync_jobs_tool["parameters"]["jsCode"]
             assert "syncJobsResult.ok !== true" in sync_jobs_tool["parameters"]["jsCode"]
             assert "warehouse_inventory_sync_failed" in sync_jobs_tool["parameters"]["jsCode"]
+            order_tool_code = order_tool["parameters"]["jsCode"]
+            assert "confirm_fulfillment" in order_tool_code
+            assert "确认发仓" in order_tool_code
+            assert order_tool_code.index("confirm_fulfillment") < order_tool_code.index("return 'ship'")
+            assert "/warehouse/order-tool" in order_tool_code
 
         if expected["agent"] == "Procurement Agent":
             system_message = agent["parameters"]["options"]["systemMessage"]
@@ -512,11 +520,14 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "/reject" in reject_tool["parameters"]["jsCode"]
             assert "/procurement/replenishment-requests-table/sync" in sync_requests_tool["parameters"]["jsCode"]
             assert "/procurement/purchase-orders-table/sync" in sync_orders_tool["parameters"]["jsCode"]
+            assert "purchase_order_drafts" not in sync_orders_tool["parameters"]["jsCode"]
             assert "/approve-batch" in batch_tool["parameters"]["jsCode"]
             assert "/procurement/replenishment-requests-table/sync" in batch_tool["parameters"]["jsCode"]
             assert "/procurement/purchase-orders-table/sync" in batch_tool["parameters"]["jsCode"]
+            assert "purchase_order_drafts" not in batch_tool["parameters"]["jsCode"]
             assert "/procurement/purchase-orders/confirm-arrival-batch" in arrival_tool["parameters"]["jsCode"]
             assert "/procurement/purchase-orders-table/sync" in arrival_tool["parameters"]["jsCode"]
+            assert "purchase_order_drafts" not in arrival_tool["parameters"]["jsCode"]
             assert "extractPurchaseOrderIds" in arrival_tool["parameters"]["jsCode"]
             assert "extractRequestId" in approve_tool["parameters"]["jsCode"]
             assert "extractRequestId" in reject_tool["parameters"]["jsCode"]

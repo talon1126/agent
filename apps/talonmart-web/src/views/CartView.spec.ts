@@ -73,14 +73,14 @@ describe('CartView checkout', () => {
         order: {
           order_id: 'ORD-CODEX-1001',
           customer_id: '1',
-          status: '未付款',
+          status: 'pending_fulfillment_review',
         },
         items: [],
       },
     })
   })
 
-  it('shows the default delivery address and creates an order before returning home', async () => {
+  it('shows the default delivery address and displays fulfillment review status after checkout', async () => {
     const wrapper = mount(CartView)
 
     await flushPromises()
@@ -102,6 +102,7 @@ describe('CartView checkout', () => {
       items: [{ item_id: 'item_milk_pure', quantity: 2 }],
       created_by: 'talonmart-web',
     })
-    expect(routerPush).toHaveBeenCalledWith({ name: 'home' })
+    expect(routerPush).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Warehouse team is reviewing fulfillment for order ORD-CODEX-1001.')
   })
 })

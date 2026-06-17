@@ -52,6 +52,11 @@ class WarehouseOrderStatusUpdateRequest(BaseModel):
     updated_by: str = "warehouse-agent"
 
 
+class WarehouseOrderFulfillmentConfirmRequest(BaseModel):
+    warehouse_id: str
+    updated_by: str = "warehouse-agent"
+
+
 class WarehouseOrderReleaseExpiredRequest(BaseModel):
     processed_by: str = "warehouse-timeout-release"
     now: str | None = None

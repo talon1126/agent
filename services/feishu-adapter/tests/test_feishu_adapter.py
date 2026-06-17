@@ -510,6 +510,123 @@ def test_procurement_table_sync_returns_not_configured_without_table_settings() 
     }
 
 
+def test_order_fulfillment_review_notification_sends_group_message() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id":
+            return httpx.Response(200, json={"code": 0, "data": {"message_id": "om_fulfillment_review"}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_app_id="cli_warehouse",
+        feishu_app_secret="warehouse_secret",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/order-fulfillment-review/send",
+        json={
+            "chat_id": "oc_warehouse_ops",
+            "order": {
+                "order_id": "ORD-CODEX-9001",
+                "customer_id": "1",
+                "shipping_city": "深圳市",
+                "selected_warehouse_id": "wh_sz_1",
+            },
+            "items": [{"item_id": "item_vinda_tissue", "quantity": 2}],
+            "candidates": [
+                {
+                    "warehouse_id": "wh_sz_1",
+                    "warehouse_name": "深圳仓",
+                    "can_fulfill": True,
+                    "total_available": 136,
+                },
+                {
+                    "warehouse_id": "wh_hk_1",
+                    "warehouse_name": "香港仓",
+                    "can_fulfill": False,
+                    "shortage": {"shortage_quantity": 2},
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["message_id"] == "om_fulfillment_review"
+    send_request = next(request for request in requests if "/im/v1/messages" in str(request.url))
+    payload = json.loads(send_request.content)
+    assert payload["receive_id"] == "oc_warehouse_ops"
+    assert payload["msg_type"] == "text"
+    text = json.loads(payload["content"])["text"]
+    assert "ORD-CODEX-9001" in text
+    assert "item_vinda_tissue x 2" in text
+    assert "深圳仓" in text
+    assert "确认发仓" in text
+
+
+def test_order_fulfillment_review_notification_uses_warehouse_bot_credentials() -> None:
+    requests: list[httpx.Request] = []
+    bots_json = json.dumps(
+        [
+            {
+                "name": "warehouse",
+                "app_id": "cli_warehouse",
+                "app_secret": "warehouse_secret",
+                "bot_open_id": "ou_warehouse_bot",
+                "n8n_webhook_url": "http://n8n.local/webhook/warehouse",
+            },
+            {
+                "name": "procurement",
+                "app_id": "cli_procurement",
+                "app_secret": "procurement_secret",
+                "bot_open_id": "ou_procurement_bot",
+                "n8n_webhook_url": "http://n8n.local/webhook/procurement",
+            },
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            payload = json.loads(request.content)
+            assert payload == {"app_id": "cli_warehouse", "app_secret": "warehouse_secret"}
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "warehouse-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id":
+            assert request.headers["Authorization"] == "Bearer warehouse-token"
+            return httpx.Response(200, json={"code": 0, "data": {"message_id": "om_fulfillment_review"}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_bots_json=bots_json,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/order-fulfillment-review/send",
+        json={
+            "chat_id": "oc_warehouse_ops",
+            "order": {
+                "order_id": "ORD-CODEX-9001",
+                "shipping_city": "深圳市",
+                "selected_warehouse_id": "wh_sz_1",
+            },
+            "items": [{"item_id": "item_vinda_tissue", "quantity": 2}],
+            "candidates": [],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message_id"] == "om_fulfillment_review"
+
+
 def test_inventory_table_provision_returns_not_configured_without_app_token() -> None:
     app = create_app(
         http_client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(500))),

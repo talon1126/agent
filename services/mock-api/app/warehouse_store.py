@@ -27,6 +27,15 @@ logger = logging.getLogger("mock_api.warehouse_store")
 
 metadata = MetaData()
 
+ORDER_STATUS_PENDING_FULFILLMENT_REVIEW = "pending_fulfillment_review"
+ORDER_STATUS_UNPAID = "unpaid"
+ORDER_STATUS_PENDING_SHIPMENT = "pending_shipment"
+ORDER_STATUS_SHIPPED = "shipped"
+ORDER_STATUS_ARRIVED = "arrived"
+ORDER_STATUS_REFUNDED = "refunded"
+ORDER_STATUS_RETURNED = "returned"
+ORDER_STATUS_CANCELED = "canceled"
+
 warehouses = Table(
     "warehouses",
     metadata,
@@ -388,9 +397,9 @@ WAREHOUSE_TABLE_COMMENTS = {
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
     "purchase_orders": "采购单表，保存采购审核补货申请后生成的采购单、支付状态和仓库同步状态。",
     "warehouse_inventory_sync_jobs": "仓储库存同步任务表，保存采购到仓后需要 Warehouse Agent 同步飞书库存视图的待处理任务。",
-    "orders": "订单主表，保存下单、付款、发货、到货、退款和退货状态，并保留物流供应商与快递员联系方式供 Delivery Agent 查询。",
-    "order_items": "订单明细表，保存订单扣减命中的商品、仓库、库位、批次和数量。",
-    "inventory_movements": "库存流水表，记录订单创建、退款、退货和未付款超时释放对库位库存余额的影响。",
+    "orders": "订单主表，保存下单、发仓确认、付款、发货、到货、退款和退货状态，并保留物流供应商与快递员联系方式供 Delivery Agent 查询。",
+    "order_items": "订单明细表，保存待发仓确认商品和确认后扣减命中的仓库、库位、批次和数量。",
+    "inventory_movements": "库存流水表，记录发仓确认、退款、退货和未付款超时释放对库位库存余额的影响。",
 }
 
 WAREHOUSE_COLUMN_COMMENTS = {
@@ -540,7 +549,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "id": "订单自增整数主键。",
         "order_id": "订单业务编号，例如 ORD-CODEX-9001。",
         "customer_id": "客户编号。",
-        "status": "订单状态：未付款、待发货、已发货、已到货、已退款、已退货、已取消。",
+        "status": "订单状态：pending_fulfillment_review、unpaid、pending_shipment、shipped、arrived、refunded、returned、canceled。",
         "delivery_provider_id": "物流供应商编号，例如 sf、jd、yto。",
         "delivery_provider_name": "物流供应商展示名称，例如顺丰、京东、圆通。",
         "courier_phone": "快递员联系电话，由 Delivery Agent 查询和跟进。",
@@ -558,15 +567,15 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "arrived_at": "到货时间。",
         "cancelled_at": "取消时间。",
         "returned_at": "退货入库时间。",
-        "expires_at": "未付款订单库存占用释放截止时间。",
-        "released_at": "未付款超时释放库存的处理时间。",
+        "expires_at": "unpaid 订单库存占用释放截止时间。",
+        "released_at": "unpaid 超时释放库存的处理时间。",
         "release_reason": "库存释放原因，例如 unpaid_timeout。",
     },
     "order_items": {
         "id": "订单明细自增整数主键。",
         "order_id": "关联订单业务编号。",
         "customer_id": "客户编号。",
-        "status": "明细状态，例如待发货、已退款、已退货。",
+        "status": "明细状态，例如 pending_fulfillment_review、unpaid、pending_shipment、refunded、returned。",
         "item_id": "明细商品编号。",
         "warehouse_id": "扣减或加回库存所在仓库编号。",
         "location_code": "扣减或加回库存所在库位。",
@@ -735,16 +744,21 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
                     connection.execute(text(statement))
             if "requested_items_json" in order_columns:
                 connection.execute(text("ALTER TABLE orders DROP COLUMN requested_items_json"))
-            connection.execute(text("UPDATE orders SET status = '未付款' WHERE status = 'created'"))
-            connection.execute(text("UPDATE orders SET status = '待发货' WHERE status = 'paid'"))
-            connection.execute(text("UPDATE orders SET status = '已发货' WHERE status = 'shipped'"))
-            connection.execute(text("UPDATE orders SET status = '已到货' WHERE status = 'arrived'"))
-            connection.execute(text("UPDATE orders SET status = '已退款' WHERE status = 'cancelled'"))
-            connection.execute(text("UPDATE orders SET status = '已退货' WHERE status = 'returned'"))
+            connection.execute(text("UPDATE orders SET status = 'unpaid' WHERE status IN ('created', '未付款')"))
+            connection.execute(text("UPDATE orders SET status = 'pending_shipment' WHERE status IN ('paid', '待发货')"))
+            connection.execute(text("UPDATE orders SET status = 'shipped' WHERE status = '已发货'"))
+            connection.execute(text("UPDATE orders SET status = 'arrived' WHERE status = '已到货'"))
+            connection.execute(text("UPDATE orders SET status = 'refunded' WHERE status IN ('cancelled', '已退款')"))
+            connection.execute(text("UPDATE orders SET status = 'returned' WHERE status = '已退货'"))
+            connection.execute(text("UPDATE orders SET status = 'canceled' WHERE status = '已取消'"))
         if inspector.has_table(order_items.name):
-            connection.execute(text("UPDATE order_items SET status = '待发货' WHERE status = 'paid'"))
-            connection.execute(text("UPDATE order_items SET status = '已退款' WHERE status = 'cancelled'"))
-            connection.execute(text("UPDATE order_items SET status = '已退货' WHERE status = 'returned'"))
+            connection.execute(text("UPDATE order_items SET status = 'unpaid' WHERE status = '未付款'"))
+            connection.execute(text("UPDATE order_items SET status = 'pending_shipment' WHERE status IN ('paid', '待发货')"))
+            connection.execute(text("UPDATE order_items SET status = 'shipped' WHERE status = '已发货'"))
+            connection.execute(text("UPDATE order_items SET status = 'arrived' WHERE status = '已到货'"))
+            connection.execute(text("UPDATE order_items SET status = 'refunded' WHERE status IN ('cancelled', '已退款')"))
+            connection.execute(text("UPDATE order_items SET status = 'returned' WHERE status = '已退货'"))
+            connection.execute(text("UPDATE order_items SET status = 'canceled' WHERE status = '已取消'"))
         if inspector.has_table(items.name):
             item_columns = {column["name"] for column in inspector.get_columns(items.name)}
             if "shelf_life_days" not in item_columns:
@@ -2550,31 +2564,9 @@ class WarehouseRepository:
         updated_at = str(values["created_at"])
         with self.engine.begin() as connection:
             connection.execute(orders.insert().values(**values))
-            allocated_items = self._allocate_order_items(connection, values, item_requests, updated_at)
-            for item in allocated_items:
-                connection.execute(
-                    inventory_location_balances.update()
-                    .where(inventory_location_balances.c.item_id == item["item_id"])
-                    .where(inventory_location_balances.c.warehouse_id == item["warehouse_id"])
-                    .where(inventory_location_balances.c.location_code == item["location_code"])
-                    .where(inventory_location_balances.c.batch_no == item["batch_no"])
-                    .values(
-                        quantity_on_hand=inventory_location_balances.c.quantity_on_hand - int(item["quantity"]),
-                        updated_at=updated_at,
-                    )
-                )
-            if allocated_items:
-                connection.execute(order_items.insert(), allocated_items)
-                connection.execute(
-                    inventory_movements.insert(),
-                    self._inventory_movement_values(
-                        allocated_items,
-                        movement_type="order_created",
-                        created_by=str(values["created_by"]),
-                        created_at=updated_at,
-                        direction=-1,
-                    ),
-                )
+            pending_items = self._pending_order_item_values(values, item_requests, updated_at)
+            if pending_items:
+                connection.execute(order_items.insert(), pending_items)
         return self.get_order(str(payload["order_id"])) or {"order": values, "items": []}
 
     def get_order(self, order_id: str) -> dict[str, Any] | None:
@@ -2603,23 +2595,130 @@ class WarehouseRepository:
         if not details:
             raise ValueError("order_not_found")
         order = details["order"]
-        if order["status"] == "待发货":
+        if order["status"] == ORDER_STATUS_PENDING_SHIPMENT:
             return details
-        if order["status"] != "未付款":
+        if order["status"] != ORDER_STATUS_UNPAID:
             raise ValueError(f"order_cannot_pay_from_{order['status']}")
         with self.engine.begin() as connection:
             connection.execute(
                 order_items.update()
                 .where(order_items.c.order_id == order_id)
-                .where(order_items.c.status == "未付款")
-                .values(status="待发货", updated_at=updated_at)
+                .where(order_items.c.status == ORDER_STATUS_UNPAID)
+                .values(status=ORDER_STATUS_PENDING_SHIPMENT, updated_at=updated_at)
             )
             connection.execute(
                 orders.update()
                 .where(orders.c.order_id == order_id)
-                .values(status="待发货", updated_at=updated_at, paid_at=updated_at)
+                .values(status=ORDER_STATUS_PENDING_SHIPMENT, updated_at=updated_at, paid_at=updated_at)
             )
         return self.get_order(order_id) or details
+
+    def confirm_order_fulfillment(
+        self,
+        order_id: str,
+        *,
+        warehouse_id: str,
+        updated_by: str,
+        updated_at: str,
+    ) -> dict[str, Any]:
+        details = self.get_order(order_id)
+        if not details:
+            raise ValueError("order_not_found")
+        order = details["order"]
+        if order["status"] == ORDER_STATUS_UNPAID:
+            return details
+        if order["status"] != ORDER_STATUS_PENDING_FULFILLMENT_REVIEW:
+            raise ValueError(f"order_cannot_confirm_fulfillment_from_{order['status']}")
+        requested_items = [
+            {
+                "item_id": item["item_id"],
+                "warehouse_id": warehouse_id or item["warehouse_id"] or order["selected_warehouse_id"],
+                "location_code": item.get("location_code") or "",
+                "quantity": int(item["quantity"]),
+            }
+            for item in details["items"]
+            if item["status"] == ORDER_STATUS_PENDING_FULFILLMENT_REVIEW
+        ]
+        if not requested_items:
+            raise ValueError("order_has_no_pending_fulfillment_items")
+        selected_warehouse_id = str(warehouse_id or requested_items[0]["warehouse_id"] or order["selected_warehouse_id"])
+        selected_warehouse_name = self._warehouse_name(selected_warehouse_id)
+        with self.engine.begin() as connection:
+            allocated_items = self._allocate_order_items(
+                connection,
+                {**order, "selected_warehouse_id": selected_warehouse_id},
+                requested_items,
+                updated_at,
+            )
+            connection.execute(order_items.delete().where(order_items.c.order_id == order_id))
+            for item in allocated_items:
+                connection.execute(
+                    inventory_location_balances.update()
+                    .where(inventory_location_balances.c.item_id == item["item_id"])
+                    .where(inventory_location_balances.c.warehouse_id == item["warehouse_id"])
+                    .where(inventory_location_balances.c.location_code == item["location_code"])
+                    .where(inventory_location_balances.c.batch_no == item["batch_no"])
+                    .values(
+                        quantity_on_hand=inventory_location_balances.c.quantity_on_hand - int(item["quantity"]),
+                        updated_at=updated_at,
+                    )
+                )
+            if allocated_items:
+                connection.execute(order_items.insert(), allocated_items)
+                connection.execute(
+                    inventory_movements.insert(),
+                    self._inventory_movement_values(
+                        allocated_items,
+                        movement_type="order_fulfillment_confirmed",
+                        created_by=updated_by,
+                        created_at=updated_at,
+                        direction=-1,
+                    ),
+                )
+            connection.execute(
+                orders.update()
+                .where(orders.c.order_id == order_id)
+                .values(
+                    status=ORDER_STATUS_UNPAID,
+                    selected_warehouse_id=selected_warehouse_id,
+                    selected_warehouse_name=selected_warehouse_name,
+                    updated_at=updated_at,
+                )
+            )
+        return self.get_order(order_id) or details
+
+    @staticmethod
+    def _pending_order_item_values(
+        order: dict[str, Any],
+        item_requests: list[dict[str, Any]],
+        updated_at: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "order_id": order["order_id"],
+                "customer_id": order["customer_id"],
+                "status": ORDER_STATUS_PENDING_FULFILLMENT_REVIEW,
+                "item_id": request["item_id"],
+                "warehouse_id": request.get("warehouse_id") or order.get("selected_warehouse_id") or "",
+                "location_code": request.get("location_code") or "",
+                "batch_no": "",
+                "quantity": int(request["quantity"]),
+                "created_at": updated_at,
+                "updated_at": updated_at,
+            }
+            for request in item_requests
+        ]
+
+    def _warehouse_name(self, warehouse_id: str) -> str:
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(
+                    select(warehouses.c.warehouse_name).where(warehouses.c.warehouse_id == warehouse_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return str(row["warehouse_name"]) if row else warehouse_id
 
     def _allocate_order_items(
         self,
@@ -2652,7 +2751,7 @@ class WarehouseRepository:
                     {
                         "order_id": order["order_id"],
                         "customer_id": order["customer_id"],
-                        "status": "未付款",
+                        "status": ORDER_STATUS_UNPAID,
                         "item_id": row["item_id"],
                         "warehouse_id": row["warehouse_id"],
                         "location_code": row["location_code"],
@@ -2680,26 +2779,93 @@ class WarehouseRepository:
                 )
         return allocated_items
 
+    def list_order_fulfillment_candidates(self, order_id: str) -> dict[str, Any]:
+        details = self.get_order(order_id)
+        if not details:
+            raise ValueError("order_not_found")
+        order = details["order"]
+        requested_quantities: dict[str, int] = {}
+        for item in details["items"]:
+            requested_quantities[str(item["item_id"])] = requested_quantities.get(str(item["item_id"]), 0) + int(item["quantity"])
+        with self.engine.connect() as connection:
+            warehouse_rows = (
+                connection.execute(
+                    select(warehouses)
+                    .where(warehouses.c.status == "active")
+                    .order_by(warehouses.c.warehouse_id)
+                )
+                .mappings()
+                .all()
+            )
+            candidates: list[dict[str, Any]] = []
+            for warehouse in warehouse_rows:
+                shortages: list[dict[str, Any]] = []
+                total_available = 0
+                for item_id, quantity in requested_quantities.items():
+                    available = int(
+                        connection.execute(
+                            select(func.coalesce(func.sum(inventory_location_balances.c.quantity_on_hand), 0))
+                            .where(inventory_location_balances.c.item_id == item_id)
+                            .where(inventory_location_balances.c.warehouse_id == warehouse["warehouse_id"])
+                            .where(inventory_location_balances.c.storage_status == "available")
+                        ).scalar_one()
+                    )
+                    total_available += available
+                    if available < quantity:
+                        shortages.append(
+                            {
+                                "error": "insufficient_available_stock",
+                                "item_id": item_id,
+                                "warehouse_id": warehouse["warehouse_id"],
+                                "requested_quantity": quantity,
+                                "available_quantity": available,
+                                "shortage_quantity": quantity - available,
+                            }
+                        )
+                candidates.append(
+                    {
+                        "warehouse_id": warehouse["warehouse_id"],
+                        "warehouse_name": warehouse["warehouse_name"],
+                        "city": warehouse["city"],
+                        "can_fulfill": not shortages,
+                        "total_available": total_available,
+                        "shortage": shortages[0] if shortages else {},
+                        "recommended": warehouse["warehouse_id"] == order.get("selected_warehouse_id"),
+                    }
+                )
+        candidates.sort(key=lambda item: (not item["recommended"], not item["can_fulfill"], item["warehouse_id"]))
+        recommended = next((item for item in candidates if item["recommended"]), candidates[0] if candidates else {})
+        return {
+            "order_id": order_id,
+            "recommended_warehouse_id": recommended.get("warehouse_id", ""),
+            "candidates": candidates,
+        }
+
     def update_order_status(self, order_id: str, *, status: str, updated_by: str, updated_at: str) -> dict[str, Any]:
         timestamp_columns = {
-            "已发货": "shipped_at",
-            "已到货": "arrived_at",
-            "已退款": "cancelled_at",
-            "已退货": "returned_at",
-            "已取消": "cancelled_at",
+            ORDER_STATUS_SHIPPED: "shipped_at",
+            ORDER_STATUS_ARRIVED: "arrived_at",
+            ORDER_STATUS_REFUNDED: "cancelled_at",
+            ORDER_STATUS_RETURNED: "returned_at",
+            ORDER_STATUS_CANCELED: "cancelled_at",
         }
         details = self.get_order(order_id)
         if not details:
             raise ValueError("order_not_found")
         current_status = details["order"]["status"]
-        if status in {"已退款", "已退货", "已取消"} and current_status in {"未付款", "待发货", "已发货", "已到货"}:
+        if status in {ORDER_STATUS_REFUNDED, ORDER_STATUS_RETURNED, ORDER_STATUS_CANCELED} and current_status in {
+            ORDER_STATUS_UNPAID,
+            ORDER_STATUS_PENDING_SHIPMENT,
+            ORDER_STATUS_SHIPPED,
+            ORDER_STATUS_ARRIVED,
+        }:
             self._restore_order_items(
                 order_id,
                 status=status,
                 movement_type={
-                    "已退款": "order_refunded",
-                    "已退货": "order_returned",
-                    "已取消": "order_timeout_released",
+                    ORDER_STATUS_REFUNDED: "order_refunded",
+                    ORDER_STATUS_RETURNED: "order_returned",
+                    ORDER_STATUS_CANCELED: "order_timeout_released",
                 }[status],
                 created_by=updated_by,
                 updated_at=updated_at,
@@ -2712,10 +2878,10 @@ class WarehouseRepository:
         return self.get_order(order_id) or details
 
     def cancel_order(self, order_id: str, *, updated_by: str, updated_at: str) -> dict[str, Any]:
-        return self.update_order_status(order_id, status="已退款", updated_by=updated_by, updated_at=updated_at)
+        return self.update_order_status(order_id, status=ORDER_STATUS_REFUNDED, updated_by=updated_by, updated_at=updated_at)
 
     def return_order(self, order_id: str, *, updated_by: str, updated_at: str) -> dict[str, Any]:
-        return self.update_order_status(order_id, status="已退货", updated_by=updated_by, updated_at=updated_at)
+        return self.update_order_status(order_id, status=ORDER_STATUS_RETURNED, updated_by=updated_by, updated_at=updated_at)
 
     def _restore_order_items(
         self,
@@ -2732,7 +2898,12 @@ class WarehouseRepository:
         restorable = [
             item
             for item in details["items"]
-            if item["status"] in {"未付款", "待发货", "已发货", "已到货"}
+            if item["status"] in {
+                ORDER_STATUS_UNPAID,
+                ORDER_STATUS_PENDING_SHIPMENT,
+                ORDER_STATUS_SHIPPED,
+                ORDER_STATUS_ARRIVED,
+            }
         ]
         with self.engine.begin() as connection:
             for item in restorable:
@@ -2770,7 +2941,7 @@ class WarehouseRepository:
             rows = (
                 connection.execute(
                     select(orders)
-                    .where(orders.c.status == "未付款")
+                    .where(orders.c.status == ORDER_STATUS_UNPAID)
                     .where(orders.c.released_at == "")
                     .where(orders.c.expires_at != "")
                     .where(orders.c.expires_at < now)
@@ -2783,7 +2954,7 @@ class WarehouseRepository:
         released: list[dict[str, Any]] = []
         for row in rows:
             order_id = str(row["order_id"])
-            self.update_order_status(order_id, status="已取消", updated_by=processed_by, updated_at=now)
+            self.update_order_status(order_id, status=ORDER_STATUS_CANCELED, updated_by=processed_by, updated_at=now)
             with self.engine.begin() as connection:
                 connection.execute(
                     orders.update()

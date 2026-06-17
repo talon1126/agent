@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import urllib.error
+import urllib.request
 from collections import defaultdict
 from datetime import timedelta
 from datetime import UTC, datetime
@@ -17,7 +20,12 @@ from .inventory import (
     inventory_batch_key,
     load_batch_inventory_rows,
 )
-from .schemas import WarehouseOrderCreate, WarehouseOrderReleaseExpiredRequest, WarehouseOrderStatusUpdateRequest
+from .schemas import (
+    WarehouseOrderCreate,
+    WarehouseOrderFulfillmentConfirmRequest,
+    WarehouseOrderReleaseExpiredRequest,
+    WarehouseOrderStatusUpdateRequest,
+)
 from .state import (
     WAREHOUSE_BATCH_QUANTITY_OVERRIDES,
     WAREHOUSE_INVENTORY_MOVEMENTS,
@@ -27,14 +35,16 @@ from .state import (
 )
 
 router = APIRouter()
+FULFILLMENT_REVIEW_NOTIFY_TIMEOUT_SECONDS = 5
 
-ORDER_STATUS_UNPAID = "未付款"
-ORDER_STATUS_PENDING_SHIPMENT = "待发货"
-ORDER_STATUS_SHIPPED = "已发货"
-ORDER_STATUS_ARRIVED = "已到货"
-ORDER_STATUS_REFUNDED = "已退款"
-ORDER_STATUS_RETURNED = "已退货"
-ORDER_STATUS_CANCELED = "已取消"
+ORDER_STATUS_PENDING_FULFILLMENT_REVIEW = "pending_fulfillment_review"
+ORDER_STATUS_UNPAID = "unpaid"
+ORDER_STATUS_PENDING_SHIPMENT = "pending_shipment"
+ORDER_STATUS_SHIPPED = "shipped"
+ORDER_STATUS_ARRIVED = "arrived"
+ORDER_STATUS_REFUNDED = "refunded"
+ORDER_STATUS_RETURNED = "returned"
+ORDER_STATUS_CANCELED = "canceled"
 
 
 def available_order_batches(item_id: str, warehouse_id: str, location_code: str | None = None) -> list[dict[str, Any]]:
@@ -150,7 +160,12 @@ def aggregate_requested_quantities(items: list[dict[str, Any]]) -> dict[str, int
 
 def warehouse_can_fulfill_all(items: list[dict[str, Any]], warehouse_id: str) -> tuple[bool, dict[str, Any] | None]:
     for item_id, quantity in aggregate_requested_quantities(items).items():
-        balances = aggregate_location_balances(item_id=item_id, warehouse_id=warehouse_id)
+        try:
+            balances = aggregate_location_balances(item_id=item_id, warehouse_id=warehouse_id)
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+            balances = {"total_quantity_available": 0, "locations": []}
         available = int(balances["total_quantity_available"])
         if available < quantity:
             return False, insufficient_stock_detail(
@@ -161,6 +176,47 @@ def warehouse_can_fulfill_all(items: list[dict[str, Any]], warehouse_id: str) ->
                 balances=balances,
             )
     return True, None
+
+
+def warehouse_name_by_id(warehouse_id: str) -> str:
+    warehouse = next((item for item in active_warehouses() if item["warehouse_id"] == warehouse_id), None)
+    return str((warehouse or {}).get("warehouse_name") or warehouse_id)
+
+
+def list_fulfillment_candidates_for_items(
+    items: list[dict[str, Any]],
+    *,
+    preferred_warehouse_id: str = "",
+) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    for warehouse in active_warehouses():
+        can_fulfill, shortage = warehouse_can_fulfill_all(items, warehouse["warehouse_id"])
+        total_available = 0
+        for item_id in aggregate_requested_quantities(items):
+            try:
+                balances = aggregate_location_balances(item_id=item_id, warehouse_id=warehouse["warehouse_id"])
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+                balances = {"total_quantity_available": 0}
+            total_available += int(balances["total_quantity_available"])
+        candidates.append(
+            {
+                "warehouse_id": warehouse["warehouse_id"],
+                "warehouse_name": warehouse["warehouse_name"],
+                "city": warehouse.get("city", ""),
+                "can_fulfill": can_fulfill,
+                "total_available": total_available,
+                "shortage": shortage or {},
+                "recommended": warehouse["warehouse_id"] == preferred_warehouse_id,
+            }
+        )
+    candidates.sort(key=lambda item: (not item["recommended"], not item["can_fulfill"], item["warehouse_id"]))
+    recommended = next((item for item in candidates if item["recommended"]), candidates[0] if candidates else {})
+    return {
+        "recommended_warehouse_id": recommended.get("warehouse_id", ""),
+        "candidates": candidates,
+    }
 
 
 def choose_single_warehouse(items: list[dict[str, Any]], shipping_city: str) -> dict[str, Any]:
@@ -247,7 +303,44 @@ def find_current_inventory_balance(line: dict[str, Any]) -> dict[str, Any]:
 
 
 def warehouse_order_response(order: dict[str, Any], items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    return {"ok": True, "order": order, "items": items or []}
+    fulfillment_review = list_fulfillment_candidates_for_items(
+        items or order.get("items") or [],
+        preferred_warehouse_id=str(order.get("selected_warehouse_id") or ""),
+    )
+    return {"ok": True, "order": order, "items": items or [], "fulfillment_review": fulfillment_review}
+
+
+def send_fulfillment_review_notification(
+    *,
+    order: dict[str, Any],
+    items: list[dict[str, Any]],
+    fulfillment_review: dict[str, Any],
+) -> dict[str, Any]:
+    notify_url = os.getenv("FEISHU_FULFILLMENT_REVIEW_NOTIFY_URL", "").strip()
+    if not notify_url:
+        return {"configured": False, "status": "skipped"}
+    payload = {
+        "chat_id": os.getenv("FEISHU_FULFILLMENT_REVIEW_CHAT_ID", "").strip(),
+        "order": order,
+        "items": items,
+        "candidates": fulfillment_review.get("candidates", []),
+    }
+    request = urllib.request.Request(
+        notify_url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=FULFILLMENT_REVIEW_NOTIFY_TIMEOUT_SECONDS) as response:
+            raw_body = response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        return {"configured": True, "status": "failed", "error": str(error)}
+    try:
+        body = json.loads(raw_body) if raw_body else {}
+    except json.JSONDecodeError:
+        body = {"raw": raw_body}
+    return {"configured": True, "status": "sent", "response": body}
 
 
 def get_warehouse_order_or_404(order_id: str) -> dict[str, Any]:
@@ -259,6 +352,14 @@ def get_warehouse_order_or_404(order_id: str) -> dict[str, Any]:
 
 def fallback_order_items(order_id: str) -> list[dict[str, Any]]:
     return [item for item in WAREHOUSE_ORDER_ITEMS if item["order_id"] == order_id]
+
+
+def pending_fallback_order_items(order_id: str) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in fallback_order_items(order_id)
+        if item["status"] == ORDER_STATUS_PENDING_FULFILLMENT_REVIEW
+    ]
 
 
 
@@ -288,7 +389,7 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
     order = {
         "order_id": order_id,
         "customer_id": payload.customer_id.strip(),
-        "status": ORDER_STATUS_UNPAID,
+        "status": ORDER_STATUS_PENDING_FULFILLMENT_REVIEW,
         # Warehouse owns inventory allocation and order lifecycle transitions.
         # Delivery fields live on the order so Delivery Agent can read provider
         # context without owning stock, picking, or shipment transition logic.
@@ -316,19 +417,78 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
     }
     if repository:
         try:
-            return {"ok": True, **repository.create_order(order)}
+            result = repository.create_order(order)
+            fulfillment_review = repository.list_order_fulfillment_candidates(order_id)
+            notification = send_fulfillment_review_notification(
+                order=result["order"],
+                items=result["items"],
+                fulfillment_review=fulfillment_review,
+            )
+            return {"ok": True, **result, "fulfillment_review": fulfillment_review, "notification": notification}
         except ValueError as error:
             raise order_http_error(error) from error
 
     created_items: list[dict[str, Any]] = []
     for requested in requested_items:
-        for row in allocate_order_item(requested):
+        created_items.append(
+            {
+                "id": len(WAREHOUSE_ORDER_ITEMS) + len(created_items) + 1,
+                "order_id": order_id,
+                "customer_id": order["customer_id"],
+                "status": ORDER_STATUS_PENDING_FULFILLMENT_REVIEW,
+                "item_id": requested["item_id"],
+                "warehouse_id": requested["warehouse_id"],
+                "location_code": requested.get("location_code") or "",
+                "batch_no": "",
+                "quantity": int(requested["quantity"]),
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+    WAREHOUSE_ORDER_ITEMS.extend(created_items)
+    WAREHOUSE_ORDERS.append(order)
+    response = warehouse_order_response(order, fallback_order_items(order_id))
+    response["notification"] = send_fulfillment_review_notification(
+        order=response["order"],
+        items=response["items"],
+        fulfillment_review=response["fulfillment_review"],
+    )
+    return response
+
+
+def confirm_fallback_order_fulfillment(
+    order_id: str,
+    *,
+    warehouse_id: str,
+    updated_by: str,
+    updated_at: str,
+) -> dict[str, Any]:
+    order = get_warehouse_order_or_404(order_id)
+    if order["status"] == ORDER_STATUS_UNPAID:
+        return warehouse_order_response(order, fallback_order_items(order_id))
+    if order["status"] != ORDER_STATUS_PENDING_FULFILLMENT_REVIEW:
+        raise HTTPException(status_code=409, detail=f"order_cannot_confirm_fulfillment_from_{order['status']}")
+
+    requested_items = pending_fallback_order_items(order_id)
+    if not requested_items:
+        raise HTTPException(status_code=409, detail="order_has_no_pending_fulfillment_items")
+
+    selected_warehouse_id = warehouse_id.strip() or str(order.get("selected_warehouse_id") or "")
+    allocated_items: list[dict[str, Any]] = []
+    for requested in requested_items:
+        request = {
+            "item_id": requested["item_id"],
+            "warehouse_id": selected_warehouse_id,
+            "location_code": requested.get("location_code") or "",
+            "quantity": int(requested["quantity"]),
+        }
+        for row in allocate_order_item(request):
             quantity = int(row["allocated_quantity"])
             balance = find_current_inventory_balance(row)
             set_inventory_balance_quantity(balance, quantity_on_hand=int(balance["quantity_on_hand"]) - quantity)
-            created_items.append(
+            allocated_items.append(
                 {
-                    "id": len(WAREHOUSE_ORDER_ITEMS) + len(created_items) + 1,
+                    "id": len(WAREHOUSE_ORDER_ITEMS) + len(allocated_items) + 1,
                     "order_id": order_id,
                     "customer_id": order["customer_id"],
                     "status": ORDER_STATUS_UNPAID,
@@ -337,21 +497,26 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
                     "location_code": row["location_code"],
                     "batch_no": row["batch_no"],
                     "quantity": quantity,
-                    "created_at": now,
-                    "updated_at": now,
+                    "created_at": requested["created_at"],
+                    "updated_at": updated_at,
                 }
             )
-    WAREHOUSE_ORDER_ITEMS.extend(created_items)
+
+    WAREHOUSE_ORDER_ITEMS[:] = [item for item in WAREHOUSE_ORDER_ITEMS if item["order_id"] != order_id]
+    WAREHOUSE_ORDER_ITEMS.extend(allocated_items)
     WAREHOUSE_INVENTORY_MOVEMENTS.extend(
         movement_rows_from_order_items(
-            created_items,
-            movement_type="order_created",
-            created_by=payload.created_by,
-            created_at=now,
+            allocated_items,
+            movement_type="order_fulfillment_confirmed",
+            created_by=updated_by,
+            created_at=updated_at,
             direction=-1,
         )
     )
-    WAREHOUSE_ORDERS.append(order)
+    order["status"] = ORDER_STATUS_UNPAID
+    order["selected_warehouse_id"] = selected_warehouse_id
+    order["selected_warehouse_name"] = warehouse_name_by_id(selected_warehouse_id)
+    order["updated_at"] = updated_at
     return warehouse_order_response(order, fallback_order_items(order_id))
 
 
@@ -365,6 +530,56 @@ def get_warehouse_order(order_id: str) -> dict[str, Any]:
         return {"ok": True, **details}
     order = get_warehouse_order_or_404(order_id)
     return warehouse_order_response(order, fallback_order_items(order_id))
+
+
+@router.get("/warehouse/orders/{order_id}/fulfillment-candidates")
+def get_warehouse_order_fulfillment_candidates(order_id: str) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    if repository:
+        try:
+            return {"ok": True, **repository.list_order_fulfillment_candidates(order_id)}
+        except ValueError as error:
+            raise order_http_error(error) from error
+
+    order = get_warehouse_order_or_404(order_id)
+    items = fallback_order_items(order_id)
+    return {
+        "ok": True,
+        "order_id": order_id,
+        **list_fulfillment_candidates_for_items(
+            items,
+            preferred_warehouse_id=str(order.get("selected_warehouse_id") or ""),
+        ),
+    }
+
+
+@router.post("/warehouse/orders/{order_id}/fulfillment/confirm")
+def confirm_order_fulfillment(
+    order_id: str,
+    payload: WarehouseOrderFulfillmentConfirmRequest,
+) -> dict[str, Any]:
+    repository = get_warehouse_repository()
+    now = datetime.now(UTC).isoformat()
+    if repository:
+        try:
+            return {
+                "ok": True,
+                **repository.confirm_order_fulfillment(
+                    order_id,
+                    warehouse_id=payload.warehouse_id,
+                    updated_by=payload.updated_by,
+                    updated_at=now,
+                ),
+            }
+        except ValueError as error:
+            raise order_http_error(error) from error
+
+    return confirm_fallback_order_fulfillment(
+        order_id,
+        warehouse_id=payload.warehouse_id,
+        updated_by=payload.updated_by,
+        updated_at=now,
+    )
 
 
 @router.post("/warehouse/orders/{order_id}/pay")
@@ -561,13 +776,32 @@ def warehouse_order_tool(payload: dict[str, Any]) -> dict[str, Any]:
         return create_warehouse_order(WarehouseOrderCreate(**payload))
     if action in {"create_and_pay", "paid"}:
         created = create_warehouse_order(WarehouseOrderCreate(**payload))
-        return pay_warehouse_order(created["order"]["order_id"], WarehouseOrderStatusUpdateRequest(updated_by=str(payload.get("updated_by") or "warehouse-agent")))
+        order_id = created["order"]["order_id"]
+        confirm_order_fulfillment(
+            order_id,
+            WarehouseOrderFulfillmentConfirmRequest(
+                warehouse_id=str(created["order"].get("selected_warehouse_id") or ""),
+                updated_by=str(payload.get("updated_by") or "warehouse-agent"),
+            ),
+        )
+        return pay_warehouse_order(
+            order_id,
+            WarehouseOrderStatusUpdateRequest(updated_by=str(payload.get("updated_by") or "warehouse-agent")),
+        )
     order_id = str(payload.get("order_id") or "").strip()
     if not order_id:
         raise HTTPException(status_code=400, detail="missing_order_id")
     update = WarehouseOrderStatusUpdateRequest(updated_by=str(payload.get("updated_by") or "warehouse-agent"))
     if action in {"pay", "付款"}:
         return pay_warehouse_order(order_id, update)
+    if action in {"confirm_fulfillment", "confirm_warehouse", "确认发仓"}:
+        return confirm_order_fulfillment(
+            order_id,
+            WarehouseOrderFulfillmentConfirmRequest(
+                warehouse_id=str(payload.get("warehouse_id") or ""),
+                updated_by=update.updated_by,
+            ),
+        )
     if action in {"ship", "发货"}:
         return ship_warehouse_order(order_id, update)
     if action in {"arrive", "到货", "delivered"}:

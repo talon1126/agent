@@ -46,7 +46,7 @@ describe('flashSaleApi', () => {
       data: {
         ok: true,
         claim: { flash_sale_id: 3, user_id: 1, status: 'ordered' },
-        order: { order_id: 'ORD-CODEX-1001', status: '未付款' },
+        order: { order_id: 'ORD-CODEX-1001', status: 'pending_fulfillment_review' },
         items: [],
       },
     })

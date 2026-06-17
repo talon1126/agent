@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink } from 'vue-router'
 import {
   ChevronDown,
   Gift,
@@ -18,8 +18,6 @@ import { createWarehouseOrder, fetchDeliveryAddresses } from '@/services/checkou
 import type { CartItem } from '@/types/cart'
 import type { DeliveryAddress } from '@/types/checkout'
 
-const router = useRouter()
-
 const cartItems = ref<CartItem[]>([])
 const deliveryAddresses = ref<DeliveryAddress[]>([])
 const selectedAddressId = ref<number | null>(null)
@@ -29,6 +27,7 @@ const isCheckingOut = ref(false)
 const errorMessage = ref('')
 const addressErrorMessage = ref('')
 const checkoutErrorMessage = ref('')
+const checkoutSuccessMessage = ref('')
 const pendingItemId = ref('')
 
 const essentials = [
@@ -170,6 +169,7 @@ async function removeItem(item: CartItem) {
 
 async function continueToCheckout() {
   checkoutErrorMessage.value = ''
+  checkoutSuccessMessage.value = ''
 
   if (cartItems.value.length === 0) {
     checkoutErrorMessage.value = 'Your cart is empty.'
@@ -184,8 +184,8 @@ async function continueToCheckout() {
   isCheckingOut.value = true
 
   try {
-    // 中文注释：前端只传商品和数量，仓库选择、库位分配、库存扣减由后端订单接口负责。
-    await createWarehouseOrder({
+    // The frontend sends only item quantities; the warehouse API owns warehouse choice and fulfillment review.
+    const response = await createWarehouseOrder({
       customer_id: String(CART_USER_ID),
       delivery_provider_id: 'sf',
       courier_phone: '',
@@ -196,7 +196,7 @@ async function continueToCheckout() {
       })),
       created_by: 'talonmart-web',
     })
-    router.push({ name: 'home' })
+    checkoutSuccessMessage.value = `Warehouse team is reviewing fulfillment for order ${response.order.order_id}.`
   } catch (error) {
     checkoutErrorMessage.value =
       error instanceof Error ? error.message : 'Unable to create order. Check the order API.'
@@ -409,6 +409,9 @@ onMounted(() => {
           </button>
           <p v-if="checkoutErrorMessage" class="mt-3 rounded-md bg-[#FEF2F2] p-3 text-sm font-semibold text-[#991B1B]" role="alert">
             {{ checkoutErrorMessage }}
+          </p>
+          <p v-if="checkoutSuccessMessage" class="mt-3 rounded-md bg-[#ECFDF3] p-3 text-sm font-semibold text-[#027A48]" role="status">
+            {{ checkoutSuccessMessage }}
           </p>
           <p class="mt-5 text-center text-sm">
             For the best shopping experience,

@@ -675,7 +675,7 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
         {
             "order_id": "ORD-CODEX-DB-1",
             "customer_id": "cus_100",
-            "status": "未付款",
+            "status": "pending_fulfillment_review",
             "delivery_provider_id": "sf",
             "delivery_provider_name": "顺丰",
             "courier_phone": "13800000001",
@@ -703,10 +703,27 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
     )
 
     assert created["order"]["id"] == 1
-    assert created["order"]["status"] == "未付款"
+    assert created["order"]["status"] == "pending_fulfillment_review"
     assert created["order"]["delivery_provider_name"] == "顺丰"
     assert "requested_items" not in created["order"]
-    assert [item["status"] for item in created["items"]] == ["未付款", "未付款"]
+    assert [item["status"] for item in created["items"]] == ["pending_fulfillment_review"]
+    balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
+    assert sum(item["quantity_on_hand"] for item in balances) == 136
+
+    candidates = repository.list_order_fulfillment_candidates("ORD-CODEX-DB-1")
+
+    assert candidates["recommended_warehouse_id"] == "wh_sz_1"
+    assert candidates["candidates"][0]["can_fulfill"] is True
+
+    confirmed = repository.confirm_order_fulfillment(
+        "ORD-CODEX-DB-1",
+        warehouse_id="wh_sz_1",
+        updated_by="warehouse-agent",
+        updated_at="2026-05-28T10:00:30+00:00",
+    )
+
+    assert confirmed["order"]["status"] == "unpaid"
+    assert [item["status"] for item in confirmed["items"]] == ["unpaid", "unpaid"]
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 116
 
@@ -716,10 +733,10 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
         updated_at="2026-05-28T10:01:00+00:00",
     )
 
-    assert paid["order"]["status"] == "待发货"
+    assert paid["order"]["status"] == "pending_shipment"
     assert [item["batch_no"] for item in paid["items"]] == ["BATCH-20260401", "BATCH-20260501"]
     assert [item["quantity"] for item in paid["items"]] == [16, 4]
-    assert all(item["status"] == "待发货" for item in paid["items"])
+    assert all(item["status"] == "pending_shipment" for item in paid["items"])
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 116
 
@@ -732,12 +749,12 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
         updated_at="2026-05-28T10:10:00+00:00",
     )
 
-    assert returned["order"]["status"] == "已退货"
+    assert returned["order"]["status"] == "returned"
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 136
 
     movements = repository.list_inventory_movements(order_id="ORD-CODEX-DB-1")
-    assert [item["movement_type"] for item in movements] == ["order_created", "order_returned"]
+    assert [item["movement_type"] for item in movements] == ["order_fulfillment_confirmed", "order_returned"]
     assert [item["quantity_delta"] for item in movements] == [-20, 20]
     assert "batch_no" not in movements[0]
 
@@ -751,7 +768,7 @@ def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path
         {
             "order_id": "ORD-CODEX-DB-EXPIRED",
             "customer_id": "cus_100",
-            "status": "未付款",
+            "status": "pending_fulfillment_review",
             "delivery_provider_id": "sf",
             "delivery_provider_name": "顺丰",
             "courier_phone": "",
@@ -777,6 +794,12 @@ def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path
             "returned_at": "",
         }
     )
+    repository.confirm_order_fulfillment(
+        "ORD-CODEX-DB-EXPIRED",
+        warehouse_id="wh_sz_1",
+        updated_by="warehouse-agent",
+        updated_at="2026-05-28T10:00:30+00:00",
+    )
 
     released = repository.release_expired_orders(
         processed_by="warehouse-timeout-job",
@@ -788,12 +811,12 @@ def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path
     )
 
     assert [item["order_id"] for item in released] == ["ORD-CODEX-DB-EXPIRED"]
-    assert released[0]["status"] == "已取消"
+    assert released[0]["status"] == "canceled"
     assert released_again == []
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 136
     movements = repository.list_inventory_movements(order_id="ORD-CODEX-DB-EXPIRED")
     assert [item["movement_type"] for item in movements] == [
-        "order_created",
+        "order_fulfillment_confirmed",
         "order_timeout_released",
     ]

@@ -11,7 +11,7 @@ import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 
-from app.feishu_client import FEISHU_API_BASE_URL, get_tenant_access_token, reply_text_message
+from app.feishu_client import FEISHU_API_BASE_URL, get_tenant_access_token, reply_text_message, send_group_text_message
 from app.feishu_events import normalize_feishu_event, to_n8n_payload
 from app.feishu_long_connection import start_long_connection_listener
 from app.intent_router import route_warehouse_intent
@@ -60,6 +60,13 @@ class InventoryTableSyncFilterRequest(BaseModel):
     expiry_risk: str | None = None
     risk_level: str | None = None
     limit: int = 50
+
+
+class OrderFulfillmentReviewNotificationRequest(BaseModel):
+    chat_id: str = ""
+    order: dict[str, Any]
+    items: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
 
 
 class InventoryTableSyncJobItem(BaseModel):
@@ -388,6 +395,7 @@ def create_app(
     event_mode = feishu_event_mode or os.getenv("FEISHU_EVENT_MODE", "http")
     bots_json = feishu_bots_json if feishu_bots_json is not None else os.getenv("FEISHU_BOTS_JSON", "")
     runtime_run_log_url = run_log_url if run_log_url is not None else os.getenv("FEISHU_RUN_LOG_URL", "")
+    fulfillment_review_chat_id = os.getenv("FEISHU_FULFILLMENT_REVIEW_CHAT_ID", "").strip()
     runtime_mock_api_url = (mock_api_url if mock_api_url is not None else os.getenv("MOCK_API_URL", "http://mock-api:8000")).rstrip("/")
     table_app_id = inventory_table_app_id if inventory_table_app_id is not None else os.getenv("FEISHU_INVENTORY_TABLE_APP_ID", app_id)
     table_app_secret = (
@@ -511,6 +519,95 @@ def create_app(
                 for bot in bot_configs
             ],
         }
+
+    def build_order_fulfillment_review_text(payload: OrderFulfillmentReviewNotificationRequest) -> str:
+        order = payload.order
+        order_id = str(order.get("order_id") or "")
+        shipping_city = str(order.get("shipping_city") or order.get("shipping_address") or "")
+        selected_warehouse_id = str(order.get("selected_warehouse_id") or "")
+        item_lines = [
+            f"- {item.get('item_name') or item.get('item_id')} x {int(item.get('quantity') or 0)}"
+            for item in payload.items
+        ]
+        candidate_lines = []
+        for candidate in payload.candidates:
+            status = "可发仓" if candidate.get("can_fulfill") else "库存不足"
+            shortage = candidate.get("shortage") if isinstance(candidate.get("shortage"), dict) else {}
+            shortage_text = (
+                f"，缺口 {shortage.get('shortage_quantity')}"
+                if shortage.get("shortage_quantity") is not None
+                else ""
+            )
+            candidate_lines.append(
+                "- "
+                f"{candidate.get('warehouse_name') or candidate.get('warehouse_id')} "
+                f"({candidate.get('warehouse_id')}): {status}{shortage_text}"
+            )
+        return "\n".join(
+            [
+                "订单发仓确认",
+                f"订单编号: {order_id}",
+                f"收货城市: {shipping_city or '-'}",
+                f"推荐发仓: {selected_warehouse_id or '-'}",
+                "商品明细:",
+                *(item_lines or ["- 无商品明细"]),
+                "候选发仓:",
+                *(candidate_lines or ["- 无候选仓"]),
+                f"确认发仓: @warehouse 确认发仓 {order_id} {selected_warehouse_id or '<warehouse_id>'}",
+            ]
+        )
+
+    def select_bot_config_by_name(name: str) -> BotConfig | None:
+        """Return the enabled bot configuration matching a logical bot name.
+
+        The adapter supports multiple Feishu bots in one process through
+        FEISHU_BOTS_JSON. Proactive warehouse notifications should therefore
+        use the warehouse bot credentials instead of the legacy top-level
+        FEISHU_APP_ID/FEISHU_APP_SECRET pair.
+        """
+        normalized_name = name.strip().lower()
+        for bot in bot_configs:
+            if bot.enabled and bot.name.strip().lower() == normalized_name:
+                return bot
+        return None
+
+    def fulfillment_review_credentials() -> tuple[str, str]:
+        """Resolve Feishu credentials for proactive fulfillment review messages.
+
+        Warehouse review messages are operational warehouse events, so the
+        warehouse bot is the preferred identity. The legacy top-level app
+        credentials remain as a fallback for older single-bot deployments.
+        """
+        warehouse_bot = select_bot_config_by_name("warehouse")
+        if warehouse_bot and warehouse_bot.app_id and warehouse_bot.app_secret:
+            return warehouse_bot.app_id, warehouse_bot.app_secret
+        if app_id and app_secret:
+            return app_id, app_secret
+        raise HTTPException(status_code=503, detail="missing_feishu_app_credentials")
+
+    @app.post("/warehouse/order-fulfillment-review/send")
+    def send_order_fulfillment_review_message(
+        payload: OrderFulfillmentReviewNotificationRequest,
+    ) -> dict[str, Any]:
+        chat_id = (payload.chat_id or fulfillment_review_chat_id).strip()
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="missing_fulfillment_review_chat_id")
+        credential_app_id, credential_app_secret = fulfillment_review_credentials()
+        token = get_tenant_access_token(
+            client=client,
+            app_id=credential_app_id,
+            app_secret=credential_app_secret,
+            api_base_url=api_base_url,
+        )
+        text = build_order_fulfillment_review_text(payload)
+        message_id = send_group_text_message(
+            client=client,
+            tenant_access_token=token,
+            chat_id=chat_id,
+            text=text,
+            api_base_url=api_base_url,
+        )
+        return {"ok": True, "chat_id": chat_id, "message_id": message_id, "text": text}
 
     def tool_calls_from_n8n_payload(payload: dict[str, Any]) -> list[Any]:
         tool_calls = payload.get("tool_trace") or payload.get("tool_calls") or []

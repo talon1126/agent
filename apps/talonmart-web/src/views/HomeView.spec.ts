@@ -219,7 +219,7 @@ describe('HomeView', () => {
     purchaseFlashSaleWithDefaultAddress.mockResolvedValue({
       ok: true,
       claim: { flash_sale_id: 2, user_id: 1, status: 'ordered' },
-      order: { order_id: 'ORD-CODEX-1001', status: '未付款' },
+      order: { order_id: 'ORD-CODEX-1001', status: 'pending_fulfillment_review' },
       items: [],
     })
     const wrapper = mount(HomeView)
