@@ -54,6 +54,9 @@ class WarehouseOrderStatusUpdateRequest(BaseModel):
 
 class WarehouseOrderFulfillmentConfirmRequest(BaseModel):
     warehouse_id: str
+    delivery_provider_id: str | None = None
+    courier_phone: str = ""
+    tracking_no: str = ""
     updated_by: str = "warehouse-agent"
 
 
@@ -65,5 +68,12 @@ class WarehouseOrderReleaseExpiredRequest(BaseModel):
 
 class WarehousePurchaseOrderArrivalSyncRequest(BaseModel):
     processed_by: str = "warehouse-agent"
+    limit: int = 50
+
+
+class WarehousePurchaseOrderArrivalNotifyRequest(BaseModel):
+    processed_by: str = "warehouse-arrival-notify"
+    target_date: str | None = None
+    chat_id: str = ""
     limit: int = 50
 

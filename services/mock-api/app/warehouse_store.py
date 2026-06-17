@@ -199,7 +199,6 @@ orders = Table(
     Column("cancelled_at", String, nullable=False, default=""),
     Column("returned_at", String, nullable=False, default=""),
     Column("expires_at", String, nullable=False, default=""),
-    Column("released_at", String, nullable=False, default=""),
     Column("release_reason", String, nullable=False, default=""),
 )
 
@@ -384,7 +383,7 @@ WAREHOUSE_TABLE_COMMENTS = {
     "items": "商品主数据表，保存每个商品的名称、品牌、规格、单位和条码。",
     "item_reviews": "商品评论表，保存用户对商品的星级评分、标题和正文。",
     "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
-    "inventory_location_balances": "批次级库位库存余额表，保存订单创建扣减和退回后的当前可售库存。",
+    "inventory_location_balances": "批次级库位库存余额表，保存员工确认发仓扣减和退回后的当前可售库存。",
     "replenishment_requests": "补货申请表，保存仓储发现低库存后交给采购审核的结构化需求。",
     "delivery_providers": "物流供应商表，保存顺丰、京东、圆通等承运商基础信息供订单和 Delivery Agent 使用。",
     "users": "TalonMart 用户表，保存购物车 v1 使用的测试用户资料。",
@@ -466,7 +465,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "batch_no": "余额对应批次号，用于商品溯源。",
         "production_date": "批次生产日期。",
         "expiry_date": "批次保质期到期日期。",
-        "quantity_on_hand": "当前可售库存余额；订单创建扣减，取消、退货或超时释放加回。",
+        "quantity_on_hand": "当前可售库存余额；员工确认发仓扣减，取消或退货时加回。",
         "reorder_threshold": "补货预警阈值。",
         "storage_status": "余额库存状态，例如 available、quality_hold。",
         "created_at": "余额行创建时间。",
@@ -567,9 +566,8 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "arrived_at": "到货时间。",
         "cancelled_at": "取消时间。",
         "returned_at": "退货入库时间。",
-        "expires_at": "unpaid 订单库存占用释放截止时间。",
-        "released_at": "unpaid 超时释放库存的处理时间。",
-        "release_reason": "库存释放原因，例如 unpaid_timeout。",
+        "expires_at": "unpaid 订单自动取消截止时间。",
+        "release_reason": "订单取消原因，例如 unpaid_timeout。",
     },
     "order_items": {
         "id": "订单明细自增整数主键。",
@@ -736,12 +734,13 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
                 "selected_warehouse_id": "ALTER TABLE orders ADD COLUMN selected_warehouse_id VARCHAR NOT NULL DEFAULT ''",
                 "selected_warehouse_name": "ALTER TABLE orders ADD COLUMN selected_warehouse_name VARCHAR NOT NULL DEFAULT ''",
                 "expires_at": "ALTER TABLE orders ADD COLUMN expires_at VARCHAR NOT NULL DEFAULT ''",
-                "released_at": "ALTER TABLE orders ADD COLUMN released_at VARCHAR NOT NULL DEFAULT ''",
                 "release_reason": "ALTER TABLE orders ADD COLUMN release_reason VARCHAR NOT NULL DEFAULT ''",
             }
             for column_name, statement in order_missing_column_sql.items():
                 if column_name not in order_columns:
                     connection.execute(text(statement))
+            if "released_at" in order_columns:
+                connection.execute(text("ALTER TABLE orders DROP COLUMN released_at"))
             if "requested_items_json" in order_columns:
                 connection.execute(text("ALTER TABLE orders DROP COLUMN requested_items_json"))
             connection.execute(text("UPDATE orders SET status = 'unpaid' WHERE status IN ('created', '未付款')"))
@@ -2548,6 +2547,21 @@ class WarehouseRepository:
             for row in rows
         ]
 
+    def _delivery_provider(self, provider_id: str) -> dict[str, Any]:
+        """Return the active delivery provider selected during fulfillment review.
+
+        Fulfillment confirmation is the point where warehouse staff can choose
+        the carrier. The repository resolves that carrier from the same
+        `delivery_providers` table used by Delivery Agent, so order facts stay
+        consistent across warehouse and delivery workflows.
+        """
+        normalized_provider_id = provider_id.strip() or "sf"
+        providers = self.list_delivery_providers()
+        provider = next((item for item in providers if item["provider_id"] == normalized_provider_id), None)
+        if not provider:
+            raise ValueError(f"delivery_provider_not_found:{normalized_provider_id}")
+        return provider
+
     def count_orders(self) -> int:
         with self.engine.connect() as connection:
             return int(connection.execute(select(func.count()).select_from(orders)).scalar_one())
@@ -2595,7 +2609,7 @@ class WarehouseRepository:
         if not details:
             raise ValueError("order_not_found")
         order = details["order"]
-        if order["status"] == ORDER_STATUS_PENDING_SHIPMENT:
+        if order["status"] == ORDER_STATUS_PENDING_FULFILLMENT_REVIEW:
             return details
         if order["status"] != ORDER_STATUS_UNPAID:
             raise ValueError(f"order_cannot_pay_from_{order['status']}")
@@ -2604,12 +2618,16 @@ class WarehouseRepository:
                 order_items.update()
                 .where(order_items.c.order_id == order_id)
                 .where(order_items.c.status == ORDER_STATUS_UNPAID)
-                .values(status=ORDER_STATUS_PENDING_SHIPMENT, updated_at=updated_at)
+                .values(status=ORDER_STATUS_PENDING_FULFILLMENT_REVIEW, updated_at=updated_at)
             )
             connection.execute(
                 orders.update()
                 .where(orders.c.order_id == order_id)
-                .values(status=ORDER_STATUS_PENDING_SHIPMENT, updated_at=updated_at, paid_at=updated_at)
+                .values(
+                    status=ORDER_STATUS_PENDING_FULFILLMENT_REVIEW,
+                    updated_at=updated_at,
+                    paid_at=updated_at,
+                )
             )
         return self.get_order(order_id) or details
 
@@ -2618,6 +2636,9 @@ class WarehouseRepository:
         order_id: str,
         *,
         warehouse_id: str,
+        delivery_provider_id: str | None = None,
+        courier_phone: str = "",
+        tracking_no: str = "",
         updated_by: str,
         updated_at: str,
     ) -> dict[str, Any]:
@@ -2625,7 +2646,7 @@ class WarehouseRepository:
         if not details:
             raise ValueError("order_not_found")
         order = details["order"]
-        if order["status"] == ORDER_STATUS_UNPAID:
+        if order["status"] == ORDER_STATUS_PENDING_SHIPMENT:
             return details
         if order["status"] != ORDER_STATUS_PENDING_FULFILLMENT_REVIEW:
             raise ValueError(f"order_cannot_confirm_fulfillment_from_{order['status']}")
@@ -2643,6 +2664,10 @@ class WarehouseRepository:
             raise ValueError("order_has_no_pending_fulfillment_items")
         selected_warehouse_id = str(warehouse_id or requested_items[0]["warehouse_id"] or order["selected_warehouse_id"])
         selected_warehouse_name = self._warehouse_name(selected_warehouse_id)
+        delivery_provider = self._delivery_provider(delivery_provider_id or str(order.get("delivery_provider_id") or "sf"))
+        selected_tracking_no = tracking_no.strip() or str(order.get("tracking_no") or "")
+        if not selected_tracking_no:
+            selected_tracking_no = f"{delivery_provider['tracking_prefix']}{order_id.replace('-', '')}"
         with self.engine.begin() as connection:
             allocated_items = self._allocate_order_items(
                 connection,
@@ -2679,7 +2704,11 @@ class WarehouseRepository:
                 orders.update()
                 .where(orders.c.order_id == order_id)
                 .values(
-                    status=ORDER_STATUS_UNPAID,
+                    status=ORDER_STATUS_PENDING_SHIPMENT,
+                    delivery_provider_id=delivery_provider["provider_id"],
+                    delivery_provider_name=delivery_provider["name"],
+                    courier_phone=courier_phone.strip() or str(order.get("courier_phone") or ""),
+                    tracking_no=selected_tracking_no,
                     selected_warehouse_id=selected_warehouse_id,
                     selected_warehouse_name=selected_warehouse_name,
                     updated_at=updated_at,
@@ -2697,7 +2726,7 @@ class WarehouseRepository:
             {
                 "order_id": order["order_id"],
                 "customer_id": order["customer_id"],
-                "status": ORDER_STATUS_PENDING_FULFILLMENT_REVIEW,
+                "status": order.get("status") or ORDER_STATUS_UNPAID,
                 "item_id": request["item_id"],
                 "warehouse_id": request.get("warehouse_id") or order.get("selected_warehouse_id") or "",
                 "location_code": request.get("location_code") or "",
@@ -2751,7 +2780,7 @@ class WarehouseRepository:
                     {
                         "order_id": order["order_id"],
                         "customer_id": order["customer_id"],
-                        "status": ORDER_STATUS_UNPAID,
+                        "status": ORDER_STATUS_PENDING_SHIPMENT,
                         "item_id": row["item_id"],
                         "warehouse_id": row["warehouse_id"],
                         "location_code": row["location_code"],
@@ -2854,7 +2883,6 @@ class WarehouseRepository:
             raise ValueError("order_not_found")
         current_status = details["order"]["status"]
         if status in {ORDER_STATUS_REFUNDED, ORDER_STATUS_RETURNED, ORDER_STATUS_CANCELED} and current_status in {
-            ORDER_STATUS_UNPAID,
             ORDER_STATUS_PENDING_SHIPMENT,
             ORDER_STATUS_SHIPPED,
             ORDER_STATUS_ARRIVED,
@@ -2942,7 +2970,6 @@ class WarehouseRepository:
                 connection.execute(
                     select(orders)
                     .where(orders.c.status == ORDER_STATUS_UNPAID)
-                    .where(orders.c.released_at == "")
                     .where(orders.c.expires_at != "")
                     .where(orders.c.expires_at < now)
                     .order_by(orders.c.expires_at, orders.c.id)
@@ -2959,7 +2986,7 @@ class WarehouseRepository:
                 connection.execute(
                     orders.update()
                     .where(orders.c.order_id == order_id)
-                    .values(released_at=now, release_reason="unpaid_timeout")
+                    .values(release_reason="unpaid_timeout")
                 )
             details = self.get_order(order_id)
             if details:

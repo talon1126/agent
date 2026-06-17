@@ -184,7 +184,7 @@ async function continueToCheckout() {
   isCheckingOut.value = true
 
   try {
-    // The frontend sends only item quantities; the warehouse API owns warehouse choice and fulfillment review.
+    // The frontend creates an unpaid order; payment later triggers the warehouse fulfillment review.
     const response = await createWarehouseOrder({
       customer_id: String(CART_USER_ID),
       delivery_provider_id: 'sf',
@@ -196,7 +196,7 @@ async function continueToCheckout() {
       })),
       created_by: 'talonmart-web',
     })
-    checkoutSuccessMessage.value = `Warehouse team is reviewing fulfillment for order ${response.order.order_id}.`
+    checkoutSuccessMessage.value = `Order ${response.order.order_id} was created and is waiting for payment.`
   } catch (error) {
     checkoutErrorMessage.value =
       error instanceof Error ? error.message : 'Unable to create order. Check the order API.'

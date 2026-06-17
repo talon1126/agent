@@ -73,14 +73,14 @@ describe('CartView checkout', () => {
         order: {
           order_id: 'ORD-CODEX-1001',
           customer_id: '1',
-          status: 'pending_fulfillment_review',
+          status: 'unpaid',
         },
         items: [],
       },
     })
   })
 
-  it('shows the default delivery address and displays fulfillment review status after checkout', async () => {
+  it('shows the default delivery address and displays unpaid status after checkout', async () => {
     const wrapper = mount(CartView)
 
     await flushPromises()
@@ -103,6 +103,6 @@ describe('CartView checkout', () => {
       created_by: 'talonmart-web',
     })
     expect(routerPush).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('Warehouse team is reviewing fulfillment for order ORD-CODEX-1001.')
+    expect(wrapper.text()).toContain('Order ORD-CODEX-1001 was created and is waiting for payment.')
   })
 })

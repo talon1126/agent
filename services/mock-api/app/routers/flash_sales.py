@@ -12,8 +12,8 @@ try:
 except ImportError:  # pragma: no cover - runtime dependency guard
     redis = None
 
-from app.routers.warehouse.orders import create_warehouse_order
-from app.routers.warehouse.schemas import WarehouseOrderCreate
+from app.routers.warehouse.orders import create_warehouse_order, pay_warehouse_order
+from app.routers.warehouse.schemas import WarehouseOrderCreate, WarehouseOrderStatusUpdateRequest
 from app.routers.warehouse.state import get_warehouse_repository
 
 router = APIRouter()
@@ -274,9 +274,13 @@ def purchase_flash_sale(
         repository.mark_flash_sale_claim_failed(claim["id"], updated_at=datetime.now(UTC).isoformat())
         raise error
 
+    paid_order = pay_warehouse_order(
+        created["order"]["order_id"],
+        WarehouseOrderStatusUpdateRequest(updated_by="flash-sale"),
+    )
     ordered_claim = repository.mark_flash_sale_claim_ordered(
         claim["id"],
-        order_id=created["order"]["order_id"],
+        order_id=paid_order["order"]["order_id"],
         updated_at=datetime.now(UTC).isoformat(),
     )
-    return {"ok": True, "claim": ordered_claim, **created}
+    return {"ok": True, "claim": ordered_claim, **paid_order}

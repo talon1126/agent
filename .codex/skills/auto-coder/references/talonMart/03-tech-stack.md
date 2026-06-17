@@ -111,7 +111,7 @@ n8n Workflow
 | `warehouse_inventory_sync_jobs` | 仓储库存同步任务表，保存采购到仓后需要同步飞书库存视图的待处理任务。 |
 | `orders` | 订单主表，保存下单、发仓确认、付款、发货、到货、退款、退货和物流状态；状态统一使用英文枚举：`pending_fulfillment_review`、`unpaid`、`pending_shipment`、`shipped`、`arrived`、`refunded`、`returned`、`canceled`。 |
 | `order_items` | 订单明细表，保存订单命中的商品、仓库、库位、批次和数量。 |
-| `inventory_movements` | 库存流水表，记录订单创建、退款、退货和未付款超时释放对库存余额的影响。 |
+| `inventory_movements` | 库存流水表，记录员工确认发仓、退款和退货对库存余额的影响。 |
 | `delivery_providers` | 物流供应商表，保存承运商名称、热线、单号前缀和启用状态。 |
 | `users` | TalonMart 用户表，保存本地演示和购物车流程使用的用户资料。 |
 | `delivery_addresses` | 配送地址表，保存用户收货人、电话、地址和默认地址标记。 |

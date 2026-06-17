@@ -10,7 +10,7 @@
 | 阶段 | 阶段标题 | 目标 | 状态 |
 | --- | --- | --- | --- |
 | 阶段 A | Project Foundation | 建立本地运行、共享服务、测试入口和基础规范 | [✔] |
-| 阶段 B | Warehouse Workflow | 完成仓储库存、履约、补货和飞书库存表闭环 | [✔] |
+| 阶段 B | Warehouse Workflow | 完成仓储库存、履约、补货、到货入库确认和飞书库存表闭环 | [✔] |
 | 阶段 C | Procurement Workflow | 完成补货审批、采购单和采购飞书表闭环 | [✔] |
 | 阶段 D | Delivery Workflow | 完成物流查询、异常和 case 闭环 | [✔] |
 | 阶段 E | Operations Workflow | 完成跨领域只读摘要和运营建议闭环 | [✔] |
@@ -23,7 +23,7 @@
 | 阶段 | 项目当前位置 | 可用功能 | 验证方式 | 下一阶段入口 | 完成日期 |
 | --- | --- | --- | --- | --- | --- |
 | 阶段 A | 基础服务可运行 | Docker Compose、fixtures、Python/Node 测试入口 | `docker compose -p after-sales-implementation config --quiet` | Warehouse Workflow |  |
-| 阶段 B | 仓储主链路可演示 | 库存查询、履约风险、补货申请、库存表同步 | `uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py -q` | Procurement Workflow |  |
+| 阶段 B | 仓储主链路可演示 | 库存查询、履约风险、补货申请、采购到货入库确认、库存表同步 | `uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py -q` | Procurement Workflow |  |
 | 阶段 C | 采购主链路可演示 | 补货审批、采购单、到仓确认、采购表同步 | `uv run --project services/mock-api pytest services\mock-api\tests\test_procurement_router_structure.py -q` | Delivery Workflow |  |
 | 阶段 D | 物流主链路可演示 | 物流状态、异常查询、case 创建 | `uv run --project services/mock-api pytest services\mock-api\tests\test_delivery_router_structure.py -q` | Operations Workflow |  |
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
@@ -49,12 +49,13 @@
 | --- | --- | --- | --- | --- |
 | B1 | 建立仓储数据模型和 repository | [✔] |  | 批次、库位、库存余额 |
 | B2 | 实现库存查询与异常查询 API | [✔] |  | warehouse inventory |
-| B3 | 实现履约风险和订单库存扣减 | [✔] |  | FEFO、整单同仓 |
+| B3 | 实现履约风险和订单确认后库存扣减 | [✔] |  | FEFO、整单同仓、员工确认扣减 |
 | B4 | 实现补货申请创建 | [✔] |  | replenishment_requests |
 | B5 | 实现采购到仓库存同步 | [✔] |  | arrived_unsynced -> synced |
 | B6 | 实现飞书库存表/余额表同步 | [✔] |  | feishu-adapter sync endpoints |
 | B7 | 实现 Warehouse n8n Workflow | [✔] |  | warehouse-workflow.json |
 | B8 | 实现仓储测试与回归门禁 | [✔] |  | warehouse tests |
+| B9 | 实现采购到货入库确认通知 | [✔] | 2026-06-17 | 今日到货采购单、飞书通知、员工入库确认 |
 
 #### 阶段 C：Procurement Workflow
 
@@ -101,7 +102,7 @@
 | F6 | 实现前端 API client 和类型 | [✔] |  | services、types |
 | F7 | 实现前端单元/E2E 测试 | [✔] |  | Vitest、Playwright |
 | F8 | 实现分类排行榜和热门商品展示 | [✔] | 2026-06-17 | PostgreSQL facts、Redis ZSET、HomeView、DepartmentCategoryView、ProductDetailView |
-| F9 | 实现订单发仓确认通知 | [✔] | 2026-06-17 | pending_fulfillment_review、候选发仓、飞书群通知 |
+| F9 | 实现订单发仓确认通知 | [✔] | 2026-06-17 | 支付后发仓确认、候选发仓、物流选择、员工确认后扣减 |
 
 #### 阶段 G：AImodel
 
@@ -133,14 +134,14 @@
 | 阶段 | 总任务数 | 已完成 | 进度 |
 | --- | ---: | ---: | --- |
 | 阶段 A | 5 | 5 | 100% |
-| 阶段 B | 8 | 8 | 100% |
+| 阶段 B | 9 | 9 | 100% |
 | 阶段 C | 7 | 7 | 100% |
 | 阶段 D | 6 | 6 | 100% |
 | 阶段 E | 5 | 5 | 100% |
 | 阶段 F | 9 | 9 | 100% |
 | 阶段 G | 8 | 8 | 100% |
 | 阶段 H | 7 | 2 | 29% |
-| **总计** | **55** | **50** | **91%** |
+| **总计** | **56** | **51** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -303,9 +304,9 @@
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py -q`
 
-##### B3：实现履约风险和订单库存扣减
+##### B3：实现履约风险和订单确认后库存扣减
 
-目标：支持订单创建时按仓库和 FEFO 扣减库存。
+目标：支持员工确认发仓时按仓库和 FEFO 扣减库存。
 
 修改文件：
 
@@ -314,7 +315,7 @@
 
 实现类/函数：
 
-- `create_warehouse_order()`：创建订单并扣减库存。
+- `confirm_order_fulfillment()`：确认发仓并按 FEFO 扣减库存。
 - `release_expired_orders()`：释放超时未付款订单库存。
 
 验收标准：
@@ -433,6 +434,41 @@
 - 仓储相关测试通过，失败时能定位到具体接口或状态。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py services\mock-api\tests\test_warehouse_router_structure.py -q`
+
+##### B9：实现采购到货入库确认通知
+
+目标：扫描预计今日到货的已支付采购单，由飞书机器人主动通知仓储人员确认是否入库，员工确认后进入既有采购到仓库存同步链路。
+
+修改文件：
+
+- `services/mock-api/app/routers/warehouse/purchase_orders.py`
+- `services/mock-api/app/warehouse_store.py`
+- `services/mock-api/tests/test_api.py`
+- `services/mock-api/tests/test_warehouse_store.py`
+- `services/feishu-adapter/app/main.py`
+- `services/feishu-adapter/app/feishu_client.py`
+- `services/feishu-adapter/tests/test_feishu_adapter.py`
+- `n8n/workflows/warehouse-purchase-arrival-notify.json`
+- `tests/test_department_workflows.py`
+- `.env.example`
+- `docker-compose.yml`
+
+实现类/函数：
+
+- `list_today_purchase_order_arrivals()`：查询 payment_status=paid 且 estimated_arrival_date 为指定日期的待入库采购单。
+- `send_purchase_arrival_notification()`：向飞书群发送今日到货采购单和入库确认入口。
+- `confirm_purchase_order_arrival_batch()`：员工确认全部或指定采购单已入库后更新 `warehouse_sync_status=arrived_unsynced`。
+- `Warehouse Purchase Arrival Notify`：定时扫描今日到货采购单并触发飞书通知。
+
+验收标准：
+
+- 今日到货通知只包含已支付且 `warehouse_sync_status=pending_arrival` 的采购单。
+- 飞书消息包含采购单号、商品、数量、仓库、库位、预计到货日期和确认入口文本。
+- 员工可以确认全部到货采购单，也可以指定部分采购单入库。
+- 入库确认后采购单进入 `arrived_unsynced`，后续由仓储同步工具写入库存批次和库存余额。
+- 通知未配置或发送失败时，扫描接口返回明确状态，不修改采购单事实。
+
+测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
 #### 阶段 C：Procurement Workflow
 
@@ -1059,7 +1095,7 @@
 
 ##### F9：实现订单发仓确认通知
 
-目标：用户下单成功后先创建待发仓确认订单，由飞书机器人主动在群里发送订单详情和候选发仓方案，员工确认后再执行库存扣减并进入付款/发货链路。
+目标：用户下单成功后先创建未付款订单，用户支付后由飞书机器人主动在群里发送订单详情、候选发仓方案和物流选择，员工确认后再执行库存扣减并进入发货链路。
 
 修改文件：
 
@@ -1079,22 +1115,26 @@
 
 实现类/函数：
 
-- `ORDER_STATUS_PENDING_FULFILLMENT_REVIEW`：订单创建后等待员工确认发仓。
-- `ORDER_STATUS_UNPAID`：员工确认发仓并完成库存扣减后等待付款。
+- `ORDER_STATUS_UNPAID`：订单创建后等待用户付款。
+- `ORDER_STATUS_PENDING_FULFILLMENT_REVIEW`：用户付款后等待员工确认发仓。
+- `ORDER_STATUS_PENDING_SHIPMENT`：员工确认发仓并完成库存扣减后等待发货。
 - `confirm_order_fulfillment()`：确认订单使用的发仓策略并扣减库存。
 - `list_order_fulfillment_candidates()`：返回可满足订单的候选仓库和库存风险。
 - `send_order_fulfillment_review_message()`：主动向飞书群发送订单详情和候选发仓方案。
-- `send_fulfillment_review_notification()`：订单创建成功后按环境变量触发 feishu-adapter 发仓确认通知，未配置或发送失败不回滚订单。
-- `createWarehouseOrder()`：前端下单后展示等待仓库确认的状态。
+- `send_fulfillment_review_notification()`：用户支付成功后按环境变量触发 feishu-adapter 发仓确认通知，未配置或发送失败不回滚付款状态。
+- `createWarehouseOrder()`：前端下单后展示待付款状态。
 
 验收标准：
 
 - 订单状态统一使用英文枚举：`pending_fulfillment_review`、`unpaid`、`pending_shipment`、`shipped`、`arrived`、`refunded`、`returned`、`canceled`。
-- 用户下单成功后不立即扣减库存，订单进入 `pending_fulfillment_review`。
-- `FEISHU_FULFILLMENT_REVIEW_NOTIFY_URL` 和 `FEISHU_FULFILLMENT_REVIEW_CHAT_ID` 控制发仓确认通知；通知未配置或发送失败时订单创建仍成功，并在响应中返回 notification 状态。
-- 飞书群主动消息包含订单编号、商品明细、收货城市、推荐发仓、可选发仓和确认入口文本。
-- 员工确认发仓后才扣减库存，并将订单状态更新为 `unpaid`。
+- 用户下单成功后不立即扣减库存，订单进入 `unpaid`，且不发送发仓确认通知。
+- 用户支付成功后订单进入 `pending_fulfillment_review`，并触发发仓确认通知。
+- `FEISHU_FULFILLMENT_REVIEW_NOTIFY_URL` 和 `FEISHU_FULFILLMENT_REVIEW_CHAT_ID` 控制发仓确认通知；通知未配置或发送失败时付款仍成功，并在响应中返回 notification 状态。
+- 飞书群主动消息包含订单编号、商品明细、收货城市、推荐发仓、可选发仓、可选物流和确认入口文本。
+- 员工确认发仓后才扣减库存，并将订单状态更新为 `pending_shipment`。
 - 员工选择其他发仓策略时，系统按选择的仓库重新校验库存，不满足时返回阻塞原因。
+- 员工确认时可以选择物流服务商，订单更新 `delivery_provider_id`、`delivery_provider_name` 和跟踪单号。
+- `orders` 表不包含 `released_at` 字段，未付款超时取消通过订单状态和 `cancelled_at` 表达。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`pnpm --dir apps/talonmart-web test:unit -- CartView checkoutApi`
 

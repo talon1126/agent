@@ -233,6 +233,7 @@ agent/                                                      # 项目根目录
 │       ├── warehouse-workflow.json                         # 仓储工作流
 │       ├── warehouse-inventory-balances-refresh.json       # 库存余额刷新
 │       ├── warehouse-order-timeout-release.json            # 订单超时释放
+│       ├── warehouse-purchase-arrival-notify.json          # 采购到货入库通知
 │       ├── procurement-workflow.json                       # 采购工作流
 │       ├── procurement-replenishment-requests-sync.json    # 补货申请表定时同步
 │       ├── procurement-purchase-orders-sync.json           # 采购单表定时同步
@@ -305,6 +306,7 @@ agent/                                                      # 项目根目录
 | 飞书 | `services/feishu-adapter/app/intent_router.py` | 仓储 fast path | 明确同步/视图意图识别 |
 | 飞书 | `services/feishu-adapter/app/view_template_builder.py` | 视图模板 | 受控模板、字段映射、视图计划 |
 | Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约、补货、同步工具 |
+| Workflow | `n8n/workflows/warehouse-purchase-arrival-notify.json` | 采购到货入库通知 | 定时扫描今日到货采购单并触发飞书群通知 |
 | Workflow | `n8n/workflows/procurement-workflow.json` | Procurement 编排 | 审批、采购单、到仓确认 |
 | Workflow | `n8n/workflows/delivery-workflow.json` | Delivery 编排 | 物流查询、异常、case |
 | Workflow | `n8n/workflows/operations-workflow.json` | Operations 编排 | 跨领域摘要和只读汇总 |

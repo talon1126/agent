@@ -262,6 +262,21 @@ def test_warehouse_order_timeout_release_workflow_runs_every_5_minutes() -> None
     assert "warehouse-timeout-release" in release_request["parameters"]["jsonBody"]
 
 
+def test_warehouse_purchase_arrival_notify_workflow_runs_daily() -> None:
+    workflow = load_workflow("warehouse-purchase-arrival-notify.json")
+    schedule = node_by_name(workflow, "Every Day At 09:00")
+    notify_request = node_by_name(workflow, "Notify Today Purchase Arrivals")
+
+    assert workflow["name"] == "Warehouse Purchase Arrival Notify"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "hours", "hoursInterval": 24, "triggerAtHour": 9}]
+    assert notify_request["parameters"]["url"].endswith(
+        "/warehouse/purchase-orders/arrival-notifications/send"
+    )
+    assert "warehouse-purchase-arrival-notify" in notify_request["parameters"]["jsonBody"]
+
+
 def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
     for filename, expected in DEPARTMENT_WORKFLOWS.items():
         workflow = load_workflow(filename)
@@ -478,8 +493,14 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             order_tool_code = order_tool["parameters"]["jsCode"]
             assert "confirm_fulfillment" in order_tool_code
             assert "确认发仓" in order_tool_code
+            assert "extractDeliveryProviderId" in order_tool_code
+            assert "body.delivery_provider_id" in order_tool_code
             assert order_tool_code.index("confirm_fulfillment") < order_tool_code.index("return 'ship'")
             assert "/warehouse/order-tool" in order_tool_code
+            system_message = agent["parameters"]["options"]["systemMessage"]
+            assert "创建订单进入 unpaid" in system_message
+            assert "付款后进入 pending_fulfillment_review" in system_message
+            assert "可选 delivery_provider_id" in system_message
 
         if expected["agent"] == "Procurement Agent":
             system_message = agent["parameters"]["options"]["systemMessage"]

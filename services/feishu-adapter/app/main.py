@@ -67,6 +67,13 @@ class OrderFulfillmentReviewNotificationRequest(BaseModel):
     order: dict[str, Any]
     items: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
+    delivery_providers: list[dict[str, Any]] = []
+
+
+class PurchaseArrivalNotificationRequest(BaseModel):
+    chat_id: str = ""
+    target_date: str
+    items: list[dict[str, Any]] = []
 
 
 class InventoryTableSyncJobItem(BaseModel):
@@ -396,6 +403,10 @@ def create_app(
     bots_json = feishu_bots_json if feishu_bots_json is not None else os.getenv("FEISHU_BOTS_JSON", "")
     runtime_run_log_url = run_log_url if run_log_url is not None else os.getenv("FEISHU_RUN_LOG_URL", "")
     fulfillment_review_chat_id = os.getenv("FEISHU_FULFILLMENT_REVIEW_CHAT_ID", "").strip()
+    purchase_arrival_chat_id = os.getenv(
+        "FEISHU_PURCHASE_ARRIVAL_NOTIFY_CHAT_ID",
+        fulfillment_review_chat_id,
+    ).strip()
     runtime_mock_api_url = (mock_api_url if mock_api_url is not None else os.getenv("MOCK_API_URL", "http://mock-api:8000")).rstrip("/")
     table_app_id = inventory_table_app_id if inventory_table_app_id is not None else os.getenv("FEISHU_INVENTORY_TABLE_APP_ID", app_id)
     table_app_secret = (
@@ -543,6 +554,12 @@ def create_app(
                 f"{candidate.get('warehouse_name') or candidate.get('warehouse_id')} "
                 f"({candidate.get('warehouse_id')}): {status}{shortage_text}"
             )
+        delivery_lines = [
+            "- "
+            f"{provider.get('name') or provider.get('provider_name') or provider.get('provider_id')} "
+            f"({provider.get('provider_id')}): {provider.get('service_hotline') or '-'}"
+            for provider in payload.delivery_providers
+        ]
         return "\n".join(
             [
                 "订单发仓确认",
@@ -553,7 +570,35 @@ def create_app(
                 *(item_lines or ["- 无商品明细"]),
                 "候选发仓:",
                 *(candidate_lines or ["- 无候选仓"]),
-                f"确认发仓: @warehouse 确认发仓 {order_id} {selected_warehouse_id or '<warehouse_id>'}",
+                "物流选项:",
+                *(delivery_lines or ["- 默认物流: sf"]),
+                f"确认发仓: @warehouse 确认发仓 {order_id} {selected_warehouse_id or '<warehouse_id>'} 物流 <delivery_provider_id>",
+            ]
+        )
+
+    def build_purchase_arrival_review_text(payload: PurchaseArrivalNotificationRequest) -> str:
+        item_lines = [
+            "- "
+            f"{item.get('purchase_order_id')}: {item.get('item_id')} x {int(item.get('quantity') or 0)} | "
+            f"{item.get('warehouse_name') or item.get('warehouse_id')} / {item.get('location_code') or '-'} | "
+            f"预计到货 {item.get('estimated_arrival_date') or payload.target_date}"
+            for item in payload.items
+        ]
+        purchase_order_ids = [
+            str(item.get("purchase_order_id") or "").strip()
+            for item in payload.items
+            if str(item.get("purchase_order_id") or "").strip()
+        ]
+        return "\n".join(
+            [
+                "采购到货入库确认",
+                f"目标日期: {payload.target_date}",
+                "到货采购单:",
+                *(item_lines or ["- 今日没有待确认入库采购单"]),
+                "确认全部入库:",
+                f"@procurement 确认采购到货 {' '.join(purchase_order_ids) if purchase_order_ids else '<purchase_order_id>'}",
+                "确认部分入库:",
+                "@procurement 确认采购到货 <purchase_order_id> [<purchase_order_id>...]",
             ]
         )
 
@@ -600,6 +645,30 @@ def create_app(
             api_base_url=api_base_url,
         )
         text = build_order_fulfillment_review_text(payload)
+        message_id = send_group_text_message(
+            client=client,
+            tenant_access_token=token,
+            chat_id=chat_id,
+            text=text,
+            api_base_url=api_base_url,
+        )
+        return {"ok": True, "chat_id": chat_id, "message_id": message_id, "text": text}
+
+    @app.post("/warehouse/purchase-arrival-review/send")
+    def send_purchase_arrival_review_message(
+        payload: PurchaseArrivalNotificationRequest,
+    ) -> dict[str, Any]:
+        chat_id = (payload.chat_id or purchase_arrival_chat_id).strip()
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="missing_purchase_arrival_chat_id")
+        credential_app_id, credential_app_secret = fulfillment_review_credentials()
+        token = get_tenant_access_token(
+            client=client,
+            app_id=credential_app_id,
+            app_secret=credential_app_secret,
+            api_base_url=api_base_url,
+        )
+        text = build_purchase_arrival_review_text(payload)
         message_id = send_group_text_message(
             client=client,
             tenant_access_token=token,

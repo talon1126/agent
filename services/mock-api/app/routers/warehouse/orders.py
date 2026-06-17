@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from app.store import load_json
-from app.routers.delivery.state import get_delivery_provider
+from app.routers.delivery.state import DELIVERY_PROVIDERS, get_delivery_provider
 from app.warehouse_store import WarehouseRepository
 
 from .inventory import (
@@ -324,6 +324,7 @@ def send_fulfillment_review_notification(
         "order": order,
         "items": items,
         "candidates": fulfillment_review.get("candidates", []),
+        "delivery_providers": [provider for provider in DELIVERY_PROVIDERS if provider.get("status") == "active"],
     }
     request = urllib.request.Request(
         notify_url,
@@ -389,7 +390,7 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
     order = {
         "order_id": order_id,
         "customer_id": payload.customer_id.strip(),
-        "status": ORDER_STATUS_PENDING_FULFILLMENT_REVIEW,
+        "status": ORDER_STATUS_UNPAID,
         # Warehouse owns inventory allocation and order lifecycle transitions.
         # Delivery fields live on the order so Delivery Agent can read provider
         # context without owning stock, picking, or shipment transition logic.
@@ -412,18 +413,13 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
         "cancelled_at": "",
         "returned_at": "",
         "expires_at": expires_at,
-        "released_at": "",
         "release_reason": "",
     }
     if repository:
         try:
             result = repository.create_order(order)
             fulfillment_review = repository.list_order_fulfillment_candidates(order_id)
-            notification = send_fulfillment_review_notification(
-                order=result["order"],
-                items=result["items"],
-                fulfillment_review=fulfillment_review,
-            )
+            notification = {"configured": bool(os.getenv("FEISHU_FULFILLMENT_REVIEW_NOTIFY_URL", "").strip()), "status": "skipped"}
             return {"ok": True, **result, "fulfillment_review": fulfillment_review, "notification": notification}
         except ValueError as error:
             raise order_http_error(error) from error
@@ -435,7 +431,7 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
                 "id": len(WAREHOUSE_ORDER_ITEMS) + len(created_items) + 1,
                 "order_id": order_id,
                 "customer_id": order["customer_id"],
-                "status": ORDER_STATUS_PENDING_FULFILLMENT_REVIEW,
+                "status": ORDER_STATUS_UNPAID,
                 "item_id": requested["item_id"],
                 "warehouse_id": requested["warehouse_id"],
                 "location_code": requested.get("location_code") or "",
@@ -448,11 +444,10 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
     WAREHOUSE_ORDER_ITEMS.extend(created_items)
     WAREHOUSE_ORDERS.append(order)
     response = warehouse_order_response(order, fallback_order_items(order_id))
-    response["notification"] = send_fulfillment_review_notification(
-        order=response["order"],
-        items=response["items"],
-        fulfillment_review=response["fulfillment_review"],
-    )
+    response["notification"] = {
+        "configured": bool(os.getenv("FEISHU_FULFILLMENT_REVIEW_NOTIFY_URL", "").strip()),
+        "status": "skipped",
+    }
     return response
 
 
@@ -460,11 +455,14 @@ def confirm_fallback_order_fulfillment(
     order_id: str,
     *,
     warehouse_id: str,
+    delivery_provider_id: str | None = None,
+    courier_phone: str = "",
+    tracking_no: str = "",
     updated_by: str,
     updated_at: str,
 ) -> dict[str, Any]:
     order = get_warehouse_order_or_404(order_id)
-    if order["status"] == ORDER_STATUS_UNPAID:
+    if order["status"] == ORDER_STATUS_PENDING_SHIPMENT:
         return warehouse_order_response(order, fallback_order_items(order_id))
     if order["status"] != ORDER_STATUS_PENDING_FULFILLMENT_REVIEW:
         raise HTTPException(status_code=409, detail=f"order_cannot_confirm_fulfillment_from_{order['status']}")
@@ -491,7 +489,7 @@ def confirm_fallback_order_fulfillment(
                     "id": len(WAREHOUSE_ORDER_ITEMS) + len(allocated_items) + 1,
                     "order_id": order_id,
                     "customer_id": order["customer_id"],
-                    "status": ORDER_STATUS_UNPAID,
+                    "status": ORDER_STATUS_PENDING_SHIPMENT,
                     "item_id": row["item_id"],
                     "warehouse_id": row["warehouse_id"],
                     "location_code": row["location_code"],
@@ -513,7 +511,15 @@ def confirm_fallback_order_fulfillment(
             direction=-1,
         )
     )
-    order["status"] = ORDER_STATUS_UNPAID
+    delivery_provider = get_delivery_provider(delivery_provider_id or str(order.get("delivery_provider_id") or "sf"))
+    selected_tracking_no = tracking_no.strip() or str(order.get("tracking_no") or "")
+    if not selected_tracking_no:
+        selected_tracking_no = f"{delivery_provider['tracking_prefix']}{order_id.replace('-', '')}"
+    order["status"] = ORDER_STATUS_PENDING_SHIPMENT
+    order["delivery_provider_id"] = delivery_provider["provider_id"]
+    order["delivery_provider_name"] = delivery_provider["name"]
+    order["courier_phone"] = courier_phone.strip() or str(order.get("courier_phone") or "")
+    order["tracking_no"] = selected_tracking_no
     order["selected_warehouse_id"] = selected_warehouse_id
     order["selected_warehouse_name"] = warehouse_name_by_id(selected_warehouse_id)
     order["updated_at"] = updated_at
@@ -567,6 +573,9 @@ def confirm_order_fulfillment(
                 **repository.confirm_order_fulfillment(
                     order_id,
                     warehouse_id=payload.warehouse_id,
+                    delivery_provider_id=payload.delivery_provider_id,
+                    courier_phone=payload.courier_phone,
+                    tracking_no=payload.tracking_no,
                     updated_by=payload.updated_by,
                     updated_at=now,
                 ),
@@ -577,6 +586,9 @@ def confirm_order_fulfillment(
     return confirm_fallback_order_fulfillment(
         order_id,
         warehouse_id=payload.warehouse_id,
+        delivery_provider_id=payload.delivery_provider_id,
+        courier_phone=payload.courier_phone,
+        tracking_no=payload.tracking_no,
         updated_by=payload.updated_by,
         updated_at=now,
     )
@@ -590,24 +602,41 @@ def pay_warehouse_order(
     repository = get_warehouse_repository()
     if repository:
         try:
-            return {"ok": True, **repository.pay_order(order_id, updated_by=payload.updated_by, updated_at=datetime.now(UTC).isoformat())}
+            result = repository.pay_order(
+                order_id,
+                updated_by=payload.updated_by,
+                updated_at=datetime.now(UTC).isoformat(),
+            )
+            fulfillment_review = repository.list_order_fulfillment_candidates(order_id)
+            notification = send_fulfillment_review_notification(
+                order=result["order"],
+                items=result["items"],
+                fulfillment_review=fulfillment_review,
+            )
+            return {"ok": True, **result, "fulfillment_review": fulfillment_review, "notification": notification}
         except ValueError as error:
             raise order_http_error(error) from error
 
     order = get_warehouse_order_or_404(order_id)
-    if order["status"] == ORDER_STATUS_PENDING_SHIPMENT:
+    if order["status"] == ORDER_STATUS_PENDING_FULFILLMENT_REVIEW:
         return warehouse_order_response(order, fallback_order_items(order_id))
     if order["status"] != ORDER_STATUS_UNPAID:
         raise HTTPException(status_code=409, detail=f"order_cannot_pay_from_{order['status']}")
     now = datetime.now(UTC).isoformat()
     for item in fallback_order_items(order_id):
         if item["status"] == ORDER_STATUS_UNPAID:
-            item["status"] = ORDER_STATUS_PENDING_SHIPMENT
+            item["status"] = ORDER_STATUS_PENDING_FULFILLMENT_REVIEW
             item["updated_at"] = now
-    order["status"] = ORDER_STATUS_PENDING_SHIPMENT
+    order["status"] = ORDER_STATUS_PENDING_FULFILLMENT_REVIEW
     order["updated_at"] = now
     order["paid_at"] = now
-    return warehouse_order_response(order, fallback_order_items(order_id))
+    response = warehouse_order_response(order, fallback_order_items(order_id))
+    response["notification"] = send_fulfillment_review_notification(
+        order=response["order"],
+        items=response["items"],
+        fulfillment_review=response["fulfillment_review"],
+    )
+    return response
 
 
 def order_http_error(error: ValueError) -> HTTPException:
@@ -625,7 +654,7 @@ def restore_fallback_order_items(order: dict[str, Any], status: str, now: str) -
         item
         for item in WAREHOUSE_ORDER_ITEMS
         if item["order_id"] == order["order_id"]
-        and item["status"] in {ORDER_STATUS_UNPAID, ORDER_STATUS_PENDING_SHIPMENT, ORDER_STATUS_SHIPPED, ORDER_STATUS_ARRIVED}
+        and item["status"] in {ORDER_STATUS_PENDING_SHIPMENT, ORDER_STATUS_SHIPPED, ORDER_STATUS_ARRIVED}
     ]:
         balance = find_current_inventory_balance(line)
         set_inventory_balance_quantity(
@@ -747,12 +776,11 @@ def release_expired_warehouse_orders(payload: WarehouseOrderReleaseExpiredReques
     for order in WAREHOUSE_ORDERS:
         if len(released) >= max(min(int(payload.limit or 100), 500), 1):
             break
-        if order["status"] != ORDER_STATUS_UNPAID or order.get("released_at"):
+        if order["status"] != ORDER_STATUS_UNPAID:
             continue
         if str(order.get("expires_at") or "") >= now:
             continue
         update_fallback_order_status(order["order_id"], ORDER_STATUS_CANCELED)
-        order["released_at"] = now
         order["release_reason"] = "unpaid_timeout"
         released.append(order)
     return {"ok": True, "released_count": len(released), "released_orders": released, "processed_at": now}
@@ -777,13 +805,6 @@ def warehouse_order_tool(payload: dict[str, Any]) -> dict[str, Any]:
     if action in {"create_and_pay", "paid"}:
         created = create_warehouse_order(WarehouseOrderCreate(**payload))
         order_id = created["order"]["order_id"]
-        confirm_order_fulfillment(
-            order_id,
-            WarehouseOrderFulfillmentConfirmRequest(
-                warehouse_id=str(created["order"].get("selected_warehouse_id") or ""),
-                updated_by=str(payload.get("updated_by") or "warehouse-agent"),
-            ),
-        )
         return pay_warehouse_order(
             order_id,
             WarehouseOrderStatusUpdateRequest(updated_by=str(payload.get("updated_by") or "warehouse-agent")),
@@ -799,6 +820,9 @@ def warehouse_order_tool(payload: dict[str, Any]) -> dict[str, Any]:
             order_id,
             WarehouseOrderFulfillmentConfirmRequest(
                 warehouse_id=str(payload.get("warehouse_id") or ""),
+                delivery_provider_id=str(payload.get("delivery_provider_id") or "") or None,
+                courier_phone=str(payload.get("courier_phone") or ""),
+                tracking_no=str(payload.get("tracking_no") or ""),
                 updated_by=update.updated_by,
             ),
         )

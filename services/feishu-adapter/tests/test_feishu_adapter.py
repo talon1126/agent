@@ -553,6 +553,10 @@ def test_order_fulfillment_review_notification_sends_group_message() -> None:
                     "shortage": {"shortage_quantity": 2},
                 },
             ],
+            "delivery_providers": [
+                {"provider_id": "sf", "name": "顺丰", "service_hotline": "95338"},
+                {"provider_id": "jd", "name": "京东物流", "service_hotline": "950616"},
+            ],
         },
     )
 
@@ -568,7 +572,11 @@ def test_order_fulfillment_review_notification_sends_group_message() -> None:
     assert "ORD-CODEX-9001" in text
     assert "item_vinda_tissue x 2" in text
     assert "深圳仓" in text
+    assert "物流选项" in text
+    assert "jd" in text
+    assert "950616" in text
     assert "确认发仓" in text
+    assert "<delivery_provider_id>" in text
 
 
 def test_order_fulfillment_review_notification_uses_warehouse_bot_credentials() -> None:
@@ -625,6 +633,55 @@ def test_order_fulfillment_review_notification_uses_warehouse_bot_credentials() 
 
     assert response.status_code == 200
     assert response.json()["message_id"] == "om_fulfillment_review"
+
+
+def test_purchase_arrival_review_notification_sends_confirm_instructions() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "test-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id":
+            return httpx.Response(200, json={"code": 0, "data": {"message_id": "om_purchase_arrival"}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_app_id="cli_warehouse",
+        feishu_app_secret="warehouse_secret",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/warehouse/purchase-arrival-review/send",
+        json={
+            "chat_id": "oc_warehouse_ops",
+            "target_date": "2026-06-17",
+            "items": [
+                {
+                    "purchase_order_id": "PO-TODAY-NOTIFY",
+                    "item_id": "item_vinda_tissue",
+                    "quantity": 20,
+                    "warehouse_name": "深圳仓",
+                    "location_code": "A1",
+                    "estimated_arrival_date": "2026-06-17",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["message_id"] == "om_purchase_arrival"
+    send_request = next(request for request in requests if "/im/v1/messages" in str(request.url))
+    payload = json.loads(send_request.content)
+    assert payload["receive_id"] == "oc_warehouse_ops"
+    text = json.loads(payload["content"])["text"]
+    assert "采购到货入库确认" in text
+    assert "PO-TODAY-NOTIFY" in text
+    assert "确认全部入库" in text
+    assert "@procurement 确认采购到货" in text
 
 
 def test_inventory_table_provision_returns_not_configured_without_app_token() -> None:
