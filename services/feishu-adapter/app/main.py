@@ -2,6 +2,7 @@ import os
 import logging
 import threading
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
@@ -694,6 +695,7 @@ def create_app(
         has_reply: bool = False,
         tool_calls: list[Any] | None = None,
         error: str | None = None,
+        workflow: str | None = None,
     ) -> None:
         if not runtime_run_log_url:
             return
@@ -704,7 +706,7 @@ def create_app(
                     "event_id": message.message_id,
                     "message_id": message.message_id,
                     "bot_name": bot.name,
-                    "workflow": bot.n8n_webhook_url,
+                    "workflow": workflow or bot.n8n_webhook_url,
                     "status": status,
                     "latency_ms": round(total_ms, 1),
                     "n8n_ms": round(n8n_ms, 1),
@@ -722,6 +724,81 @@ def create_app(
                 message.message_id,
                 run_log_error,
             )
+
+    def purchase_order_ids_from_text(text: str) -> list[str]:
+        matches = re.findall(r"\bPO-[0-9A-Za-z_-]+\b", text, flags=re.IGNORECASE)
+        return list(dict.fromkeys(match.upper() for match in matches))
+
+    def is_procurement_arrival_confirmation(text: str) -> bool:
+        normalized = text.lower()
+        return bool(
+            purchase_order_ids_from_text(text)
+            and (
+                "arrived" in normalized
+                or "arrival" in normalized
+                or "到货" in text
+                or "到仓" in text
+                or "采购到货" in text
+            )
+        )
+
+    def build_procurement_arrival_fast_path_reply(result: dict[str, Any]) -> str:
+        confirmed_items = result.get("confirmed_items") if isinstance(result.get("confirmed_items"), list) else []
+        if result.get("ok") is True and confirmed_items:
+            lines = [
+                "✅ 到仓确认成功",
+                f"处理数量: {result.get('processed_count', len(confirmed_items))}",
+                f"确认数量: {result.get('confirmed_count', len(confirmed_items))}",
+                "到仓采购单:",
+            ]
+            for item in confirmed_items:
+                lines.append(
+                    "- "
+                    f"{item.get('purchase_order_id')}: {item.get('item_id')} x {item.get('quantity')} | "
+                    f"{item.get('warehouse_id')} / {item.get('location_code') or '-'} | "
+                    f"{item.get('warehouse_sync_status')}"
+                )
+            lines.append("下一步: 通知 Warehouse 检查 arrived_unsynced 采购单并同步库存批次。")
+            return "\n".join(lines)
+        errors = result.get("errors") if isinstance(result.get("errors"), list) else []
+        return "\n".join(
+            [
+                "❌ 到仓确认失败",
+                f"处理数量: {result.get('processed_count', 0)}",
+                f"确认数量: {result.get('confirmed_count', 0)}",
+                f"错误: {errors or result.get('error') or 'unknown_error'}",
+            ]
+        )
+
+    def procurement_arrival_fast_path_payload(bot: BotConfig, message: Any) -> dict[str, Any] | None:
+        if bot.name != "procurement" or message.message_type != "text":
+            return None
+        if not is_procurement_arrival_confirmation(message.text):
+            return None
+        purchase_order_ids = purchase_order_ids_from_text(message.text)
+        response = client.post(
+            f"{runtime_mock_api_url}/procurement/purchase-orders/confirm-arrival-batch",
+            json={
+                "purchase_order_ids": purchase_order_ids,
+                "received_by": f"feishu:{message.sender_id}",
+            },
+        )
+        response.raise_for_status()
+        result = response.json()
+        return {
+            "reply": build_procurement_arrival_fast_path_reply(result),
+            "workflow": "/procurement/purchase-order-arrival-fast-path",
+            "tool_trace": [
+                {
+                    "tool": "procurement_confirm_purchase_order_arrival_tool",
+                    "input": {
+                        "purchase_order_ids": purchase_order_ids,
+                        "received_by": f"feishu:{message.sender_id}",
+                    },
+                    "output": result,
+                }
+            ],
+        }
 
     def write_inventory_table_run_log(
         *,
@@ -3575,12 +3652,19 @@ def create_app(
         token_ms = 0.0
         reply_ms = 0.0
         tool_calls: list[Any] = []
+        workflow_override: str | None = None
+        route_status = 200
         try:
             n8n_started = perf_counter()
-            n8n_response = client.post(bot.n8n_webhook_url, json=to_n8n_payload(message))
+            n8n_payload = procurement_arrival_fast_path_payload(bot, message)
+            if n8n_payload is None:
+                n8n_response = client.post(bot.n8n_webhook_url, json=to_n8n_payload(message))
+                n8n_response.raise_for_status()
+                route_status = n8n_response.status_code
+                n8n_payload = n8n_response.json()
+            else:
+                workflow_override = str(n8n_payload.get("workflow") or "")
             n8n_ms = (perf_counter() - n8n_started) * 1000
-            n8n_response.raise_for_status()
-            n8n_payload = n8n_response.json()
             tool_calls = tool_calls_from_n8n_payload(n8n_payload)
         except httpx.HTTPError as error:
             total_ms = (perf_counter() - total_started) * 1000
@@ -3597,6 +3681,7 @@ def create_app(
                 total_ms=total_ms,
                 n8n_ms=n8n_ms,
                 error=str(error),
+                workflow=workflow_override,
             )
             return
 
@@ -3605,7 +3690,7 @@ def create_app(
             "forwarded feishu bot=%s message_id=%s to n8n status=%s has_reply=%s n8n_ms=%.1f",
             bot.name,
             message.message_id,
-            n8n_response.status_code,
+            route_status,
             bool(reply),
             n8n_ms,
         )
@@ -3631,6 +3716,7 @@ def create_app(
                 reply_ms=reply_ms,
                 has_reply=bool(reply),
                 tool_calls=tool_calls,
+                workflow=workflow_override,
             )
             return
 
@@ -3691,6 +3777,7 @@ def create_app(
                 has_reply=True,
                 tool_calls=tool_calls,
                 error=error_text,
+                workflow=workflow_override,
             )
 
     def handle_feishu_event(bot: BotConfig, payload: dict[str, Any]) -> None:

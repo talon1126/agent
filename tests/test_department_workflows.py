@@ -550,6 +550,8 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "/procurement/purchase-orders-table/sync" in arrival_tool["parameters"]["jsCode"]
             assert "purchase_order_drafts" not in arrival_tool["parameters"]["jsCode"]
             assert "extractPurchaseOrderIds" in arrival_tool["parameters"]["jsCode"]
+            assert "\x08" not in arrival_tool["parameters"]["jsCode"]
+            assert r"\bPO-[0-9A-Za-z_-]+\b" in arrival_tool["parameters"]["jsCode"]
             assert "extractRequestId" in approve_tool["parameters"]["jsCode"]
             assert "extractRequestId" in reject_tool["parameters"]["jsCode"]
 

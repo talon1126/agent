@@ -1557,6 +1557,49 @@ def test_warehouse_purchase_arrival_notification_posts_without_changing_purchase
     assert PURCHASE_ORDERS[0]["warehouse_sync_status"] == "pending_arrival"
 
 
+def test_warehouse_purchase_arrival_notification_falls_back_to_fulfillment_review_chat(monkeypatch):
+    calls: list[dict[str, Any]] = []
+    PURCHASE_ORDERS.append(purchase_order_fixture(purchase_order_id="PO-TODAY-FALLBACK-CHAT"))
+
+    class FakeUrlopenResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true, "message_id": "om_purchase_arrival"}'
+
+    def fake_urlopen(request, timeout):
+        calls.append(
+            {
+                "url": request.full_url,
+                "timeout": timeout,
+                "payload": json.loads(request.data.decode("utf-8")),
+            }
+        )
+        return FakeUrlopenResponse()
+
+    monkeypatch.setenv(
+        "FEISHU_PURCHASE_ARRIVAL_NOTIFY_URL",
+        "http://feishu-adapter.local/warehouse/purchase-arrival-review/send",
+    )
+    monkeypatch.delenv("FEISHU_PURCHASE_ARRIVAL_NOTIFY_CHAT_ID", raising=False)
+    monkeypatch.setenv("FEISHU_FULFILLMENT_REVIEW_CHAT_ID", "oc_warehouse_ops")
+    monkeypatch.setattr("app.routers.warehouse.purchase_orders.urllib.request.urlopen", fake_urlopen)
+
+    response = client.post(
+        "/warehouse/purchase-orders/arrival-notifications/send",
+        json={"target_date": "2026-06-17"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert calls[0]["payload"]["chat_id"] == "oc_warehouse_ops"
+
+
 def test_purchase_orders_can_be_filtered_by_arrived_unsynced_status():
     request = create_replenishment_request_for_test(
         item_id="item_vinda_tissue",
@@ -2215,6 +2258,78 @@ def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_
     assert sum(int(batch["quantity_on_hand"]) for batch in inventory["batches"]) == 116
 
     assert all(line["status"] == "pending_shipment" for line in confirmed["items"])
+
+
+def test_warehouse_order_tool_normalizes_lowercase_order_id_for_fulfillment_confirmation():
+    create_response = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-LOWERCASE",
+            "customer_id": "cus_100",
+            "shipping_address": "广东省深圳市",
+            "items": [{"item_id": "item_vinda_tissue", "quantity": 1}],
+            "delivery_provider_id": "sf",
+        },
+    )
+    assert create_response.status_code == 200
+
+    paid_response = client.post("/warehouse/orders/ORD-CODEX-LOWERCASE/pay", json={"updated_by": "customer"})
+    assert paid_response.status_code == 200
+
+    confirmed_response = client.post(
+        "/warehouse/order-tool",
+        json={
+            "action": "confirm_fulfillment",
+            "order_id": "ord-codex-lowercase",
+            "warehouse_id": "wh_sz_1",
+            "delivery_provider_id": "jd",
+            "updated_by": "warehouse-agent",
+        },
+    )
+
+    assert confirmed_response.status_code == 200
+    confirmed = confirmed_response.json()
+    assert confirmed["order"]["order_id"] == "ORD-CODEX-LOWERCASE"
+    assert confirmed["order"]["status"] == "pending_shipment"
+    assert confirmed["order"]["delivery_provider_id"] == "jd"
+
+
+def test_warehouse_order_tool_merges_nested_json_input_for_fulfillment_confirmation():
+    create_response = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-NESTED",
+            "customer_id": "cus_100",
+            "shipping_address": "广东省深圳市",
+            "items": [{"item_id": "item_vinda_tissue", "quantity": 1}],
+            "delivery_provider_id": "sf",
+        },
+    )
+    assert create_response.status_code == 200
+
+    paid_response = client.post("/warehouse/orders/ORD-CODEX-NESTED/pay", json={"updated_by": "customer"})
+    assert paid_response.status_code == 200
+
+    confirmed_response = client.post(
+        "/warehouse/order-tool",
+        json={
+            "input": json.dumps(
+                {
+                    "order_id": "ord-codex-nested",
+                    "warehouse_id": "wh_sz_1",
+                    "action": "confirm_fulfillment",
+                    "carrier": "jd",
+                }
+            )
+        },
+    )
+
+    assert confirmed_response.status_code == 200
+    confirmed = confirmed_response.json()
+    assert confirmed["order"]["order_id"] == "ORD-CODEX-NESTED"
+    assert confirmed["order"]["status"] == "pending_shipment"
+    assert confirmed["order"]["delivery_provider_id"] == "jd"
+    assert confirmed["order"]["delivery_provider_name"] == "京东"
 
 
 def test_warehouse_order_payment_posts_fulfillment_review_notification(monkeypatch):

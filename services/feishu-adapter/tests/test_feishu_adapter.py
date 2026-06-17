@@ -464,6 +464,99 @@ def test_event_callback_writes_structured_run_log() -> None:
     assert run_log["latency_ms"] >= 0
 
 
+def test_procurement_arrival_confirmation_uses_fast_path_without_n8n() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == "http://mock-api.local/procurement/purchase-orders/confirm-arrival-batch":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "processed_count": 1,
+                    "confirmed_count": 1,
+                    "skipped_count": 0,
+                    "confirmed_items": [
+                        {
+                            "purchase_order_id": "PO-CODEX-TODAY-0617",
+                            "item_id": "item_vinda_tissue",
+                            "warehouse_id": "wh_sz_1",
+                            "location_code": "A1",
+                            "quantity": 12,
+                            "payment_status": "paid",
+                            "warehouse_sync_status": "arrived_unsynced",
+                        }
+                    ],
+                    "errors": [],
+                },
+            )
+        if str(request.url) == "http://mock-api.local/run-logs":
+            return httpx.Response(200, json={"ok": True})
+        if str(request.url) == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if str(request.url) == "https://open.feishu.cn/open-apis/im/v1/messages/om_proc/reply":
+            return httpx.Response(200, json={"code": 0})
+        if str(request.url) == "http://n8n.local/webhook/procurement-inbound":
+            return httpx.Response(500, json={"error": "n8n should not be called"})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        feishu_bots_json=json.dumps(
+            [
+                {
+                    "name": "procurement",
+                    "app_id": "cli_procurement",
+                    "app_secret": "secret_procurement",
+                    "n8n_webhook_url": "http://n8n.local/webhook/procurement-inbound",
+                }
+            ]
+        ),
+        mock_api_url="http://mock-api.local",
+        run_log_url="http://mock-api.local/run-logs",
+    )
+
+    response = TestClient(app).post(
+        "/feishu/events",
+        json={
+            "schema": "2.0",
+            "header": {"event_id": "evt_proc", "event_type": "im.message.receive_v1"},
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou_sender"}},
+                "message": {
+                    "message_id": "om_proc",
+                    "chat_id": "oc_chat",
+                    "message_type": "text",
+                    "content": '{"text":"@procurement PO-CODEX-TODAY-0617 arrived at warehouse"}',
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    urls = [str(request.url) for request in requests]
+    assert "http://n8n.local/webhook/procurement-inbound" not in urls
+    confirm_request = next(
+        request
+        for request in requests
+        if str(request.url) == "http://mock-api.local/procurement/purchase-orders/confirm-arrival-batch"
+    )
+    assert json.loads(confirm_request.content)["purchase_order_ids"] == ["PO-CODEX-TODAY-0617"]
+    reply_request = next(
+        request
+        for request in requests
+        if str(request.url) == "https://open.feishu.cn/open-apis/im/v1/messages/om_proc/reply"
+    )
+    reply_text = json.loads(json.loads(reply_request.content)["content"])["text"]
+    assert "到仓确认成功" in reply_text
+    assert "PO-CODEX-TODAY-0617" in reply_text
+    run_log_request = next(request for request in requests if str(request.url) == "http://mock-api.local/run-logs")
+    run_log = json.loads(run_log_request.content)
+    assert run_log["workflow"] == "/procurement/purchase-order-arrival-fast-path"
+    assert run_log["tool_calls"][0]["tool"] == "procurement_confirm_purchase_order_arrival_tool"
+
+
 def test_inventory_table_sync_returns_not_configured_without_table_settings() -> None:
     app = create_app(
         http_client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(500))),

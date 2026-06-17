@@ -118,8 +118,13 @@ def post_purchase_arrival_notification(
     notify_url = os.getenv("FEISHU_PURCHASE_ARRIVAL_NOTIFY_URL", "").strip()
     if not notify_url:
         return {"configured": False, "status": "skipped"}
+    resolved_chat_id = (
+        chat_id.strip()
+        or os.getenv("FEISHU_PURCHASE_ARRIVAL_NOTIFY_CHAT_ID", "").strip()
+        or os.getenv("FEISHU_FULFILLMENT_REVIEW_CHAT_ID", "").strip()
+    )
     payload = {
-        "chat_id": chat_id.strip() or os.getenv("FEISHU_PURCHASE_ARRIVAL_NOTIFY_CHAT_ID", "").strip(),
+        "chat_id": resolved_chat_id,
         "target_date": target_date,
         "items": items,
     }

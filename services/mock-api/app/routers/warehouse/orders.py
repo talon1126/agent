@@ -799,6 +799,7 @@ def return_warehouse_order(order_id: str, payload: WarehouseOrderStatusUpdateReq
 
 @router.post("/warehouse/order-tool")
 def warehouse_order_tool(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = normalize_order_tool_payload(payload)
     action = str(payload.get("action") or "").strip().lower()
     if action in {"create", "create_order"}:
         return create_warehouse_order(WarehouseOrderCreate(**payload))
@@ -812,6 +813,8 @@ def warehouse_order_tool(payload: dict[str, Any]) -> dict[str, Any]:
     order_id = str(payload.get("order_id") or "").strip()
     if not order_id:
         raise HTTPException(status_code=400, detail="missing_order_id")
+    if order_id.lower().startswith("ord-"):
+        order_id = order_id.upper()
     update = WarehouseOrderStatusUpdateRequest(updated_by=str(payload.get("updated_by") or "warehouse-agent"))
     if action in {"pay", "付款"}:
         return pay_warehouse_order(order_id, update)
@@ -835,4 +838,34 @@ def warehouse_order_tool(payload: dict[str, Any]) -> dict[str, Any]:
     if action in {"return", "退货"}:
         return return_warehouse_order(order_id, update)
     raise HTTPException(status_code=400, detail="unsupported_order_action")
+
+
+def normalize_order_tool_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a warehouse order tool payload with nested Agent input merged.
+
+    Feishu and n8n sometimes pass an LLM tool call as {"input": "{...json...}"}
+    instead of flattening each argument at the top level. The warehouse order
+    tool is the stable API boundary, so it normalizes that shape before action
+    routing and preserves explicitly provided top-level fields when both shapes
+    are present.
+    """
+    normalized = dict(payload)
+    embedded_input = payload.get("input")
+    if isinstance(embedded_input, str) and embedded_input.strip().startswith("{"):
+        try:
+            embedded_payload = json.loads(embedded_input)
+        except json.JSONDecodeError:
+            embedded_payload = {}
+        if isinstance(embedded_payload, dict):
+            for key, value in embedded_payload.items():
+                if normalized.get(key) in (None, ""):
+                    normalized[key] = value
+
+    if not normalized.get("delivery_provider_id"):
+        for alias in ("carrier", "deliveryProviderId", "provider_id"):
+            alias_value = normalized.get(alias)
+            if alias_value not in (None, ""):
+                normalized["delivery_provider_id"] = str(alias_value).strip().lower()
+                break
+    return normalized
 
