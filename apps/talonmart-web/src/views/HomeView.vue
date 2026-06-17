@@ -9,7 +9,9 @@ import {
 } from 'lucide-vue-next'
 import StoreHeader from '@/components/StoreHeader.vue'
 import { CART_USER_ID } from '@/services/cartApi'
+import { fetchHomeHotRankings } from '@/services/categoryRankingApi'
 import { fetchFlashSales, purchaseFlashSaleWithDefaultAddress } from '@/services/flashSaleApi'
+import type { CategoryRankingItem } from '@/types/categoryRanking'
 import type { FlashSale } from '@/types/flashSale'
 
 const router = useRouter()
@@ -123,6 +125,9 @@ const searchError = ref('')
 const flashSales = ref<FlashSale[]>([])
 const flashSaleError = ref('')
 const flashSaleSuccess = ref('')
+const hotRankings = ref<CategoryRankingItem[]>([])
+const hotRankingError = ref('')
+const isHotRankingLoading = ref(false)
 const isFlashSaleLoading = ref(false)
 const pendingFlashSaleId = ref<number | null>(null)
 const activeSlideIndex = ref(0)
@@ -225,6 +230,26 @@ function openFlashSaleProduct(sale: FlashSale) {
   })
 }
 
+function openHotRankingProduct(item: CategoryRankingItem) {
+  router.push({
+    name: 'product-detail',
+    params: { item_id: item.item_id },
+  })
+}
+
+function rankingProductImage(item: CategoryRankingItem) {
+  if (item.category_id === 'electronics') {
+    return 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=640&q=80'
+  }
+  if (item.category_id === 'dairy') {
+    return 'https://images.unsplash.com/photo-1563636619-e9143da7973b?auto=format&fit=crop&w=640&q=80'
+  }
+  if (item.category_id === 'paper') {
+    return 'https://images.unsplash.com/photo-1583947581924-860bda6a26df?auto=format&fit=crop&w=640&q=80'
+  }
+  return 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=640&q=80'
+}
+
 async function loadFlashSales() {
   // Stock is weakly real-time: the page refreshes from the backend instead of polling locally.
   isFlashSaleLoading.value = true
@@ -239,6 +264,23 @@ async function loadFlashSales() {
       error instanceof Error ? error.message : 'Unable to load flash deals right now.'
   } finally {
     isFlashSaleLoading.value = false
+  }
+}
+
+async function loadHomeHotRankings() {
+  // The homepage rail reads backend ranking snapshots so product popularity is not hardcoded in Vue.
+  isHotRankingLoading.value = true
+  hotRankingError.value = ''
+
+  try {
+    const response = await fetchHomeHotRankings({ limit: 8 })
+    hotRankings.value = response.items
+  } catch (error) {
+    hotRankings.value = []
+    hotRankingError.value =
+      error instanceof Error ? error.message : 'Unable to load popular products right now.'
+  } finally {
+    isHotRankingLoading.value = false
   }
 }
 
@@ -266,6 +308,7 @@ async function buyFlashSale(sale: FlashSale) {
 
 onMounted(() => {
   void loadFlashSales()
+  void loadHomeHotRankings()
 })
 </script>
 
@@ -480,6 +523,71 @@ onMounted(() => {
               >
                 {{ flashSaleStockLabel(sale) }}
               </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="bg-white px-0 py-8">
+          <div class="mb-5 flex items-end justify-between gap-4">
+            <div>
+              <p class="text-sm font-black uppercase text-[#0053E2]">Popular now</p>
+              <h2 class="mt-1 text-2xl font-black">Bet you like it.</h2>
+            </div>
+          </div>
+
+          <p
+            v-if="hotRankingError"
+            class="mb-4 rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-4 text-sm font-bold text-[#991B1B]"
+            role="alert"
+          >
+            {{ hotRankingError }}
+          </p>
+
+          <div
+            v-if="isHotRankingLoading"
+            class="grid min-h-[180px] place-items-center rounded-lg border border-[#D8E0E8] bg-[#FCFCFD]"
+          >
+            <div class="flex items-center gap-3 text-sm font-bold text-[#344054]">
+              <LoaderCircle class="h-5 w-5 animate-spin text-[#00A6C8]" aria-hidden="true" />
+              Loading popular products
+            </div>
+          </div>
+
+          <div
+            v-else-if="hotRankings.length === 0"
+            class="rounded-lg border border-[#D8E0E8] bg-[#F7F8FA] p-6"
+          >
+            <p class="text-sm font-bold text-[#667085]">Ranking data is warming up</p>
+          </div>
+
+          <div v-else class="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            <article
+              v-for="item in hotRankings"
+              :key="item.item_id"
+              class="rounded-lg bg-white transition hover:-translate-y-0.5"
+            >
+              <button
+                class="block w-full text-left"
+                type="button"
+                :data-testid="`home-hot-product-${item.item_id}`"
+                @click="openHotRankingProduct(item)"
+              >
+                <span class="block aspect-[4/3] overflow-hidden rounded-md bg-white">
+                  <img
+                    class="h-full w-full object-cover"
+                    :alt="item.item_name"
+                    :src="rankingProductImage(item)"
+                  />
+                </span>
+                <span class="mt-3 block text-xs font-black uppercase text-[#0053E2]">
+                  #{{ item.rank }} in {{ item.category_name || item.category_id }}
+                </span>
+                <span class="mt-1 block min-h-12 text-base font-black leading-tight">
+                  {{ item.item_name }}
+                </span>
+                <span class="mt-2 block text-sm text-[#667085]">{{ item.brand }} / {{ item.spec }}</span>
+                <span class="mt-3 block text-xl font-black">{{ formatCurrency(item.price) }}</span>
+              </button>
             </article>
           </div>
         </section>

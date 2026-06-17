@@ -15,10 +15,12 @@ import {
 
 import StoreHeader from '@/components/StoreHeader.vue'
 import { addCartItem, CART_USER_ID } from '@/services/cartApi'
+import { fetchCategoryRanking } from '@/services/categoryRankingApi'
 import { fetchFlashSales } from '@/services/flashSaleApi'
 import { fetchProductDetail } from '@/services/productDetailApi'
 import { createItemReview, fetchItemReviews } from '@/services/productReviewApi'
 import type { FlashSale } from '@/types/flashSale'
+import type { CategoryRankingItem } from '@/types/categoryRanking'
 import type { ProductDetail, ProductImage } from '@/types/productDetail'
 import type { ItemReview, ItemReviewSummary } from '@/types/productReview'
 
@@ -26,6 +28,7 @@ const route = useRoute()
 
 const product = ref<ProductDetail | null>(null)
 const activeFlashSale = ref<FlashSale | null>(null)
+const categoryRankingBadge = ref<CategoryRankingItem | null>(null)
 const selectedImageIndex = ref(0)
 const isLoading = ref(false)
 const isAddingToCart = ref(false)
@@ -76,6 +79,12 @@ const originalPrice = computed(() => {
     ? activeFlashSale.value.item_price
     : null
 })
+
+const categoryRankingRoute = computed(() =>
+  categoryRankingBadge.value
+    ? { name: 'department-category', params: { departmentSlug: categoryRankingBadge.value.category_id } }
+    : '/',
+)
 
 function formatCurrency(value: number | string | undefined) {
   return new Intl.NumberFormat('en-US', {
@@ -144,16 +153,29 @@ async function loadProductDetail() {
     const response = await fetchProductDetail(itemId.value)
     product.value = response.item
     await loadActiveFlashSale(response.item.item_id)
+    await loadCategoryRankingBadge(response.item)
     await loadItemReviews(response.item.item_id)
   } catch (error) {
     product.value = null
     activeFlashSale.value = null
+    categoryRankingBadge.value = null
     reviews.value = []
     reviewSummary.value = { average_rating: 0, review_count: 0 }
     errorMessage.value =
       error instanceof Error ? error.message : 'Product detail service is unavailable.'
   } finally {
     isLoading.value = false
+  }
+}
+
+async function loadCategoryRankingBadge(targetProduct: ProductDetail) {
+  try {
+    const response = await fetchCategoryRanking(targetProduct.category_id, { limit: 3 })
+    categoryRankingBadge.value =
+      response.items.find((item) => item.item_id === targetProduct.item_id && item.rank <= 3) ??
+      null
+  } catch {
+    categoryRankingBadge.value = null
   }
 }
 
@@ -370,6 +392,14 @@ onMounted(() => {
           >
             {{ badge }}
           </span>
+          <RouterLink
+            v-if="categoryRankingBadge"
+            class="rounded-md bg-[#FFC220] px-3 py-1 text-sm font-black text-[#101828]"
+            :to="categoryRankingRoute"
+          >
+            #{{ categoryRankingBadge.rank }} in
+            {{ categoryRankingBadge.category_name || categoryRankingBadge.category_id }}
+          </RouterLink>
         </div>
 
         <p class="mt-4 text-sm font-semibold text-[#0053E2] underline">{{ product.brand }}</p>

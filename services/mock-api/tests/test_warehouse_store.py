@@ -13,6 +13,7 @@ from app.warehouse_store import (
     build_item_search_sql,
     _quote_literal,
     cart_items,
+    category_rank_snapshots,
     categories,
     delivery_addresses,
     flash_sale_claims,
@@ -21,6 +22,7 @@ from app.warehouse_store import (
     inventory_movements,
     inventory_location_balances,
     inventory_batches,
+    item_rank_events,
     item_reviews,
     items,
     delivery_providers,
@@ -50,6 +52,8 @@ WAREHOUSE_TABLES = [
     cart_items,
     flash_sales,
     flash_sale_claims,
+    item_rank_events,
+    category_rank_snapshots,
     item_reviews,
     procurement_suppliers,
     purchase_orders,
@@ -90,6 +94,8 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
             text("select count(*) from flash_sales where status = 'active'")
         ).scalar_one()
         flash_sale_claim_count = connection.execute(text("select count(*) from flash_sale_claims")).scalar_one()
+        rank_event_count = connection.execute(text("select count(*) from item_rank_events")).scalar_one()
+        rank_snapshot_count = connection.execute(text("select count(*) from category_rank_snapshots")).scalar_one()
         item_review_count = connection.execute(text("select count(*) from item_reviews")).scalar_one()
         default_address = connection.execute(
             text("select address from delivery_addresses where user_id = 1 and is_default = 1")
@@ -116,6 +122,8 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert flash_sale_count == 8
     assert active_flash_sale_count == 7
     assert flash_sale_claim_count == 0
+    assert rank_event_count >= 16
+    assert rank_snapshot_count >= 9
     assert item_review_count == 4
     assert default_address == "广东省深圳市南山区示例路 100 号"
     assert cart_item_count == 0
@@ -261,6 +269,109 @@ def test_warehouse_repository_lists_flash_sales_by_status(tmp_path: Path) -> Non
     assert len(sales) == 1
     assert sales[0]["item_id"] == "item_milk_pure"
     assert sales[0]["status"] == "active"
+
+
+def test_warehouse_repository_rebuilds_category_rankings_from_rank_events(tmp_path: Path) -> None:
+    """Protect the F8 ranking contract from drifting back to static frontend data.
+
+    The repository owns durable ranking facts and snapshots. Rebuilding should
+    aggregate item events into deterministic category rankings, then expose rows
+    with item display fields so routers and frontend pages do not need separate
+    item lookups for the common read path.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    repository.record_item_rank_event(
+        item_id="item_wireless_earbuds",
+        event_type="purchase",
+        user_id=1,
+        occurred_at="2026-06-17T10:00:00+08:00",
+    )
+    repository.record_item_rank_event(
+        item_id="item_smart_tv_43",
+        event_type="view",
+        user_id=1,
+        occurred_at="2026-06-17T10:01:00+08:00",
+    )
+
+    rebuilt = repository.rebuild_category_rankings(
+        category_id="electronics",
+        rank_type="hot",
+        window_type="all_time",
+        limit=10,
+        generated_at="2026-06-17T10:05:00+08:00",
+    )
+    ranking = repository.get_category_ranking(
+        category_id="electronics",
+        rank_type="hot",
+        window_type="all_time",
+        limit=10,
+    )
+
+    assert rebuilt[0]["item_id"] == "item_wireless_earbuds"
+    assert rebuilt[0]["rank"] == 1
+    assert rebuilt[0]["score"] > rebuilt[1]["score"]
+    assert ranking == rebuilt
+    assert ranking[0]["item_name"]
+    assert isinstance(ranking[0]["price"], float)
+
+
+def test_warehouse_repository_gets_ranked_items_by_cached_ids(tmp_path: Path) -> None:
+    """Ensure Redis ZSET cache hits can hydrate display cards from PostgreSQL.
+
+    Redis only stores `item_id` scores. The repository must preserve the cached
+    item order while joining current item facts and category metadata.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    rows = repository.get_ranked_items_by_ids(
+        ["item_smart_tv_43", "item_wireless_earbuds"],
+        scores={"item_smart_tv_43": 42.0, "item_wireless_earbuds": 39.0},
+    )
+
+    assert [row["item_id"] for row in rows] == ["item_smart_tv_43", "item_wireless_earbuds"]
+    assert rows[0]["rank"] == 1
+    assert rows[0]["score"] == 42.0
+    assert rows[0]["category_id"] == "electronics"
+
+
+def test_warehouse_repository_home_hot_preserves_category_snapshot_rank(tmp_path: Path) -> None:
+    """Keep homepage hot labels aligned with the category leaderboard rank.
+
+    The home rail sorts products from every category by score, but each label is
+    still rendered as "#N in Category". The repository must therefore return the
+    rank stored in `category_rank_snapshots` instead of re-numbering the
+    cross-category result set.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                update category_rank_snapshots
+                set rank = 2, score = 999
+                where item_id = 'item_wireless_earbuds'
+                  and category_id = 'electronics'
+                  and rank_type = 'hot'
+                  and window_type = 'all_time'
+                """
+            )
+        )
+
+    rows = repository.list_home_hot_rankings(rank_type="hot", window_type="all_time", limit=1)
+
+    assert rows[0]["item_id"] == "item_wireless_earbuds"
+    assert rows[0]["rank"] == 2
 
 
 def test_warehouse_tables_and_columns_have_chinese_comments() -> None:

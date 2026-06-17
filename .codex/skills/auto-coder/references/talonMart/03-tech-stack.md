@@ -118,6 +118,8 @@ n8n Workflow
 | `cart_items` | 购物车明细表，按用户和商品保存加入购物车时的商品快照价格与数量。 |
 | `flash_sales` | 秒杀活动表，保存秒杀商品、秒杀价、营销库存配额、开始时间和结束时间；`/flash-sales` 接口结合 `items.price` 返回可选商品原价，用于前端在存在真实折扣时展示划线价。 |
 | `flash_sale_claims` | 秒杀抢购结果表，记录用户抢购结果、关联订单和一人一单约束。 |
+| `item_rank_events` | 商品排行榜事件事实表，记录浏览、加购、购买、收藏、评论等可聚合行为。 |
+| `category_rank_snapshots` | 分类排行榜快照表，保存各 category、rank_type、window_type 下的商品排名、分数和生成时间，Redis 丢失后可重建榜单。 |
 | `procurement_suppliers` | 采购供应商表，保存供应商、商品、交期、采购价和可靠性。 |
 | `purchase_orders` | 采购单表，保存补货申请审核后生成的采购单、支付状态和仓库同步状态。 |
 | `session_state` | Agent 会话状态表，保存飞书/会话维度的短期状态，例如最近订单。 |

@@ -187,6 +187,8 @@ n8n Workflow
 | `cart_items` | 购物车明细表，按用户和商品保存加入购物车时的商品快照价格与数量。 |
 | `flash_sales` | 秒杀活动表，保存秒杀商品、秒杀价、营销库存配额、开始时间和结束时间；`/flash-sales` 接口结合 `items.price` 返回可选商品原价，用于前端在存在真实折扣时展示划线价。 |
 | `flash_sale_claims` | 秒杀抢购结果表，记录用户抢购结果、关联订单和一人一单约束。 |
+| `item_rank_events` | 商品排行榜事件事实表，记录浏览、加购、购买、收藏、评论等可聚合行为。 |
+| `category_rank_snapshots` | 分类排行榜快照表，保存各 category、rank_type、window_type 下的商品排名、分数和生成时间，Redis 丢失后可重建榜单。 |
 | `procurement_suppliers` | 采购供应商表，保存供应商、商品、交期、采购价和可靠性。 |
 | `purchase_orders` | 采购单表，保存补货申请审核后生成的采购单、支付状态和仓库同步状态。 |
 | `session_state` | Agent 会话状态表，保存飞书/会话维度的短期状态，例如最近订单。 |
@@ -327,6 +329,8 @@ agent/                                                      # 项目根目录
 │           │   ├── aiModelApi.ts                           # AI 模式 API
 │           │   ├── aiModelApi.spec.ts                      # AI API 测试
 │           │   ├── cartApi.ts                              # 购物车 API
+│           │   ├── categoryRankingApi.ts                   # 分类排行榜 API
+│           │   ├── categoryRankingApi.spec.ts              # 分类排行榜 API 测试
 │           │   ├── checkoutApi.ts                          # 结算 API
 │           │   ├── flashSaleApi.ts                         # 秒杀 API
 │           │   ├── flashSaleApi.spec.ts                    # 秒杀 API 测试
@@ -338,6 +342,7 @@ agent/                                                      # 项目根目录
 │           ├── types/                                      # 前端类型定义
 │           │   ├── aiModel.ts                              # AI 模式类型
 │           │   ├── cart.ts                                 # 购物车类型
+│           │   ├── categoryRanking.ts                      # 分类排行榜类型
 │           │   ├── checkout.ts                             # 结算类型
 │           │   ├── flashSale.ts                            # 秒杀类型
 │           │   ├── productDetail.ts                        # 商品详情类型
@@ -392,6 +397,7 @@ agent/                                                      # 项目根目录
 │   │   │   └── routers/                                    # 业务路由目录
 │   │   │       ├── __init__.py                             # 路由包标记
 │   │   │       ├── cart.py                                 # 购物车路由
+│   │   │       ├── category_rankings.py                    # 分类排行榜路由
 │   │   │       ├── delivery_addresses.py                   # 配送地址路由
 │   │   │       ├── flash_sales.py                          # 秒杀路由
 │   │   │       ├── product_details.py                      # 商品详情路由
@@ -510,6 +516,7 @@ agent/                                                      # 项目根目录
 | 前端 | `apps/talonmart-web/src/components/AiModeSidebar.vue` | AI 模式浮动入口 | 右下角笑脸入口、聊天面板开关、会话面板挂载 |
 | 前端 | `apps/talonmart-web/src/components/AiModeChatPanel.vue` | AI 聊天面板 | SSE 流式输出、消息格式化、内部结果过滤 |
 | 前端 | `apps/talonmart-web/src/services/aiModelApi.ts` | AImodel API client | chat stream、conversation、message |
+| 前端 | `apps/talonmart-web/src/services/categoryRankingApi.ts` | 分类排行榜 API client | 首页热门、分类榜单、详情页 Top 标签 |
 | AI 服务 | `services/ai-service/app/main.py` | FastAPI 入口 | 路由注册、启动初始化、shutdown 释放资源 |
 | AI 服务 | `services/ai-service/app/routers/AImodel/router.py` | AImodel HTTP 路由 | chat、conversation、message、memory |
 | AI 服务 | `services/ai-service/app/routers/AImodel/service.py` | Agent 编排 | LangChain message、工具调用、流式响应 |
@@ -517,6 +524,7 @@ agent/                                                      # 项目根目录
 | AI 服务 | `services/ai-service/app/routers/AImodel/memory.py` | 会话记忆 | conversation、message、user_memory、message_query_trace |
 | 业务 API | `services/mock-api/app/main.py` | mock-api 入口 | 路由注册、health、政策搜索、run log |
 | 业务 API | `services/mock-api/app/warehouse_store.py` | 仓储 repository | PostgreSQL 优先、fixtures fallback、库存事实 |
+| 业务 API | `services/mock-api/app/routers/category_rankings.py` | 分类排行榜路由 | PostgreSQL 事实/快照、Redis ZSET 缓存、Top 商品返回 |
 | 业务 API | `services/mock-api/app/routers/warehouse/router.py` | Warehouse 路由聚合 | 库存、订单、同步任务 |
 | 业务 API | `services/mock-api/app/routers/procurement/router.py` | Procurement 路由聚合 | 补货申请、采购单、到仓确认 |
 | 业务 API | `services/mock-api/app/routers/delivery/router.py` | Delivery 路由聚合 | 物流状态、异常、case |
@@ -647,7 +655,7 @@ AImodel service 读取记忆并调用工具
 | 阶段 C | Procurement Workflow | 完成补货审批、采购单和采购飞书表闭环 | [✔] |
 | 阶段 D | Delivery Workflow | 完成物流查询、异常和 case 闭环 | [✔] |
 | 阶段 E | Operations Workflow | 完成跨领域只读摘要和运营建议闭环 | [✔] |
-| 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀和前端体验 | [✔] |
+| 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀、排行榜和前端体验 | [✔] |
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆和 RAG MCP 集成 | [✔] |
 | 阶段 H | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
 
@@ -660,7 +668,7 @@ AImodel service 读取记忆并调用工具
 | 阶段 C | 采购主链路可演示 | 补货审批、采购单、到仓确认、采购表同步 | `uv run --project services/mock-api pytest services\mock-api\tests\test_procurement_router_structure.py -q` | Delivery Workflow |  |
 | 阶段 D | 物流主链路可演示 | 物流状态、异常查询、case 创建 | `uv run --project services/mock-api pytest services\mock-api\tests\test_delivery_router_structure.py -q` | Operations Workflow |  |
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
-| 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel |  |
+| 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
 | 阶段 G | AImodel 可用 | 流式聊天、工具调用、会话记忆、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | Quality And Delivery |  |
 | 阶段 H | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
 
@@ -733,6 +741,7 @@ AImodel service 读取记忆并调用工具
 | F5 | 实现 AI 模式浮动入口和聊天面板 | [✔] |  | AiModeSidebar、AiModeChatPanel |
 | F6 | 实现前端 API client 和类型 | [✔] |  | services、types |
 | F7 | 实现前端单元/E2E 测试 | [✔] |  | Vitest、Playwright |
+| F8 | 实现分类排行榜和热门商品展示 | [✔] | 2026-06-17 | PostgreSQL facts、Redis ZSET、HomeView、DepartmentCategoryView、ProductDetailView |
 
 #### 阶段 G：AImodel
 
@@ -768,10 +777,10 @@ AImodel service 读取记忆并调用工具
 | 阶段 C | 7 | 7 | 100% |
 | 阶段 D | 6 | 6 | 100% |
 | 阶段 E | 5 | 5 | 100% |
-| 阶段 F | 7 | 7 | 100% |
+| 阶段 F | 8 | 8 | 100% |
 | 阶段 G | 8 | 8 | 100% |
 | 阶段 H | 7 | 2 | 29% |
-| **总计** | **53** | **48** | **91%** |
+| **总计** | **54** | **49** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -1458,7 +1467,7 @@ AImodel service 读取记忆并调用工具
 - 用户点击 Electronics 后跳转到 `/cp/electronics`。
 - `/cp/electronics` 页面应查询 electronics category 下的商品并展示列表。
 - Flash Deals 商品图片和标题点击后进入对应商品详情页。
-- Home、Search、Department、Product Detail、Cart 页面使用统一商城顶部导航：蓝色主栏、TM 标识、Pickup 定位、搜索框、Account、Cart。
+- Home、Search、Department、Product Detail、Cart 页面使用统一商城顶部导航：蓝色主栏、TM 标识、搜索框、Account、Cart。
 - 统一顶部导航第二行以 Departments 下拉入口作为分类导航入口。
 - Department 详情页通过统一顶部导航中的 Departments 下拉框完成分类切换。
 - 空结果、加载中和接口失败状态都有明确页面反馈。
@@ -1622,6 +1631,55 @@ AImodel service 读取记忆并调用工具
 - 前端测试能稳定执行。
 
 测试方法：`pnpm --dir apps/talonmart-web test:unit`
+
+##### F8：实现分类排行榜和热门商品展示
+
+目标：为每个 category 提供可重建、可缓存、可展示的商品排行榜能力，并在首页、分类页和商品详情页形成完整入口。
+
+修改文件：
+
+- `services/mock-api/app/warehouse_store.py`
+- `services/mock-api/app/main.py`
+- `services/mock-api/app/routers/category_rankings.py`
+- `services/mock-api/tests/test_api.py`
+- `services/mock-api/tests/test_warehouse_store.py`
+- `apps/talonmart-web/src/services/categoryRankingApi.ts`
+- `apps/talonmart-web/src/services/categoryRankingApi.spec.ts`
+- `apps/talonmart-web/src/types/categoryRanking.ts`
+- `apps/talonmart-web/src/views/HomeView.vue`
+- `apps/talonmart-web/src/views/HomeView.spec.ts`
+- `apps/talonmart-web/src/views/DepartmentCategoryView.vue`
+- `apps/talonmart-web/src/views/DepartmentCategoryView.spec.ts`
+- `apps/talonmart-web/src/views/ProductDetailView.vue`
+- `apps/talonmart-web/src/views/ProductDetailView.spec.ts`
+
+实现类/函数：
+
+- `item_rank_events`：保存商品浏览、加购、购买、收藏、评论等排行榜事实事件。
+- `category_rank_snapshots`：保存分类排行榜快照，支持 Redis 缓存失效后的重建和历史追踪。
+- `record_item_rank_event()`：写入商品排行事件。
+- `rebuild_category_rankings()`：按 category、rank_type、window_type 聚合事件并生成排行榜快照。
+- `get_category_ranking()`：优先读取 Redis ZSET，未命中时从 PostgreSQL 快照恢复并回填 Redis。
+- `GET /rankings/categories/{category_id}`：返回指定 category 的排行榜商品、分数、排名和商品基础信息。
+- `GET /rankings/home/hot`：返回首页 `Bet you like it.` 栏目所需热门商品。
+- `categoryRankingApi.ts`：封装排行榜 HTTP 调用。
+- `categoryRanking.ts`：定义排行榜项、榜单类型、时间窗口和响应类型。
+- `HomeView.vue`：展示 `Bet you like it.` 热门商品栏目。
+- `DepartmentCategoryView.vue`：在每个分类页提供排行榜入口和 Top 商品展示。
+- `ProductDetailView.vue`：商品属于当前 category Top3 时展示可点击排行榜标签。
+
+验收标准：
+
+- PostgreSQL 保存排行榜事实事件和排行榜快照，Redis 只保存可重建的 ZSET 排序缓存。
+- Redis key 采用 `rank:category:{category_id}:{rank_type}:{window_type}` 结构，ZSET member 为 `item_id`，score 为聚合分数。
+- 首页展示 `Bet you like it.` 栏目，内容来自热门商品排行榜接口。
+- 首页 `Bet you like it.` 跨分类热门列表展示每个商品在原 category snapshot 中的排名，不对跨分类结果重新递增编号。
+- 每个分类页提供排行榜入口，用户可以查看该分类下的热门商品。
+- 商品详情页命中所属分类 Top3 时展示排行榜标签，例如 `#1 in Grocery`，标签点击后进入对应分类排行榜入口。
+- Redis 不可用或缓存未命中时，API 可以从 PostgreSQL 快照读取榜单并返回结果。
+- 排行榜接口返回空结果时，前端显示稳定空状态，不影响首页、分类页和详情页主体内容。
+
+测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`；`pnpm --dir apps/talonmart-web test:unit -- HomeView DepartmentCategoryView ProductDetailView categoryRankingApi`
 
 #### 阶段 G：AImodel
 

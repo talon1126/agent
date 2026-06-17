@@ -4,12 +4,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ProductDetailView from './ProductDetailView.vue'
 
 const routerPush = vi.fn()
-const { fetchProductDetail, addCartItem, fetchItemReviews, createItemReview, fetchFlashSales } = vi.hoisted(() => ({
+const {
+  addCartItem,
+  createItemReview,
+  fetchCategoryRanking,
+  fetchFlashSales,
+  fetchItemReviews,
+  fetchProductDetail,
+} = vi.hoisted(() => ({
   fetchProductDetail: vi.fn(),
   addCartItem: vi.fn(),
   fetchItemReviews: vi.fn(),
   createItemReview: vi.fn(),
   fetchFlashSales: vi.fn(),
+  fetchCategoryRanking: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({
@@ -43,6 +51,10 @@ vi.mock('@/services/flashSaleApi', () => ({
   fetchFlashSales,
 }))
 
+vi.mock('@/services/categoryRankingApi', () => ({
+  fetchCategoryRanking,
+}))
+
 describe('ProductDetailView', () => {
   beforeEach(() => {
     routerPush.mockClear()
@@ -50,6 +62,7 @@ describe('ProductDetailView', () => {
     fetchItemReviews.mockReset()
     createItemReview.mockReset()
     fetchFlashSales.mockReset()
+    fetchCategoryRanking.mockReset()
     fetchProductDetail.mockResolvedValue({
       ok: true,
       item: {
@@ -86,6 +99,26 @@ describe('ProductDetailView', () => {
       ok: true,
       count: 0,
       flash_sales: [],
+    })
+    fetchCategoryRanking.mockResolvedValue({
+      ok: true,
+      category_id: 'dairy',
+      rank_type: 'hot',
+      window_type: 'all_time',
+      count: 1,
+      items: [
+        {
+          rank: 1,
+          item_id: 'item_milk_pure',
+          item_name: 'Pure milk 1L multipack',
+          brand: 'Talon Value',
+          spec: '1L x 6',
+          category_id: 'dairy',
+          category_name: 'Dairy',
+          price: 18.4,
+          score: 95,
+        },
+      ],
     })
     addCartItem.mockResolvedValue({
       ok: true,
@@ -190,7 +223,9 @@ describe('ProductDetailView', () => {
 
     expect(fetchProductDetail).toHaveBeenCalledWith('item_milk_pure')
     expect(fetchItemReviews).toHaveBeenCalledWith('item_milk_pure', { limit: 20, offset: 0 })
+    expect(fetchCategoryRanking).toHaveBeenCalledWith('dairy', { limit: 3 })
     expect(wrapper.text()).toContain('Pure milk 1L multipack')
+    expect(wrapper.text()).toContain('#1 in Dairy')
     expect(wrapper.text()).toContain('Pure milk for everyday use')
     expect(wrapper.text()).toContain('Customer reviews')
     expect(wrapper.text()).toContain('Family pack is convenient')

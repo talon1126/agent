@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { ChevronDown, MapPin, Menu, Search, ShoppingCart, UserRound } from 'lucide-vue-next'
+import { ChevronDown, Menu, Search, ShoppingCart, UserRound } from 'lucide-vue-next'
 
 const props = withDefaults(
   defineProps<{
@@ -58,21 +58,6 @@ function openDepartment(slug?: string) {
       >
         TM
       </RouterLink>
-
-      <button
-        class="hidden min-h-12 shrink-0 items-center gap-3 rounded-full bg-[#003A9B] px-5 text-left text-sm font-semibold xl:flex"
-        type="button"
-        data-testid="store-header-pickup"
-      >
-        <MapPin class="h-6 w-6 text-[#FFC220]" aria-hidden="true" />
-        <span>
-          <span class="block text-sm leading-5 text-white">Pickup or delivery?</span>
-          <span class="block max-w-[220px] truncate text-sm leading-5 text-white/90">
-            Sacramento, 95829
-          </span>
-        </span>
-        <ChevronDown class="h-4 w-4" aria-hidden="true" />
-      </button>
 
       <form
         class="flex min-h-12 flex-1 overflow-hidden rounded-full bg-white"

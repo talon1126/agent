@@ -18,6 +18,7 @@ from app.main import (
     app,
 )
 from app.routers import search as search_router
+from app.routers import category_rankings as category_rankings_router
 from app.routers import flash_sales as flash_sales_router
 from app.routers import product_details as product_details_router
 from app.routers import product_reviews as product_reviews_router
@@ -147,6 +148,101 @@ class FakeProductDetailRepository:
 
     def item_review_summary(self, item_id: str):
         return self.review_summaries.get(item_id, {"average_rating": 0, "review_count": 0})
+
+
+class FakeRankingRepository:
+    """In-memory repository double for category ranking HTTP contracts.
+
+    The router combines Redis cache reads with PostgreSQL-backed snapshots. This
+    fake exposes the same read methods needed by the router so API tests can
+    verify fallback behavior without depending on a real database or Redis.
+    """
+
+    def __init__(self):
+        self.snapshot_rows = [
+            {
+                "rank": 2,
+                "item_id": "item_wireless_earbuds",
+                "item_name": "Wireless Earbuds",
+                "brand": "Talon Audio",
+                "spec": "Bluetooth 5.3",
+                "category_id": "electronics",
+                "category_name": "Electronics",
+                "price": 59.99,
+                "score": 91.0,
+                "rank_type": "hot",
+                "window_type": "all_time",
+                "generated_at": "2026-06-17T10:00:00+08:00",
+            },
+            {
+                "rank": 2,
+                "item_id": "item_smart_tv_43",
+                "item_name": "43 inch Smart TV",
+                "brand": "Talon Vision",
+                "spec": "4K UHD",
+                "category_id": "electronics",
+                "category_name": "Electronics",
+                "price": 279.99,
+                "score": 73.0,
+                "rank_type": "hot",
+                "window_type": "all_time",
+                "generated_at": "2026-06-17T10:00:00+08:00",
+            },
+        ]
+
+    def get_category_ranking(self, *, category_id: str, rank_type: str, window_type: str, limit: int):
+        return [
+            dict(row)
+            for row in self.snapshot_rows
+            if row["category_id"] == category_id
+            and row["rank_type"] == rank_type
+            and row["window_type"] == window_type
+        ][:limit]
+
+    def get_ranked_items_by_ids(
+        self,
+        item_ids: list[str],
+        *,
+        rank_type: str = "hot",
+        scores: dict[str, float],
+        window_type: str = "all_time",
+    ):
+        rows_by_id = {row["item_id"]: row for row in self.snapshot_rows}
+        hydrated = []
+        for index, item_id in enumerate(item_ids, start=1):
+            row = dict(rows_by_id[item_id])
+            row["rank"] = index
+            row["rank_type"] = rank_type
+            row["score"] = scores[item_id]
+            row["window_type"] = window_type
+            hydrated.append(row)
+        return hydrated
+
+    def list_home_hot_rankings(self, *, rank_type: str, window_type: str, limit: int):
+        return sorted(self.snapshot_rows, key=lambda row: row["score"], reverse=True)[:limit]
+
+
+class FakeRankingRedis:
+    """Minimal Redis ZSET double used by ranking router tests."""
+
+    def __init__(self, cached_items: list[tuple[str, float]] | None = None):
+        self.cached_items = cached_items or []
+        self.writes: dict[str, dict[str, float]] = {}
+
+    def zrevrange(self, key: str, start: int, end: int, withscores: bool = False):
+        sliced = self.cached_items[start : end + 1]
+        if withscores:
+            return sliced
+        return [item_id for item_id, _score in sliced]
+
+    def zadd(self, key: str, mapping: dict[str, float]):
+        self.writes[key] = dict(mapping)
+
+    def expire(self, key: str, seconds: int):
+        return True
+
+    def delete(self, key: str):
+        self.cached_items = []
 
 
 def active_flash_sale(**overrides):
@@ -354,6 +450,69 @@ def test_product_search_returns_items_by_category_without_query(monkeypatch):
     assert body["items"][0]["category_id"] == "electronics"
     assert body["items"][0]["rating"] == {"score": 4.7, "count": 3}
     assert body["items"][0]["balances"][0]["quantity_on_hand"] == 42
+
+
+def test_category_ranking_endpoint_falls_back_to_postgres_snapshot(monkeypatch):
+    repository = FakeRankingRepository()
+    monkeypatch.setattr(category_rankings_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(category_rankings_router, "get_category_ranking_redis", lambda: None)
+
+    response = client.get("/rankings/categories/electronics", params={"limit": 2})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["category_id"] == "electronics"
+    assert body["count"] == 2
+    assert [item["item_id"] for item in body["items"]] == [
+        "item_wireless_earbuds",
+        "item_smart_tv_43",
+    ]
+
+
+def test_category_ranking_endpoint_uses_redis_zset_when_available(monkeypatch):
+    repository = FakeRankingRepository()
+    redis_client = FakeRankingRedis(
+        [
+            ("item_smart_tv_43", 101.0),
+            ("item_wireless_earbuds", 96.0),
+        ]
+    )
+    monkeypatch.setattr(category_rankings_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(category_rankings_router, "get_category_ranking_redis", lambda: redis_client)
+
+    response = client.get("/rankings/categories/electronics", params={"limit": 2})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["item_id"] for item in body["items"]] == [
+        "item_smart_tv_43",
+        "item_wireless_earbuds",
+    ]
+    assert body["items"][0]["score"] == 101.0
+
+
+def test_home_hot_ranking_endpoint_returns_cross_category_items(monkeypatch):
+    """Homepage rankings must preserve the item's category snapshot rank.
+
+    The home rail is a cross-category projection sorted by score, but the
+    displayed label still means "#N in category". Re-numbering the cross-category
+    result would make a second-ranked Electronics item appear as "#1 in
+    Electronics", which is misleading for users and inconsistent with product
+    detail rank tags.
+    """
+    repository = FakeRankingRepository()
+    monkeypatch.setattr(category_rankings_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(category_rankings_router, "get_category_ranking_redis", lambda: None)
+
+    response = client.get("/rankings/home/hot", params={"limit": 2})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["count"] == 2
+    assert body["items"][0]["rank"] == 2
+    assert body["items"][0]["item_id"] == "item_wireless_earbuds"
 
 
 def test_product_keyword_search_sql_keeps_optional_category_filter():

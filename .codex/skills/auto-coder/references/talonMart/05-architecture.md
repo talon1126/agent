@@ -99,6 +99,8 @@ agent/                                                      # 项目根目录
 │           │   ├── aiModelApi.ts                           # AI 模式 API
 │           │   ├── aiModelApi.spec.ts                      # AI API 测试
 │           │   ├── cartApi.ts                              # 购物车 API
+│           │   ├── categoryRankingApi.ts                   # 分类排行榜 API
+│           │   ├── categoryRankingApi.spec.ts              # 分类排行榜 API 测试
 │           │   ├── checkoutApi.ts                          # 结算 API
 │           │   ├── flashSaleApi.ts                         # 秒杀 API
 │           │   ├── flashSaleApi.spec.ts                    # 秒杀 API 测试
@@ -110,6 +112,7 @@ agent/                                                      # 项目根目录
 │           ├── types/                                      # 前端类型定义
 │           │   ├── aiModel.ts                              # AI 模式类型
 │           │   ├── cart.ts                                 # 购物车类型
+│           │   ├── categoryRanking.ts                      # 分类排行榜类型
 │           │   ├── checkout.ts                             # 结算类型
 │           │   ├── flashSale.ts                            # 秒杀类型
 │           │   ├── productDetail.ts                        # 商品详情类型
@@ -164,6 +167,7 @@ agent/                                                      # 项目根目录
 │   │   │   └── routers/                                    # 业务路由目录
 │   │   │       ├── __init__.py                             # 路由包标记
 │   │   │       ├── cart.py                                 # 购物车路由
+│   │   │       ├── category_rankings.py                    # 分类排行榜路由
 │   │   │       ├── delivery_addresses.py                   # 配送地址路由
 │   │   │       ├── flash_sales.py                          # 秒杀路由
 │   │   │       ├── product_details.py                      # 商品详情路由
@@ -282,6 +286,7 @@ agent/                                                      # 项目根目录
 | 前端 | `apps/talonmart-web/src/components/AiModeSidebar.vue` | AI 模式浮动入口 | 右下角笑脸入口、聊天面板开关、会话面板挂载 |
 | 前端 | `apps/talonmart-web/src/components/AiModeChatPanel.vue` | AI 聊天面板 | SSE 流式输出、消息格式化、内部结果过滤 |
 | 前端 | `apps/talonmart-web/src/services/aiModelApi.ts` | AImodel API client | chat stream、conversation、message |
+| 前端 | `apps/talonmart-web/src/services/categoryRankingApi.ts` | 分类排行榜 API client | 首页热门、分类榜单、详情页 Top 标签 |
 | AI 服务 | `services/ai-service/app/main.py` | FastAPI 入口 | 路由注册、启动初始化、shutdown 释放资源 |
 | AI 服务 | `services/ai-service/app/routers/AImodel/router.py` | AImodel HTTP 路由 | chat、conversation、message、memory |
 | AI 服务 | `services/ai-service/app/routers/AImodel/service.py` | Agent 编排 | LangChain message、工具调用、流式响应 |
@@ -289,6 +294,7 @@ agent/                                                      # 项目根目录
 | AI 服务 | `services/ai-service/app/routers/AImodel/memory.py` | 会话记忆 | conversation、message、user_memory、message_query_trace |
 | 业务 API | `services/mock-api/app/main.py` | mock-api 入口 | 路由注册、health、政策搜索、run log |
 | 业务 API | `services/mock-api/app/warehouse_store.py` | 仓储 repository | PostgreSQL 优先、fixtures fallback、库存事实 |
+| 业务 API | `services/mock-api/app/routers/category_rankings.py` | 分类排行榜路由 | PostgreSQL 事实/快照、Redis ZSET 缓存、Top 商品返回 |
 | 业务 API | `services/mock-api/app/routers/warehouse/router.py` | Warehouse 路由聚合 | 库存、订单、同步任务 |
 | 业务 API | `services/mock-api/app/routers/procurement/router.py` | Procurement 路由聚合 | 补货申请、采购单、到仓确认 |
 | 业务 API | `services/mock-api/app/routers/delivery/router.py` | Delivery 路由聚合 | 物流状态、异常、case |

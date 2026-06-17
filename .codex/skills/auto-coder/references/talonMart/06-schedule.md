@@ -14,7 +14,7 @@
 | 阶段 C | Procurement Workflow | 完成补货审批、采购单和采购飞书表闭环 | [✔] |
 | 阶段 D | Delivery Workflow | 完成物流查询、异常和 case 闭环 | [✔] |
 | 阶段 E | Operations Workflow | 完成跨领域只读摘要和运营建议闭环 | [✔] |
-| 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀和前端体验 | [✔] |
+| 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀、排行榜和前端体验 | [✔] |
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆和 RAG MCP 集成 | [✔] |
 | 阶段 H | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
 
@@ -27,7 +27,7 @@
 | 阶段 C | 采购主链路可演示 | 补货审批、采购单、到仓确认、采购表同步 | `uv run --project services/mock-api pytest services\mock-api\tests\test_procurement_router_structure.py -q` | Delivery Workflow |  |
 | 阶段 D | 物流主链路可演示 | 物流状态、异常查询、case 创建 | `uv run --project services/mock-api pytest services\mock-api\tests\test_delivery_router_structure.py -q` | Operations Workflow |  |
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
-| 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel |  |
+| 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
 | 阶段 G | AImodel 可用 | 流式聊天、工具调用、会话记忆、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | Quality And Delivery |  |
 | 阶段 H | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
 
@@ -100,6 +100,7 @@
 | F5 | 实现 AI 模式浮动入口和聊天面板 | [✔] |  | AiModeSidebar、AiModeChatPanel |
 | F6 | 实现前端 API client 和类型 | [✔] |  | services、types |
 | F7 | 实现前端单元/E2E 测试 | [✔] |  | Vitest、Playwright |
+| F8 | 实现分类排行榜和热门商品展示 | [✔] | 2026-06-17 | PostgreSQL facts、Redis ZSET、HomeView、DepartmentCategoryView、ProductDetailView |
 
 #### 阶段 G：AImodel
 
@@ -135,10 +136,10 @@
 | 阶段 C | 7 | 7 | 100% |
 | 阶段 D | 6 | 6 | 100% |
 | 阶段 E | 5 | 5 | 100% |
-| 阶段 F | 7 | 7 | 100% |
+| 阶段 F | 8 | 8 | 100% |
 | 阶段 G | 8 | 8 | 100% |
 | 阶段 H | 7 | 2 | 29% |
-| **总计** | **53** | **48** | **91%** |
+| **总计** | **54** | **49** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -825,7 +826,7 @@
 - 用户点击 Electronics 后跳转到 `/cp/electronics`。
 - `/cp/electronics` 页面应查询 electronics category 下的商品并展示列表。
 - Flash Deals 商品图片和标题点击后进入对应商品详情页。
-- Home、Search、Department、Product Detail、Cart 页面使用统一商城顶部导航：蓝色主栏、TM 标识、Pickup 定位、搜索框、Account、Cart。
+- Home、Search、Department、Product Detail、Cart 页面使用统一商城顶部导航：蓝色主栏、TM 标识、搜索框、Account、Cart。
 - 统一顶部导航第二行以 Departments 下拉入口作为分类导航入口。
 - Department 详情页通过统一顶部导航中的 Departments 下拉框完成分类切换。
 - 空结果、加载中和接口失败状态都有明确页面反馈。
@@ -989,6 +990,55 @@
 - 前端测试能稳定执行。
 
 测试方法：`pnpm --dir apps/talonmart-web test:unit`
+
+##### F8：实现分类排行榜和热门商品展示
+
+目标：为每个 category 提供可重建、可缓存、可展示的商品排行榜能力，并在首页、分类页和商品详情页形成完整入口。
+
+修改文件：
+
+- `services/mock-api/app/warehouse_store.py`
+- `services/mock-api/app/main.py`
+- `services/mock-api/app/routers/category_rankings.py`
+- `services/mock-api/tests/test_api.py`
+- `services/mock-api/tests/test_warehouse_store.py`
+- `apps/talonmart-web/src/services/categoryRankingApi.ts`
+- `apps/talonmart-web/src/services/categoryRankingApi.spec.ts`
+- `apps/talonmart-web/src/types/categoryRanking.ts`
+- `apps/talonmart-web/src/views/HomeView.vue`
+- `apps/talonmart-web/src/views/HomeView.spec.ts`
+- `apps/talonmart-web/src/views/DepartmentCategoryView.vue`
+- `apps/talonmart-web/src/views/DepartmentCategoryView.spec.ts`
+- `apps/talonmart-web/src/views/ProductDetailView.vue`
+- `apps/talonmart-web/src/views/ProductDetailView.spec.ts`
+
+实现类/函数：
+
+- `item_rank_events`：保存商品浏览、加购、购买、收藏、评论等排行榜事实事件。
+- `category_rank_snapshots`：保存分类排行榜快照，支持 Redis 缓存失效后的重建和历史追踪。
+- `record_item_rank_event()`：写入商品排行事件。
+- `rebuild_category_rankings()`：按 category、rank_type、window_type 聚合事件并生成排行榜快照。
+- `get_category_ranking()`：优先读取 Redis ZSET，未命中时从 PostgreSQL 快照恢复并回填 Redis。
+- `GET /rankings/categories/{category_id}`：返回指定 category 的排行榜商品、分数、排名和商品基础信息。
+- `GET /rankings/home/hot`：返回首页 `Bet you like it.` 栏目所需热门商品。
+- `categoryRankingApi.ts`：封装排行榜 HTTP 调用。
+- `categoryRanking.ts`：定义排行榜项、榜单类型、时间窗口和响应类型。
+- `HomeView.vue`：展示 `Bet you like it.` 热门商品栏目。
+- `DepartmentCategoryView.vue`：在每个分类页提供排行榜入口和 Top 商品展示。
+- `ProductDetailView.vue`：商品属于当前 category Top3 时展示可点击排行榜标签。
+
+验收标准：
+
+- PostgreSQL 保存排行榜事实事件和排行榜快照，Redis 只保存可重建的 ZSET 排序缓存。
+- Redis key 采用 `rank:category:{category_id}:{rank_type}:{window_type}` 结构，ZSET member 为 `item_id`，score 为聚合分数。
+- 首页展示 `Bet you like it.` 栏目，内容来自热门商品排行榜接口。
+- 首页 `Bet you like it.` 跨分类热门列表展示每个商品在原 category snapshot 中的排名，不对跨分类结果重新递增编号。
+- 每个分类页提供排行榜入口，用户可以查看该分类下的热门商品。
+- 商品详情页命中所属分类 Top3 时展示排行榜标签，例如 `#1 in Grocery`，标签点击后进入对应分类排行榜入口。
+- Redis 不可用或缓存未命中时，API 可以从 PostgreSQL 快照读取榜单并返回结果。
+- 排行榜接口返回空结果时，前端显示稳定空状态，不影响首页、分类页和详情页主体内容。
+
+测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`；`pnpm --dir apps/talonmart-web test:unit -- HomeView DepartmentCategoryView ProductDetailView categoryRankingApi`
 
 #### 阶段 G：AImodel
 

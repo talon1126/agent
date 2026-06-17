@@ -4,8 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import HomeView from './HomeView.vue'
 
 const routerPush = vi.fn()
-const { fetchFlashSales, purchaseFlashSaleWithDefaultAddress } = vi.hoisted(() => ({
+const { fetchFlashSales, fetchHomeHotRankings, purchaseFlashSaleWithDefaultAddress } = vi.hoisted(() => ({
   fetchFlashSales: vi.fn(),
+  fetchHomeHotRankings: vi.fn(),
   purchaseFlashSaleWithDefaultAddress: vi.fn(),
 }))
 
@@ -22,6 +23,10 @@ vi.mock('vue-router', () => ({
 vi.mock('@/services/flashSaleApi', () => ({
   fetchFlashSales,
   purchaseFlashSaleWithDefaultAddress,
+}))
+
+vi.mock('@/services/categoryRankingApi', () => ({
+  fetchHomeHotRankings,
 }))
 
 describe('HomeView', () => {
@@ -44,6 +49,26 @@ describe('HomeView', () => {
         },
       ],
     })
+    fetchHomeHotRankings.mockReset()
+    fetchHomeHotRankings.mockResolvedValue({
+      ok: true,
+      rank_type: 'hot',
+      window_type: 'all_time',
+      count: 1,
+      items: [
+        {
+          rank: 3,
+          item_id: 'item_wireless_earbuds',
+          item_name: 'Wireless Earbuds',
+          brand: 'Talon Audio',
+          spec: 'Bluetooth 5.3',
+          category_id: 'electronics',
+          category_name: 'Electronics',
+          price: 59.99,
+          score: 92,
+        },
+      ],
+    })
   })
 
   it('renders the TalonMart storefront essentials with the promotional carousel', async () => {
@@ -63,6 +88,9 @@ describe('HomeView', () => {
     expect(wrapper.text()).not.toContain('Ready to ship')
     expect(wrapper.text()).toContain('Flash Deals')
     expect(wrapper.text()).toContain('Pure milk flash deal')
+    expect(wrapper.text()).toContain('Bet you like it.')
+    expect(wrapper.text()).toContain('Wireless Earbuds')
+    expect(wrapper.text()).toContain('#3 in Electronics')
     expect(wrapper.text()).toContain('30 left')
     expect(wrapper.text()).toContain('Cart')
   })
@@ -104,6 +132,18 @@ describe('HomeView', () => {
     expect(routerPush).toHaveBeenCalledWith({
       name: 'product-detail',
       params: { item_id: 'item_milk_pure' },
+    })
+  })
+
+  it('routes hot ranking product clicks to the product detail page', async () => {
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    await wrapper.get('[data-testid="home-hot-product-item_wireless_earbuds"]').trigger('click')
+
+    expect(routerPush).toHaveBeenCalledWith({
+      name: 'product-detail',
+      params: { item_id: 'item_wireless_earbuds' },
     })
   })
 

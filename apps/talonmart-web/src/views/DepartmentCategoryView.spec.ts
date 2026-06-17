@@ -11,7 +11,8 @@ const route = ref({
 })
 
 const routerPush = vi.fn()
-const { searchProductsByCategory } = vi.hoisted(() => ({
+const { fetchCategoryRanking, searchProductsByCategory } = vi.hoisted(() => ({
+  fetchCategoryRanking: vi.fn(),
   searchProductsByCategory: vi.fn(),
 }))
 
@@ -30,6 +31,10 @@ vi.mock('@/services/searchApi', () => ({
   searchProductsByCategory,
 }))
 
+vi.mock('@/services/categoryRankingApi', () => ({
+  fetchCategoryRanking,
+}))
+
 describe('DepartmentCategoryView', () => {
   beforeEach(() => {
     route.value = {
@@ -38,6 +43,27 @@ describe('DepartmentCategoryView', () => {
       },
     }
     searchProductsByCategory.mockReset()
+    fetchCategoryRanking.mockReset()
+    fetchCategoryRanking.mockResolvedValue({
+      ok: true,
+      category_id: 'electronics',
+      rank_type: 'hot',
+      window_type: 'all_time',
+      count: 1,
+      items: [
+        {
+          rank: 1,
+          item_id: 'item_wireless_earbuds',
+          item_name: 'Wireless Earbuds',
+          brand: 'Talon Audio',
+          spec: 'Bluetooth 5.3',
+          category_id: 'electronics',
+          category_name: 'Electronics',
+          price: 59.99,
+          score: 92,
+        },
+      ],
+    })
     routerPush.mockReset()
   })
 
@@ -75,7 +101,9 @@ describe('DepartmentCategoryView', () => {
     await flushPromises()
 
     expect(searchProductsByCategory).toHaveBeenCalledWith('electronics')
+    expect(fetchCategoryRanking).toHaveBeenCalledWith('electronics', { limit: 5 })
     expect(wrapper.text()).toContain('Electronics')
+    expect(wrapper.text()).toContain('Top products')
     expect(wrapper.text()).toContain('Wireless Earbuds')
     expect(wrapper.text()).toContain('Talon Audio')
 
@@ -91,6 +119,29 @@ describe('DepartmentCategoryView', () => {
     )
   })
 
+  it('renders a stable empty ranking state when the category has no leaderboard rows', async () => {
+    searchProductsByCategory.mockResolvedValue({
+      ok: true,
+      query: '',
+      category: 'electronics',
+      count: 0,
+      items: [],
+    })
+    fetchCategoryRanking.mockResolvedValue({
+      ok: true,
+      category_id: 'electronics',
+      rank_type: 'hot',
+      window_type: 'all_time',
+      count: 0,
+      items: [],
+    })
+
+    const wrapper = mount(DepartmentCategoryView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Ranking data is warming up')
+  })
+
   it('uses the shared storefront header with search, account, cart, and departments dropdown', async () => {
     searchProductsByCategory.mockResolvedValue({
       ok: true,
@@ -104,9 +155,8 @@ describe('DepartmentCategoryView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="store-header-logo"]').text()).toContain('TM')
-    expect(wrapper.get('[data-testid="store-header-pickup"]').text()).toContain(
-      'Sacramento, 95829',
-    )
+    expect(wrapper.find('[data-testid="store-header-pickup"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Pickup or delivery?')
     expect(wrapper.find('input[aria-label="Search products"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="store-header-account"]').text()).toContain('Account')
     expect(wrapper.get('[data-testid="store-header-cart"]').text()).toContain('Cart')

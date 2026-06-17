@@ -294,6 +294,39 @@ flash_sale_claims = Table(
     UniqueConstraint("flash_sale_id", "user_id", name="uq_flash_sale_claim_user"),
 )
 
+item_rank_events = Table(
+    "item_rank_events",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("item_id", String(64), nullable=False, index=True),
+    Column("category_id", String(64), nullable=False, index=True),
+    Column("event_type", String(32), nullable=False, index=True),
+    Column("event_weight", Numeric(12, 2), nullable=False, default=0),
+    Column("user_id", Integer, nullable=True, index=True),
+    Column("occurred_at", String, nullable=False),
+    Column("created_at", String, nullable=False),
+)
+
+category_rank_snapshots = Table(
+    "category_rank_snapshots",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("category_id", String(64), nullable=False, index=True),
+    Column("rank_type", String(32), nullable=False, index=True),
+    Column("window_type", String(32), nullable=False, index=True),
+    Column("rank", Integer, nullable=False),
+    Column("item_id", String(64), nullable=False, index=True),
+    Column("score", Numeric(12, 2), nullable=False, default=0),
+    Column("generated_at", String, nullable=False),
+    UniqueConstraint(
+        "category_id",
+        "rank_type",
+        "window_type",
+        "item_id",
+        name="uq_category_rank_snapshot_item",
+    ),
+)
+
 procurement_suppliers = Table(
     "procurement_suppliers",
     metadata,
@@ -350,6 +383,8 @@ WAREHOUSE_TABLE_COMMENTS = {
     "cart_items": "购物车明细表，按用户和商品保存加入购物车时的商品快照价格与数量。",
     "flash_sales": "秒杀活动表，一条活动绑定一个秒杀商品和独立营销库存配额。",
     "flash_sale_claims": "秒杀抢购结果表，记录用户抢购结果和关联订单，保证一人一单。",
+    "item_rank_events": "商品排行榜事件事实表，记录浏览、加购、购买、收藏、评论等可聚合行为。",
+    "category_rank_snapshots": "分类排行榜快照表，保存各分类下的商品排名、分数和生成时间。",
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
     "purchase_orders": "采购单表，保存采购审核补货申请后生成的采购单、支付状态和仓库同步状态。",
     "warehouse_inventory_sync_jobs": "仓储库存同步任务表，保存采购到仓后需要 Warehouse Agent 同步飞书库存视图的待处理任务。",
@@ -591,6 +626,26 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "created_at": "结果创建时间。",
         "updated_at": "结果更新时间。",
     },
+    "item_rank_events": {
+        "id": "排行榜事件自增整数主键。",
+        "item_id": "发生排行榜行为的商品编号。",
+        "category_id": "事件发生时商品所属分类编号。",
+        "event_type": "事件类型，例如 view、add_to_cart、purchase、favorite、review。",
+        "event_weight": "事件参与排行计算的权重。",
+        "user_id": "触发事件的用户 ID；系统种子事件可为空。",
+        "occurred_at": "业务事件发生时间。",
+        "created_at": "事件写入时间。",
+    },
+    "category_rank_snapshots": {
+        "id": "排行榜快照自增整数主键。",
+        "category_id": "榜单所属商品分类编号。",
+        "rank_type": "榜单类型，例如 hot。",
+        "window_type": "统计时间窗口，例如 all_time。",
+        "rank": "商品在当前榜单中的排名，从 1 开始。",
+        "item_id": "榜单商品编号。",
+        "score": "聚合后的排序分数。",
+        "generated_at": "快照生成时间。",
+    },
     "inventory_movements": {
         "movement_id": "库存流水编号。",
         "order_id": "关联订单编号。",
@@ -624,6 +679,8 @@ def init_warehouse_schema(engine: Engine) -> None:
             cart_items,
             flash_sales,
             flash_sale_claims,
+            item_rank_events,
+            category_rank_snapshots,
             purchase_orders,
             warehouse_inventory_sync_jobs,
             orders,
@@ -825,6 +882,36 @@ def item_search_text(row: dict[str, Any]) -> str:
 def load_item_fixture_rows(fixture_dir: Path) -> list[dict[str, Any]]:
     rows = load_fixture_rows(fixture_dir, "items.json")
     return [{**row, "search_text": item_search_text(row)} for row in rows]
+
+
+def default_item_rank_event_rows(item_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Create deterministic ranking facts for the local demo catalog.
+
+    The ranking feature is backed by durable event facts, not hardcoded frontend
+    cards. Seed events give fresh local databases a useful leaderboard while
+    preserving the same rebuild path that production-like events use later.
+
+    Args:
+        item_rows: Item fixture rows already normalized for insertion.
+
+    Returns:
+        One synthetic popularity event per item. Scores intentionally vary by
+        stable item order so every category can produce a deterministic ranking.
+    """
+    timestamp = datetime.now(UTC).isoformat()
+    total = len(item_rows)
+    return [
+        {
+            "item_id": str(row["item_id"]),
+            "category_id": str(row["category_id"]),
+            "event_type": "seed_popularity",
+            "event_weight": total - index,
+            "user_id": None,
+            "occurred_at": timestamp,
+            "created_at": timestamp,
+        }
+        for index, row in enumerate(item_rows)
+    ]
 
 
 def default_user_rows() -> list[dict[str, Any]]:
@@ -1079,6 +1166,131 @@ def ensure_item_pg_search_index(engine: Engine) -> None:
         connection.execute(text(build_item_pg_search_index_sql()))
 
 
+def rebuild_category_rankings_for_connection(
+    connection: Any,
+    *,
+    category_id: str | None = None,
+    rank_type: str = "hot",
+    window_type: str = "all_time",
+    limit: int = 100,
+    generated_at: str,
+) -> list[dict[str, Any]]:
+    """Aggregate ranking events into durable category snapshot rows.
+
+    Args:
+        connection: SQLAlchemy connection that owns the surrounding transaction.
+        category_id: Optional category to rebuild. When omitted, all categories
+            with ranking events are rebuilt.
+        rank_type: Logical ranking name, currently `hot`.
+        window_type: Time window label, currently `all_time`.
+        limit: Maximum number of items written per category.
+        generated_at: Timestamp stored on snapshot rows for traceability.
+
+    Returns:
+        Snapshot rows joined with current item display fields in the same shape
+        returned by `WarehouseRepository.get_category_ranking`.
+    """
+    categories_to_rebuild: list[str]
+    if category_id:
+        categories_to_rebuild = [category_id]
+    else:
+        categories_to_rebuild = [
+            str(row["category_id"])
+            for row in connection.execute(
+                select(item_rank_events.c.category_id).distinct().order_by(item_rank_events.c.category_id)
+            ).mappings()
+        ]
+
+    rebuilt_rows: list[dict[str, Any]] = []
+    capped_limit = max(1, min(int(limit or 100), 500))
+    for current_category_id in categories_to_rebuild:
+        connection.execute(
+            category_rank_snapshots.delete()
+            .where(category_rank_snapshots.c.category_id == current_category_id)
+            .where(category_rank_snapshots.c.rank_type == rank_type)
+            .where(category_rank_snapshots.c.window_type == window_type)
+        )
+        scored_rows = (
+            connection.execute(
+                select(
+                    item_rank_events.c.item_id,
+                    item_rank_events.c.category_id,
+                    func.sum(item_rank_events.c.event_weight).label("score"),
+                )
+                .where(item_rank_events.c.category_id == current_category_id)
+                .group_by(item_rank_events.c.item_id, item_rank_events.c.category_id)
+                .order_by(func.sum(item_rank_events.c.event_weight).desc(), item_rank_events.c.item_id)
+                .limit(capped_limit)
+            )
+            .mappings()
+            .all()
+        )
+        snapshot_rows = [
+            {
+                "category_id": str(row["category_id"]),
+                "rank_type": rank_type,
+                "window_type": window_type,
+                "rank": index,
+                "item_id": str(row["item_id"]),
+                "score": float(row["score"] or 0),
+                "generated_at": generated_at,
+            }
+            for index, row in enumerate(scored_rows, start=1)
+        ]
+        if snapshot_rows:
+            connection.execute(category_rank_snapshots.insert(), snapshot_rows)
+            rebuilt_rows.extend(snapshot_rows)
+
+    return hydrate_category_rank_snapshot_rows(connection, rebuilt_rows)
+
+
+def hydrate_category_rank_snapshot_rows(connection: Any, snapshot_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach current item and category display fields to ranking snapshots."""
+    if not snapshot_rows:
+        return []
+    item_ids = [str(row["item_id"]) for row in snapshot_rows]
+    item_rows = (
+        connection.execute(
+            select(
+                items.c.item_id,
+                items.c.item_name,
+                items.c.brand,
+                items.c.spec,
+                items.c.category_id,
+                categories.c.category_name,
+                items.c.price,
+            )
+            .select_from(items.outerjoin(categories, items.c.category_id == categories.c.category_id))
+            .where(items.c.item_id.in_(item_ids))
+        )
+        .mappings()
+        .all()
+    )
+    items_by_id = {str(row["item_id"]): dict(row) for row in item_rows}
+    hydrated: list[dict[str, Any]] = []
+    for row in snapshot_rows:
+        item = items_by_id.get(str(row["item_id"]))
+        if not item:
+            continue
+        hydrated.append(
+            {
+                "rank": int(row["rank"]),
+                "item_id": str(row["item_id"]),
+                "item_name": str(item["item_name"]),
+                "brand": str(item["brand"]),
+                "spec": str(item["spec"]),
+                "category_id": str(row["category_id"]),
+                "category_name": str(item.get("category_name") or row["category_id"]),
+                "price": float(item["price"]),
+                "score": float(row["score"]),
+                "rank_type": str(row["rank_type"]),
+                "window_type": str(row["window_type"]),
+                "generated_at": str(row["generated_at"]),
+            }
+        )
+    return hydrated
+
+
 def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
     init_warehouse_schema(engine)
     with engine.begin() as connection:
@@ -1090,6 +1302,8 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         connection.execute(cart_items.delete())
         connection.execute(flash_sale_claims.delete())
         connection.execute(flash_sales.delete())
+        connection.execute(category_rank_snapshots.delete())
+        connection.execute(item_rank_events.delete())
         connection.execute(item_reviews.delete())
         connection.execute(delivery_addresses.delete())
         connection.execute(inventory_location_balances.delete())
@@ -1106,7 +1320,9 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
             load_fixture_rows(fixture_dir, "storage_locations.json"),
         )
         connection.execute(categories.insert(), load_fixture_rows(fixture_dir, "categories.json"))
-        connection.execute(items.insert(), load_item_fixture_rows(fixture_dir))
+        item_rows = load_item_fixture_rows(fixture_dir)
+        connection.execute(items.insert(), item_rows)
+        connection.execute(item_rank_events.insert(), default_item_rank_event_rows(item_rows))
         connection.execute(item_reviews.insert(), default_item_review_rows())
         if engine.dialect.name == "postgresql":
             connection.execute(
@@ -1134,6 +1350,13 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         connection.execute(
             procurement_suppliers.insert(),
             load_fixture_rows(fixture_dir, "procurement_suppliers.json"),
+        )
+        rebuild_category_rankings_for_connection(
+            connection,
+            rank_type="hot",
+            window_type="all_time",
+            limit=100,
+            generated_at=datetime.now(UTC).isoformat(),
         )
     ensure_item_pg_search_index(engine)
 
@@ -1266,6 +1489,188 @@ class WarehouseRepository:
         with self.engine.connect() as connection:
             rows = connection.execute(statement, params).mappings().all()
         return [{**dict(row), "price": float(row["price"])} for row in rows]
+
+    def record_item_rank_event(
+        self,
+        *,
+        item_id: str,
+        event_type: str,
+        user_id: int | None = None,
+        occurred_at: str,
+    ) -> dict[str, Any]:
+        """Persist one item behavior fact for later leaderboard rebuilds.
+
+        Args:
+            item_id: Catalog item that received the behavior.
+            event_type: Behavior type. Unknown values are accepted with weight
+                `1` so new UI events do not break ingestion.
+            user_id: Optional local user id associated with the behavior.
+            occurred_at: Business timestamp supplied by the caller.
+
+        Returns:
+            The stored event row.
+
+        Raises:
+            ValueError: If `item_id` does not exist in the catalog.
+        """
+        event_weights = {
+            "view": 1,
+            "review": 2,
+            "add_to_cart": 3,
+            "favorite": 4,
+            "purchase": 5,
+            "seed_popularity": 1,
+        }
+        with self.engine.begin() as connection:
+            item = (
+                connection.execute(
+                    select(items.c.item_id, items.c.category_id).where(items.c.item_id == item_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if not item:
+                raise ValueError("item_not_found")
+            values = {
+                "item_id": str(item["item_id"]),
+                "category_id": str(item["category_id"]),
+                "event_type": event_type,
+                "event_weight": event_weights.get(event_type, 1),
+                "user_id": user_id,
+                "occurred_at": occurred_at,
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+            result = connection.execute(item_rank_events.insert().values(**values))
+            row = (
+                connection.execute(
+                    select(item_rank_events).where(item_rank_events.c.id == result.inserted_primary_key[0])
+                )
+                .mappings()
+                .one()
+            )
+        return self._format_item_rank_event(row)
+
+    def rebuild_category_rankings(
+        self,
+        *,
+        category_id: str | None = None,
+        rank_type: str = "hot",
+        window_type: str = "all_time",
+        limit: int = 100,
+        generated_at: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Rebuild ranking snapshots from durable item rank events."""
+        with self.engine.begin() as connection:
+            return rebuild_category_rankings_for_connection(
+                connection,
+                category_id=category_id,
+                rank_type=rank_type,
+                window_type=window_type,
+                limit=limit,
+                generated_at=generated_at or datetime.now(UTC).isoformat(),
+            )
+
+    def get_category_ranking(
+        self,
+        *,
+        category_id: str,
+        rank_type: str = "hot",
+        window_type: str = "all_time",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Read a category leaderboard from PostgreSQL snapshots."""
+        capped_limit = max(1, min(int(limit or 20), 100))
+        with self.engine.connect() as connection:
+            snapshot_rows = (
+                connection.execute(
+                    select(category_rank_snapshots)
+                    .where(category_rank_snapshots.c.category_id == category_id)
+                    .where(category_rank_snapshots.c.rank_type == rank_type)
+                    .where(category_rank_snapshots.c.window_type == window_type)
+                    .order_by(category_rank_snapshots.c.rank, category_rank_snapshots.c.item_id)
+                    .limit(capped_limit)
+                )
+                .mappings()
+                .all()
+            )
+            return hydrate_category_rank_snapshot_rows(connection, [dict(row) for row in snapshot_rows])
+
+    def get_ranked_items_by_ids(
+        self,
+        item_ids: list[str],
+        *,
+        rank_type: str = "hot",
+        scores: dict[str, float],
+        window_type: str = "all_time",
+    ) -> list[dict[str, Any]]:
+        """Hydrate Redis ZSET item ids while preserving cached order."""
+        if not item_ids:
+            return []
+        with self.engine.connect() as connection:
+            item_rows = (
+                connection.execute(
+                    select(
+                        items.c.item_id,
+                        items.c.item_name,
+                        items.c.brand,
+                        items.c.spec,
+                        items.c.category_id,
+                        categories.c.category_name,
+                        items.c.price,
+                    )
+                    .select_from(items.outerjoin(categories, items.c.category_id == categories.c.category_id))
+                    .where(items.c.item_id.in_(item_ids))
+                )
+                .mappings()
+                .all()
+            )
+        items_by_id = {str(row["item_id"]): dict(row) for row in item_rows}
+        rows: list[dict[str, Any]] = []
+        for index, item_id in enumerate(item_ids, start=1):
+            item = items_by_id.get(item_id)
+            if not item:
+                continue
+            rows.append(
+                {
+                    "rank": index,
+                    "item_id": item_id,
+                    "item_name": str(item["item_name"]),
+                    "brand": str(item["brand"]),
+                    "spec": str(item["spec"]),
+                    "category_id": str(item["category_id"]),
+                    "category_name": str(item.get("category_name") or item["category_id"]),
+                    "price": float(item["price"]),
+                    "score": float(scores.get(item_id, 0)),
+                    "rank_type": rank_type,
+                    "window_type": window_type,
+                    "generated_at": "",
+                }
+            )
+        return rows
+
+    def list_home_hot_rankings(
+        self,
+        *,
+        rank_type: str = "hot",
+        window_type: str = "all_time",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return the strongest ranking rows across all categories for the homepage."""
+        capped_limit = max(1, min(int(limit or 20), 100))
+        with self.engine.connect() as connection:
+            snapshot_rows = (
+                connection.execute(
+                    select(category_rank_snapshots)
+                    .where(category_rank_snapshots.c.rank_type == rank_type)
+                    .where(category_rank_snapshots.c.window_type == window_type)
+                    .order_by(category_rank_snapshots.c.score.desc(), category_rank_snapshots.c.item_id)
+                    .limit(capped_limit)
+                )
+                .mappings()
+                .all()
+            )
+            hydrated = hydrate_category_rank_snapshot_rows(connection, [dict(row) for row in snapshot_rows])
+        return hydrated
 
     def user_exists(self, user_id: int) -> bool:
         with self.engine.connect() as connection:
@@ -1547,6 +1952,15 @@ class WarehouseRepository:
         item["id"] = int(item["id"])
         item["user_id"] = int(item["user_id"])
         item["rating"] = int(item["rating"])
+        return item
+
+    @staticmethod
+    def _format_item_rank_event(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        item["id"] = int(item["id"])
+        item["event_weight"] = float(item["event_weight"])
+        if item.get("user_id") is not None:
+            item["user_id"] = int(item["user_id"])
         return item
 
     def list_inventory_balance_snapshots(

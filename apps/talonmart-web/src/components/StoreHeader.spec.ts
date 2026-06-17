@@ -27,9 +27,9 @@ describe('StoreHeader', () => {
     })
 
     expect(wrapper.get('[data-testid="store-header-logo"]').text()).toContain('TM')
-    expect(wrapper.get('[data-testid="store-header-pickup"]').text()).toContain(
-      'Sacramento, 95829',
-    )
+    expect(wrapper.find('[data-testid="store-header-pickup"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Pickup or delivery?')
+    expect(wrapper.text()).not.toContain('Sacramento, 95829')
     expect(wrapper.find('input[aria-label="Search products"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="store-header-account"]').text()).toContain('Account')
     expect(wrapper.get('[data-testid="store-header-cart"]').text()).toContain('Cart')

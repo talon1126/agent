@@ -4,7 +4,9 @@ import { RouterLink, useRoute } from 'vue-router'
 import { ChevronLeft, LoaderCircle, Search, Star } from 'lucide-vue-next'
 
 import StoreHeader from '@/components/StoreHeader.vue'
+import { fetchCategoryRanking } from '@/services/categoryRankingApi'
 import { searchProductsByCategory } from '@/services/searchApi'
+import type { CategoryRankingItem } from '@/types/categoryRanking'
 import type { SearchProduct } from '@/types/search'
 
 const route = useRoute()
@@ -17,8 +19,11 @@ const departmentLabels: Record<string, string> = {
 }
 
 const products = ref<SearchProduct[]>([])
+const rankingItems = ref<CategoryRankingItem[]>([])
 const isLoading = ref(false)
+const isRankingLoading = ref(false)
 const errorMessage = ref('')
+const rankingErrorMessage = ref('')
 
 const departmentSlug = computed(() => String(route.params.departmentSlug ?? ''))
 const departmentLabel = computed(() => departmentLabels[departmentSlug.value] ?? 'Department')
@@ -41,6 +46,19 @@ function productImage(product: SearchProduct) {
     return 'https://images.unsplash.com/photo-1519689680058-324335c77eba?auto=format&fit=crop&w=640&q=80'
   }
   return 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=640&q=80'
+}
+
+function rankingProductImage(product: CategoryRankingItem) {
+  return productImage({
+    item_id: product.item_id,
+    item_name: product.item_name,
+    brand: product.brand,
+    spec: product.spec,
+    category_id: product.category_id,
+    price: product.price,
+    rating: null,
+    balances: [],
+  })
 }
 
 function productRating(product: SearchProduct) {
@@ -70,12 +88,31 @@ async function loadDepartmentProducts() {
   }
 }
 
+async function loadCategoryRanking() {
+  // Category rankings are optional read models; page browsing still works when they are empty.
+  isRankingLoading.value = true
+  rankingErrorMessage.value = ''
+
+  try {
+    const response = await fetchCategoryRanking(departmentSlug.value, { limit: 5 })
+    rankingItems.value = response.items
+  } catch (error) {
+    rankingItems.value = []
+    rankingErrorMessage.value =
+      error instanceof Error ? error.message : 'Unable to load category ranking.'
+  } finally {
+    isRankingLoading.value = false
+  }
+}
+
 onMounted(() => {
   void loadDepartmentProducts()
+  void loadCategoryRanking()
 })
 
 watch(departmentSlug, () => {
   void loadDepartmentProducts()
+  void loadCategoryRanking()
 })
 </script>
 
@@ -99,6 +136,52 @@ watch(departmentSlug, () => {
           {{ resultCountLabel }} from the live category search API.
         </p>
       </div>
+
+      <section class="mt-6 rounded-lg border border-[#D8E0E8] bg-white p-6">
+        <div class="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p class="text-sm font-black uppercase text-[#0053E2]">Leaderboard</p>
+            <h2 class="mt-1 text-2xl font-black">Top products</h2>
+          </div>
+        </div>
+
+        <div v-if="isRankingLoading" class="mt-5 flex min-h-24 items-center gap-3 text-[#0053E2]">
+          <LoaderCircle class="h-5 w-5 animate-spin" aria-hidden="true" />
+          <span class="font-bold">Loading category ranking</span>
+        </div>
+        <p
+          v-else-if="rankingErrorMessage"
+          class="mt-5 rounded-md bg-[#FEF2F2] p-4 text-sm font-bold text-[#991B1B]"
+          role="alert"
+        >
+          {{ rankingErrorMessage }}
+        </p>
+        <p v-else-if="rankingItems.length === 0" class="mt-5 text-sm font-bold text-[#667085]">
+          Ranking data is warming up
+        </p>
+        <div v-else class="mt-5 grid gap-4 md:grid-cols-3 xl:grid-cols-5">
+          <RouterLink
+            v-for="item in rankingItems"
+            :key="item.item_id"
+            class="rounded-lg bg-white transition hover:-translate-y-0.5 hover:shadow-md"
+            :to="{ name: 'product-detail', params: { item_id: item.item_id } }"
+          >
+            <span class="block aspect-[4/3] overflow-hidden rounded-md bg-white">
+              <img
+                class="h-full w-full object-cover"
+                :alt="item.item_name"
+                :src="rankingProductImage(item)"
+              />
+            </span>
+            <span class="mt-3 block text-xs font-black uppercase text-[#0053E2]">
+              #{{ item.rank }} in {{ item.category_name || departmentLabel }}
+            </span>
+            <span class="mt-1 block min-h-11 text-sm font-black leading-tight">
+              {{ item.item_name }}
+            </span>
+          </RouterLink>
+        </div>
+      </section>
 
       <div
         v-if="isLoading"
