@@ -4,11 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ProductDetailView from './ProductDetailView.vue'
 
 const routerPush = vi.fn()
-const { fetchProductDetail, addCartItem, fetchItemReviews, createItemReview } = vi.hoisted(() => ({
+const { fetchProductDetail, addCartItem, fetchItemReviews, createItemReview, fetchFlashSales } = vi.hoisted(() => ({
   fetchProductDetail: vi.fn(),
   addCartItem: vi.fn(),
   fetchItemReviews: vi.fn(),
   createItemReview: vi.fn(),
+  fetchFlashSales: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({
@@ -38,12 +39,17 @@ vi.mock('@/services/productReviewApi', () => ({
   createItemReview,
 }))
 
+vi.mock('@/services/flashSaleApi', () => ({
+  fetchFlashSales,
+}))
+
 describe('ProductDetailView', () => {
   beforeEach(() => {
     routerPush.mockClear()
     addCartItem.mockReset()
     fetchItemReviews.mockReset()
     createItemReview.mockReset()
+    fetchFlashSales.mockReset()
     fetchProductDetail.mockResolvedValue({
       ok: true,
       item: {
@@ -75,6 +81,11 @@ describe('ProductDetailView', () => {
           delivery_message: 'As soon as tomorrow',
         },
       },
+    })
+    fetchFlashSales.mockResolvedValue({
+      ok: true,
+      count: 0,
+      flash_sales: [],
     })
     addCartItem.mockResolvedValue({
       ok: true,
@@ -118,6 +129,58 @@ describe('ProductDetailView', () => {
         updated_at: '2026-06-03T10:00:00+08:00',
       },
     })
+  })
+
+  it('shows the active flash sale price when the product has a matching discount', async () => {
+    fetchFlashSales.mockResolvedValue({
+      ok: true,
+      count: 1,
+      flash_sales: [
+        {
+          id: 114,
+          item_id: 'item_milk_pure',
+          item_price: 18.4,
+          sale_price: 12.9,
+          stock_limit: 30,
+          stock_remaining: 30,
+          status: 'active',
+          starts_at: '2026-06-16T12:51:23.042362+08:00',
+          ends_at: '2026-06-24T12:51:23.042362+08:00',
+        },
+      ],
+    })
+
+    const wrapper = mount(ProductDetailView)
+    await flushPromises()
+
+    expect(fetchFlashSales).toHaveBeenCalledWith({ status: 'active', limit: 100 })
+    expect(wrapper.text()).toContain('Now $12.90')
+    expect(wrapper.text()).toContain('$18.40')
+  })
+
+  it('keeps the regular detail price when active flash sale data lacks item_price', async () => {
+    fetchFlashSales.mockResolvedValue({
+      ok: true,
+      count: 1,
+      flash_sales: [
+        {
+          id: 115,
+          item_id: 'item_milk_pure',
+          sale_price: 12.9,
+          stock_limit: 30,
+          stock_remaining: 30,
+          status: 'active',
+          starts_at: '2026-06-16T12:51:23.042362+08:00',
+          ends_at: '2026-06-24T12:51:23.042362+08:00',
+        },
+      ],
+    })
+
+    const wrapper = mount(ProductDetailView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('$18.40')
+    expect(wrapper.text()).not.toContain('Now $12.90')
   })
 
   it('loads product detail, shows zoom preview on image hover, and adds the item to cart', async () => {

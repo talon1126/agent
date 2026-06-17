@@ -185,7 +185,7 @@ n8n Workflow
 | `users` | TalonMart 用户表，保存本地演示和购物车流程使用的用户资料。 |
 | `delivery_addresses` | 配送地址表，保存用户收货人、电话、地址和默认地址标记。 |
 | `cart_items` | 购物车明细表，按用户和商品保存加入购物车时的商品快照价格与数量。 |
-| `flash_sales` | 秒杀活动表，保存秒杀商品、秒杀价、营销库存配额、开始时间和结束时间。 |
+| `flash_sales` | 秒杀活动表，保存秒杀商品、秒杀价、营销库存配额、开始时间和结束时间；`/flash-sales` 接口结合 `items.price` 返回可选商品原价，用于前端在存在真实折扣时展示划线价。 |
 | `flash_sale_claims` | 秒杀抢购结果表，记录用户抢购结果、关联订单和一人一单约束。 |
 | `procurement_suppliers` | 采购供应商表，保存供应商、商品、交期、采购价和可靠性。 |
 | `purchase_orders` | 采购单表，保存补货申请审核后生成的采购单、支付状态和仓库同步状态。 |
@@ -302,14 +302,16 @@ agent/                                                      # 项目根目录
 │           │   ├── HomeView.vue                            # 首页页面
 │           │   ├── HomeView.spec.ts                        # 首页单元测试
 │           │   ├── SearchView.vue                          # 商品搜索页面
+│           │   ├── DepartmentCategoryView.vue              # Departments 分类页面
+│           │   ├── DepartmentCategoryView.spec.ts          # Departments 分类测试
 │           │   ├── ProductDetailView.vue                   # 商品详情页面
 │           │   ├── ProductDetailView.spec.ts               # 商品详情测试
 │           │   ├── CartView.vue                            # 购物车页面
 │           │   ├── CartView.spec.ts                        # 购物车测试
 │           │   └── AboutView.vue                           # 关于页面
 │           ├── components/                                 # 前端组件目录
-│           │   ├── AiModeSidebar.vue                       # AI 模式侧栏
-│           │   ├── AiModeSidebar.spec.ts                   # AI 侧栏测试
+│           │   ├── AiModeSidebar.vue                       # AI 浮动入口组件
+│           │   ├── AiModeSidebar.spec.ts                   # AI 浮动入口测试
 │           │   ├── AiModeChatPanel.vue                     # AI 聊天面板
 │           │   ├── HelloWorld.vue                          # 模板示例组件
 │           │   ├── TheWelcome.vue                          # 模板欢迎组件
@@ -505,7 +507,7 @@ agent/                                                      # 项目根目录
 | --- | --- | --- | --- |
 | 前端 | `apps/talonmart-web/src/App.vue` | 前端应用壳 | 全局布局和路由出口 |
 | 前端 | `apps/talonmart-web/src/router/index.ts` | 页面路由 | 首页、搜索、商品详情、购物车 |
-| 前端 | `apps/talonmart-web/src/components/AiModeSidebar.vue` | AI 模式入口 | 会话列表、新会话、切换会话 |
+| 前端 | `apps/talonmart-web/src/components/AiModeSidebar.vue` | AI 模式浮动入口 | 右下角笑脸入口、聊天面板开关、会话面板挂载 |
 | 前端 | `apps/talonmart-web/src/components/AiModeChatPanel.vue` | AI 聊天面板 | SSE 流式输出、消息格式化、内部结果过滤 |
 | 前端 | `apps/talonmart-web/src/services/aiModelApi.ts` | AImodel API client | chat stream、conversation、message |
 | AI 服务 | `services/ai-service/app/main.py` | FastAPI 入口 | 路由注册、启动初始化、shutdown 释放资源 |
@@ -728,7 +730,7 @@ AImodel service 读取记忆并调用工具
 | F2 | 实现商品详情与评论 | [✔] |  | ProductDetailView |
 | F3 | 实现购物车页面 | [✔] |  | CartView |
 | F4 | 实现秒杀前端接口 | [✔] |  | flashSaleApi |
-| F5 | 实现 AI 模式侧栏和聊天面板 | [✔] |  | AiModeSidebar、AiModeChatPanel |
+| F5 | 实现 AI 模式浮动入口和聊天面板 | [✔] |  | AiModeSidebar、AiModeChatPanel |
 | F6 | 实现前端 API client 和类型 | [✔] |  | services、types |
 | F7 | 实现前端单元/E2E 测试 | [✔] |  | Vitest、Playwright |
 
@@ -1421,13 +1423,15 @@ AImodel service 读取记忆并调用工具
 
 ##### F1：实现首页、搜索与 Departments 导购
 
-目标：提供商品浏览、搜索入口和 Departments 分类导购入口。
+目标：提供商品浏览、搜索入口、首页促销轮播、Flash Deals 商品跳转和 Departments 分类导购入口。
 
 修改文件：
 
 - `apps/talonmart-web/src/views/HomeView.vue`
+- `apps/talonmart-web/src/views/HomeView.spec.ts`
 - `apps/talonmart-web/src/views/SearchView.vue`
 - `apps/talonmart-web/src/views/DepartmentCategoryView.vue`
+- `apps/talonmart-web/src/views/DepartmentCategoryView.spec.ts`
 - `apps/talonmart-web/src/router/index.ts`
 - `apps/talonmart-web/src/services/searchApi.ts`
 - `apps/talonmart-web/src/types/search.ts`
@@ -1436,9 +1440,11 @@ AImodel service 读取记忆并调用工具
 
 实现类/函数：
 
-- `HomeView.vue`：展示 Departments 导购入口和搜索入口。
+- `HomeView.vue`：展示统一商城顶部导航、搜索入口、促销轮播和 Flash Deals。
+- `HomeView.spec.ts`：验证首页轮播、Departments 下拉、Flash Deals 展示和详情跳转。
 - `SearchView.vue`：展示搜索输入和搜索结果。
 - `DepartmentCategoryView.vue`：读取 `/cp/:departmentSlug` 路由参数并展示该 department 下的商品。
+- `DepartmentCategoryView.spec.ts`：验证分类页导航、商品展示和状态反馈。
 - `searchProducts()`：调用商品搜索接口。
 - `searchProductsByCategory()`：按 department/category 查询商品。
 - `search_products()`：支持 category 参数并返回该分类下的商品结果。
@@ -1446,41 +1452,53 @@ AImodel service 读取记忆并调用工具
 验收标准：
 
 - 用户可以搜索商品并进入详情页。
+- 首页使用促销轮播承载主视觉内容，轮播切换通过平滑位移动画完成。
+- 首页首屏内容由促销轮播、Flash Deals 和统一顶部导航组成，促销信息集中在轮播中呈现。
 - 首页展示首版 Departments：Grocery、Clothing, Shoes & Accessories、Baby & Kids、Electronics。
 - 用户点击 Electronics 后跳转到 `/cp/electronics`。
 - `/cp/electronics` 页面应查询 electronics category 下的商品并展示列表。
+- Flash Deals 商品图片和标题点击后进入对应商品详情页。
 - Home、Search、Department、Product Detail、Cart 页面使用统一商城顶部导航：蓝色主栏、TM 标识、Pickup 定位、搜索框、Account、Cart。
-- 统一顶部导航第二行只保留 Departments 下拉入口，不展示 Services、Rollbacks、Father's Day、Get it Fast、Pharmacy、New Arrivals、TalonMart+ 等快捷入口。
-- Department 详情页使用统一顶部导航中的 Departments 下拉框切换分类，不使用独立横向分类按钮。
+- 统一顶部导航第二行以 Departments 下拉入口作为分类导航入口。
+- Department 详情页通过统一顶部导航中的 Departments 下拉框完成分类切换。
 - 空结果、加载中和接口失败状态都有明确页面反馈。
 
 测试方法：`pnpm --dir apps/talonmart-web test:unit -- HomeView SearchView DepartmentCategoryView`
 
 ##### F2：实现商品详情与评论
 
-目标：展示商品详情、卖点、规格、评论，以及商品展示卡片的评分体验。
+目标：展示商品详情、卖点、规格、评论，以及商品展示卡片的白底无边框和评分体验。
 
 修改文件：
 
 - `apps/talonmart-web/src/views/SearchView.vue`
 - `apps/talonmart-web/src/views/DepartmentCategoryView.vue`
 - `apps/talonmart-web/src/views/ProductDetailView.vue`
+- `apps/talonmart-web/src/views/ProductDetailView.spec.ts`
 - `apps/talonmart-web/src/services/productDetailApi.ts`
+- `apps/talonmart-web/src/services/flashSaleApi.ts`
 - `apps/talonmart-web/src/services/productReviewApi.ts`
 - `apps/talonmart-web/src/types/search.ts`
+- `apps/talonmart-web/src/types/flashSale.ts`
 
 实现类/函数：
 
 - `SearchView.vue`：展示搜索商品卡片。
 - `DepartmentCategoryView.vue`：展示 Departments 商品卡片。
 - `ProductDetailView.vue`：展示商品详情。
+- `ProductDetailView.vue`：读取 active flash sale 并为命中商品展示秒杀折扣价。
+- `ProductDetailView.spec.ts`：验证详情页在商品存在 active flash sale 时展示秒杀价和划线原价。
 - `fetchProductDetail()`：读取商品详情。
+- `fetchFlashSales()`：读取 active flash sale，用于详情页匹配当前商品折扣。
 - `fetchProductReviews()`：读取商品评论。
 
 验收标准：
 
 - 商品详情页包含商品信息和评论信息。
+- 商品详情页命中 active flash sale 且 `sale_price < item_price` 时，价格区展示 `sale_price` 为当前购买展示价，并展示 `item_price` 为划线原价。
+- 商品详情页没有匹配 active flash sale 时，价格区展示商品详情接口返回的普通 `price`。
 - 搜索页和 Departments 页面商品卡片使用统一白色背景，不显示商品卡片边框。
+- 首页 Flash Deals 商品展示使用白色背景，不显示商品图或商品卡片边框。
 - 搜索页和 Departments 页面商品卡片显示星级评分与评分数量。
 
 测试方法：`pnpm --dir apps/talonmart-web test:unit -- SearchView DepartmentCategoryView ProductDetailView`
@@ -1508,27 +1526,39 @@ AImodel service 读取记忆并调用工具
 
 ##### F4：实现秒杀前端接口
 
-目标：展示秒杀活动并触发抢购。
+目标：展示秒杀活动、折扣价格和真实折扣场景下的商品原价，并触发抢购。
 
 修改文件：
 
 - `apps/talonmart-web/src/services/flashSaleApi.ts`
 - `apps/talonmart-web/src/types/flashSale.ts`
+- `apps/talonmart-web/src/views/HomeView.vue`
+- `apps/talonmart-web/src/views/HomeView.spec.ts`
+- `services/mock-api/app/routers/flash_sales.py`
+- `services/mock-api/app/warehouse_store.py`
+- `services/mock-api/tests/test_api.py`
 
 实现类/函数：
 
 - `fetchFlashSale()`：读取秒杀活动。
 - `purchaseFlashSale()`：提交秒杀购买。
+- `list_flash_sales()`：读取秒杀活动并结合商品原价。
+- `/flash-sales`：返回秒杀活动、秒杀价、库存、状态和可选商品原价 `item_price`。
+- `FlashSale.item_price`：表示后端返回的可选商品原价，供前端判断是否展示划线价。
 
 验收标准：
 
 - 前端能处理成功、库存不足和重复购买响应。
+- 秒杀商品存在 `item_price > sale_price` 时，前端展示 `sale_price` 为折扣价，并展示 `item_price` 为划线原价。
+- 秒杀商品缺少 `item_price` 或 `item_price <= sale_price` 时，前端只展示 `sale_price`，不使用本地静态数据补造原价。
+- 用户从 Flash Deals 进入商品详情页后，详情页基于 active flash sale 匹配同一 `item_id` 并展示折扣价。
+- `/flash-sales` 接口返回的 `item_price` 来源于关联商品的 `items.price`，不要求 `flash_sales` 表重复存储商品原价。
 
-测试方法：`pnpm --dir apps/talonmart-web test:unit -- flashSaleApi`
+测试方法：`pnpm --dir apps/talonmart-web test:unit -- HomeView flashSaleApi`；`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py -q`
 
-##### F5：实现 AI 模式侧栏和聊天面板
+##### F5：实现 AI 模式浮动入口和聊天面板
 
-目标：提供前端 AI 模式入口和会话交互。
+目标：提供前端右下角 AI 模式浮动入口和会话交互。
 
 修改文件：
 
@@ -1537,12 +1567,14 @@ AImodel service 读取记忆并调用工具
 
 实现类/函数：
 
-- `AiModeSidebar.vue`：展示会话列表和新建入口。
+- `AiModeSidebar.vue`：展示右下角黄色笑脸浮动入口，并负责打开或关闭 AI 聊天面板。
 - `AiModeChatPanel.vue`：展示消息、输入框和流式回答。
 
 验收标准：
 
-- 用户可以选择历史会话或创建新会话并发送消息。
+- 用户点击右下角黄色笑脸入口后打开 AI 聊天面板。
+- AI 入口不展示桌面版、插件版、购物车等侧栏文案。
+- 用户可以在聊天面板中选择历史会话或创建新会话并发送消息。
 
 测试方法：`pnpm --dir apps/talonmart-web test:unit -- AiModeSidebar`
 
@@ -1561,10 +1593,13 @@ AImodel service 读取记忆并调用工具
 - `aiModelApi.ts`：AI 模式接口。
 - `productDetailApi.ts`：商品详情接口。
 - `cartApi.ts`：购物车接口。
+- `flashSale.ts`：定义秒杀活动响应类型，包含可选商品原价 `item_price`。
 
 验收标准：
 
 - API client 有类型定义和单元测试覆盖。
+- 秒杀活动类型支持后端返回的可选 `item_price` 字段，前端将缺失值视为没有可展示划线价。
+- 商品详情页复用秒杀活动类型匹配当前商品折扣，不新增独立详情页折扣类型。
 
 测试方法：`pnpm --dir apps/talonmart-web test:unit -- aiModelApi`
 

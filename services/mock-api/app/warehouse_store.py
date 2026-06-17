@@ -1427,7 +1427,11 @@ class WarehouseRepository:
 
     def list_flash_sales(self, *, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         capped_limit = max(1, min(limit, 100))
-        statement = select(flash_sales).order_by(flash_sales.c.id)
+        statement = (
+            select(flash_sales, items.c.price.label("item_price"))
+            .select_from(flash_sales.outerjoin(items, flash_sales.c.item_id == items.c.item_id))
+            .order_by(flash_sales.c.id)
+        )
         if status:
             statement = statement.where(flash_sales.c.status == status)
         statement = statement.limit(capped_limit)
@@ -1533,6 +1537,8 @@ class WarehouseRepository:
     def _format_flash_sale(row: Any) -> dict[str, Any]:
         item = dict(row)
         item["sale_price"] = float(item["sale_price"])
+        if item.get("item_price") is not None:
+            item["item_price"] = float(item["item_price"])
         return item
 
     @staticmethod

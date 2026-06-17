@@ -24,10 +24,13 @@ describe('AiModeSidebar', () => {
     fetchAiModelConversationMessages.mockResolvedValue([])
   })
 
-  it('opens and closes the AI mode chat panel from the sidebar entry', async () => {
+  it('opens and closes the AI mode chat panel from the floating smiley launcher', async () => {
     const wrapper = mount(AiModeSidebar)
 
-    expect(wrapper.text()).toContain('AI模式')
+    expect(wrapper.get('[data-testid="ai-smiley-launcher"]').attributes('aria-label')).toBe(
+      'Open AI mode',
+    )
+    expect(wrapper.text()).not.toContain('AI模式')
     expect(wrapper.text()).not.toContain('购物车')
     expect(wrapper.text()).not.toContain('桌面版')
     expect(wrapper.text()).not.toContain('插件版')

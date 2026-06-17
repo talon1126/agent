@@ -74,14 +74,16 @@ agent/                                                      # 项目根目录
 │           │   ├── HomeView.vue                            # 首页页面
 │           │   ├── HomeView.spec.ts                        # 首页单元测试
 │           │   ├── SearchView.vue                          # 商品搜索页面
+│           │   ├── DepartmentCategoryView.vue              # Departments 分类页面
+│           │   ├── DepartmentCategoryView.spec.ts          # Departments 分类测试
 │           │   ├── ProductDetailView.vue                   # 商品详情页面
 │           │   ├── ProductDetailView.spec.ts               # 商品详情测试
 │           │   ├── CartView.vue                            # 购物车页面
 │           │   ├── CartView.spec.ts                        # 购物车测试
 │           │   └── AboutView.vue                           # 关于页面
 │           ├── components/                                 # 前端组件目录
-│           │   ├── AiModeSidebar.vue                       # AI 模式侧栏
-│           │   ├── AiModeSidebar.spec.ts                   # AI 侧栏测试
+│           │   ├── AiModeSidebar.vue                       # AI 浮动入口组件
+│           │   ├── AiModeSidebar.spec.ts                   # AI 浮动入口测试
 │           │   ├── AiModeChatPanel.vue                     # AI 聊天面板
 │           │   ├── HelloWorld.vue                          # 模板示例组件
 │           │   ├── TheWelcome.vue                          # 模板欢迎组件
@@ -277,7 +279,7 @@ agent/                                                      # 项目根目录
 | --- | --- | --- | --- |
 | 前端 | `apps/talonmart-web/src/App.vue` | 前端应用壳 | 全局布局和路由出口 |
 | 前端 | `apps/talonmart-web/src/router/index.ts` | 页面路由 | 首页、搜索、商品详情、购物车 |
-| 前端 | `apps/talonmart-web/src/components/AiModeSidebar.vue` | AI 模式入口 | 会话列表、新会话、切换会话 |
+| 前端 | `apps/talonmart-web/src/components/AiModeSidebar.vue` | AI 模式浮动入口 | 右下角笑脸入口、聊天面板开关、会话面板挂载 |
 | 前端 | `apps/talonmart-web/src/components/AiModeChatPanel.vue` | AI 聊天面板 | SSE 流式输出、消息格式化、内部结果过滤 |
 | 前端 | `apps/talonmart-web/src/services/aiModelApi.ts` | AImodel API client | chat stream、conversation、message |
 | AI 服务 | `services/ai-service/app/main.py` | FastAPI 入口 | 路由注册、启动初始化、shutdown 释放资源 |

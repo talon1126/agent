@@ -87,6 +87,7 @@ def format_flash_sale(sale: dict[str, Any], stock_remaining: int | None) -> dict
     return {
         "id": int(sale["id"]),
         "item_id": str(sale["item_id"]),
+        "item_price": float(sale["item_price"]) if sale.get("item_price") is not None else None,
         "sale_price": float(sale["sale_price"]),
         "stock_limit": int(sale["stock_limit"]),
         "stock_remaining": stock_remaining,

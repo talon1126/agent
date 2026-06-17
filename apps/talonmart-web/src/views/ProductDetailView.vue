@@ -15,14 +15,17 @@ import {
 
 import StoreHeader from '@/components/StoreHeader.vue'
 import { addCartItem, CART_USER_ID } from '@/services/cartApi'
+import { fetchFlashSales } from '@/services/flashSaleApi'
 import { fetchProductDetail } from '@/services/productDetailApi'
 import { createItemReview, fetchItemReviews } from '@/services/productReviewApi'
+import type { FlashSale } from '@/types/flashSale'
 import type { ProductDetail, ProductImage } from '@/types/productDetail'
 import type { ItemReview, ItemReviewSummary } from '@/types/productReview'
 
 const route = useRoute()
 
 const product = ref<ProductDetail | null>(null)
+const activeFlashSale = ref<FlashSale | null>(null)
 const selectedImageIndex = ref(0)
 const isLoading = ref(false)
 const isAddingToCart = ref(false)
@@ -63,6 +66,17 @@ const featureList = computed(() => product.value?.features ?? [])
 const detailList = computed(() => product.value?.details ?? [])
 const badges = computed(() => product.value?.badges ?? [])
 
+const displayPrice = computed(() => activeFlashSale.value?.sale_price ?? product.value?.price ?? 0)
+const originalPrice = computed(() => {
+  if (!activeFlashSale.value?.item_price) {
+    return null
+  }
+
+  return activeFlashSale.value.item_price > activeFlashSale.value.sale_price
+    ? activeFlashSale.value.item_price
+    : null
+})
+
 function formatCurrency(value: number | string | undefined) {
   return new Intl.NumberFormat('en-US', {
     currency: product.value?.currency ?? 'USD',
@@ -97,7 +111,7 @@ function handleImageMove(event: MouseEvent) {
     return
   }
 
-  // 中文注释：图片放大效果只记录鼠标相对坐标，放大区域由背景图定位完成。
+  // The zoom lens stores relative cursor coordinates; CSS background positioning renders the lens.
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
   if (!rect.width || !rect.height) {
     zoomPosition.value = { x: 50, y: 50 }
@@ -123,20 +137,39 @@ async function loadProductDetail() {
   errorMessage.value = ''
   cartMessage.value = ''
   selectedImageIndex.value = 0
+  activeFlashSale.value = null
 
   try {
-    // 中文注释：详情页按前端路由参数读取后端 /ip/{item_id}，缺失扩展字段时由模板隐藏对应模块。
+    // Product detail is loaded from the documented `/ip/{item_id}` endpoint.
     const response = await fetchProductDetail(itemId.value)
     product.value = response.item
+    await loadActiveFlashSale(response.item.item_id)
     await loadItemReviews(response.item.item_id)
   } catch (error) {
     product.value = null
+    activeFlashSale.value = null
     reviews.value = []
     reviewSummary.value = { average_rating: 0, review_count: 0 }
     errorMessage.value =
       error instanceof Error ? error.message : 'Product detail service is unavailable.'
   } finally {
     isLoading.value = false
+  }
+}
+
+async function loadActiveFlashSale(targetItemId: string) {
+  try {
+    const response = await fetchFlashSales({ status: 'active', limit: 100 })
+    activeFlashSale.value =
+      response.flash_sales.find(
+        (sale) =>
+          sale.item_id === targetItemId &&
+          sale.item_price !== null &&
+          sale.item_price !== undefined &&
+          sale.sale_price < sale.item_price,
+      ) ?? null
+  } catch {
+    activeFlashSale.value = null
   }
 }
 
@@ -205,7 +238,7 @@ async function handleAddToCart() {
   cartErrorMessage.value = ''
 
   try {
-    // 中文注释：商品详情页加入购物车复用现有购物车接口，价格最终仍以后端写入为准。
+    // Cart writes still go through the cart API, so backend cart validation remains authoritative.
     await addCartItem({
       user_id: CART_USER_ID,
       item_id: product.value.item_id,
@@ -392,7 +425,15 @@ onMounted(() => {
       <aside class="space-y-5">
         <section class="rounded-lg bg-[#F7F8FA] p-6 shadow-sm">
           <div class="flex items-baseline gap-3">
-            <p class="text-4xl font-black">{{ formatCurrency(product.price) }}</p>
+            <p class="text-4xl font-black">
+              <span v-if="activeFlashSale">Now </span>{{ formatCurrency(displayPrice) }}
+            </p>
+            <p
+              v-if="originalPrice !== null"
+              class="text-base font-semibold text-[#667085] line-through"
+            >
+              {{ formatCurrency(originalPrice) }}
+            </p>
             <p class="text-sm text-[#344054]">{{ product.spec }}</p>
           </div>
           <p class="mt-4 flex items-center gap-2 text-sm">

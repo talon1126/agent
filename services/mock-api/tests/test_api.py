@@ -153,6 +153,7 @@ def active_flash_sale(**overrides):
     sale = {
         "id": 1,
         "item_id": "item_milk_pure",
+        "item_price": 18.4,
         "sale_price": 9.9,
         "stock_limit": 2,
         "status": "active",
@@ -732,6 +733,7 @@ def test_flash_sale_detail_returns_redis_remaining_stock(monkeypatch):
         "flash_sale": {
             "id": 1,
             "item_id": "item_milk_pure",
+            "item_price": 18.4,
             "sale_price": 9.9,
             "stock_limit": 2,
             "stock_remaining": 2,
@@ -746,7 +748,7 @@ def test_flash_sale_list_returns_multiple_sales_with_redis_stock(monkeypatch):
     repository = FakeFlashSaleRepository(
         sales=[
             active_flash_sale(id=1, item_id="item_milk_pure", stock_limit=2),
-            active_flash_sale(id=2, item_id="item_cola_zero", stock_limit=3),
+            active_flash_sale(id=2, item_id="item_cola_zero", item_price=24.9, stock_limit=3),
             active_flash_sale(id=3, item_id="item_vinda_tissue", status="draft", stock_limit=4),
         ]
     )
@@ -764,6 +766,7 @@ def test_flash_sale_list_returns_multiple_sales_with_redis_stock(monkeypatch):
             {
                 "id": 1,
                 "item_id": "item_milk_pure",
+                "item_price": 18.4,
                 "sale_price": 9.9,
                 "stock_limit": 2,
                 "stock_remaining": 1,
@@ -774,6 +777,7 @@ def test_flash_sale_list_returns_multiple_sales_with_redis_stock(monkeypatch):
             {
                 "id": 2,
                 "item_id": "item_cola_zero",
+                "item_price": 24.9,
                 "sale_price": 9.9,
                 "stock_limit": 3,
                 "stock_remaining": 3,
