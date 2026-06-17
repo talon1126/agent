@@ -70,7 +70,6 @@ def procurement_replenishment_table_rows_response() -> dict:
                     "Warehouse": "深圳仓",
                     "Warehouse ID": "wh_sz_1",
                     "Location": "A1",
-                    "Item ID": "item_vinda_tissue",
                     "Item Name": "维达纸巾",
                     "Suggested Quantity": 104,
                     "Last Synced At": "2026-05-26T00:00:00+00:00",
@@ -96,9 +95,7 @@ def procurement_purchase_order_table_rows_response() -> dict:
                     "Request ID": "REQ-1001",
                     "Payment Status": "unpaid",
                     "Warehouse Sync Status": "pending_arrival",
-                    "Supplier ID": "supplier_paper_sz",
                     "Supplier Name": "深圳纸品供应商",
-                    "Item ID": "item_vinda_tissue",
                     "Warehouse ID": "wh_sz_1",
                     "Location": "A1",
                     "Quantity": 104,
@@ -1584,6 +1581,9 @@ def test_procurement_replenishment_request_table_sync_upserts_by_request_id() ->
         request for request in requests if request.method == "GET" and "/records?" in str(request.url)
     )
     assert 'CurrentValue.[Request ID]="REQ-1001"' in str(lookup_request.url.params["filter"])
+    update_fields = json.loads(requests[-1].content)["fields"]
+    assert "Category ID" not in update_fields
+    assert "Item ID" not in update_fields
     assert requests[-1].method == "PUT"
 
 
@@ -1645,7 +1645,10 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
     create_request = next(
         request for request in requests if request.method == "POST" and str(request.url).endswith("/records")
     )
-    assert json.loads(create_request.content)["fields"]["Estimated Arrival Date"] == "2026-05-29"
+    create_fields = json.loads(create_request.content)["fields"]
+    assert create_fields["Estimated Arrival Date"] == "2026-05-29"
+    assert "Supplier ID" not in create_fields
+    assert "Item ID" not in create_fields
 
 
 def test_inventory_table_sync_filter_updates_matching_inventory_records() -> None:
@@ -2530,11 +2533,10 @@ def balance_table_schema_response() -> dict:
         "ok": True,
         "schema_id": "warehouse_inventory_balances",
         "fields": [
-            {"name": "Balance Key", "type": "text"},
+            {"name": "Balance ID", "type": "text"},
             {"name": "Warehouse", "type": "text"},
             {"name": "Warehouse ID", "type": "text"},
             {"name": "Location", "type": "text"},
-            {"name": "Item ID", "type": "text"},
             {"name": "Item Name", "type": "text"},
             {"name": "Quantity On Hand", "type": "number"},
             {"name": "Quantity Available", "type": "number"},
@@ -2588,13 +2590,12 @@ def balance_table_rows_response(*, next_cursor: str = "") -> dict:
         "next_cursor": next_cursor,
         "items": [
             {
-                "balance_key": "item_vinda_tissue:wh_sz_1:A1",
+                "balance_id": "7",
                 "fields": {
-                    "Balance Key": "item_vinda_tissue:wh_sz_1:A1",
+                    "Balance ID": "7",
                     "Warehouse": "深圳仓",
                     "Warehouse ID": "wh_sz_1",
                     "Location": "A1",
-                    "Item ID": "item_vinda_tissue",
                     "Item Name": "维达纸巾",
                     "Quantity On Hand": 136,
                     "Quantity Available": 136,
@@ -2606,7 +2607,7 @@ def balance_table_rows_response(*, next_cursor: str = "") -> dict:
                     "Updated At": "2026-05-29T10:00:00+00:00",
                     "Last Synced At": "2026-05-29T10:05:00+00:00",
                     "Sync Status": "synced",
-                    "Source Version": "mock-api:item_vinda_tissue:wh_sz_1:A1:2026-05-29T10:00:00+00:00",
+                    "Source Version": "mock-api:balance:7:2026-05-29T10:00:00+00:00",
                 },
             }
         ],
@@ -2681,7 +2682,7 @@ def test_inventory_balances_table_sync_provisions_pages_and_writes_date_fields_a
     assert body["ok"] is True
     assert body["synced_count"] == 1
     assert body["table_id"] == "tbl_balances"
-    assert body["items"][0]["balance_key"] == "item_vinda_tissue:wh_sz_1:A1"
+    assert body["items"][0]["balance_id"] == "7"
     field_create_payloads = [
         json.loads(request.content)
         for request in requests
@@ -2690,11 +2691,22 @@ def test_inventory_balances_table_sync_provisions_pages_and_writes_date_fields_a
     assert any(payload["field_name"] == "Storage Status" and payload["type"] == 3 for payload in field_create_payloads)
     assert any(payload["field_name"] == "Created At" and payload["type"] == 5 for payload in field_create_payloads)
     assert any(payload["field_name"] == "Updated At" and payload["type"] == 5 for payload in field_create_payloads)
+    balance_field_id = next(field["field_id"] for field in created_fields if field["field_name"] == "Balance ID")
+    view_patch_payloads = [
+        json.loads(request.content)
+        for request in requests
+        if request.method == "PATCH" and "/tables/tbl_balances/views/" in str(request.url)
+    ]
+    assert view_patch_payloads
+    for payload in view_patch_payloads:
+        hidden_fields = payload.get("property", {}).get("hidden_fields", [])
+        assert balance_field_id not in hidden_fields
     batch_create = next(
         request for request in requests if str(request.url).endswith("/tables/tbl_balances/records/batch_create")
     )
     fields = json.loads(batch_create.content)["records"][0]["fields"]
-    assert fields["Balance Key"] == "item_vinda_tissue:wh_sz_1:A1"
+    assert fields["Balance ID"] == "7"
+    assert "Item ID" not in fields
     assert isinstance(fields["Created At"], int)
     assert isinstance(fields["Updated At"], int)
     assert isinstance(fields["Last Synced At"], int)

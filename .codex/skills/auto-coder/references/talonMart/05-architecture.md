@@ -234,6 +234,8 @@ agent/                                                      # 项目根目录
 │       ├── warehouse-inventory-balances-refresh.json       # 库存余额刷新
 │       ├── warehouse-order-timeout-release.json            # 订单超时释放
 │       ├── procurement-workflow.json                       # 采购工作流
+│       ├── procurement-replenishment-requests-sync.json    # 补货申请表定时同步
+│       ├── procurement-purchase-orders-sync.json           # 采购单表定时同步
 │       ├── delivery-workflow.json                          # 物流工作流
 │       └── operations-workflow.json                        # 运营工作流
 ├── fixtures/                                               # 测试与演示数据

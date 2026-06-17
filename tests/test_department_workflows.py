@@ -215,6 +215,36 @@ def test_warehouse_inventory_balances_refresh_workflow_runs_every_10_minutes() -
     assert '"limit": 500' in sync_request["parameters"]["jsonBody"]
 
 
+def test_procurement_replenishment_requests_sync_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("procurement-replenishment-requests-sync.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Procurement Replenishment Requests Table")
+
+    assert workflow["name"] == "Procurement Replenishment Requests Sync"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith(
+        "/procurement/replenishment-requests-table/sync"
+    )
+    assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
+
+
+def test_procurement_purchase_orders_sync_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("procurement-purchase-orders-sync.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Procurement Purchase Orders Table")
+
+    assert workflow["name"] == "Procurement Purchase Orders Sync"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith(
+        "/procurement/purchase-orders-table/sync"
+    )
+    assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
+
+
 def test_warehouse_order_timeout_release_workflow_runs_every_5_minutes() -> None:
     workflow = load_workflow("warehouse-order-timeout-release.json")
     schedule = node_by_name(workflow, "Every 5 Minutes")

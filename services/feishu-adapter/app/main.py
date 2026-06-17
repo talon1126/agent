@@ -1388,9 +1388,9 @@ def create_app(
                 "view_name": "库存余额总览",
                 "view_type": "grid",
                 "visible_fields": [
+                    "Balance ID",
                     "Warehouse",
                     "Location",
-                    "Item ID",
                     "Item Name",
                     "Quantity On Hand",
                     "Storage Status",
@@ -1399,15 +1399,15 @@ def create_app(
                     "Updated At",
                 ],
                 "filters": [],
-                "sorts": [{"field": "Warehouse", "order": "asc"}, {"field": "Item ID", "order": "asc"}],
+                "sorts": [{"field": "Warehouse", "order": "asc"}, {"field": "Item Name", "order": "asc"}],
             },
             {
                 "view_name": "低库存余额",
                 "view_type": "grid",
                 "visible_fields": [
+                    "Balance ID",
                     "Warehouse",
                     "Location",
-                    "Item ID",
                     "Item Name",
                     "Quantity On Hand",
                     "Reorder Threshold",
@@ -1422,9 +1422,9 @@ def create_app(
                 "view_name": "可售库存",
                 "view_type": "grid",
                 "visible_fields": [
+                    "Balance ID",
                     "Warehouse",
                     "Location",
-                    "Item ID",
                     "Item Name",
                     "Quantity On Hand",
                     "Storage Status",
@@ -1432,7 +1432,7 @@ def create_app(
                     "Updated At",
                 ],
                 "filters": [{"field": "Balance Status", "operator": "is", "value": "available"}],
-                "sorts": [{"field": "Warehouse", "order": "asc"}, {"field": "Item ID", "order": "asc"}],
+                "sorts": [{"field": "Warehouse", "order": "asc"}, {"field": "Item Name", "order": "asc"}],
             },
         ]
         existing_views = {
@@ -1979,18 +1979,18 @@ def create_app(
 
         return results
 
-    def balance_identity_key(balance_key: str) -> tuple[tuple[str, str], ...]:
-        return (("Balance Key", balance_key),)
+    def balance_identity_key(balance_id: str) -> tuple[tuple[str, str], ...]:
+        return (("Balance ID", balance_id),)
 
-    def balance_record_filter_expression(balance_key: str) -> str:
-        return f'CurrentValue.[Balance Key]="{bitable_filter_literal(balance_key)}"'
+    def balance_record_filter_expression(balance_id: str) -> str:
+        return f'CurrentValue.[Balance ID]="{bitable_filter_literal(balance_id)}"'
 
-    def balance_record_filter_chunks(balance_keys: list[str]) -> list[tuple[list[str], str]]:
+    def balance_record_filter_chunks(balance_ids: list[str]) -> list[tuple[list[str], str]]:
         chunks: list[tuple[list[str], str]] = []
         current_keys: list[str] = []
         current_expressions: list[str] = []
-        for balance_key_value in balance_keys:
-            expression = balance_record_filter_expression(balance_key_value)
+        for balance_id_value in balance_ids:
+            expression = balance_record_filter_expression(balance_id_value)
             candidate_expressions = [*current_expressions, expression]
             candidate_filter = (
                 candidate_expressions[0]
@@ -2009,10 +2009,10 @@ def create_app(
                         else f"OR({','.join(current_expressions)})",
                     )
                 )
-                current_keys = [balance_key_value]
+                current_keys = [balance_id_value]
                 current_expressions = [expression]
                 continue
-            current_keys.append(balance_key_value)
+            current_keys.append(balance_id_value)
             current_expressions.append(expression)
         if current_expressions:
             chunks.append(
@@ -2029,12 +2029,12 @@ def create_app(
         *,
         token: str,
         table_identifier: str,
-        balance_keys: list[str],
+        balance_ids: list[str],
     ) -> dict[tuple[tuple[str, str], ...], str]:
         records: dict[tuple[tuple[str, str], ...], str] = {}
-        if not balance_keys:
+        if not balance_ids:
             return records
-        for key_chunk, filter_expression in balance_record_filter_chunks(balance_keys):
+        for key_chunk, filter_expression in balance_record_filter_chunks(balance_ids):
             response = client.get(
                 bitable_records_url(table_identifier=table_identifier),
                 headers={"Authorization": f"Bearer {token}"},
@@ -2053,9 +2053,9 @@ def create_app(
                     continue
                 fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
                 record_id = str(item.get("record_id") or item.get("id") or "")
-                balance_key_value = str(fields.get("Balance Key") or "").strip()
-                if record_id and balance_key_value:
-                    records[balance_identity_key(balance_key_value)] = record_id
+                balance_id_value = str(fields.get("Balance ID") or "").strip()
+                if record_id and balance_id_value:
+                    records[balance_identity_key(balance_id_value)] = record_id
         return records
 
     def upsert_balance_table_records(
@@ -2067,26 +2067,26 @@ def create_app(
     ) -> list[dict[str, str]]:
         prepared = []
         for index, fields in enumerate(field_rows):
-            balance_key_value = str(fields.get("Balance Key") or "").strip()
-            if not balance_key_value:
-                raise RuntimeError("inventory balance table row is missing Balance Key")
+            balance_id_value = str(fields.get("Balance ID") or "").strip()
+            if not balance_id_value:
+                raise RuntimeError("inventory balance table row is missing Balance ID")
             prepared.append(
                 {
                     "index": index,
-                    "balance_key": balance_key_value,
+                    "balance_id": balance_id_value,
                     "fields": normalize_inventory_record_fields(fields, table_fields),
                 }
             )
         existing_records = find_balance_table_records(
             token=token,
             table_identifier=table_identifier,
-            balance_keys=[item["balance_key"] for item in prepared],
+            balance_ids=[item["balance_id"] for item in prepared],
         )
         create_items = []
         update_items = []
         results: list[dict[str, str]] = [{} for _ in prepared]
         for item in prepared:
-            record_id = existing_records.get(balance_identity_key(item["balance_key"]), "")
+            record_id = existing_records.get(balance_identity_key(item["balance_id"]), "")
             if record_id:
                 update_items.append(
                     {
@@ -2698,7 +2698,7 @@ def create_app(
                     fields = row["fields"]
                     synced_items.append(
                         {
-                            "balance_key": fields.get("Balance Key") or row.get("balance_key"),
+                            "balance_id": fields.get("Balance ID") or row.get("balance_id"),
                             "item_id": fields.get("Item ID") or row.get("item_id"),
                             "warehouse_id": fields.get("Warehouse ID") or row.get("warehouse_id"),
                             "location_code": fields.get("Location") or row.get("location_code"),

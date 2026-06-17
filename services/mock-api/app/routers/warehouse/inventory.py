@@ -186,10 +186,10 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
 
 WAREHOUSE_STOCK_BALANCE_TABLE_SCHEMA = [
     {
-        "name": "Balance Key",
-        "source": "computed.balance_key",
+        "name": "Balance ID",
+        "source": "inventory_location_balances.id",
         "type": "text",
-        "comment": "库存余额行唯一键，格式为 item_id:warehouse_id:location_code。",
+        "comment": "库存余额行唯一标识；数据库模式使用 inventory_location_balances.id。",
     },
     {"name": "Warehouse", "source": "warehouses.name", "type": "text", "comment": "仓库展示名称，例如深圳仓、香港仓。"},
     {
@@ -210,13 +210,6 @@ WAREHOUSE_STOCK_BALANCE_TABLE_SCHEMA = [
         "type": "text",
         "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_name"],
     },
-    {
-        "name": "Category ID",
-        "source": "categories.category_id",
-        "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_id"],
-    },
-    {"name": "Item ID", "source": "items.item_id", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["item_id"]},
     {"name": "Item Name", "source": "items.item_name", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["item_name"]},
     {"name": "Brand", "source": "items.brand", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["brand"]},
     {"name": "Spec", "source": "items.spec", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["spec"]},
@@ -530,6 +523,13 @@ def balance_key(row: dict[str, Any]) -> str:
     return f"{row['item_id']}:{row['warehouse_id']}:{row['location_code']}"
 
 
+def balance_id(row: dict[str, Any]) -> str:
+    raw_id = row.get("id")
+    if raw_id is not None and str(raw_id).strip():
+        return str(raw_id)
+    return f"fallback:{balance_key(row)}"
+
+
 def balance_status(row: dict[str, Any]) -> str:
     if row.get("storage_status") == "quality_hold":
         return "quality_hold"
@@ -617,6 +617,7 @@ def aggregate_stock_balance_snapshot_rows(rows: list[dict[str, Any]]) -> list[di
             continue
         grouped[key] = {
             **row,
+            "id": row.get("id"),
             "quantity_on_hand": int(row.get("quantity_on_hand") or 0),
             "reorder_threshold": int(row.get("reorder_threshold") or 0),
         }
@@ -627,16 +628,14 @@ def aggregate_stock_balance_snapshot_rows(rows: list[dict[str, Any]]) -> list[di
 
 
 def stock_balance_table_fields(row: dict[str, Any]) -> dict[str, Any]:
-    key = balance_key(row)
+    row_balance_id = balance_id(row)
     quantity = int(row["quantity_on_hand"])
     return {
-        "Balance Key": key,
+        "Balance ID": row_balance_id,
         "Warehouse": row["warehouse_name"],
         "Warehouse ID": row["warehouse_id"],
         "Location": row["location_code"],
         "Category": row["category_name"],
-        "Category ID": row["category_id"],
-        "Item ID": row["item_id"],
         "Item Name": row["item_name"],
         "Brand": row["brand"],
         "Spec": row["spec"],
@@ -651,7 +650,7 @@ def stock_balance_table_fields(row: dict[str, Any]) -> dict[str, Any]:
         "Updated At": row["updated_at"],
         "Last Synced At": datetime.now(UTC).isoformat(),
         "Sync Status": "synced",
-        "Source Version": f"mock-api:{key}:{row['updated_at']}",
+        "Source Version": f"mock-api:balance:{row_balance_id}:{row['updated_at']}",
     }
 
 
@@ -692,7 +691,7 @@ def get_warehouse_stock_balance_table_rows(payload: WarehouseStockBalanceTableRo
         "next_cursor": next_cursor,
         "items": [
             {
-                "balance_key": balance_key(row),
+                "balance_id": balance_id(row),
                 "item_id": row["item_id"],
                 "warehouse_id": row["warehouse_id"],
                 "location_code": row["location_code"],

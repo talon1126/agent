@@ -1493,11 +1493,16 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
 
     assert request_schema["ok"] is True
     assert request_schema["schema_id"] == "procurement_replenishment_requests"
-    assert "Request ID" in [field["name"] for field in request_schema["fields"]]
+    request_field_names = [field["name"] for field in request_schema["fields"]]
+    assert "Request ID" in request_field_names
+    assert "Category ID" not in request_field_names
+    assert "Item ID" not in request_field_names
     assert order_schema["ok"] is True
     assert order_schema["schema_id"] == "procurement_purchase_orders"
     order_field_names = [field["name"] for field in order_schema["fields"]]
     assert "Purchase Order ID" in order_field_names
+    assert "Supplier ID" not in order_field_names
+    assert "Item ID" not in order_field_names
     assert "Warehouse ID" in order_field_names
     assert "Location" in order_field_names
     assert "Payment Status" in order_field_names
@@ -1514,12 +1519,16 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
     assert request_fields["Request ID"] == request["request_id"]
     assert request_fields["Status"] == "已审批"
     assert request_fields["Item Name"] == "维达纸巾"
+    assert "Category ID" not in request_fields
+    assert "Item ID" not in request_fields
 
     assert order_rows["ok"] is True
     assert order_rows["count"] == 1
     order_fields = order_rows["items"][0]["fields"]
     assert order_fields["Purchase Order ID"] == approve["purchase_order"]["purchase_order_id"]
     assert order_fields["Request ID"] == request["request_id"]
+    assert "Supplier ID" not in order_fields
+    assert "Item ID" not in order_fields
     assert order_fields["Warehouse ID"] == request["warehouse_id"]
     assert order_fields["Location"] == request["location_code"]
     assert order_fields["Payment Status"] == "unpaid"
@@ -1836,7 +1845,9 @@ def test_warehouse_stock_balance_table_schema_uses_select_statuses_and_date_fiel
     assert body["schema_id"] == "warehouse_inventory_balances"
     fields_by_name = {item["name"]: item for item in body["fields"]}
     assert "Batch No" not in fields_by_name
-    assert fields_by_name["Balance Key"]["type"] == "text"
+    assert "Category ID" not in fields_by_name
+    assert "Item ID" not in fields_by_name
+    assert fields_by_name["Balance ID"]["type"] == "text"
     assert fields_by_name["Quantity On Hand"]["type"] == "number"
     assert fields_by_name["Storage Status"]["type"] == "single_select"
     assert fields_by_name["Risk Level"]["type"] == "single_select"
@@ -1859,10 +1870,11 @@ def test_warehouse_stock_balance_table_rows_page_by_cursor_without_batch_no():
     assert body["count"] == 2
     assert body["next_cursor"]
     first = body["items"][0]
-    assert first["balance_key"] == (
-        f"{first['fields']['Item ID']}:{first['fields']['Warehouse ID']}:{first['fields']['Location']}"
-    )
+    assert first["balance_id"] == first["fields"]["Balance ID"]
+    assert first["balance_id"].isdigit() or first["balance_id"].startswith("fallback:")
     assert "Batch No" not in first["fields"]
+    assert "Category ID" not in first["fields"]
+    assert "Item ID" not in first["fields"]
     assert first["fields"]["Warehouse"] == "深圳仓"
     assert first["fields"]["Warehouse ID"] == "wh_sz_1"
     assert first["fields"]["Quantity On Hand"] >= 0
@@ -1883,12 +1895,14 @@ def test_warehouse_stock_balance_table_rows_are_unique_by_item_warehouse_locatio
 
     assert response.status_code == 200
     body = response.json()
-    balance_keys = [item["balance_key"] for item in body["items"]]
-    assert len(balance_keys) == len(set(balance_keys))
+    balance_ids = [item["balance_id"] for item in body["items"]]
+    assert len(balance_ids) == len(set(balance_ids))
     vinda = [
         item
         for item in body["items"]
-        if item["balance_key"] == "item_vinda_tissue:wh_sz_1:A1"
+        if item["fields"]["Item Name"] == "维达纸巾"
+        and item["warehouse_id"] == "wh_sz_1"
+        and item["location_code"] == "A1"
     ]
     assert len(vinda) == 1
     assert vinda[0]["fields"]["Quantity On Hand"] >= 136
