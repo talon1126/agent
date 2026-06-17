@@ -1587,6 +1587,60 @@ def test_procurement_replenishment_request_table_sync_upserts_by_request_id() ->
     assert requests[-1].method == "PUT"
 
 
+def test_procurement_replenishment_request_table_sync_recreates_deleted_configured_table() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/procurement/replenishment-requests/table-schema":
+            return httpx.Response(
+                200,
+                json={"ok": True, "fields": [{"name": "Request ID", "type": "text"}]},
+            )
+        if url == "http://mock-api.local/procurement/replenishment-requests/table-rows":
+            return httpx.Response(200, json=procurement_replenishment_table_rows_response())
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_deleted/fields":
+            return httpx.Response(200, json={"code": 1254041, "msg": "table not found"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"table_id": "tbl_req_new", "default_view_id": "vew_req_new"}},
+            )
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req_new/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_request_id"}}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req_new/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req_new/records":
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_req_new"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        procurement_replenishment_request_table_id="tbl_deleted",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/procurement/replenishment-requests-table/sync", json={"status": "pending"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["table_id"] == "tbl_req_new"
+    assert body["synced_count"] == 1
+    assert body["items"][0]["action"] == "created"
+    assert any(request.method == "POST" and str(request.url).endswith("/tables") for request in requests)
+    assert not any("/tables/tbl_deleted/records" in str(request.url) for request in requests)
+
+
 def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() -> None:
     requests: list[httpx.Request] = []
 

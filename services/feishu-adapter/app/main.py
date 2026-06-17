@@ -1504,12 +1504,18 @@ def create_app(
                 "view_id": state["view_id"],
                 "action": "existing",
             }
-            ensure_inventory_table_fields(
-                token=token,
-                table_identifier=result["table_id"],
-                field_specs=field_specs,
-            )
-            return result
+            try:
+                ensure_inventory_table_fields(
+                    token=token,
+                    table_identifier=result["table_id"],
+                    field_specs=field_specs,
+                )
+                return result
+            except (httpx.HTTPStatusError, RuntimeError) as error:
+                if not is_missing_inventory_table_error(error):
+                    raise
+                state["table_id"] = ""
+                state["view_id"] = ""
         existing = find_inventory_table_by_name(token=token, table_name=table_name)
         if existing["table_id"]:
             ensure_inventory_table_fields(
