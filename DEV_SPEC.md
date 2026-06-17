@@ -657,7 +657,7 @@ AImodel service 读取记忆并调用工具
 | 阶段 C | Procurement Workflow | 完成补货审批、采购单和采购飞书表闭环 | [✔] |
 | 阶段 D | Delivery Workflow | 完成物流查询、异常和 case 闭环 | [✔] |
 | 阶段 E | Operations Workflow | 完成跨领域只读摘要和运营建议闭环 | [✔] |
-| 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀、排行榜、发仓确认和前端体验 | [~] |
+| 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀、排行榜、发仓确认和前端体验 | [✔] |
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆和 RAG MCP 集成 | [✔] |
 | 阶段 H | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
 
@@ -670,7 +670,7 @@ AImodel service 读取记忆并调用工具
 | 阶段 C | 采购主链路可演示 | 补货审批、采购单、到仓确认、采购表同步 | `uv run --project services/mock-api pytest services\mock-api\tests\test_procurement_router_structure.py -q` | Delivery Workflow |  |
 | 阶段 D | 物流主链路可演示 | 物流状态、异常查询、case 创建 | `uv run --project services/mock-api pytest services\mock-api\tests\test_delivery_router_structure.py -q` | Operations Workflow |  |
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
-| 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、发仓确认、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel |  |
+| 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、发仓确认、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
 | 阶段 G | AImodel 可用 | 流式聊天、工具调用、会话记忆、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | Quality And Delivery |  |
 | 阶段 H | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
 
@@ -744,7 +744,7 @@ AImodel service 读取记忆并调用工具
 | F6 | 实现前端 API client 和类型 | [✔] |  | services、types |
 | F7 | 实现前端单元/E2E 测试 | [✔] |  | Vitest、Playwright |
 | F8 | 实现分类排行榜和热门商品展示 | [✔] | 2026-06-17 | PostgreSQL facts、Redis ZSET、HomeView、DepartmentCategoryView、ProductDetailView |
-| F9 | 实现订单发仓确认通知 | [ ] |  | pending_fulfillment_review、候选发仓、飞书群通知 |
+| F9 | 实现订单发仓确认通知 | [✔] | 2026-06-17 | pending_fulfillment_review、候选发仓、飞书群通知 |
 
 #### 阶段 G：AImodel
 
@@ -780,10 +780,10 @@ AImodel service 读取记忆并调用工具
 | 阶段 C | 7 | 7 | 100% |
 | 阶段 D | 6 | 6 | 100% |
 | 阶段 E | 5 | 5 | 100% |
-| 阶段 F | 9 | 8 | 89% |
+| 阶段 F | 9 | 9 | 100% |
 | 阶段 G | 8 | 8 | 100% |
 | 阶段 H | 7 | 2 | 29% |
-| **总计** | **55** | **49** | **89%** |
+| **总计** | **55** | **50** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -1713,6 +1713,8 @@ AImodel service 读取记忆并调用工具
 - `services/feishu-adapter/app/main.py`
 - `services/feishu-adapter/app/feishu_client.py`
 - `services/feishu-adapter/tests/test_feishu_adapter.py`
+- `.env.example`
+- `docker-compose.yml`
 - `apps/talonmart-web/src/services/checkoutApi.ts`
 - `apps/talonmart-web/src/types/checkout.ts`
 - `apps/talonmart-web/src/views/CartView.vue`
@@ -1725,12 +1727,14 @@ AImodel service 读取记忆并调用工具
 - `confirm_order_fulfillment()`：确认订单使用的发仓策略并扣减库存。
 - `list_order_fulfillment_candidates()`：返回可满足订单的候选仓库和库存风险。
 - `send_order_fulfillment_review_message()`：主动向飞书群发送订单详情和候选发仓方案。
+- `send_fulfillment_review_notification()`：订单创建成功后按环境变量触发 feishu-adapter 发仓确认通知，未配置或发送失败不回滚订单。
 - `createWarehouseOrder()`：前端下单后展示等待仓库确认的状态。
 
 验收标准：
 
 - 订单状态统一使用英文枚举：`pending_fulfillment_review`、`unpaid`、`pending_shipment`、`shipped`、`arrived`、`refunded`、`returned`、`canceled`。
 - 用户下单成功后不立即扣减库存，订单进入 `pending_fulfillment_review`。
+- `FEISHU_FULFILLMENT_REVIEW_NOTIFY_URL` 和 `FEISHU_FULFILLMENT_REVIEW_CHAT_ID` 控制发仓确认通知；通知未配置或发送失败时订单创建仍成功，并在响应中返回 notification 状态。
 - 飞书群主动消息包含订单编号、商品明细、收货城市、推荐发仓、可选发仓和确认入口文本。
 - 员工确认发仓后才扣减库存，并将订单状态更新为 `unpaid`。
 - 员工选择其他发仓策略时，系统按选择的仓库重新校验库存，不满足时返回阻塞原因。
