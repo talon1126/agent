@@ -2,6 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from app.routers.pagination import page_items
 from app.routers.warehouse.state import get_warehouse_repository
 
 from .schemas import (
@@ -181,17 +182,18 @@ def get_procurement_replenishment_request_table_rows(
         ]
     if payload.request_id:
         items = [request for request in items if request["request_id"] == payload.request_id]
-    limit = max(min(int(payload.limit or 100), 500), 1)
-    items = items[:limit]
+    page, has_more, next_offset = page_items(items, limit=payload.limit, offset=payload.offset)
     return {
         "ok": True,
         "schema_id": "procurement_replenishment_requests",
-        "count": len(items),
+        "count": len(page),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "items": [
             {
                 "request_id": request["request_id"],
                 "fields": procurement_replenishment_request_table_fields(request),
             }
-            for request in items
+            for request in page
         ],
     }

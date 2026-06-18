@@ -11,8 +11,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.store import load_json
+from app.routers.pagination import page_items
 from app.routers.delivery.state import DELIVERY_PROVIDERS, get_delivery_provider
+from app.store import load_json
 from app.warehouse_store import WarehouseRepository
 
 from .inventory import (
@@ -120,6 +121,7 @@ class OrderFulfillmentTableRowsRequest(BaseModel):
     order_id: str | None = None
     status: str | None = None
     limit: int = 100
+    offset: int = 0
 
 
 class OrderItemsTableRowsRequest(BaseModel):
@@ -134,6 +136,7 @@ class OrderItemsTableRowsRequest(BaseModel):
     order_id: str | None = None
     status: str | None = None
     limit: int = 100
+    offset: int = 0
 
 
 def available_order_batches(item_id: str, warehouse_id: str, location_code: str | None = None) -> list[dict[str, Any]]:
@@ -539,22 +542,23 @@ def load_order_fulfillment_table_rows(
     order_id: str | None = None,
     status: str | None = None,
     limit: int = 100,
-) -> list[dict[str, Any]]:
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], bool, int | None]:
     """Load order fulfillment rows for the Feishu read-model sync endpoint.
 
     Args:
         order_id: Optional exact order business id filter.
         status: Optional order lifecycle status filter.
-        limit: Maximum number of rows to return after filtering.
+        limit: Maximum number of rows in one response page.
+        offset: Zero-based row offset for multi-page Feishu table sync.
 
     Returns:
-        A list of dictionaries containing the source order id and Feishu fields.
+        Page rows, whether another page exists, and the next offset.
     """
 
     repository = get_warehouse_repository()
     normalized_order_id = (order_id or "").strip()
     normalized_status = (status or "").strip()
-    capped_limit = max(min(int(limit or 100), 500), 1)
 
     source_orders = repository.list_orders() if repository else list(WAREHOUSE_ORDERS)
     rows: list[dict[str, Any]] = []
@@ -574,9 +578,7 @@ def load_order_fulfillment_table_rows(
                 "fields": order_fulfillment_table_fields(order, items),
             }
         )
-        if len(rows) >= capped_limit:
-            break
-    return rows
+    return page_items(rows, limit=limit, offset=offset)
 
 
 def order_item_business_id(item: dict[str, Any]) -> str:
@@ -635,13 +637,13 @@ def load_order_items_table_rows(
     order_id: str | None = None,
     status: str | None = None,
     limit: int = 100,
-) -> list[dict[str, Any]]:
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], bool, int | None]:
     """Load order item rows for the Feishu read-model sync endpoint."""
 
     repository = get_warehouse_repository()
     normalized_order_id = (order_id or "").strip()
     normalized_status = (status or "").strip()
-    capped_limit = max(min(int(limit or 100), 500), 1)
 
     if repository and normalized_order_id:
         details = repository.get_order(normalized_order_id)
@@ -662,9 +664,7 @@ def load_order_items_table_rows(
             continue
         business_id = order_item_business_id(item)
         rows.append({"order_item_id": business_id, "fields": order_item_table_fields(item)})
-        if len(rows) >= capped_limit:
-            break
-    return rows
+    return page_items(rows, limit=limit, offset=offset)
 
 
 @router.get("/warehouse/orders/fulfillment/table-schema")
@@ -683,15 +683,18 @@ def get_order_fulfillment_table_schema() -> dict[str, Any]:
 def get_order_fulfillment_table_rows(payload: OrderFulfillmentTableRowsRequest) -> dict[str, Any]:
     """Return order fulfillment rows consumed by feishu-adapter table sync."""
 
-    rows = load_order_fulfillment_table_rows(
+    rows, has_more, next_offset = load_order_fulfillment_table_rows(
         order_id=payload.order_id,
         status=payload.status,
         limit=payload.limit,
+        offset=payload.offset,
     )
     return {
         "ok": True,
         "schema_id": "order_fulfillment",
         "count": len(rows),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "items": rows,
     }
 
@@ -712,11 +715,18 @@ def get_order_items_table_schema() -> dict[str, Any]:
 def get_order_items_table_rows(payload: OrderItemsTableRowsRequest) -> dict[str, Any]:
     """Return order item rows consumed by feishu-adapter table sync."""
 
-    rows = load_order_items_table_rows(order_id=payload.order_id, status=payload.status, limit=payload.limit)
+    rows, has_more, next_offset = load_order_items_table_rows(
+        order_id=payload.order_id,
+        status=payload.status,
+        limit=payload.limit,
+        offset=payload.offset,
+    )
     return {
         "ok": True,
         "schema_id": "order_items",
         "count": len(rows),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "items": rows,
     }
 

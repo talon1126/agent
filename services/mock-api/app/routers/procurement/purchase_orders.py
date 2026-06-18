@@ -2,6 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from app.routers.pagination import page_items
 from app.routers.warehouse.state import get_warehouse_repository
 
 from .schemas import PurchaseOrderConfirmArrivalBatchRequest, PurchaseOrderTableRowsRequest
@@ -112,18 +113,19 @@ def get_procurement_purchase_order_table_rows(
         purchase_order_id=payload.purchase_order_id,
         repository=repository,
     )
-    limit = max(min(int(payload.limit or 100), 500), 1)
-    items = items[:limit]
+    page, has_more, next_offset = page_items(items, limit=payload.limit, offset=payload.offset)
     return {
         "ok": True,
         "schema_id": "procurement_purchase_orders",
-        "count": len(items),
+        "count": len(page),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "items": [
             {
                 "purchase_order_id": order["purchase_order_id"],
                 "request_id": order["request_id"],
                 "fields": procurement_purchase_order_table_fields(order),
             }
-            for order in items
+            for order in page
         ],
     }

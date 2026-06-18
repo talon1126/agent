@@ -33,6 +33,7 @@ class ReplenishmentRequestTableRowsRequest(BaseModel):
     status: str | None = None
     request_id: str | None = None
     limit: int = 100
+    offset: int = 0
 
 
 class PurchaseOrderTableRowsRequest(BaseModel):
@@ -41,3 +42,4 @@ class PurchaseOrderTableRowsRequest(BaseModel):
     warehouse_sync_status: str | None = None
     payment_status: str | None = None
     limit: int = 100
+    offset: int = 0

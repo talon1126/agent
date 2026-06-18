@@ -127,10 +127,13 @@ services:
       FEISHU_FLASH_SALE_CLAIMS_TABLE_ID: ${FEISHU_FLASH_SALE_CLAIMS_TABLE_ID:-}
       FEISHU_FLASH_SALE_CLAIMS_TABLE_VIEW_ID: ${FEISHU_FLASH_SALE_CLAIMS_TABLE_VIEW_ID:-}
       FEISHU_FLASH_SALE_CLAIMS_TABLE_URL: ${FEISHU_FLASH_SALE_CLAIMS_TABLE_URL:-}
+      FEISHU_TABLE_STATE_PATH: ${FEISHU_TABLE_STATE_PATH:-/app/state/feishu_table_state.json}
       FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:-}
       FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
     ports:
       - "8010:8000"
+    volumes:
+      - feishu_table_state:/app/state
     depends_on:
       - n8n
 
@@ -164,3 +167,4 @@ services:
 volumes:
   postgres_data:
   n8n_data:
+  feishu_table_state:

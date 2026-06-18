@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.routers.pagination import page_items
 from app.routers.product_details import item_rating_from_reviews
 from app.routers.warehouse.inventory import load_batch_inventory_rows
 from app.routers.warehouse.state import get_warehouse_repository
@@ -60,6 +61,7 @@ class ProductOperationsTableRowsRequest(BaseModel):
 
     category_id: str | None = None
     limit: int = 100
+    offset: int = 0
 
 
 class ItemsTableRowsRequest(BaseModel):
@@ -72,6 +74,7 @@ class ItemsTableRowsRequest(BaseModel):
 
     category_id: str | None = None
     limit: int = 100
+    offset: int = 0
 
 
 class SearchBackendUnavailable(RuntimeError):
@@ -322,16 +325,22 @@ def items_table_fields(product: dict[str, Any], *, rating: dict[str, Any]) -> di
     }
 
 
-def load_items_table_rows(*, category_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+def load_items_table_rows(
+    *,
+    category_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], bool, int | None]:
     """Load standalone Items rows for the Feishu read-model sync endpoint.
 
     Args:
         category_id: Optional backend category id used by Feishu page filters.
-        limit: Requested row limit. The function caps this value before reading
-            PostgreSQL so scheduled n8n runs cannot request an unbounded export.
+        limit: Requested row limit. The function caps this value before
+            building the response page.
+        offset: Zero-based row offset for multi-page Feishu table sync.
 
     Returns:
-        Rows with stable `item_id` identities and Feishu field maps. The field
+        Page rows, whether another page exists, and the next offset. The field
         map keeps category display names and image URLs, but does not expose the
         internal category id in the employee-facing table.
 
@@ -344,29 +353,30 @@ def load_items_table_rows(*, category_id: str | None = None, limit: int = 100) -
     if not repository:
         raise SearchBackendUnavailable("Postgres backend is required for Items table rows")
     normalized_category = (category_id or "").strip() or None
-    capped_limit = max(min(int(limit or 100), 500), 1)
-    products = repository.search_items(None, category_id=normalized_category)[:capped_limit]
+    products = repository.search_items(None, category_id=normalized_category)
     rows = []
     for product in products:
         item_id = str(product["item_id"])
         rating = repository.item_review_summary(item_id) if hasattr(repository, "item_review_summary") else {}
         rows.append({"item_id": item_id, "fields": items_table_fields(product, rating=rating)})
-    return rows
+    return page_items(rows, limit=limit, offset=offset)
 
 
 def load_product_operations_table_rows(
     *,
     category_id: str | None = None,
     limit: int = 100,
-) -> list[dict[str, Any]]:
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], bool, int | None]:
     """Load Product Operations rows for the Feishu read-model sync endpoint.
 
     Args:
         category_id: Optional backend category id filter.
-        limit: Maximum number of rows to return after catalog lookup.
+        limit: Maximum number of rows in one response page.
+        offset: Zero-based row offset for multi-page Feishu table sync.
 
     Returns:
-        A list of row dictionaries containing item ids and Feishu field maps.
+        Page rows, whether another page exists, and the next offset.
 
     Raises:
         SearchBackendUnavailable: When PostgreSQL-backed catalog search is not
@@ -377,10 +387,9 @@ def load_product_operations_table_rows(
     if not repository:
         raise SearchBackendUnavailable("Postgres backend is required for Product Operations table rows")
     normalized_category = (category_id or "").strip() or None
-    capped_limit = max(min(int(limit or 100), 500), 1)
-    products = repository.search_items(None, category_id=normalized_category)[:capped_limit]
+    products = repository.search_items(None, category_id=normalized_category)
     flash_sales = active_flash_sales_by_item(repository)
-    rankings = ranking_rows_by_item(repository, category_id=normalized_category, limit=capped_limit)
+    rankings = ranking_rows_by_item(repository, category_id=normalized_category, limit=max(len(products), 1))
     rows = []
     for product in products:
         item_id = str(product["item_id"])
@@ -396,7 +405,7 @@ def load_product_operations_table_rows(
                 ),
             }
         )
-    return rows
+    return page_items(rows, limit=limit, offset=offset)
 
 
 @router.get("/products/operations/table-schema")
@@ -443,7 +452,11 @@ def get_items_table_rows(payload: ItemsTableRowsRequest):
     """
 
     try:
-        rows = load_items_table_rows(category_id=payload.category_id, limit=payload.limit)
+        rows, has_more, next_offset = load_items_table_rows(
+            category_id=payload.category_id,
+            limit=payload.limit,
+            offset=payload.offset,
+        )
     except SearchBackendUnavailable as error:
         return JSONResponse(
             status_code=503,
@@ -454,6 +467,8 @@ def get_items_table_rows(payload: ItemsTableRowsRequest):
         "schema_id": "items",
         "source": "mock-api",
         "count": len(rows),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "items": rows,
     }
 
@@ -463,7 +478,11 @@ def get_product_operations_table_rows(payload: ProductOperationsTableRowsRequest
     """Return Product Operations rows consumed by feishu-adapter table sync."""
 
     try:
-        rows = load_product_operations_table_rows(category_id=payload.category_id, limit=payload.limit)
+        rows, has_more, next_offset = load_product_operations_table_rows(
+            category_id=payload.category_id,
+            limit=payload.limit,
+            offset=payload.offset,
+        )
     except SearchBackendUnavailable as error:
         return JSONResponse(
             status_code=503,
@@ -473,6 +492,8 @@ def get_product_operations_table_rows(payload: ProductOperationsTableRowsRequest
         "ok": True,
         "schema_id": "product_operations",
         "count": len(rows),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "items": rows,
     }
 

@@ -714,7 +714,7 @@ mock-api / PostgreSQL 业务事实
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
 | 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
 | 阶段 G | AImodel 可用 | 流式聊天、工具调用、会话记忆、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 |  |
-| 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、业务操作页、订单明细、商品、秒杀 read model 同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
+| 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、业务操作页、订单明细、商品、秒杀 read model 分页同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
 | 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
 
 ### 6.3 任务跟踪表
@@ -801,7 +801,7 @@ mock-api / PostgreSQL 业务事实
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| H1 | 建立 feishu-adapter 基础能力 | [✔] | 2026-06-18 | 长连接、多机器人、事件解析、n8n 转发、回复、run log、table_id-first 表定位 |
+| H1 | 建立 feishu-adapter 基础能力 | [✔] | 2026-06-18 | 长连接、多机器人、事件解析、n8n 转发、回复、run log、table_id-first 表定位、table_id 持久记忆、分页同步基础能力 |
 | H2 | 实现仓储飞书表和余额表同步 | [✔] |  | Warehouse Inventory Snapshots / Balances |
 | H3 | 实现采购到仓库存同步和采购飞书表同步 | [✔] |  | arrived_unsynced -> synced、Replenishment Requests、Purchase Orders |
 | H4 | 实现订单发仓确认通知 | [✔] | 2026-06-17 | 支付后发仓确认、候选发仓、物流选择、员工确认后扣减 |
@@ -1822,7 +1822,7 @@ mock-api / PostgreSQL 业务事实
 
 ##### H1：建立 feishu-adapter 基础能力
 
-目标：提供飞书长连接、多机器人事件接入、n8n 转发、飞书回复、run log 记录和 table_id-first 多维表格定位能力。
+目标：提供飞书长连接、多机器人事件接入、n8n 转发、飞书回复、run log 记录、table_id-first 多维表格定位和 table_id 持久记忆能力。
 
 修改文件：
 
@@ -1842,6 +1842,10 @@ mock-api / PostgreSQL 业务事实
 - `send_group_text_message()`：向指定群主动发送业务通知。
 - `write_run_log()`：记录事件、工作流、工具调用、耗时和回复状态。
 - `ensure_*_table()`：所有飞书表同步优先使用已配置或已记忆的 `table_id` 校验表是否存在，表名只用于首次创建或 `table_id` 缺失时的兜底查找。
+- `load_feishu_table_state()`：服务启动时读取 `FEISHU_TABLE_STATE_PATH` 指向的本地状态文件，作为环境变量缺失时的表 ID 来源。
+- `remember_feishu_table_state()`：表创建或首次按名称解析成功后，持久化 `table_id`、`view_id` 和 `table_url` 状态。
+- `fetch_business_table_rows_paginated()`：按 `limit + offset` 从 mock-api 拉取多页 read model，并兼容旧版单页响应。
+- `sync_business_table()`：统一编排 schema 获取、分页取数、飞书字段补齐和按业务键 upsert。
 
 验收标准：
 
@@ -1850,9 +1854,14 @@ mock-api / PostgreSQL 业务事实
 - 机器人回复和主动群消息都通过统一 Feishu client 发送。
 - run log 记录 event_id、message_id、bot_name、workflow、status、latency_ms、tool_calls 和 error。
 - 所有表同步端点以 `table_id` 为主定位飞书表；业务人员修改飞书表名后，只要 `table_id` 仍有效，同步不得创建重复表。
+- 飞书表创建成功或通过名称首次解析成功后，服务必须把 `table_id` 持久化到 `FEISHU_TABLE_STATE_PATH` 指向的本地状态文件；后续启动在未显式配置环境变量时优先复用该状态。
 - `table_id` 无效或表被删除时，系统清空失效状态并按当前默认表名或请求表名重新创建。
+- 通用表同步从源端读取 `items`、`count`、`has_more` 和 `next_offset`；当源端未返回分页字段时按单页兼容处理。
+- 通用表同步在多页场景下持续请求下一页，直到 `has_more=false` 或 `next_offset` 为空，不因默认单页限制丢失记录。
+- n8n 定时任务只触发对应同步端点，不在 workflow 内实现分页循环。
+- 表同步响应包含 table_id、table_name、table_url、synced_count、page_count 和错误摘要。
 
-测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`
+测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`docker compose -p after-sales-implementation config --quiet`
 
 ##### H2：实现仓储批次表和余额表同步
 
@@ -1882,6 +1891,7 @@ mock-api / PostgreSQL 业务事实
 - 库存批次快照表优先使用 `Source Version` 作为同步幂等身份键，避免同名商品在同一仓库和批次下误更新。
 - `Balance ID` 来源于数据库 `inventory_location_balances.id`；无数据库 fallback 时使用稳定可读的 `fallback:{item_id}:{warehouse_id}:{location}`。
 - 定时任务调用 `/warehouse/inventory-balances-table/sync` 刷新飞书余额表。
+- 库存快照和库存余额同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
 
 测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
@@ -1918,6 +1928,7 @@ mock-api / PostgreSQL 业务事实
 - 补货申请飞书表不展示 `Category ID` 或 `Item ID`。
 - 采购单飞书表不展示 `Supplier ID` 或 `Item ID`。
 - 补货申请和采购单都有独立 n8n 定时同步任务，并调用对应 `/procurement/*-table/sync` 端点。
+- 补货申请和采购单同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
@@ -2090,10 +2101,12 @@ mock-api / PostgreSQL 业务事实
 - 两个同步端点在配置缺失时返回明确 not configured 响应。
 - 两个同步端点在配置完整时能够使用 table_id-first 策略补齐字段并 upsert 记录。
 - 返回结果包含 table_id、table_name、table_url、synced_count 和 items。
+- 返回结果包含 page_count，用于确认订单履约和订单明细同步读取了多少页源数据。
 - 字段使用 TalonMart 业务可读名称，不暴露内部数据库主键以外的实现细节。
 - 订单明细表可以展示 `Order Item ID` 作为业务行标识，但不展示数据库自增 `id`。
 - 订单履约表有独立 n8n 定时同步任务，并调用 `/orders/fulfillment-table/sync` 端点。
 - 订单明细表有独立 n8n 定时同步任务，并调用 `/orders/items-table/sync` 端点。
+- 订单履约和订单明细同步复用 H1 分页能力，支持超过 100 条记录的源端 read model。
 
 测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
@@ -2130,6 +2143,7 @@ mock-api / PostgreSQL 业务事实
 - 飞书商品表包含商品图片 URL，后续 OSS URL 可直接同步展示。
 - 商品表分类字段使用分类展示名，不直接展示内部 `category_id`。
 - 商品表有独立 n8n 定时同步任务，并调用 `/items/table/sync` 端点。
+- 商品同步复用 H1 分页能力，支持超过 100 条商品主数据同步。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
@@ -2168,6 +2182,7 @@ mock-api / PostgreSQL 业务事实
 - 秒杀活动表展示商品名称、活动价、商品原价、库存配额、状态和时间窗口。
 - 秒杀结果表展示用户、商品、订单、状态和时间，不展示内部数据库实现字段。
 - 秒杀活动表和秒杀结果表都有独立 n8n 定时同步任务。
+- 秒杀活动和秒杀结果同步复用 H1 分页能力，支持超过 100 条活动或抢购结果同步。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 

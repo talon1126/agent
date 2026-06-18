@@ -658,6 +658,40 @@ def test_order_items_table_schema_and_rows_expose_line_fields():
     assert "id" not in row["fields"]
 
 
+def test_order_items_table_rows_support_offset_pagination():
+    """Protect the shared H1 pagination contract for the H8 Order Items table."""
+
+    create_response = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-LINES-PAGED",
+            "customer_id": "cus_100",
+            "shipping_address": "广东省深圳市南山区",
+            "items": [
+                {"item_id": "item_vinda_tissue", "quantity": 1},
+                {"item_id": "item_milk_pure", "quantity": 1},
+                {"item_id": "item_cola_zero", "quantity": 1},
+            ],
+            "delivery_provider_id": "sf",
+        },
+    )
+    assert create_response.status_code == 200
+
+    response = client.post(
+        "/warehouse/orders/items/table-rows",
+        json={"order_id": "ORD-CODEX-LINES-PAGED", "limit": 2, "offset": 2},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["count"] == 1
+    assert body["has_more"] is False
+    assert body["next_offset"] is None
+    assert body["items"][0]["fields"]["Order ID"] == "ORD-CODEX-LINES-PAGED"
+    assert body["items"][0]["fields"]["Item ID"] == "item_cola_zero"
+
+
 def test_product_operations_table_schema_and_rows_merge_catalog_deal_and_ranking(monkeypatch):
     """Protect the H8 Product Operations read model contract for Feishu tables.
 
@@ -732,6 +766,45 @@ def test_items_table_schema_and_rows_expose_catalog_fields(monkeypatch):
     assert row["fields"]["Rating"] == 4.8
 
 
+def test_items_table_rows_support_offset_pagination(monkeypatch):
+    """Protect the shared H1 pagination contract for the H9 Items read model.
+
+    Feishu table sync jobs must be able to read more than the first page of
+    catalog rows. This test uses a repository double with three rows, requests
+    the second page, and verifies that the endpoint returns the standard
+    `has_more` and `next_offset` envelope consumed by feishu-adapter.
+    """
+
+    class PaginatedItemsRepository(FakeProductOperationsRepository):
+        def search_items(self, query: str | None = None, *, category_id: str | None = None):
+            assert query is None
+            return [
+                {
+                    "item_id": f"item_page_{index}",
+                    "item_name": f"Paged Item {index}",
+                    "brand": "Talon",
+                    "spec": "Demo",
+                    "category_id": "electronics",
+                    "category_name": "Electronics",
+                    "price": 10 + index,
+                    "image": f"https://oss.example.com/products/item_page_{index}.jpg",
+                }
+                for index in range(1, 4)
+            ]
+
+    monkeypatch.setattr(search_router, "get_warehouse_repository", lambda: PaginatedItemsRepository())
+
+    response = client.post("/items/table-rows", json={"category_id": "electronics", "limit": 2, "offset": 2})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["count"] == 1
+    assert body["has_more"] is False
+    assert body["next_offset"] is None
+    assert [item["item_id"] for item in body["items"]] == ["item_page_3"]
+
+
 def test_flash_sales_table_schema_and_rows_expose_activity_fields(monkeypatch):
     """Protect the H10 Flash Sales read model used by Feishu operations."""
 
@@ -754,6 +827,25 @@ def test_flash_sales_table_schema_and_rows_expose_activity_fields(monkeypatch):
     assert row["fields"]["Item ID"] == "item_milk_pure"
     assert row["fields"]["Original Price"] == 18.4
     assert row["fields"]["Stock Remaining"] == 1
+
+
+def test_flash_sales_table_rows_support_offset_pagination(monkeypatch):
+    """Protect the shared H1 pagination contract for H10 Flash Sales rows."""
+
+    sales = [active_flash_sale(id=index, item_id=f"item_flash_{index}") for index in range(1, 4)]
+    repository = FakeFlashSaleRepository(sales=sales)
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: FakeFlashSaleRedis(stocks={}))
+
+    response = client.post("/flash-sales/table-rows", json={"status": "active", "limit": 2, "offset": 2})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["count"] == 1
+    assert body["has_more"] is False
+    assert body["next_offset"] is None
+    assert [item["flash_sale_id"] for item in body["items"]] == ["3"]
 
 
 def test_flash_sale_claims_table_schema_and_rows_expose_result_fields(monkeypatch):
@@ -1972,6 +2064,41 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
     assert order_fields["Arrived At"] == ""
 
 
+def test_procurement_replenishment_table_rows_support_offset_pagination():
+    """Protect the shared H1 pagination contract for H3 procurement tables."""
+
+    for _index in range(3):
+        create_replenishment_request_for_test(
+            item_id="item_vinda_tissue",
+            location_code="A1",
+        )
+
+    first_response = client.post(
+        "/procurement/replenishment-requests/table-rows",
+        json={"status": "未审批", "limit": 2, "offset": 0},
+    )
+    response = client.post(
+        "/procurement/replenishment-requests/table-rows",
+        json={"status": "未审批", "limit": 2, "offset": 2},
+    )
+
+    assert first_response.status_code == 200
+    assert response.status_code == 200
+    first_body = first_response.json()
+    body = response.json()
+    assert first_body["ok"] is True
+    assert body["ok"] is True
+    assert body["count"] >= 1
+    assert isinstance(body["has_more"], bool)
+    if body["has_more"]:
+        assert body["next_offset"] == 4
+    else:
+        assert body["next_offset"] is None
+    first_ids = {item["request_id"] for item in first_body["items"]}
+    second_ids = {item["request_id"] for item in body["items"]}
+    assert first_ids.isdisjoint(second_ids)
+
+
 def test_operations_summary_mock_returns_cross_domain_summary():
     response = client.post("/operations/summary/mock", json={"query": "帮我总结今天的运营异常"})
 
@@ -2287,6 +2414,31 @@ def test_warehouse_inventory_table_rows_return_batch_location_feishu_ready_field
     assert first["fields"]["Item Name"] == "维达纸巾"
     assert "Category ID" not in first["fields"]
     assert "Item ID" not in first["fields"]
+
+
+def test_warehouse_inventory_table_rows_support_offset_pagination():
+    """Protect the shared H1 pagination contract for H2 inventory snapshots."""
+
+    first_page = client.post(
+        "/warehouse/inventory/table-rows",
+        json={"warehouse_id": "wh_sz_1", "limit": 1},
+    )
+    assert first_page.status_code == 200
+    first_body = first_page.json()
+    assert first_body["ok"] is True
+    assert first_body["count"] == 1
+    assert first_body["has_more"] is True
+    assert first_body["next_offset"] == 1
+
+    second_page = client.post(
+        "/warehouse/inventory/table-rows",
+        json={"warehouse_id": "wh_sz_1", "limit": 1, "offset": 1},
+    )
+    assert second_page.status_code == 200
+    second_body = second_page.json()
+    assert second_body["ok"] is True
+    assert second_body["count"] == 1
+    assert second_body["items"][0]["batch_key"] != first_body["items"][0]["batch_key"]
 
 
 def test_warehouse_stock_balance_table_schema_uses_select_statuses_and_date_fields():

@@ -2268,6 +2268,82 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
     assert "Item ID" not in create_fields
 
 
+def test_procurement_table_sync_fetches_all_offset_pages() -> None:
+    """Verify H3 procurement table sync reuses the shared H1 pagination contract."""
+
+    requests: list[httpx.Request] = []
+    source_rows = []
+    for index in range(1, 4):
+        row = procurement_replenishment_table_rows_response()["items"][0]
+        row["request_id"] = f"REQ-PAGE-{index}"
+        row["fields"] = {
+            **row["fields"],
+            "Request ID": f"REQ-PAGE-{index}",
+            "Source Version": f"mock-api:REQ-PAGE-{index}",
+        }
+        source_rows.append(row)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/procurement/replenishment-requests/table-schema":
+            return httpx.Response(200, json={"ok": True, "fields": [{"name": "Request ID", "type": "text"}]})
+        if url == "http://mock-api.local/procurement/replenishment-requests/table-rows":
+            payload = json.loads(request.content)
+            offset = int(payload.get("offset") or 0)
+            limit = int(payload.get("limit") or 2)
+            page = source_rows[offset : offset + limit]
+            next_offset = offset + limit if offset + limit < len(source_rows) else None
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "schema_id": "procurement_replenishment_requests",
+                    "count": len(page),
+                    "has_more": next_offset is not None,
+                    "next_offset": next_offset,
+                    "items": page,
+                },
+            )
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req/records":
+            request_id = json.loads(request.content)["fields"]["Request ID"]
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": f"rec_{request_id}"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        procurement_replenishment_request_table_id="tbl_req",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/procurement/replenishment-requests-table/sync", json={"limit": 2})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True, body
+    assert body["synced_count"] == 3
+    assert body["page_count"] == 2
+    row_payloads = [
+        json.loads(request.content)
+        for request in requests
+        if str(request.url) == "http://mock-api.local/procurement/replenishment-requests/table-rows"
+    ]
+    assert row_payloads == [
+        {"status": None, "request_id": None, "limit": 2, "offset": 0},
+        {"status": None, "request_id": None, "limit": 2, "offset": 2},
+    ]
+
+
 def test_order_fulfillment_table_sync_upserts_by_order_id() -> None:
     """Verify H8 sync writes Order Fulfillment rows into a real Feishu table.
 
@@ -2536,6 +2612,90 @@ def test_items_table_sync_upserts_by_item_id() -> None:
     assert body["ok"] is True, body
     assert body["table_id"] == "tbl_items"
     assert body["items"][0]["item_id"] == "item_wireless_earbuds"
+
+
+def test_business_table_sync_fetches_all_offset_pages() -> None:
+    """Verify H1 shared sync reads every source page before upserting records.
+
+    Items table sync is representative for H8/H9/H10 business read models
+    because those endpoints all use `sync_business_table()`. The mock-api side
+    returns two pages with the standard `has_more` and `next_offset` envelope;
+    the adapter must request both offsets and expose `page_count` in the sync
+    response so operators can tell that a full multi-page sync ran.
+    """
+
+    requests: list[httpx.Request] = []
+    source_rows = [
+        {
+            "item_id": f"item_page_{index}",
+            "fields": {
+                "Item ID": f"item_page_{index}",
+                "Source Version": f"mock-api:item_page_{index}",
+            },
+        }
+        for index in range(1, 4)
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/items/table-schema":
+            return httpx.Response(200, json={"ok": True, "fields": [{"name": "Item ID", "type": "text"}]})
+        if url == "http://mock-api.local/items/table-rows":
+            payload = json.loads(request.content)
+            offset = int(payload.get("offset") or 0)
+            limit = int(payload.get("limit") or 2)
+            page = source_rows[offset : offset + limit]
+            next_offset = offset + limit if offset + limit < len(source_rows) else None
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "schema_id": "items",
+                    "count": len(page),
+                    "has_more": next_offset is not None,
+                    "next_offset": next_offset,
+                    "items": page,
+                },
+            )
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records":
+            item_id = json.loads(request.content)["fields"]["Item ID"]
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": f"rec_{item_id}"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        items_table_id="tbl_items",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/items/table/sync", json={"limit": 2})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True, body
+    assert body["synced_count"] == 3
+    assert body["page_count"] == 2
+    assert [item["item_id"] for item in body["items"]] == ["item_page_1", "item_page_2", "item_page_3"]
+    row_payloads = [
+        json.loads(request.content)
+        for request in requests
+        if str(request.url) == "http://mock-api.local/items/table-rows"
+    ]
+    assert row_payloads == [
+        {"category_id": None, "limit": 2, "offset": 0},
+        {"category_id": None, "limit": 2, "offset": 2},
+    ]
 
 
 def test_flash_sales_table_sync_upserts_by_flash_sale_id() -> None:
@@ -3060,10 +3220,11 @@ def test_inventory_table_sync_filter_uses_backend_table_rows() -> None:
         "category": None,
         "category_id": None,
         "batch_no": None,
-        "expiry_risk": None,
-        "risk_level": "high",
-        "limit": 50,
-    }
+            "expiry_risk": None,
+            "risk_level": "high",
+            "limit": 50,
+            "offset": 0,
+        }
     lookup_request = next(
         request
         for request in requests
@@ -3681,6 +3842,128 @@ def test_inventory_balances_table_sync_provisions_pages_and_writes_date_fields_a
     assert fields["Storage Status"] == "available"
     assert fields["Risk Level"] == "high"
     assert fields["Balance Status"] == "low_stock"
+
+
+def test_inventory_balances_table_sync_persists_created_table_id_for_renamed_tables(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    """Protect durable table-id-first behavior across adapter restarts.
+
+    Feishu operators can rename the human-facing balance table after the
+    adapter creates it. The first sync must persist the created `table_id`, and
+    a later app instance must reuse that stored id before searching by table
+    name. If this regresses, the second sync creates a duplicate table whenever
+    the visible Feishu table name no longer matches the default name.
+    """
+
+    state_path = tmp_path / "feishu_table_state.json"
+    monkeypatch.setenv("FEISHU_TABLE_STATE_PATH", str(state_path))
+    created_fields: list[dict[str, Any]] = []
+    requests: list[httpx.Request] = []
+
+    def field_response_for(table_id: str) -> httpx.Response:
+        if not created_fields:
+            created_fields.extend(
+                {
+                    "field_id": f"fld_{index + 1}",
+                    "field_name": field["name"],
+                    "type": 1,
+                    "is_primary": index == 0,
+                }
+                for index, field in enumerate(balance_table_schema_response()["fields"])
+            )
+        return httpx.Response(200, json={"code": 0, "data": {"items": created_fields}})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/warehouse/stock/balances/table-schema":
+            return httpx.Response(200, json=balance_table_schema_response())
+        if url == "http://mock-api.local/warehouse/stock/balances/table-rows":
+            return httpx.Response(200, json=balance_table_rows_response())
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            if state_path.exists():
+                return httpx.Response(500, json={"error": "duplicate table creation attempted"})
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {"table_id": "tbl_balances_persisted", "default_view_id": "vew_balance"},
+                },
+            )
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances_persisted/fields":
+            if request.method == "GET":
+                return field_response_for("tbl_balances_persisted")
+            payload = json.loads(request.content)
+            created_fields.append(
+                {
+                    "field_id": f"fld_{len(created_fields) + 1}",
+                    "field_name": payload["field_name"],
+                    "type": payload["type"],
+                }
+            )
+            return httpx.Response(200, json={"code": 0, "data": {"field": created_fields[-1]}})
+        if url.startswith(
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances_persisted/fields/"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances_persisted/views":
+            if request.method == "GET":
+                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(200, json={"code": 0, "data": {"view": {"view_id": "vew_created"}}})
+        if url.startswith(
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances_persisted/views/"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"view": {"view_id": "vew_created"}}})
+        if url.startswith(
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_balances_persisted/records?"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == (
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token"
+            "/tables/tbl_balances_persisted/records/batch_create"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"records": [{"record_id": "rec_balance"}]}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    first_app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        mock_api_url="http://mock-api.local",
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+    )
+    first_response = TestClient(first_app).post("/warehouse/inventory-balances-table/sync", json={})
+
+    assert first_response.status_code == 200
+    assert first_response.json()["table_id"] == "tbl_balances_persisted"
+    persisted_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted_state["inventory_balance_table"]["table_id"] == "tbl_balances_persisted"
+
+    requests.clear()
+    second_app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        mock_api_url="http://mock-api.local",
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+    )
+    second_response = TestClient(second_app).post("/warehouse/inventory-balances-table/sync", json={})
+
+    assert second_response.status_code == 200
+    body = second_response.json()
+    assert body["ok"] is True, body
+    assert body["table_id"] == "tbl_balances_persisted"
+    assert not any(
+        request.method == "POST"
+        and str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables"
+        for request in requests
+    )
 
 
 def test_warehouse_intent_router_endpoint_routes_update_table_view_to_sync() -> None:

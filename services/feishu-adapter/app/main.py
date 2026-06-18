@@ -5,6 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -373,6 +374,76 @@ DEFAULT_INVENTORY_BALANCE_TABLE_NAME = "Warehouse Inventory Balances"
 DEFAULT_INVENTORY_BALANCE_TABLE_ALIASES = ["库存余额表", DEFAULT_INVENTORY_BALANCE_TABLE_NAME]
 
 
+def load_feishu_table_state(state_path: str) -> dict[str, dict[str, str]]:
+    """Load durable Feishu Bitable identifiers from a local JSON state file.
+
+    The adapter can create Feishu tables automatically when the operator has
+    not configured table ids through environment variables. Created table ids
+    must survive process restarts, otherwise a renamed Feishu table will no
+    longer be found by name and the next sync will create a duplicate table.
+
+    Args:
+        state_path: Absolute or relative JSON file path from
+            `FEISHU_TABLE_STATE_PATH`. An empty value disables durable state and
+            keeps the adapter compatible with tests or deployments that manage
+            table ids only through environment variables.
+
+    Returns:
+        A mapping keyed by internal table family. Each value contains string
+        fields such as `table_id`, `view_id`, and `table_url`. Invalid or
+        missing files return an empty mapping so the sync path can fall back to
+        normal table discovery.
+    """
+
+    if not state_path:
+        return {}
+    path = Path(state_path)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        logger.warning("failed to load Feishu table state from %s: %s", path, error)
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    state: dict[str, dict[str, str]] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        state[key] = {
+            field: str(raw_value)
+            for field, raw_value in value.items()
+            if field in {"table_id", "view_id", "table_url"} and raw_value is not None
+        }
+    return state
+
+
+def save_feishu_table_state(state_path: str, state: dict[str, dict[str, str]]) -> None:
+    """Persist Feishu Bitable identifiers with an atomic replace operation.
+
+    Args:
+        state_path: JSON file path from `FEISHU_TABLE_STATE_PATH`.
+        state: Complete durable table-state mapping to write.
+
+    Side Effects:
+        Creates the parent directory when needed and replaces the previous JSON
+        file. Write failures are logged by callers so table syncs can continue
+        even when local state persistence is temporarily unavailable.
+    """
+
+    if not state_path:
+        return
+    path = Path(state_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp")
+    temp_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    temp_path.replace(path)
+
+
 def _clean_bot_name(value: str) -> str:
     name = value.strip().lower().replace("-", "_")
     return name or "default"
@@ -523,62 +594,123 @@ def create_app(
         if inventory_table_app_token is not None
         else os.getenv("FEISHU_INVENTORY_TABLE_APP_TOKEN", "")
     )
-    table_id = inventory_table_id if inventory_table_id is not None else os.getenv("FEISHU_INVENTORY_TABLE_ID", "")
-    table_view_id = (
-        inventory_table_view_id
-        if inventory_table_view_id is not None
-        else os.getenv("FEISHU_INVENTORY_TABLE_VIEW_ID", "")
+    table_state_path = os.getenv("FEISHU_TABLE_STATE_PATH", "").strip()
+    durable_table_state = load_feishu_table_state(table_state_path)
+    durable_table_state_lock = threading.RLock()
+
+    def table_state_value(
+        *,
+        explicit_value: str | None,
+        env_name: str,
+        state_key: str,
+        field_name: str,
+        fallback_env_names: tuple[str, ...] = (),
+    ) -> str:
+        """Resolve one table-state value from explicit config, env, or disk.
+
+        Args:
+            explicit_value: Optional value passed directly to `create_app` by a
+                test or an embedding application.
+            env_name: Environment variable name used by Docker/.env driven
+                deployments.
+            state_key: Durable JSON state key for the Feishu table family.
+            field_name: Field inside that durable state entry.
+            fallback_env_names: Compatibility environment variable names that
+                should still override durable state when a legacy deployment
+                has not migrated to the current variable name.
+
+        Returns:
+            The first configured string in priority order. Explicit values and
+            environment variables intentionally override durable state so
+            operators can correct a bad stored table id without editing JSON.
+        """
+
+        if explicit_value is not None:
+            return explicit_value
+        env_value = os.getenv(env_name, "").strip()
+        if env_value:
+            return env_value
+        for fallback_env_name in fallback_env_names:
+            fallback_env_value = os.getenv(fallback_env_name, "").strip()
+            if fallback_env_value:
+                return fallback_env_value
+        return str(durable_table_state.get(state_key, {}).get(field_name) or "")
+
+    table_id = table_state_value(
+        explicit_value=inventory_table_id,
+        env_name="FEISHU_INVENTORY_TABLE_ID",
+        state_key="inventory_table",
+        field_name="table_id",
+    )
+    table_view_id = table_state_value(
+        explicit_value=inventory_table_view_id,
+        env_name="FEISHU_INVENTORY_TABLE_VIEW_ID",
+        state_key="inventory_table",
+        field_name="view_id",
     )
     table_url = inventory_table_url if inventory_table_url is not None else os.getenv("FEISHU_INVENTORY_TABLE_URL", "")
     inventory_table_state = {
+        "_state_key": "inventory_table",
         "table_id": table_id,
         "view_id": table_view_id,
     }
     inventory_balance_table_state = {
-        "table_id": (
-            inventory_balance_table_id
-            if inventory_balance_table_id is not None
-            else os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_ID", "")
+        "_state_key": "inventory_balance_table",
+        "table_id": table_state_value(
+            explicit_value=inventory_balance_table_id,
+            env_name="FEISHU_INVENTORY_BALANCE_TABLE_ID",
+            state_key="inventory_balance_table",
+            field_name="table_id",
         ),
-        "view_id": (
-            inventory_balance_table_view_id
-            if inventory_balance_table_view_id is not None
-            else os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_VIEW_ID", "")
+        "view_id": table_state_value(
+            explicit_value=inventory_balance_table_view_id,
+            env_name="FEISHU_INVENTORY_BALANCE_TABLE_VIEW_ID",
+            state_key="inventory_balance_table",
+            field_name="view_id",
         ),
-        "table_url": (
-            inventory_balance_table_url
-            if inventory_balance_table_url is not None
-            else os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_URL", "")
+        "table_url": table_state_value(
+            explicit_value=inventory_balance_table_url,
+            env_name="FEISHU_INVENTORY_BALANCE_TABLE_URL",
+            state_key="inventory_balance_table",
+            field_name="table_url",
         ),
     }
     inventory_table_lock = threading.RLock()
     procurement_replenishment_request_table_state = {
-        "table_id": (
-            procurement_replenishment_request_table_id
-            if procurement_replenishment_request_table_id is not None
-            else os.getenv("FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_ID", "")
+        "_state_key": "procurement_replenishment_request_table",
+        "table_id": table_state_value(
+            explicit_value=procurement_replenishment_request_table_id,
+            env_name="FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_ID",
+            state_key="procurement_replenishment_request_table",
+            field_name="table_id",
         ),
-        "view_id": (
-            procurement_replenishment_request_table_view_id
-            if procurement_replenishment_request_table_view_id is not None
-            else os.getenv("FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_VIEW_ID", "")
+        "view_id": table_state_value(
+            explicit_value=procurement_replenishment_request_table_view_id,
+            env_name="FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_VIEW_ID",
+            state_key="procurement_replenishment_request_table",
+            field_name="view_id",
         ),
-        "table_url": (
-            procurement_replenishment_request_table_url
-            if procurement_replenishment_request_table_url is not None
-            else os.getenv("FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_URL", "")
+        "table_url": table_state_value(
+            explicit_value=procurement_replenishment_request_table_url,
+            env_name="FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_URL",
+            state_key="procurement_replenishment_request_table",
+            field_name="table_url",
         ),
     }
     procurement_purchase_order_table_state = {
+        "_state_key": "procurement_purchase_order_table",
         "table_id": (
             procurement_purchase_order_table_id
             if procurement_purchase_order_table_id is not None
             else (
                 procurement_purchase_order_draft_table_id
                 if procurement_purchase_order_draft_table_id is not None
-                else os.getenv(
-                    "FEISHU_PROCUREMENT_PURCHASE_ORDER_TABLE_ID",
-                    os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_ID", ""),
+                else table_state_value(
+                    explicit_value=None,
+                    env_name="FEISHU_PROCUREMENT_PURCHASE_ORDER_TABLE_ID",
+                    state_key="procurement_purchase_order_table",
+                    field_name="table_id",
+                    fallback_env_names=("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_ID",),
                 )
             )
         ),
@@ -588,9 +720,12 @@ def create_app(
             else (
                 procurement_purchase_order_draft_table_view_id
                 if procurement_purchase_order_draft_table_view_id is not None
-                else os.getenv(
-                    "FEISHU_PROCUREMENT_PURCHASE_ORDER_TABLE_VIEW_ID",
-                    os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_VIEW_ID", ""),
+                else table_state_value(
+                    explicit_value=None,
+                    env_name="FEISHU_PROCUREMENT_PURCHASE_ORDER_TABLE_VIEW_ID",
+                    state_key="procurement_purchase_order_table",
+                    field_name="view_id",
+                    fallback_env_names=("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_VIEW_ID",),
                 )
             )
         ),
@@ -600,113 +735,140 @@ def create_app(
             else (
                 procurement_purchase_order_draft_table_url
                 if procurement_purchase_order_draft_table_url is not None
-                else os.getenv(
-                    "FEISHU_PROCUREMENT_PURCHASE_ORDER_TABLE_URL",
-                    os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_URL", ""),
+                else table_state_value(
+                    explicit_value=None,
+                    env_name="FEISHU_PROCUREMENT_PURCHASE_ORDER_TABLE_URL",
+                    state_key="procurement_purchase_order_table",
+                    field_name="table_url",
+                    fallback_env_names=("FEISHU_PROCUREMENT_PURCHASE_ORDER_DRAFT_TABLE_URL",),
                 )
             )
         ),
     }
     order_fulfillment_table_state = {
-        "table_id": (
-            order_fulfillment_table_id
-            if order_fulfillment_table_id is not None
-            else os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_ID", "")
+        "_state_key": "order_fulfillment_table",
+        "table_id": table_state_value(
+            explicit_value=order_fulfillment_table_id,
+            env_name="FEISHU_ORDER_FULFILLMENT_TABLE_ID",
+            state_key="order_fulfillment_table",
+            field_name="table_id",
         ),
-        "view_id": (
-            order_fulfillment_table_view_id
-            if order_fulfillment_table_view_id is not None
-            else os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_VIEW_ID", "")
+        "view_id": table_state_value(
+            explicit_value=order_fulfillment_table_view_id,
+            env_name="FEISHU_ORDER_FULFILLMENT_TABLE_VIEW_ID",
+            state_key="order_fulfillment_table",
+            field_name="view_id",
         ),
-        "table_url": (
-            order_fulfillment_table_url
-            if order_fulfillment_table_url is not None
-            else os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_URL", "")
+        "table_url": table_state_value(
+            explicit_value=order_fulfillment_table_url,
+            env_name="FEISHU_ORDER_FULFILLMENT_TABLE_URL",
+            state_key="order_fulfillment_table",
+            field_name="table_url",
         ),
     }
     order_items_table_state = {
-        "table_id": (
-            order_items_table_id
-            if order_items_table_id is not None
-            else os.getenv("FEISHU_ORDER_ITEMS_TABLE_ID", "")
+        "_state_key": "order_items_table",
+        "table_id": table_state_value(
+            explicit_value=order_items_table_id,
+            env_name="FEISHU_ORDER_ITEMS_TABLE_ID",
+            state_key="order_items_table",
+            field_name="table_id",
         ),
-        "view_id": (
-            order_items_table_view_id
-            if order_items_table_view_id is not None
-            else os.getenv("FEISHU_ORDER_ITEMS_TABLE_VIEW_ID", "")
+        "view_id": table_state_value(
+            explicit_value=order_items_table_view_id,
+            env_name="FEISHU_ORDER_ITEMS_TABLE_VIEW_ID",
+            state_key="order_items_table",
+            field_name="view_id",
         ),
-        "table_url": (
-            order_items_table_url
-            if order_items_table_url is not None
-            else os.getenv("FEISHU_ORDER_ITEMS_TABLE_URL", "")
+        "table_url": table_state_value(
+            explicit_value=order_items_table_url,
+            env_name="FEISHU_ORDER_ITEMS_TABLE_URL",
+            state_key="order_items_table",
+            field_name="table_url",
         ),
     }
     items_table_state = {
-        "table_id": (
-            items_table_id
-            if items_table_id is not None
-            else os.getenv("FEISHU_ITEMS_TABLE_ID", "")
+        "_state_key": "items_table",
+        "table_id": table_state_value(
+            explicit_value=items_table_id,
+            env_name="FEISHU_ITEMS_TABLE_ID",
+            state_key="items_table",
+            field_name="table_id",
         ),
-        "view_id": (
-            items_table_view_id
-            if items_table_view_id is not None
-            else os.getenv("FEISHU_ITEMS_TABLE_VIEW_ID", "")
+        "view_id": table_state_value(
+            explicit_value=items_table_view_id,
+            env_name="FEISHU_ITEMS_TABLE_VIEW_ID",
+            state_key="items_table",
+            field_name="view_id",
         ),
-        "table_url": (
-            items_table_url
-            if items_table_url is not None
-            else os.getenv("FEISHU_ITEMS_TABLE_URL", "")
+        "table_url": table_state_value(
+            explicit_value=items_table_url,
+            env_name="FEISHU_ITEMS_TABLE_URL",
+            state_key="items_table",
+            field_name="table_url",
         ),
     }
     product_operations_table_state = {
-        "table_id": (
-            product_operations_table_id
-            if product_operations_table_id is not None
-            else os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_ID", "")
+        "_state_key": "product_operations_table",
+        "table_id": table_state_value(
+            explicit_value=product_operations_table_id,
+            env_name="FEISHU_PRODUCT_OPERATIONS_TABLE_ID",
+            state_key="product_operations_table",
+            field_name="table_id",
         ),
-        "view_id": (
-            product_operations_table_view_id
-            if product_operations_table_view_id is not None
-            else os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_VIEW_ID", "")
+        "view_id": table_state_value(
+            explicit_value=product_operations_table_view_id,
+            env_name="FEISHU_PRODUCT_OPERATIONS_TABLE_VIEW_ID",
+            state_key="product_operations_table",
+            field_name="view_id",
         ),
-        "table_url": (
-            product_operations_table_url
-            if product_operations_table_url is not None
-            else os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_URL", "")
+        "table_url": table_state_value(
+            explicit_value=product_operations_table_url,
+            env_name="FEISHU_PRODUCT_OPERATIONS_TABLE_URL",
+            state_key="product_operations_table",
+            field_name="table_url",
         ),
     }
     flash_sales_table_state = {
-        "table_id": (
-            flash_sales_table_id
-            if flash_sales_table_id is not None
-            else os.getenv("FEISHU_FLASH_SALES_TABLE_ID", "")
+        "_state_key": "flash_sales_table",
+        "table_id": table_state_value(
+            explicit_value=flash_sales_table_id,
+            env_name="FEISHU_FLASH_SALES_TABLE_ID",
+            state_key="flash_sales_table",
+            field_name="table_id",
         ),
-        "view_id": (
-            flash_sales_table_view_id
-            if flash_sales_table_view_id is not None
-            else os.getenv("FEISHU_FLASH_SALES_TABLE_VIEW_ID", "")
+        "view_id": table_state_value(
+            explicit_value=flash_sales_table_view_id,
+            env_name="FEISHU_FLASH_SALES_TABLE_VIEW_ID",
+            state_key="flash_sales_table",
+            field_name="view_id",
         ),
-        "table_url": (
-            flash_sales_table_url
-            if flash_sales_table_url is not None
-            else os.getenv("FEISHU_FLASH_SALES_TABLE_URL", "")
+        "table_url": table_state_value(
+            explicit_value=flash_sales_table_url,
+            env_name="FEISHU_FLASH_SALES_TABLE_URL",
+            state_key="flash_sales_table",
+            field_name="table_url",
         ),
     }
     flash_sale_claims_table_state = {
-        "table_id": (
-            flash_sale_claims_table_id
-            if flash_sale_claims_table_id is not None
-            else os.getenv("FEISHU_FLASH_SALE_CLAIMS_TABLE_ID", "")
+        "_state_key": "flash_sale_claims_table",
+        "table_id": table_state_value(
+            explicit_value=flash_sale_claims_table_id,
+            env_name="FEISHU_FLASH_SALE_CLAIMS_TABLE_ID",
+            state_key="flash_sale_claims_table",
+            field_name="table_id",
         ),
-        "view_id": (
-            flash_sale_claims_table_view_id
-            if flash_sale_claims_table_view_id is not None
-            else os.getenv("FEISHU_FLASH_SALE_CLAIMS_TABLE_VIEW_ID", "")
+        "view_id": table_state_value(
+            explicit_value=flash_sale_claims_table_view_id,
+            env_name="FEISHU_FLASH_SALE_CLAIMS_TABLE_VIEW_ID",
+            state_key="flash_sale_claims_table",
+            field_name="view_id",
         ),
-        "table_url": (
-            flash_sale_claims_table_url
-            if flash_sale_claims_table_url is not None
-            else os.getenv("FEISHU_FLASH_SALE_CLAIMS_TABLE_URL", "")
+        "table_url": table_state_value(
+            explicit_value=flash_sale_claims_table_url,
+            env_name="FEISHU_FLASH_SALE_CLAIMS_TABLE_URL",
+            state_key="flash_sale_claims_table",
+            field_name="table_url",
         ),
     }
     bot_configs = parse_bot_configs(
@@ -1199,6 +1361,68 @@ def create_app(
             "next_cursor": str(payload.get("next_cursor") or ""),
         }
 
+    def fetch_business_table_rows_paginated(
+        *,
+        rows_endpoint: str,
+        request_payload: dict[str, Any],
+        error_context: str,
+        max_pages: int = 500,
+    ) -> dict[str, Any]:
+        """Fetch all pages from a mock-api read-model endpoint.
+
+        Args:
+            rows_endpoint: mock-api path that returns a Feishu read-model page.
+            request_payload: Source filters supplied by the sync endpoint. The
+                helper preserves these filters and injects `limit` and `offset`
+                for each page request.
+            error_context: Human-readable table family name used in runtime
+                errors and run-log messages.
+            max_pages: Safety cap that prevents an accidental infinite loop if
+                a source endpoint returns a repeated `next_offset`.
+
+        Returns:
+            A dictionary with normalized `items` and `page_count`. Old source
+            endpoints without `has_more` or `next_offset` are treated as a
+            single page for backward compatibility.
+
+        Raises:
+            httpx.HTTPError: If the mock-api request fails.
+            RuntimeError: If the source payload is not a successful read-model
+                response or if pagination does not advance.
+        """
+
+        limit = max(min(int(request_payload.get("limit") or 100), 500), 1)
+        offset = max(int(request_payload.get("offset") or 0), 0)
+        page_count = 0
+        rows: list[dict[str, Any]] = []
+        seen_offsets: set[int] = set()
+        while page_count < max_pages:
+            if offset in seen_offsets:
+                raise RuntimeError(f"{error_context} pagination did not advance at offset={offset}")
+            seen_offsets.add(offset)
+            page_payload = {**request_payload, "limit": limit, "offset": offset}
+            rows_response = client.post(
+                f"{runtime_mock_api_url}{rows_endpoint}",
+                json=page_payload,
+            )
+            rows_response.raise_for_status()
+            rows_payload = rows_response.json()
+            if rows_payload.get("ok") is not True:
+                raise RuntimeError(f"{error_context} rows lookup failed: {rows_payload}")
+            page_rows = rows_payload.get("items", [])
+            if not isinstance(page_rows, list):
+                raise RuntimeError(f"{error_context} rows returned invalid items: {rows_payload}")
+            rows.extend(row for row in page_rows if isinstance(row, dict) and isinstance(row.get("fields"), dict))
+            page_count += 1
+            has_more = bool(rows_payload.get("has_more"))
+            raw_next_offset = rows_payload.get("next_offset")
+            if not has_more or raw_next_offset is None:
+                break
+            offset = max(int(raw_next_offset), 0)
+        else:
+            raise RuntimeError(f"{error_context} pagination exceeded max_pages={max_pages}")
+        return {"items": rows, "page_count": page_count}
+
     def fetch_inventory_table_rows(
         *,
         item_id: str | None = None,
@@ -1610,11 +1834,70 @@ def create_app(
             or "table not found" in message
         )
 
-    def remember_inventory_table(result: dict[str, str]) -> None:
+    def remember_feishu_table_state(state: dict[str, str], result: dict[str, str]) -> None:
+        """Remember a resolved Feishu table id in memory and durable JSON state.
+
+        Args:
+            state: Mutable runtime state for one table family. The private
+                `_state_key` field maps it to the durable JSON entry.
+            result: Table resolution result returned by Feishu lookup or table
+                creation. `table_id` is required to persist an entry; `view_id`
+                and `table_url` are optional.
+
+        Side Effects:
+            Updates the process-local state immediately and writes the durable
+            JSON state file when `FEISHU_TABLE_STATE_PATH` is configured. Write
+            failures are logged but do not fail the sync, because table syncing
+            should still succeed when the local state volume is temporarily
+            unavailable.
+        """
+
         if result.get("table_id"):
-            inventory_table_state["table_id"] = result["table_id"]
+            state["table_id"] = result["table_id"]
         if result.get("view_id"):
-            inventory_table_state["view_id"] = result["view_id"]
+            state["view_id"] = result["view_id"]
+        if result.get("table_url"):
+            state["table_url"] = result["table_url"]
+        state_key = state.get("_state_key", "")
+        if not table_state_path or not state_key or not state.get("table_id"):
+            return
+        with durable_table_state_lock:
+            durable_table_state[state_key] = {
+                "table_id": state.get("table_id", ""),
+                "view_id": state.get("view_id", ""),
+                "table_url": state.get("table_url", ""),
+            }
+            try:
+                save_feishu_table_state(table_state_path, durable_table_state)
+            except OSError as error:
+                logger.warning("failed to persist Feishu table state for %s: %s", state_key, error)
+
+    def clear_feishu_table_state_entry(state: dict[str, str]) -> None:
+        """Clear a missing Feishu table id from runtime and durable state.
+
+        Args:
+            state: Mutable runtime state for one table family.
+
+        Side Effects:
+            Removes the table id from memory and from the optional durable JSON
+            file. This prevents the next sync from retrying an id that Feishu
+            has already reported as missing or deleted.
+        """
+
+        state["table_id"] = ""
+        state["view_id"] = ""
+        state_key = state.get("_state_key", "")
+        if not table_state_path or not state_key:
+            return
+        with durable_table_state_lock:
+            durable_table_state.pop(state_key, None)
+            try:
+                save_feishu_table_state(table_state_path, durable_table_state)
+            except OSError as error:
+                logger.warning("failed to clear Feishu table state for %s: %s", state_key, error)
+
+    def remember_inventory_table(result: dict[str, str]) -> None:
+        remember_feishu_table_state(inventory_table_state, result)
 
     def create_or_reuse_inventory_table(
         *,
@@ -1693,8 +1976,7 @@ def create_app(
                 except (httpx.HTTPStatusError, RuntimeError) as error:
                     if not is_missing_inventory_table_error(error):
                         raise
-                    inventory_table_state["table_id"] = ""
-                    inventory_table_state["view_id"] = ""
+                    clear_feishu_table_state_entry(inventory_table_state)
             existing = find_inventory_table_by_name_safe(token=token, table_name=table_name)
             if existing["table_id"]:
                 ensure_inventory_table_fields(
@@ -1724,10 +2006,7 @@ def create_app(
         return [table_name]
 
     def remember_inventory_balance_table(result: dict[str, str]) -> None:
-        if result.get("table_id"):
-            inventory_balance_table_state["table_id"] = result["table_id"]
-        if result.get("view_id"):
-            inventory_balance_table_state["view_id"] = result["view_id"]
+        remember_feishu_table_state(inventory_balance_table_state, result)
 
     def find_inventory_balance_table_by_name(*, token: str, table_name: str) -> dict[str, str]:
         tables = list_inventory_tables(token=token)
@@ -1821,8 +2100,7 @@ def create_app(
             except (httpx.HTTPStatusError, RuntimeError) as error:
                 if not is_missing_inventory_table_error(error):
                     raise
-                inventory_balance_table_state["table_id"] = ""
-                inventory_balance_table_state["view_id"] = ""
+                clear_feishu_table_state_entry(inventory_balance_table_state)
         existing = find_inventory_balance_table_by_name_safe(token=token, table_name=table_name)
         if existing["table_id"]:
             ensure_inventory_table_fields(
@@ -1946,10 +2224,7 @@ def create_app(
         ]
 
     def remember_procurement_table(state: dict[str, str], result: dict[str, str]) -> None:
-        if result.get("table_id"):
-            state["table_id"] = result["table_id"]
-        if result.get("view_id"):
-            state["view_id"] = result["view_id"]
+        remember_feishu_table_state(state, result)
 
     def ensure_procurement_table(
         *,
@@ -1976,8 +2251,7 @@ def create_app(
             except (httpx.HTTPStatusError, RuntimeError) as error:
                 if not is_missing_inventory_table_error(error):
                     raise
-                state["table_id"] = ""
-                state["view_id"] = ""
+                clear_feishu_table_state_entry(state)
         existing = find_inventory_table_by_name(token=token, table_name=table_name)
         if existing["table_id"]:
             ensure_inventory_table_fields(
@@ -3182,47 +3456,42 @@ def create_app(
                 fields_by_name=fields_by_name,
             )
 
-            cursor = ""
+            paginated_rows = fetch_business_table_rows_paginated(
+                rows_endpoint="/warehouse/stock/balances/table-rows",
+                request_payload={
+                    "item_id": (request.item_id or "").strip() or None,
+                    "warehouse_id": (request.warehouse_id or "").strip() or None,
+                    "location_code": (request.location_code or "").strip() or None,
+                    "limit": limit,
+                },
+                error_context="warehouse inventory balance table",
+                max_pages=max_pages,
+            )
+            page_rows = paginated_rows["items"]
+            page_count = int(paginated_rows["page_count"])
+            upsert_results = upsert_balance_table_records(
+                token=token,
+                table_identifier=table_result["table_id"],
+                field_rows=[row["fields"] for row in page_rows],
+                table_fields=fields_by_name,
+            )
             synced_items: list[dict[str, Any]] = []
-            page_count = 0
-            while page_count < max_pages:
-                page = fetch_inventory_balance_table_rows(
-                    item_id=(request.item_id or "").strip() or None,
-                    warehouse_id=(request.warehouse_id or "").strip() or None,
-                    location_code=(request.location_code or "").strip() or None,
-                    cursor=cursor or None,
-                    limit=limit,
+            for row, upsert_result in zip(page_rows, upsert_results, strict=False):
+                fields = row["fields"]
+                synced_items.append(
+                    {
+                        "balance_id": fields.get("Balance ID") or row.get("balance_id"),
+                        "item_id": fields.get("Item ID") or row.get("item_id"),
+                        "warehouse_id": fields.get("Warehouse ID") or row.get("warehouse_id"),
+                        "location_code": fields.get("Location") or row.get("location_code"),
+                        "quantity_on_hand": fields.get("Quantity On Hand"),
+                        "risk_level": fields.get("Risk Level"),
+                        "balance_status": fields.get("Balance Status"),
+                        "action": upsert_result.get("action"),
+                        "record_id": upsert_result.get("record_id"),
+                        "source_version": fields.get("Source Version", ""),
+                    }
                 )
-                page_rows = page["items"]
-                if not page_rows:
-                    break
-
-                upsert_results = upsert_balance_table_records(
-                    token=token,
-                    table_identifier=table_result["table_id"],
-                    field_rows=[row["fields"] for row in page_rows],
-                    table_fields=fields_by_name,
-                )
-                for row, upsert_result in zip(page_rows, upsert_results, strict=False):
-                    fields = row["fields"]
-                    synced_items.append(
-                        {
-                            "balance_id": fields.get("Balance ID") or row.get("balance_id"),
-                            "item_id": fields.get("Item ID") or row.get("item_id"),
-                            "warehouse_id": fields.get("Warehouse ID") or row.get("warehouse_id"),
-                            "location_code": fields.get("Location") or row.get("location_code"),
-                            "quantity_on_hand": fields.get("Quantity On Hand"),
-                            "risk_level": fields.get("Risk Level"),
-                            "balance_status": fields.get("Balance Status"),
-                            "action": upsert_result.get("action"),
-                            "record_id": upsert_result.get("record_id"),
-                            "source_version": fields.get("Source Version", ""),
-                        }
-                    )
-                page_count += 1
-                cursor = page["next_cursor"]
-                if not cursor:
-                    break
 
             latency_ms = (perf_counter() - started) * 1000
             write_inventory_table_run_log(
@@ -3435,18 +3704,24 @@ def create_app(
                 "message": "Feishu inventory table sync is not configured.",
             }
         try:
-            inventory_rows = fetch_inventory_table_rows_with_fallback(
-                item_id=item_id or None,
-                sku=sku or None,
-                warehouse_id=warehouse_id or None,
-                location_code=location_code or None,
-                category=category or None,
-                category_id=category_id or None,
-                batch_no=batch_no or None,
-                expiry_risk=expiry_risk or None,
-                risk_level=risk_level or None,
-                limit=limit,
+            paginated_rows = fetch_business_table_rows_paginated(
+                rows_endpoint="/warehouse/inventory/table-rows",
+                request_payload={
+                    "item_id": item_id or None,
+                    "sku": sku or None,
+                    "warehouse_id": warehouse_id or None,
+                    "location_code": location_code or None,
+                    "category": category or None,
+                    "category_id": category_id or None,
+                    "batch_no": batch_no or None,
+                    "expiry_risk": expiry_risk or None,
+                    "risk_level": risk_level or None,
+                    "limit": limit,
+                },
+                error_context="warehouse inventory table",
             )
+            inventory_rows = paginated_rows["items"]
+            page_count = int(paginated_rows["page_count"])
             token = get_tenant_access_token(
                 client=client,
                 app_id=table_app_id,
@@ -3480,7 +3755,7 @@ def create_app(
                     {
                         "tool": "warehouse_inventory_table_sync_tool",
                         "input": request.model_dump(),
-                        "output": {"synced_count": len(synced_items)},
+                        "output": {"synced_count": len(synced_items), "page_count": page_count},
                     }
                 ],
             )
@@ -3497,6 +3772,7 @@ def create_app(
                 "expiry_risk": expiry_risk or None,
                 "risk_level": risk_level or None,
                 "synced_count": len(synced_items),
+                "page_count": page_count,
                 "items": synced_items,
                 "table_id": provision_result["table_id"],
                 "table_url": inventory_table_url_for(provision_result["table_id"]),
@@ -3757,17 +4033,13 @@ def create_app(
         if not procurement_table_configured():
             return procurement_table_not_configured_response()
         try:
-            rows_response = client.post(
-                f"{runtime_mock_api_url}{rows_endpoint}",
-                json=request_payload,
+            paginated_rows = fetch_business_table_rows_paginated(
+                rows_endpoint=rows_endpoint,
+                request_payload=request_payload,
+                error_context="procurement table",
             )
-            rows_response.raise_for_status()
-            rows_payload = rows_response.json()
-            if rows_payload.get("ok") is not True:
-                raise RuntimeError(f"procurement table rows lookup failed: {rows_payload}")
-            rows = rows_payload.get("items", [])
-            if not isinstance(rows, list):
-                raise RuntimeError(f"procurement table rows returned invalid items: {rows_payload}")
+            rows = paginated_rows["items"]
+            page_count = int(paginated_rows["page_count"])
             token = get_tenant_access_token(
                 client=client,
                 app_id=table_app_id,
@@ -3815,7 +4087,7 @@ def create_app(
                     {
                         "tool": workflow.rsplit("/", 1)[-1],
                         "input": request_payload,
-                        "output": {"synced_count": len(synced_items)},
+                        "output": {"synced_count": len(synced_items), "page_count": page_count},
                     }
                 ],
             )
@@ -3823,6 +4095,7 @@ def create_app(
                 "ok": True,
                 "configured": True,
                 "synced_count": len(synced_items),
+                "page_count": page_count,
                 "items": synced_items,
                 "table_id": table_result["table_id"],
                 "table_name": table_name,
@@ -3909,17 +4182,13 @@ def create_app(
                 message=not_configured_message,
             )
         try:
-            rows_response = client.post(
-                f"{runtime_mock_api_url}{rows_endpoint}",
-                json=request_payload,
+            paginated_rows = fetch_business_table_rows_paginated(
+                rows_endpoint=rows_endpoint,
+                request_payload=request_payload,
+                error_context="business table",
             )
-            rows_response.raise_for_status()
-            rows_payload = rows_response.json()
-            if rows_payload.get("ok") is not True:
-                raise RuntimeError(f"business table rows lookup failed: {rows_payload}")
-            rows = rows_payload.get("items", [])
-            if not isinstance(rows, list):
-                raise RuntimeError(f"business table rows returned invalid items: {rows_payload}")
+            rows = paginated_rows["items"]
+            page_count = int(paginated_rows["page_count"])
             field_specs = procurement_table_field_specs(schema_endpoint)
             token = get_tenant_access_token(
                 client=client,
@@ -3957,7 +4226,7 @@ def create_app(
                     {
                         "tool": workflow.rsplit("/", 1)[-1],
                         "input": request_payload,
-                        "output": {"synced_count": len(synced_items)},
+                        "output": {"synced_count": len(synced_items), "page_count": page_count},
                     }
                 ],
             )
@@ -3965,6 +4234,7 @@ def create_app(
                 "ok": True,
                 "configured": True,
                 "synced_count": len(synced_items),
+                "page_count": page_count,
                 "items": synced_items,
                 "table_id": table_result["table_id"],
                 "table_name": table_name,

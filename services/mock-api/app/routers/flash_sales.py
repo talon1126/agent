@@ -12,6 +12,7 @@ try:
 except ImportError:  # pragma: no cover - runtime dependency guard
     redis = None
 
+from app.routers.pagination import normalize_limit_offset, page_items
 from app.routers.warehouse.orders import create_warehouse_order, pay_warehouse_order
 from app.routers.warehouse.schemas import WarehouseOrderCreate, WarehouseOrderStatusUpdateRequest
 from app.routers.warehouse.state import get_warehouse_repository
@@ -56,6 +57,7 @@ class FlashSalesTableRowsRequest(BaseModel):
 
     status: str | None = None
     limit: int = 100
+    offset: int = 0
 
 
 class FlashSaleClaimsTableRowsRequest(BaseModel):
@@ -69,6 +71,7 @@ class FlashSaleClaimsTableRowsRequest(BaseModel):
     flash_sale_id: int | None = None
     status: str | None = None
     limit: int = 100
+    offset: int = 0
 
 
 FLASH_SALES_TABLE_SCHEMA = [
@@ -339,7 +342,8 @@ def get_flash_sales_table_rows(payload: FlashSalesTableRowsRequest) -> Any:
     if not repository:
         return error_response(503, "flash_sale_backend_unavailable", "Postgres backend is required")
     redis_client = get_flash_sale_redis()
-    sales = repository.list_flash_sales(status=payload.status, limit=max(min(int(payload.limit or 100), 500), 1))
+    limit, offset = normalize_limit_offset(limit=payload.limit, offset=payload.offset)
+    sales = repository.list_flash_sales(status=payload.status, limit=offset + limit + 1)
     rows = []
     for sale in sales:
         stock_remaining = None
@@ -348,7 +352,16 @@ def get_flash_sales_table_rows(payload: FlashSalesTableRowsRequest) -> Any:
             stock_remaining = int(raw_stock) if raw_stock is not None else None
         flash_sale_id = str(sale["id"])
         rows.append({"flash_sale_id": flash_sale_id, "fields": flash_sale_table_fields(sale, stock_remaining)})
-    return {"ok": True, "schema_id": "flash_sales", "source": "mock-api", "count": len(rows), "items": rows}
+    page, has_more, next_offset = page_items(rows, limit=limit, offset=offset)
+    return {
+        "ok": True,
+        "schema_id": "flash_sales",
+        "source": "mock-api",
+        "count": len(page),
+        "has_more": has_more,
+        "next_offset": next_offset,
+        "items": page,
+    }
 
 
 @router.get("/flash-sales/claims/table-schema")
@@ -385,16 +398,26 @@ def get_flash_sale_claims_table_rows(payload: FlashSaleClaimsTableRowsRequest) -
     repository = get_warehouse_repository()
     if not repository or not hasattr(repository, "list_flash_sale_claims"):
         return error_response(503, "flash_sale_claim_backend_unavailable", "Postgres backend is required")
+    limit, offset = normalize_limit_offset(limit=payload.limit, offset=payload.offset)
     claims = repository.list_flash_sale_claims(
         flash_sale_id=payload.flash_sale_id,
         status=payload.status,
-        limit=max(min(int(payload.limit or 100), 500), 1),
+        limit=offset + limit + 1,
     )
     rows = [
         {"claim_id": str(claim["id"]), "fields": flash_sale_claim_table_fields(claim)}
         for claim in claims
     ]
-    return {"ok": True, "schema_id": "flash_sale_claims", "source": "mock-api", "count": len(rows), "items": rows}
+    page, has_more, next_offset = page_items(rows, limit=limit, offset=offset)
+    return {
+        "ok": True,
+        "schema_id": "flash_sale_claims",
+        "source": "mock-api",
+        "count": len(page),
+        "has_more": has_more,
+        "next_offset": next_offset,
+        "items": page,
+    }
 
 
 @router.get("/flash-sales/{flash_sale_id}", response_model=None)

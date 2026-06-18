@@ -3,6 +3,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from app.routers.pagination import page_items
 from app.store import load_json
 from app.warehouse_store import WAREHOUSE_COLUMN_COMMENTS
 
@@ -669,11 +670,20 @@ def get_warehouse_stock_balance_table_rows(payload: WarehouseStockBalanceTableRo
         location_code=(payload.location_code or "").strip() or None,
     )
     limit = max(min(int(payload.limit or 500), 500), 1)
-    page, next_cursor = apply_cursor_page(rows, cursor=payload.cursor, limit=limit)
+    offset = payload.offset
+    if payload.cursor:
+        try:
+            offset = int(payload.cursor)
+        except ValueError:
+            offset = 0
+    page, has_more, next_offset = page_items(rows, limit=limit, offset=offset, default_limit=500)
+    next_cursor = str(next_offset) if next_offset is not None else ""
     return {
         "ok": True,
         "schema_id": "warehouse_inventory_balances",
         "count": len(page),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "next_cursor": next_cursor,
         "items": [
             {
@@ -744,11 +754,37 @@ def search_warehouse_inventory(payload: WarehouseInventorySearchRequest) -> dict
 
 @router.post("/warehouse/inventory/table-rows")
 def get_warehouse_inventory_table_rows(payload: WarehouseInventorySearchRequest) -> dict[str, Any]:
-    search_result = search_warehouse_inventory(payload)
+    item_id = (payload.item_id or payload.sku or "").strip()
+    warehouse_id = (payload.warehouse_id or "").strip()
+    location_code = (payload.location_code or "").strip()
+    category_id = normalize_category(payload.category_id or payload.category)
+    batch_no = (payload.batch_no or "").strip()
+    expiry_risk_filter = (payload.expiry_risk or "").strip()
+    risk_level = (payload.risk_level or "").strip()
+    rows = [
+        enrich_batch_row(row)
+        for row in load_batch_inventory_rows(
+            item_id=item_id or None,
+            warehouse_id=warehouse_id or None,
+            location_code=location_code or None,
+            category_id=category_id or None,
+            batch_no=batch_no or None,
+        )
+    ]
+    matches: list[dict[str, Any]] = []
+    for row in rows:
+        if expiry_risk_filter and row["expiry_risk"] != expiry_risk_filter:
+            continue
+        if risk_level and row["risk_level"] != risk_level:
+            continue
+        matches.append(row)
+    page, has_more, next_offset = page_items(matches, limit=payload.limit, offset=payload.offset, default_limit=50, max_limit=100)
     return {
         "ok": True,
         "schema_id": "warehouse_batch_inventory",
-        "count": search_result["count"],
+        "count": len(page),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "items": [
             {
                 "batch_key": item["batch_key"],
@@ -756,7 +792,7 @@ def get_warehouse_inventory_table_rows(payload: WarehouseInventorySearchRequest)
                 "batch_no": item["batch_no"],
                 "fields": batch_inventory_table_fields(item),
             }
-            for item in search_result["items"]
+            for item in page
         ],
     }
 

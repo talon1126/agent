@@ -14,6 +14,7 @@ class WarehouseInventorySearchRequest(BaseModel):
     expiry_risk: str | None = None
     risk_level: str | None = None
     limit: int = 50
+    offset: int = 0
 
 
 class WarehouseStockBalanceTableRowsRequest(BaseModel):
@@ -22,6 +23,7 @@ class WarehouseStockBalanceTableRowsRequest(BaseModel):
     location_code: str | None = None
     cursor: str | None = None
     limit: int = 500
+    offset: int = 0
 
 
 class WarehouseInventorySyncJobUpdateRequest(BaseModel):
