@@ -412,6 +412,7 @@ def test_warehouse_repository_searches_items_by_category_without_keyword(tmp_pat
         "item_wireless_earbuds",
     ]
     assert {item["category_id"] for item in rows} == {"electronics"}
+    assert {item["category_name"] for item in rows} == {"Electronics"}
     assert all(isinstance(item["price"], float) for item in rows)
 
 

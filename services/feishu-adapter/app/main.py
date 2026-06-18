@@ -125,6 +125,32 @@ class ProcurementPurchaseOrderTableSyncRequest(BaseModel):
     limit: int = 100
 
 
+class OrderFulfillmentTableSyncRequest(BaseModel):
+    """Request payload for syncing the Order Fulfillment Feishu read model.
+
+    Args:
+        order_id: Optional business order id used for a single-row refresh.
+        status: Optional order lifecycle status filter for scheduled syncs.
+        limit: Maximum number of rows requested from mock-api.
+    """
+
+    order_id: str | None = None
+    status: str | None = None
+    limit: int = 100
+
+
+class ProductOperationsTableSyncRequest(BaseModel):
+    """Request payload for syncing the Product Operations Feishu read model.
+
+    Args:
+        category_id: Optional category id used by Feishu page filters.
+        limit: Maximum number of product rows requested from mock-api.
+    """
+
+    category_id: str | None = None
+    limit: int = 100
+
+
 class InventoryTableViewFilter(BaseModel):
     field: str
     operator: str = "is"
@@ -491,6 +517,16 @@ def create_app(
                 )
             )
         ),
+    }
+    order_fulfillment_table_state = {
+        "table_id": os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_ID", ""),
+        "view_id": os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_VIEW_ID", ""),
+        "table_url": os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_URL", ""),
+    }
+    product_operations_table_state = {
+        "table_id": os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_ID", ""),
+        "view_id": os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_VIEW_ID", ""),
+        "table_url": os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_URL", ""),
     }
     bot_configs = parse_bot_configs(
         bots_json=bots_json,
@@ -899,6 +935,7 @@ def create_app(
             "number": 2,
             "single_select": 3,
             "date": 5,
+            "datetime": 5,
         }
         field_name = str(field.get("name") or field.get("field_name") or "").strip()
         field_type = str(field.get("type") or "text").strip()
@@ -1739,8 +1776,9 @@ def create_app(
         table_name: str,
         state: dict[str, str],
         schema_endpoint: str,
+        field_specs: list[dict[str, Any]] | None = None,
     ) -> dict[str, str]:
-        field_specs = procurement_table_field_specs(schema_endpoint)
+        field_specs = field_specs if field_specs is not None else procurement_table_field_specs(schema_endpoint)
         if state["table_id"]:
             result = {
                 "table_id": state["table_id"],
@@ -1843,16 +1881,44 @@ def create_app(
             return ""
         return str(items[0].get("record_id") or items[0].get("id") or "")
 
+    def normalize_procurement_record_fields_by_specs(
+        fields: dict[str, Any],
+        field_specs: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """Normalize outgoing Feishu record values from schema-derived specs.
+
+        Args:
+            fields: Business read-model fields from mock-api.
+            field_specs: Feishu field specifications produced from backend
+                schema. The specs include Feishu numeric field types, allowing
+                date/datetime values to be converted before record upsert.
+
+        Returns:
+            Field values normalized with the same single-select and date logic
+            used by inventory table sync. Missing specs leave fields unchanged.
+        """
+
+        if not field_specs:
+            return fields
+        fields_by_name = {
+            str(field.get("field_name") or ""): field
+            for field in field_specs
+            if str(field.get("field_name") or "").strip()
+        }
+        return normalize_inventory_record_fields(fields, fields_by_name)
+
     def upsert_procurement_table_record(
         *,
         token: str,
         table_identifier: str,
         identity_field: str,
         fields: dict[str, Any],
+        field_specs: list[dict[str, Any]] | None = None,
     ) -> dict[str, str]:
         identity_value = str(fields.get(identity_field) or "").strip()
         if not identity_value:
             raise RuntimeError(f"procurement table row missing identity field: {identity_field}")
+        normalized_fields = normalize_procurement_record_fields_by_specs(fields, field_specs)
         record_id = find_procurement_table_record(
             token=token,
             table_identifier=table_identifier,
@@ -1863,14 +1929,14 @@ def create_app(
             response = client.put(
                 procurement_records_url(table_identifier=table_identifier, record_id=record_id),
                 headers={"Authorization": f"Bearer {token}"},
-                json={"fields": fields},
+                json={"fields": normalized_fields},
             )
             action = "updated"
         else:
             response = client.post(
                 procurement_records_url(table_identifier=table_identifier),
                 headers={"Authorization": f"Bearer {token}"},
-                json={"fields": fields},
+                json={"fields": normalized_fields},
             )
             action = "created"
         response.raise_for_status()
@@ -3585,6 +3651,148 @@ def create_app(
                 "message": message,
             }
 
+    def business_table_not_configured_response(*, error: str, message: str) -> dict[str, Any]:
+        """Return a clear not-configured envelope for Feishu business tables.
+
+        Args:
+            error: Stable machine-readable error code for the table family.
+            message: Human-readable explanation returned to schedulers and
+                manual API callers.
+
+        Returns:
+            A response dictionary that mirrors existing procurement table
+            behavior while making the missing table family explicit.
+        """
+
+        return {
+            "ok": False,
+            "configured": False,
+            "error": error,
+            "message": message,
+        }
+
+    def sync_business_table(
+        *,
+        request_payload: dict[str, Any],
+        table_name: str,
+        state: dict[str, str],
+        schema_endpoint: str,
+        rows_endpoint: str,
+        identity_field: str,
+        workflow: str,
+        not_configured_error: str,
+        not_configured_message: str,
+        failure_error: str,
+        item_builder: Any,
+    ) -> dict[str, Any]:
+        """Sync a mock-api business read model into a Feishu bitable table.
+
+        Args:
+            request_payload: JSON body sent to the mock-api row endpoint.
+            table_name: Feishu table name created when no configured table
+                exists.
+            state: Mutable table state containing table id, view id, and URL.
+            schema_endpoint: mock-api schema endpoint used to create fields.
+            rows_endpoint: mock-api rows endpoint used as the source read model.
+            identity_field: Feishu field used to find existing records.
+            workflow: Run-log workflow identifier.
+            not_configured_error: Error code returned when Feishu table
+                credentials are missing.
+            not_configured_message: Message returned with the missing-config
+                response.
+            failure_error: Error code returned for runtime sync failures.
+            item_builder: Callable that converts source fields and upsert result
+                into the compact `items[]` response row.
+
+        Returns:
+            A sync result containing table metadata, count, and per-row actions.
+        """
+
+        started = perf_counter()
+        if not procurement_table_configured():
+            return business_table_not_configured_response(
+                error=not_configured_error,
+                message=not_configured_message,
+            )
+        try:
+            rows_response = client.post(
+                f"{runtime_mock_api_url}{rows_endpoint}",
+                json=request_payload,
+            )
+            rows_response.raise_for_status()
+            rows_payload = rows_response.json()
+            if rows_payload.get("ok") is not True:
+                raise RuntimeError(f"business table rows lookup failed: {rows_payload}")
+            rows = rows_payload.get("items", [])
+            if not isinstance(rows, list):
+                raise RuntimeError(f"business table rows returned invalid items: {rows_payload}")
+            field_specs = procurement_table_field_specs(schema_endpoint)
+            token = get_tenant_access_token(
+                client=client,
+                app_id=table_app_id,
+                app_secret=table_app_secret,
+                api_base_url=api_base_url,
+            )
+            table_result = ensure_procurement_table(
+                token=token,
+                table_name=table_name,
+                state=state,
+                schema_endpoint=schema_endpoint,
+                field_specs=field_specs,
+            )
+            synced_items: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict) or not isinstance(row.get("fields"), dict):
+                    continue
+                fields = row["fields"]
+                upsert_result = upsert_procurement_table_record(
+                    token=token,
+                    table_identifier=table_result["table_id"],
+                    identity_field=identity_field,
+                    fields=fields,
+                    field_specs=field_specs,
+                )
+                synced_items.append(item_builder(row, fields, upsert_result))
+            latency_ms = (perf_counter() - started) * 1000
+            write_inventory_table_run_log(
+                event_id=f"{workflow.rsplit('/', 1)[-1]}:{table_result['table_id']}",
+                workflow=workflow,
+                status="succeeded",
+                latency_ms=latency_ms,
+                tool_calls=[
+                    {
+                        "tool": workflow.rsplit("/", 1)[-1],
+                        "input": request_payload,
+                        "output": {"synced_count": len(synced_items)},
+                    }
+                ],
+            )
+            return {
+                "ok": True,
+                "configured": True,
+                "synced_count": len(synced_items),
+                "items": synced_items,
+                "table_id": table_result["table_id"],
+                "table_name": table_name,
+                "table_url": procurement_table_url_for(state, table_result["table_id"]),
+            }
+        except (httpx.HTTPError, RuntimeError) as error:
+            latency_ms = (perf_counter() - started) * 1000
+            message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
+            write_inventory_table_run_log(
+                event_id=f"{workflow.rsplit('/', 1)[-1]}:failed",
+                workflow=workflow,
+                status="failed",
+                latency_ms=latency_ms,
+                error=message,
+            )
+            return {
+                "ok": False,
+                "configured": True,
+                "error": failure_error,
+                "message": message,
+            }
+
     @app.post("/procurement/replenishment-requests-table/provision")
     def provision_procurement_replenishment_requests_table(
         request: ProcurementTableProvisionRequest,
@@ -3644,6 +3852,65 @@ def create_app(
             rows_endpoint="/procurement/purchase-orders/table-rows",
             identity_field="Purchase Order ID",
             workflow="/procurement/purchase-orders-table/sync",
+        )
+
+    @app.post("/orders/fulfillment-table/sync")
+    def sync_order_fulfillment_table(
+        request: OrderFulfillmentTableSyncRequest,
+    ) -> dict[str, Any]:
+        """Sync Order Fulfillment rows into the Feishu business read model."""
+
+        return sync_business_table(
+            request_payload={
+                "order_id": request.order_id,
+                "status": request.status,
+                "limit": max(min(int(request.limit or 100), 500), 1),
+            },
+            table_name="Order Fulfillment",
+            state=order_fulfillment_table_state,
+            schema_endpoint="/warehouse/orders/fulfillment/table-schema",
+            rows_endpoint="/warehouse/orders/fulfillment/table-rows",
+            identity_field="Order ID",
+            workflow="/orders/fulfillment-table/sync",
+            not_configured_error="missing_feishu_order_fulfillment_table_config",
+            not_configured_message="Feishu order fulfillment table sync is not configured.",
+            failure_error="feishu_order_fulfillment_table_sync_failed",
+            item_builder=lambda row, fields, result: {
+                "order_id": fields.get("Order ID") or row.get("order_id"),
+                "status": fields.get("Status"),
+                "action": result["action"],
+                "record_id": result["record_id"],
+                "source_version": fields.get("Source Version", ""),
+            },
+        )
+
+    @app.post("/products/operations-table/sync")
+    def sync_product_operations_table(
+        request: ProductOperationsTableSyncRequest,
+    ) -> dict[str, Any]:
+        """Sync Product Operations rows into the Feishu business read model."""
+
+        return sync_business_table(
+            request_payload={
+                "category_id": request.category_id,
+                "limit": max(min(int(request.limit or 100), 500), 1),
+            },
+            table_name="Product Operations",
+            state=product_operations_table_state,
+            schema_endpoint="/products/operations/table-schema",
+            rows_endpoint="/products/operations/table-rows",
+            identity_field="Item ID",
+            workflow="/products/operations-table/sync",
+            not_configured_error="missing_feishu_product_operations_table_config",
+            not_configured_message="Feishu product operations table sync is not configured.",
+            failure_error="feishu_product_operations_table_sync_failed",
+            item_builder=lambda row, fields, result: {
+                "item_id": fields.get("Item ID") or row.get("item_id"),
+                "status": fields.get("Flash Deal Status"),
+                "action": result["action"],
+                "record_id": result["record_id"],
+                "source_version": fields.get("Source Version", ""),
+            },
         )
 
     def process_message(bot: BotConfig, message: Any) -> None:

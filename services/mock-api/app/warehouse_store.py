@@ -1125,16 +1125,18 @@ def build_item_search_sql():
     return text(
         """
         SELECT
-            item_id,
-            item_name,
-            brand,
-            spec,
-            price,
-            category_id,
-            pdb.score(item_id) AS score
+            items.item_id,
+            items.item_name,
+            items.brand,
+            items.spec,
+            items.price,
+            items.category_id,
+            categories.category_name,
+            pdb.score(items.item_id) AS score
         FROM items
+        JOIN categories ON categories.category_id = items.category_id
         WHERE search_text &&& :query
-          AND (CAST(:category_id AS TEXT) IS NULL OR category_id = CAST(:category_id AS TEXT))
+          AND (CAST(:category_id AS TEXT) IS NULL OR items.category_id = CAST(:category_id AS TEXT))
         ORDER BY score DESC, item_id
         LIMIT :limit
         """
@@ -1155,16 +1157,18 @@ def build_item_category_search_sql():
     return text(
         """
         SELECT
-            item_id,
-            item_name,
-            brand,
-            spec,
-            price,
-            category_id,
+            items.item_id,
+            items.item_name,
+            items.brand,
+            items.spec,
+            items.price,
+            items.category_id,
+            categories.category_name,
             1.0 AS score
         FROM items
-        WHERE category_id = :category_id
-        ORDER BY item_id
+        JOIN categories ON categories.category_id = items.category_id
+        WHERE items.category_id = :category_id
+        ORDER BY items.item_id
         LIMIT :limit
         """
     )

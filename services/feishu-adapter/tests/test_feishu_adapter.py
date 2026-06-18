@@ -113,6 +113,64 @@ def procurement_purchase_order_table_rows_response() -> dict:
     }
 
 
+def order_fulfillment_table_rows_response() -> dict:
+    """Return one mock-api Order Fulfillment read-model row for H8 sync tests."""
+    return {
+        "ok": True,
+        "schema_id": "order_fulfillment",
+        "count": 1,
+        "items": [
+            {
+                "order_id": "ORD-CODEX-9001",
+                "fields": {
+                    "Order ID": "ORD-CODEX-9001",
+                    "Status": "pending_fulfillment_review",
+                    "Customer": "cus_100",
+                    "Warehouse": "深圳仓",
+                    "Delivery Provider": "顺丰",
+                    "Tracking No": "SFORDCODEX9001",
+                    "Shipping City": "深圳市",
+                    "Item Summary": "item_vinda_tissue x 2",
+                    "Total Quantity": 2,
+                    "Candidate Warehouses": "深圳仓(available)",
+                    "Created At": "2026-06-17T10:00:00+08:00",
+                    "Paid At": "2026-06-17T10:05:00+08:00",
+                    "Updated At": "2026-06-17T10:05:00+08:00",
+                    "Source Version": "mock-api:ORD-CODEX-9001",
+                },
+            }
+        ],
+    }
+
+
+def product_operations_table_rows_response() -> dict:
+    """Return one mock-api Product Operations read-model row for H8 sync tests."""
+    return {
+        "ok": True,
+        "schema_id": "product_operations",
+        "count": 1,
+        "items": [
+            {
+                "item_id": "item_wireless_earbuds",
+                "fields": {
+                    "Item ID": "item_wireless_earbuds",
+                    "Item Name": "Wireless Earbuds",
+                    "Brand": "Talon Audio",
+                    "Category": "Electronics",
+                    "Price": 59.99,
+                    "Rating": 4.8,
+                    "Review Count": 128,
+                    "Flash Deal Status": "active",
+                    "Flash Sale Price": 49.99,
+                    "Ranking Label": "#2 in Electronics",
+                    "Ranking Score": 91.0,
+                    "Source Version": "mock-api:item_wireless_earbuds",
+                },
+            }
+        ],
+    }
+
+
 def test_url_verification_returns_challenge() -> None:
     app = create_app()
     client = TestClient(app)
@@ -600,6 +658,40 @@ def test_procurement_table_sync_returns_not_configured_without_table_settings() 
         "configured": False,
         "error": "missing_feishu_procurement_table_config",
         "message": "Feishu procurement table sync is not configured.",
+    }
+
+
+def test_order_and_product_table_sync_return_not_configured_without_table_settings() -> None:
+    """Ensure H8 business read-model sync endpoints fail clearly without config.
+
+    The Feishu app pages must bind real tables, so missing table credentials
+    should be reported as a configuration state instead of silently pretending a
+    sync happened.
+    """
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(500))),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+    )
+    client = TestClient(app)
+
+    order_response = client.post("/orders/fulfillment-table/sync", json={})
+    product_response = client.post("/products/operations-table/sync", json={})
+
+    assert order_response.status_code == 200
+    assert order_response.json() == {
+        "ok": False,
+        "configured": False,
+        "error": "missing_feishu_order_fulfillment_table_config",
+        "message": "Feishu order fulfillment table sync is not configured.",
+    }
+    assert product_response.status_code == 200
+    assert product_response.json() == {
+        "ok": False,
+        "configured": False,
+        "error": "missing_feishu_product_operations_table_config",
+        "message": "Feishu product operations table sync is not configured.",
     }
 
 
@@ -1970,6 +2062,166 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
     assert create_fields["Estimated Arrival Date"] == "2026-05-29"
     assert "Supplier ID" not in create_fields
     assert "Item ID" not in create_fields
+
+
+def test_order_fulfillment_table_sync_upserts_by_order_id(monkeypatch) -> None:
+    """Verify H8 sync writes Order Fulfillment rows into a real Feishu table.
+
+    The endpoint should pull the read model from mock-api, validate/create
+    fields from backend schema, and upsert records by the business Order ID so
+    repeated scheduled syncs update the same Feishu row.
+    """
+
+    requests: list[httpx.Request] = []
+    monkeypatch.setenv("FEISHU_ORDER_FULFILLMENT_TABLE_ID", "tbl_order_fulfillment")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/warehouse/orders/fulfillment/table-schema":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "fields": [
+                        {"name": "Order ID", "type": "text"},
+                        {"name": "Created At", "type": "datetime"},
+                    ],
+                },
+            )
+        if url == "http://mock-api.local/warehouse/orders/fulfillment/table-rows":
+            return httpx.Response(200, json=order_fulfillment_table_rows_response())
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_order_fulfillment/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith(
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_order_fulfillment/records?"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_order_fulfillment/records":
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_order"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/orders/fulfillment-table/sync", json={"status": "pending_fulfillment_review"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["table_id"] == "tbl_order_fulfillment"
+    assert body["table_name"] == "Order Fulfillment"
+    assert body["synced_count"] == 1
+    assert body["items"] == [
+        {
+            "order_id": "ORD-CODEX-9001",
+            "status": "pending_fulfillment_review",
+            "action": "created",
+            "record_id": "rec_order",
+            "source_version": "mock-api:ORD-CODEX-9001",
+        }
+    ]
+    lookup_request = next(
+        request for request in requests if request.method == "GET" and "/records?" in str(request.url)
+    )
+    assert 'CurrentValue.[Order ID]="ORD-CODEX-9001"' in str(lookup_request.url.params["filter"])
+    create_request = next(
+        request for request in requests if request.method == "POST" and str(request.url).endswith("/records")
+    )
+    create_fields = json.loads(create_request.content)["fields"]
+    assert create_fields["Order ID"] == "ORD-CODEX-9001"
+    assert isinstance(create_fields["Created At"], int)
+    assert "Order Item ID" not in create_fields
+    field_requests = [
+        json.loads(request.content)
+        for request in requests
+        if request.method == "POST" and str(request.url).endswith("/tables/tbl_order_fulfillment/fields")
+    ]
+    assert field_requests == [
+        {"field_name": "Order ID", "type": 1},
+        {"field_name": "Created At", "type": 5},
+    ]
+
+
+def test_product_operations_table_sync_upserts_by_item_id(monkeypatch) -> None:
+    """Verify H8 sync writes Product Operations rows into a real Feishu table.
+
+    Product Operations is the backing read model for the future Feishu product
+    operations page, so the sync must use Item ID as the durable business key
+    and avoid exposing hidden catalog or persistence identifiers as table fields.
+    """
+
+    requests: list[httpx.Request] = []
+    monkeypatch.setenv("FEISHU_PRODUCT_OPERATIONS_TABLE_ID", "tbl_product_operations")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/products/operations/table-schema":
+            return httpx.Response(
+                200,
+                json={"ok": True, "fields": [{"name": "Item ID", "type": "text"}]},
+            )
+        if url == "http://mock-api.local/products/operations/table-rows":
+            return httpx.Response(200, json=product_operations_table_rows_response())
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_product_operations/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith(
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_product_operations/records?"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"items": [{"record_id": "rec_product"}]}})
+        if url == (
+            "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/"
+            "tbl_product_operations/records/rec_product"
+        ):
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_product"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/products/operations-table/sync", json={"category_id": "electronics"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["table_id"] == "tbl_product_operations"
+    assert body["table_name"] == "Product Operations"
+    assert body["synced_count"] == 1
+    assert body["items"] == [
+        {
+            "item_id": "item_wireless_earbuds",
+            "status": "active",
+            "action": "updated",
+            "record_id": "rec_product",
+            "source_version": "mock-api:item_wireless_earbuds",
+        }
+    ]
+    lookup_request = next(
+        request for request in requests if request.method == "GET" and "/records?" in str(request.url)
+    )
+    assert 'CurrentValue.[Item ID]="item_wireless_earbuds"' in str(lookup_request.url.params["filter"])
+    update_request = next(request for request in requests if request.method == "PUT")
+    update_fields = json.loads(update_request.content)["fields"]
+    assert update_fields["Item ID"] == "item_wireless_earbuds"
+    assert "Category ID" not in update_fields
+    assert "Database ID" not in update_fields
 
 
 def test_inventory_table_sync_filter_updates_matching_inventory_records() -> None:

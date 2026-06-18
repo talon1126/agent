@@ -30,7 +30,7 @@
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
 | 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
 | 阶段 G | AImodel 可用 | 流式聊天、工具调用、会话记忆、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 |  |
-| 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
+| 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、订单与商品运营 read model 同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
 | 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
 
 ### 6.3 任务跟踪表
@@ -124,8 +124,9 @@
 | H5 | 实现采购到货入库确认通知 | [✔] | 2026-06-17 | 今日到货采购单、飞书通知、员工入库确认 |
 | H6 | 设计飞书应用信息架构和首页草图 | [✔] | 2026-06-17 | 运营驾驶舱 + 业务操作台 |
 | H7 | 搭建飞书应用首页运营驾驶舱 | [✔] | 2026-06-18 | 指标卡、图表、排行榜、待办列表、快捷按钮 |
-| H8 | 搭建飞书应用业务操作页 | [ ] |  | 订单、库存、采购、商品运营页面 |
-| H9 | 实现飞书应用联调与验收门禁 | [ ] |  | Chrome 验证、表格数据校验、关键按钮动作验证 |
+| H8 | 实现订单与商品运营飞书表同步 | [✔] | 2026-06-18 | Order Fulfillment / Product Operations read model |
+| H9 | 搭建飞书应用业务操作页 | [ ] |  | 订单、库存、采购、商品运营页面 |
+| H10 | 实现飞书应用联调与验收门禁 | [ ] |  | Chrome 验证、表格数据校验、关键按钮动作验证 |
 
 #### 阶段 I：Quality And Delivery
 
@@ -150,9 +151,9 @@
 | 阶段 E | 5 | 5 | 100% |
 | 阶段 F | 8 | 8 | 100% |
 | 阶段 G | 8 | 8 | 100% |
-| 阶段 H | 9 | 7 | 78% |
+| 阶段 H | 10 | 8 | 80% |
 | 阶段 I | 7 | 2 | 29% |
-| **总计** | **59** | **52** | **88%** |
+| **总计** | **60** | **53** | **88%** |
 
 ### 6.5 阶段实施明细
 
@@ -1357,7 +1358,44 @@
 
 测试方法：使用 Chrome 打开飞书应用预览并截图/人工核对；检查相关表同步接口返回正常。
 
-##### H8：搭建飞书应用业务操作页
+##### H8：实现订单与商品运营飞书表同步
+
+目标：为飞书应用业务操作页补齐订单履约和商品运营真实数据源，使后续页面组件能够绑定真实 read model。
+
+修改文件：
+
+- `services/mock-api/app/routers/warehouse/orders.py`
+- `services/mock-api/app/routers/search.py`
+- `services/mock-api/app/routers/category_rankings.py`
+- `services/mock-api/app/warehouse_store.py`
+- `services/feishu-adapter/app/main.py`
+- `services/feishu-adapter/tests/test_feishu_adapter.py`
+- `services/mock-api/tests/test_api.py`
+- `services/mock-api/tests/test_warehouse_store.py`
+- `DEV_SPEC.md`
+
+实现类/函数：
+
+- `get_order_fulfillment_table_schema()`：返回订单履约飞书表字段契约。
+- `get_order_fulfillment_table_rows()`：返回待付款、待发仓确认、待出库和已发货订单 read model。
+- `get_product_operations_table_schema()`：返回商品运营飞书表字段契约。
+- `get_product_operations_table_rows()`：返回商品、分类、Flash Deals、评分评论和排行榜摘要 read model。
+- `sync_order_fulfillment_table()`：创建或复用 `Order Fulfillment` 飞书表并按 `Order ID` upsert 订单履约记录。
+- `sync_product_operations_table()`：创建或复用 `Product Operations` 飞书表并按 `Item ID` upsert 商品运营记录。
+
+验收标准：
+
+- mock-api 提供订单履约和商品运营的 table schema / table rows 端点。
+- feishu-adapter 提供 `/orders/fulfillment-table/sync` 和 `/products/operations-table/sync` 端点。
+- 两个同步端点在配置缺失时返回明确 not configured 响应。
+- 两个同步端点在配置完整时能够自动创建缺失表、补齐字段并 upsert 记录。
+- 返回结果包含 table_id、table_name、table_url、synced_count 和 items。
+- 字段使用 TalonMart 业务可读名称，不暴露内部数据库主键以外的实现细节。
+- 商品运营表的分类字段使用分类展示名，不直接展示内部 category_id。
+
+测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`
+
+##### H9：搭建飞书应用业务操作页
 
 目标：搭建订单、库存、采购和商品运营页面，让员工能从飞书应用处理核心业务。
 
@@ -1377,12 +1415,12 @@
 
 - 应用左侧存在订单履约、库存管理、采购管理和商品运营页面。
 - 每个页面至少包含一个真实数据列表和一个业务筛选组件。
-- 与当前飞书表无对应数据源的组件明确标注为后续补齐，不展示误导性假数据。
+- 订单履约中心绑定 `Order Fulfillment`，库存管理中心绑定 `Warehouse Inventory Balances`，采购管理中心绑定 `Procurement Replenishment Requests` 或 `Procurement Purchase Orders`，商品运营中心绑定 `Product Operations`。
 - 页面命名、组件标题和字段展示与 TalonMart 业务术语一致。
 
 测试方法：使用 Chrome 逐页预览；人工核对页面组件、数据源和筛选行为。
 
-##### H9：实现飞书应用联调与验收门禁
+##### H10：实现飞书应用联调与验收门禁
 
 目标：验证飞书应用、feishu-adapter、多维表格同步和业务 API 的端到端协作。
 

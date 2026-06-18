@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from app.store import load_json
 from app.routers.delivery.state import DELIVERY_PROVIDERS, get_delivery_provider
@@ -45,6 +46,52 @@ ORDER_STATUS_ARRIVED = "arrived"
 ORDER_STATUS_REFUNDED = "refunded"
 ORDER_STATUS_RETURNED = "returned"
 ORDER_STATUS_CANCELED = "canceled"
+
+ORDER_FULFILLMENT_TABLE_SCHEMA = [
+    {"name": "Order ID", "type": "text"},
+    {
+        "name": "Status",
+        "type": "single_select",
+        "options": [
+            {"name": ORDER_STATUS_UNPAID, "color": 24},
+            {"name": ORDER_STATUS_PENDING_FULFILLMENT_REVIEW, "color": 17},
+            {"name": ORDER_STATUS_PENDING_SHIPMENT, "color": 28},
+            {"name": ORDER_STATUS_SHIPPED, "color": 21},
+            {"name": ORDER_STATUS_ARRIVED, "color": 30},
+            {"name": ORDER_STATUS_REFUNDED, "color": 19},
+            {"name": ORDER_STATUS_RETURNED, "color": 18},
+            {"name": ORDER_STATUS_CANCELED, "color": 20},
+        ],
+    },
+    {"name": "Customer", "type": "text"},
+    {"name": "Warehouse", "type": "text"},
+    {"name": "Delivery Provider", "type": "text"},
+    {"name": "Tracking No", "type": "text"},
+    {"name": "Shipping City", "type": "text"},
+    {"name": "Item Summary", "type": "text"},
+    {"name": "Total Quantity", "type": "number"},
+    {"name": "Candidate Warehouses", "type": "text"},
+    {"name": "Created At", "type": "datetime"},
+    {"name": "Paid At", "type": "datetime"},
+    {"name": "Updated At", "type": "datetime"},
+    {"name": "Source Version", "type": "text"},
+]
+
+
+class OrderFulfillmentTableRowsRequest(BaseModel):
+    """Request contract for the Order Fulfillment Feishu read model.
+
+    Args:
+        order_id: Optional order business identifier used for a single-row
+            refresh after a specific order changes.
+        status: Optional order lifecycle status filter used by page-level or
+            scheduled sync jobs.
+        limit: Maximum number of order rows returned to feishu-adapter.
+    """
+
+    order_id: str | None = None
+    status: str | None = None
+    limit: int = 100
 
 
 def available_order_batches(item_id: str, warehouse_id: str, location_code: str | None = None) -> list[dict[str, Any]]:
@@ -361,6 +408,162 @@ def pending_fallback_order_items(order_id: str) -> list[dict[str, Any]]:
         for item in fallback_order_items(order_id)
         if item["status"] == ORDER_STATUS_PENDING_FULFILLMENT_REVIEW
     ]
+
+
+def summarize_order_items_for_table(items: list[dict[str, Any]]) -> tuple[str, int]:
+    """Build the compact item summary used by the Feishu fulfillment table.
+
+    Args:
+        items: Order item rows from PostgreSQL or the in-memory fallback store.
+
+    Returns:
+        A tuple containing a readable summary such as `item_a x 2, item_b x 1`
+        and the total quantity across all order lines.
+    """
+
+    quantities: dict[str, int] = defaultdict(int)
+    for item in items:
+        item_id = str(item.get("item_id") or "").strip()
+        if not item_id:
+            continue
+        quantities[item_id] += int(item.get("quantity") or 0)
+    summary = ", ".join(f"{item_id} x {quantity}" for item_id, quantity in quantities.items())
+    return summary, sum(quantities.values())
+
+
+def candidate_warehouses_for_table(order: dict[str, Any], items: list[dict[str, Any]]) -> str:
+    """Return a readable fulfillment-candidate summary for Feishu employees.
+
+    Args:
+        order: Order header row containing the preferred warehouse.
+        items: Order item rows used to calculate whether each warehouse can
+            fulfill the order.
+
+    Returns:
+        Comma-separated warehouse labels with an `available` or `blocked`
+        indicator. An empty string is returned when candidate calculation cannot
+        be completed from the current fixture/repository state.
+    """
+
+    try:
+        review = list_fulfillment_candidates_for_items(
+            items,
+            preferred_warehouse_id=str(order.get("selected_warehouse_id") or ""),
+        )
+    except HTTPException:
+        return ""
+    labels = []
+    for candidate in review.get("candidates", []):
+        status = "available" if candidate.get("can_fulfill") else "blocked"
+        labels.append(f"{candidate.get('warehouse_name') or candidate.get('warehouse_id')}({status})")
+    return ", ".join(labels)
+
+
+def order_fulfillment_table_fields(order: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Convert one order and its lines into Feishu table fields.
+
+    Args:
+        order: Order header row from PostgreSQL or fallback fixtures.
+        items: Order item rows attached to the order.
+
+    Returns:
+        Field dictionary matching `ORDER_FULFILLMENT_TABLE_SCHEMA`. Only
+        employee-facing business values are emitted; internal order item row ids
+        are intentionally omitted from this read model.
+    """
+
+    item_summary, total_quantity = summarize_order_items_for_table(items)
+    updated_at = str(order.get("updated_at") or "")
+    return {
+        "Order ID": order["order_id"],
+        "Status": order["status"],
+        "Customer": order.get("customer_id") or "",
+        "Warehouse": order.get("selected_warehouse_name") or warehouse_name_by_id(str(order.get("selected_warehouse_id") or "")),
+        "Delivery Provider": order.get("delivery_provider_name") or "",
+        "Tracking No": order.get("tracking_no") or "",
+        "Shipping City": order.get("shipping_city") or "",
+        "Item Summary": item_summary,
+        "Total Quantity": total_quantity,
+        "Candidate Warehouses": candidate_warehouses_for_table(order, items),
+        "Created At": order.get("created_at") or "",
+        "Paid At": order.get("paid_at") or "",
+        "Updated At": updated_at,
+        "Source Version": f"mock-api:{order['order_id']}:{updated_at}",
+    }
+
+
+def load_order_fulfillment_table_rows(
+    *,
+    order_id: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Load order fulfillment rows for the Feishu read-model sync endpoint.
+
+    Args:
+        order_id: Optional exact order business id filter.
+        status: Optional order lifecycle status filter.
+        limit: Maximum number of rows to return after filtering.
+
+    Returns:
+        A list of dictionaries containing the source order id and Feishu fields.
+    """
+
+    repository = get_warehouse_repository()
+    normalized_order_id = (order_id or "").strip()
+    normalized_status = (status or "").strip()
+    capped_limit = max(min(int(limit or 100), 500), 1)
+
+    source_orders = repository.list_orders() if repository else list(WAREHOUSE_ORDERS)
+    rows: list[dict[str, Any]] = []
+    for order in source_orders:
+        if normalized_order_id and str(order.get("order_id") or "") != normalized_order_id:
+            continue
+        if normalized_status and str(order.get("status") or "") != normalized_status:
+            continue
+        if repository:
+            details = repository.get_order(str(order["order_id"]))
+            items = list((details or {}).get("items") or [])
+        else:
+            items = fallback_order_items(str(order["order_id"]))
+        rows.append(
+            {
+                "order_id": order["order_id"],
+                "fields": order_fulfillment_table_fields(order, items),
+            }
+        )
+        if len(rows) >= capped_limit:
+            break
+    return rows
+
+
+@router.get("/warehouse/orders/fulfillment/table-schema")
+def get_order_fulfillment_table_schema() -> dict[str, Any]:
+    """Return the Feishu table schema for the Order Fulfillment read model."""
+
+    return {
+        "ok": True,
+        "schema_id": "order_fulfillment",
+        "source": "mock-api",
+        "fields": ORDER_FULFILLMENT_TABLE_SCHEMA,
+    }
+
+
+@router.post("/warehouse/orders/fulfillment/table-rows")
+def get_order_fulfillment_table_rows(payload: OrderFulfillmentTableRowsRequest) -> dict[str, Any]:
+    """Return order fulfillment rows consumed by feishu-adapter table sync."""
+
+    rows = load_order_fulfillment_table_rows(
+        order_id=payload.order_id,
+        status=payload.status,
+        limit=payload.limit,
+    )
+    return {
+        "ok": True,
+        "schema_id": "order_fulfillment",
+        "count": len(rows),
+        "items": rows,
+    }
 
 
 

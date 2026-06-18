@@ -225,6 +225,50 @@ class FakeRankingRepository:
         return sorted(self.snapshot_rows, key=lambda row: row["score"], reverse=True)[:limit]
 
 
+class FakeProductOperationsRepository(FakeRankingRepository):
+    """Repository double for the Feishu Product Operations read model.
+
+    H8 exposes a business-facing table contract that combines catalog facts,
+    customer review summaries, Flash Deals, and leaderboard signals. The fake
+    keeps those inputs in memory so the route test can verify the response
+    shape without requiring PostgreSQL or Redis.
+    """
+
+    def search_items(self, query: str | None = None, *, category_id: str | None = None):
+        assert query is None
+        rows = [
+            {
+                "item_id": "item_wireless_earbuds",
+                "item_name": "Wireless Earbuds",
+                "brand": "Talon Audio",
+                "spec": "Bluetooth 5.3",
+                "category_id": "electronics",
+                "category_name": "Electronics",
+                "price": 59.99,
+            }
+        ]
+        return [row for row in rows if category_id is None or row["category_id"] == category_id]
+
+    def item_review_summary(self, item_id: str):
+        return {"average_rating": 4.8, "review_count": 128}
+
+    def list_flash_sales(self, *, status: str | None = None, limit: int = 20):
+        return [
+            {
+                "id": 1,
+                "item_id": "item_wireless_earbuds",
+                "item_price": 59.99,
+                "sale_price": 49.99,
+                "stock_limit": 50,
+                "status": "active",
+                "starts_at": "2026-06-17T00:00:00+08:00",
+                "ends_at": "2026-06-30T00:00:00+08:00",
+                "created_at": "2026-06-17T00:00:00+08:00",
+                "updated_at": "2026-06-17T00:00:00+08:00",
+            }
+        ][:limit]
+
+
 class FakeRankingRedis:
     """Minimal Redis ZSET double used by ranking router tests."""
 
@@ -504,6 +548,99 @@ def test_category_ranking_endpoint_falls_back_to_postgres_snapshot(monkeypatch):
         "item_wireless_earbuds",
         "item_smart_tv_43",
     ]
+
+
+def test_order_fulfillment_table_schema_and_rows_expose_business_fields():
+    """Protect the H8 Order Fulfillment read model contract for Feishu tables.
+
+    The endpoint is consumed by feishu-adapter table sync, so it must return
+    human-readable field names and row fields without leaking order item row ids
+    or other implementation-only persistence details.
+    """
+
+    create_response = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-TABLE-1",
+            "customer_id": "cus_100",
+            "shipping_address": "广东省深圳市南山区",
+            "items": [{"item_id": "item_vinda_tissue", "quantity": 2}],
+            "delivery_provider_id": "sf",
+        },
+    )
+    assert create_response.status_code == 200
+    pay_response = client.post("/warehouse/orders/ORD-CODEX-TABLE-1/pay", json={"updated_by": "customer"})
+    assert pay_response.status_code == 200
+
+    schema_response = client.get("/warehouse/orders/fulfillment/table-schema")
+    rows_response = client.post(
+        "/warehouse/orders/fulfillment/table-rows",
+        json={"status": "pending_fulfillment_review", "limit": 10},
+    )
+
+    assert schema_response.status_code == 200
+    schema = schema_response.json()
+    assert schema["ok"] is True
+    assert schema["schema_id"] == "order_fulfillment"
+    field_names = [field["name"] for field in schema["fields"]]
+    assert field_names[:4] == ["Order ID", "Status", "Customer", "Warehouse"]
+    assert "Order Item ID" not in field_names
+
+    assert rows_response.status_code == 200
+    body = rows_response.json()
+    assert body["ok"] is True
+    assert body["schema_id"] == "order_fulfillment"
+    assert body["count"] == 1
+    row = body["items"][0]
+    assert row["order_id"] == "ORD-CODEX-TABLE-1"
+    assert row["fields"]["Order ID"] == "ORD-CODEX-TABLE-1"
+    assert row["fields"]["Status"] == "pending_fulfillment_review"
+    assert row["fields"]["Item Summary"] == "item_vinda_tissue x 2"
+    assert "id" not in row["fields"]
+
+
+def test_product_operations_table_schema_and_rows_merge_catalog_deal_and_ranking(monkeypatch):
+    """Protect the H8 Product Operations read model contract for Feishu tables.
+
+    Product Operations powers a future Feishu app page, so the route should
+    present operational product signals in one row per item while keeping the
+    table fields readable for non-developer employees.
+    """
+
+    repository = FakeProductOperationsRepository()
+    monkeypatch.setattr(search_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(category_rankings_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(category_rankings_router, "get_category_ranking_redis", lambda: None)
+
+    schema_response = client.get("/products/operations/table-schema")
+    rows_response = client.post(
+        "/products/operations/table-rows",
+        json={"category_id": "electronics", "limit": 10},
+    )
+
+    assert schema_response.status_code == 200
+    schema = schema_response.json()
+    assert schema["ok"] is True
+    assert schema["schema_id"] == "product_operations"
+    field_names = [field["name"] for field in schema["fields"]]
+    assert "Item ID" in field_names
+    assert "Category ID" not in field_names
+    assert "Database ID" not in field_names
+
+    assert rows_response.status_code == 200
+    body = rows_response.json()
+    assert body["ok"] is True
+    assert body["schema_id"] == "product_operations"
+    assert body["count"] == 1
+    row = body["items"][0]
+    assert row["item_id"] == "item_wireless_earbuds"
+    assert row["fields"]["Item ID"] == "item_wireless_earbuds"
+    assert row["fields"]["Category"] == "Electronics"
+    assert row["fields"]["Rating"] == 4.8
+    assert row["fields"]["Review Count"] == 128
+    assert row["fields"]["Flash Deal Status"] == "active"
+    assert row["fields"]["Flash Sale Price"] == 49.99
+    assert row["fields"]["Ranking Score"] == 91.0
 
 
 def test_category_ranking_endpoint_uses_redis_zset_when_available(monkeypatch):
