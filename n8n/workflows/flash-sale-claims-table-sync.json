@@ -1,0 +1,83 @@
+[
+  {
+    "updatedAt": "2026-06-18T00:00:00.000Z",
+    "createdAt": "2026-06-18T00:00:00.000Z",
+    "id": "flash-sale-claims-table-sync",
+    "name": "Flash Sale Claims Table Sync",
+    "description": "Refreshes the Feishu flash sale claim read model every 10 minutes.",
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 10
+              }
+            ]
+          }
+        },
+        "id": "flash-sale-claims-table-sync-schedule",
+        "name": "Every 10 Minutes",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          -320,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://feishu-adapter:8000/flash-sales/claims-table/sync",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "{\n  \"limit\": 100\n}",
+          "options": {
+            "timeout": 300000
+          }
+        },
+        "id": "flash-sale-claims-table-sync-request",
+        "name": "Sync Flash Sale Claims Table",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          -64,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Every 10 Minutes": {
+        "main": [
+          [
+            {
+              "node": "Sync Flash Sale Claims Table",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "meta": {
+      "templateCredsSetupCompleted": true
+    },
+    "pinData": {}
+  }
+]

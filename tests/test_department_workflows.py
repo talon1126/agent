@@ -247,6 +247,88 @@ def test_procurement_purchase_orders_sync_workflow_runs_every_10_minutes() -> No
     assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
 
 
+def test_order_fulfillment_table_sync_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("order-fulfillment-table-sync.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Order Fulfillment Table")
+
+    assert workflow["name"] == "Order Fulfillment Table Sync"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith(
+        "/orders/fulfillment-table/sync"
+    )
+    assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
+
+
+def test_product_operations_table_sync_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("product-operations-table-sync.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Product Operations Table")
+
+    assert workflow["name"] == "Product Operations Table Sync"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith(
+        "/products/operations-table/sync"
+    )
+    assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
+
+
+def test_order_items_table_sync_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("order-items-table-sync.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Order Items Table")
+
+    assert workflow["name"] == "Order Items Table Sync"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith("/orders/items-table/sync")
+    assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
+
+
+def test_items_table_sync_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("items-table-sync.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Items Table")
+
+    assert workflow["name"] == "Items Table Sync"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith("/items/table/sync")
+    assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
+
+
+def test_flash_sales_table_sync_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("flash-sales-table-sync.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Flash Sales Table")
+
+    assert workflow["name"] == "Flash Sales Table Sync"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith("/flash-sales/table/sync")
+    assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
+
+
+def test_flash_sale_claims_table_sync_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("flash-sale-claims-table-sync.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Flash Sale Claims Table")
+
+    assert workflow["name"] == "Flash Sale Claims Table Sync"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith("/flash-sales/claims-table/sync")
+    assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
+
+
 def test_warehouse_order_timeout_release_workflow_runs_every_5_minutes() -> None:
     workflow = load_workflow("warehouse-order-timeout-release.json")
     schedule = node_by_name(workflow, "Every 5 Minutes")

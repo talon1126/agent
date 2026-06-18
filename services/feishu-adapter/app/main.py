@@ -151,6 +151,62 @@ class ProductOperationsTableSyncRequest(BaseModel):
     limit: int = 100
 
 
+class OrderItemsTableSyncRequest(BaseModel):
+    """Request payload for syncing the Order Items Feishu read model.
+
+    Args:
+        order_id: Optional order id filter for manual backfill or focused
+            operator refresh.
+        status: Optional order-line status filter passed through to mock-api.
+        limit: Maximum number of order item rows requested from mock-api. The
+            endpoint caps this value again before calling the shared sync path.
+    """
+
+    order_id: str | None = None
+    status: str | None = None
+    limit: int = 100
+
+
+class ItemsTableSyncRequest(BaseModel):
+    """Request payload for syncing the standalone Items Feishu read model.
+
+    Args:
+        category_id: Optional catalog category filter for Feishu application
+            pages that need to refresh one department at a time.
+        limit: Maximum number of product rows requested from mock-api.
+    """
+
+    category_id: str | None = None
+    limit: int = 100
+
+
+class FlashSalesTableSyncRequest(BaseModel):
+    """Request payload for syncing the Flash Sales Feishu read model.
+
+    Args:
+        status: Optional activity status filter such as active, paused, or
+            ended.
+        limit: Maximum number of flash-sale rows requested from mock-api.
+    """
+
+    status: str | None = None
+    limit: int = 100
+
+
+class FlashSaleClaimsTableSyncRequest(BaseModel):
+    """Request payload for syncing the Flash Sale Claims Feishu read model.
+
+    Args:
+        flash_sale_id: Optional activity id for focused claim-result refreshes.
+        status: Optional claim status filter such as ordered or failed.
+        limit: Maximum number of claim rows requested from mock-api.
+    """
+
+    flash_sale_id: int | None = None
+    status: str | None = None
+    limit: int = 100
+
+
 class InventoryTableViewFilter(BaseModel):
     field: str
     operator: str = "is"
@@ -406,6 +462,9 @@ def create_app(
     inventory_table_id: str | None = None,
     inventory_table_view_id: str | None = None,
     inventory_table_url: str | None = None,
+    inventory_balance_table_id: str | None = None,
+    inventory_balance_table_view_id: str | None = None,
+    inventory_balance_table_url: str | None = None,
     procurement_replenishment_request_table_id: str | None = None,
     procurement_replenishment_request_table_view_id: str | None = None,
     procurement_replenishment_request_table_url: str | None = None,
@@ -415,6 +474,24 @@ def create_app(
     procurement_purchase_order_draft_table_id: str | None = None,
     procurement_purchase_order_draft_table_view_id: str | None = None,
     procurement_purchase_order_draft_table_url: str | None = None,
+    order_fulfillment_table_id: str | None = None,
+    order_fulfillment_table_view_id: str | None = None,
+    order_fulfillment_table_url: str | None = None,
+    order_items_table_id: str | None = None,
+    order_items_table_view_id: str | None = None,
+    order_items_table_url: str | None = None,
+    items_table_id: str | None = None,
+    items_table_view_id: str | None = None,
+    items_table_url: str | None = None,
+    product_operations_table_id: str | None = None,
+    product_operations_table_view_id: str | None = None,
+    product_operations_table_url: str | None = None,
+    flash_sales_table_id: str | None = None,
+    flash_sales_table_view_id: str | None = None,
+    flash_sales_table_url: str | None = None,
+    flash_sale_claims_table_id: str | None = None,
+    flash_sale_claims_table_view_id: str | None = None,
+    flash_sale_claims_table_url: str | None = None,
     long_connection_starter: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Feishu Adapter")
@@ -458,9 +535,21 @@ def create_app(
         "view_id": table_view_id,
     }
     inventory_balance_table_state = {
-        "table_id": os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_ID", ""),
-        "view_id": os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_VIEW_ID", ""),
-        "table_url": os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_URL", ""),
+        "table_id": (
+            inventory_balance_table_id
+            if inventory_balance_table_id is not None
+            else os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_ID", "")
+        ),
+        "view_id": (
+            inventory_balance_table_view_id
+            if inventory_balance_table_view_id is not None
+            else os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_VIEW_ID", "")
+        ),
+        "table_url": (
+            inventory_balance_table_url
+            if inventory_balance_table_url is not None
+            else os.getenv("FEISHU_INVENTORY_BALANCE_TABLE_URL", "")
+        ),
     }
     inventory_table_lock = threading.RLock()
     procurement_replenishment_request_table_state = {
@@ -519,14 +608,106 @@ def create_app(
         ),
     }
     order_fulfillment_table_state = {
-        "table_id": os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_ID", ""),
-        "view_id": os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_VIEW_ID", ""),
-        "table_url": os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_URL", ""),
+        "table_id": (
+            order_fulfillment_table_id
+            if order_fulfillment_table_id is not None
+            else os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_ID", "")
+        ),
+        "view_id": (
+            order_fulfillment_table_view_id
+            if order_fulfillment_table_view_id is not None
+            else os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_VIEW_ID", "")
+        ),
+        "table_url": (
+            order_fulfillment_table_url
+            if order_fulfillment_table_url is not None
+            else os.getenv("FEISHU_ORDER_FULFILLMENT_TABLE_URL", "")
+        ),
+    }
+    order_items_table_state = {
+        "table_id": (
+            order_items_table_id
+            if order_items_table_id is not None
+            else os.getenv("FEISHU_ORDER_ITEMS_TABLE_ID", "")
+        ),
+        "view_id": (
+            order_items_table_view_id
+            if order_items_table_view_id is not None
+            else os.getenv("FEISHU_ORDER_ITEMS_TABLE_VIEW_ID", "")
+        ),
+        "table_url": (
+            order_items_table_url
+            if order_items_table_url is not None
+            else os.getenv("FEISHU_ORDER_ITEMS_TABLE_URL", "")
+        ),
+    }
+    items_table_state = {
+        "table_id": (
+            items_table_id
+            if items_table_id is not None
+            else os.getenv("FEISHU_ITEMS_TABLE_ID", "")
+        ),
+        "view_id": (
+            items_table_view_id
+            if items_table_view_id is not None
+            else os.getenv("FEISHU_ITEMS_TABLE_VIEW_ID", "")
+        ),
+        "table_url": (
+            items_table_url
+            if items_table_url is not None
+            else os.getenv("FEISHU_ITEMS_TABLE_URL", "")
+        ),
     }
     product_operations_table_state = {
-        "table_id": os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_ID", ""),
-        "view_id": os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_VIEW_ID", ""),
-        "table_url": os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_URL", ""),
+        "table_id": (
+            product_operations_table_id
+            if product_operations_table_id is not None
+            else os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_ID", "")
+        ),
+        "view_id": (
+            product_operations_table_view_id
+            if product_operations_table_view_id is not None
+            else os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_VIEW_ID", "")
+        ),
+        "table_url": (
+            product_operations_table_url
+            if product_operations_table_url is not None
+            else os.getenv("FEISHU_PRODUCT_OPERATIONS_TABLE_URL", "")
+        ),
+    }
+    flash_sales_table_state = {
+        "table_id": (
+            flash_sales_table_id
+            if flash_sales_table_id is not None
+            else os.getenv("FEISHU_FLASH_SALES_TABLE_ID", "")
+        ),
+        "view_id": (
+            flash_sales_table_view_id
+            if flash_sales_table_view_id is not None
+            else os.getenv("FEISHU_FLASH_SALES_TABLE_VIEW_ID", "")
+        ),
+        "table_url": (
+            flash_sales_table_url
+            if flash_sales_table_url is not None
+            else os.getenv("FEISHU_FLASH_SALES_TABLE_URL", "")
+        ),
+    }
+    flash_sale_claims_table_state = {
+        "table_id": (
+            flash_sale_claims_table_id
+            if flash_sale_claims_table_id is not None
+            else os.getenv("FEISHU_FLASH_SALE_CLAIMS_TABLE_ID", "")
+        ),
+        "view_id": (
+            flash_sale_claims_table_view_id
+            if flash_sale_claims_table_view_id is not None
+            else os.getenv("FEISHU_FLASH_SALE_CLAIMS_TABLE_VIEW_ID", "")
+        ),
+        "table_url": (
+            flash_sale_claims_table_url
+            if flash_sale_claims_table_url is not None
+            else os.getenv("FEISHU_FLASH_SALE_CLAIMS_TABLE_URL", "")
+        ),
     }
     bot_configs = parse_bot_configs(
         bots_json=bots_json,
@@ -1496,15 +1677,6 @@ def create_app(
     ) -> dict[str, str]:
         with inventory_table_lock:
             field_specs = field_specs or inventory_table_field_specs()
-            existing = find_inventory_table_by_name_safe(token=token, table_name=table_name)
-            if existing["table_id"]:
-                ensure_inventory_table_fields(
-                    token=token,
-                    table_identifier=existing["table_id"],
-                    field_specs=field_specs,
-                )
-                remember_inventory_table(existing)
-                return {**existing, "action": "existing"}
             if inventory_table_state["table_id"]:
                 result = {
                     "table_id": inventory_table_state["table_id"],
@@ -1523,6 +1695,15 @@ def create_app(
                         raise
                     inventory_table_state["table_id"] = ""
                     inventory_table_state["view_id"] = ""
+            existing = find_inventory_table_by_name_safe(token=token, table_name=table_name)
+            if existing["table_id"]:
+                ensure_inventory_table_fields(
+                    token=token,
+                    table_identifier=existing["table_id"],
+                    field_specs=field_specs,
+                )
+                remember_inventory_table(existing)
+                return {**existing, "action": "existing"}
             return create_or_reuse_inventory_table(
                 token=token,
                 table_name=table_name,
@@ -1624,15 +1805,6 @@ def create_app(
         table_name: str,
         field_specs: list[dict[str, Any]],
     ) -> dict[str, str]:
-        existing = find_inventory_balance_table_by_name_safe(token=token, table_name=table_name)
-        if existing["table_id"]:
-            ensure_inventory_table_fields(
-                token=token,
-                table_identifier=existing["table_id"],
-                field_specs=field_specs,
-            )
-            remember_inventory_balance_table(existing)
-            return {**existing, "action": "existing"}
         if inventory_balance_table_state["table_id"]:
             result = {
                 "table_id": inventory_balance_table_state["table_id"],
@@ -1651,6 +1823,15 @@ def create_app(
                     raise
                 inventory_balance_table_state["table_id"] = ""
                 inventory_balance_table_state["view_id"] = ""
+        existing = find_inventory_balance_table_by_name_safe(token=token, table_name=table_name)
+        if existing["table_id"]:
+            ensure_inventory_table_fields(
+                token=token,
+                table_identifier=existing["table_id"],
+                field_specs=field_specs,
+            )
+            remember_inventory_balance_table(existing)
+            return {**existing, "action": "existing"}
         return create_or_reuse_inventory_balance_table(
             token=token,
             table_name=table_name,
@@ -1959,10 +2140,13 @@ def create_app(
         return {"action": action, "record_id": returned_record_id}
 
     def inventory_record_identity(fields: dict[str, Any]) -> dict[str, str]:
+        source_version = str(fields.get("Source Version") or "").strip()
+        if source_version:
+            return {"Source Version": source_version}
         batch_identity = {
             "Warehouse ID": str(fields.get("Warehouse ID") or "").strip(),
             "Location": str(fields.get("Location") or "").strip(),
-            "Item ID": str(fields.get("Item ID") or "").strip(),
+            "Item Name": str(fields.get("Item Name") or "").strip(),
             "Batch No": str(fields.get("Batch No") or "").strip(),
         }
         if all(batch_identity.values()):
@@ -1975,7 +2159,7 @@ def create_app(
             return legacy_identity
         raise RuntimeError(
             "inventory table row is missing batch identity fields: "
-            "Warehouse ID, Location, Item ID, Batch No"
+            "Source Version or Warehouse ID, Location, Item Name, Batch No"
         )
 
     def inventory_identity_key(identity: dict[str, str]) -> tuple[tuple[str, str], ...]:
@@ -3894,6 +4078,90 @@ def create_app(
             },
         )
 
+    @app.post("/orders/items-table/sync")
+    def sync_order_items_table(
+        request: OrderItemsTableSyncRequest,
+    ) -> dict[str, Any]:
+        """Sync Order Items rows into the Feishu business read model.
+
+        Args:
+            request: Filter and limit payload received from n8n or a manual
+                operator-triggered sync call.
+
+        Returns:
+            Shared table-sync result containing table identity, table URL,
+            synced count, and per-row upsert actions.
+
+        Side Effects:
+            Reads mock-api order item rows, ensures the configured Bitable
+            fields exist, and upserts records by `Order Item ID`.
+        """
+
+        return sync_business_table(
+            request_payload={
+                "order_id": request.order_id,
+                "status": request.status,
+                "limit": max(min(int(request.limit or 100), 500), 1),
+            },
+            table_name="Order Items",
+            state=order_items_table_state,
+            schema_endpoint="/warehouse/orders/items/table-schema",
+            rows_endpoint="/warehouse/orders/items/table-rows",
+            identity_field="Order Item ID",
+            workflow="/orders/items-table/sync",
+            not_configured_error="missing_feishu_order_items_table_config",
+            not_configured_message="Feishu order items table sync is not configured.",
+            failure_error="feishu_order_items_table_sync_failed",
+            item_builder=lambda row, fields, result: {
+                "order_item_id": fields.get("Order Item ID") or row.get("order_item_id"),
+                "order_id": fields.get("Order ID"),
+                "status": fields.get("Status"),
+                "action": result["action"],
+                "record_id": result["record_id"],
+                "source_version": fields.get("Source Version", ""),
+            },
+        )
+
+    @app.post("/items/table/sync")
+    def sync_items_table(
+        request: ItemsTableSyncRequest,
+    ) -> dict[str, Any]:
+        """Sync standalone Items rows into the Feishu business read model.
+
+        Args:
+            request: Optional category filter and row limit.
+
+        Returns:
+            Shared table-sync result containing table identity, table URL,
+            synced count, and per-row upsert actions.
+
+        Side Effects:
+            Reads mock-api catalog rows, ensures the Items Bitable schema, and
+            upserts records by `Item ID`.
+        """
+
+        return sync_business_table(
+            request_payload={
+                "category_id": request.category_id,
+                "limit": max(min(int(request.limit or 100), 500), 1),
+            },
+            table_name="Items",
+            state=items_table_state,
+            schema_endpoint="/items/table-schema",
+            rows_endpoint="/items/table-rows",
+            identity_field="Item ID",
+            workflow="/items/table/sync",
+            not_configured_error="missing_feishu_items_table_config",
+            not_configured_message="Feishu items table sync is not configured.",
+            failure_error="feishu_items_table_sync_failed",
+            item_builder=lambda row, fields, result: {
+                "item_id": fields.get("Item ID") or row.get("item_id"),
+                "action": result["action"],
+                "record_id": result["record_id"],
+                "source_version": fields.get("Source Version", ""),
+            },
+        )
+
     @app.post("/products/operations-table/sync")
     def sync_product_operations_table(
         request: ProductOperationsTableSyncRequest,
@@ -3917,6 +4185,91 @@ def create_app(
             item_builder=lambda row, fields, result: {
                 "item_id": fields.get("Item ID") or row.get("item_id"),
                 "status": fields.get("Flash Deal Status"),
+                "action": result["action"],
+                "record_id": result["record_id"],
+                "source_version": fields.get("Source Version", ""),
+            },
+        )
+
+    @app.post("/flash-sales/table/sync")
+    def sync_flash_sales_table(
+        request: FlashSalesTableSyncRequest,
+    ) -> dict[str, Any]:
+        """Sync Flash Sales rows into the Feishu business read model.
+
+        Args:
+            request: Optional status filter and row limit.
+
+        Returns:
+            Shared table-sync result containing table identity, table URL,
+            synced count, and per-row upsert actions.
+
+        Side Effects:
+            Reads mock-api flash-sale activities, ensures the Flash Sales
+            Bitable schema, and upserts records by `Flash Sale ID`.
+        """
+
+        return sync_business_table(
+            request_payload={
+                "status": request.status,
+                "limit": max(min(int(request.limit or 100), 500), 1),
+            },
+            table_name="Flash Sales",
+            state=flash_sales_table_state,
+            schema_endpoint="/flash-sales/table-schema",
+            rows_endpoint="/flash-sales/table-rows",
+            identity_field="Flash Sale ID",
+            workflow="/flash-sales/table/sync",
+            not_configured_error="missing_feishu_flash_sales_table_config",
+            not_configured_message="Feishu flash sales table sync is not configured.",
+            failure_error="feishu_flash_sales_table_sync_failed",
+            item_builder=lambda row, fields, result: {
+                "flash_sale_id": fields.get("Flash Sale ID") or row.get("flash_sale_id"),
+                "status": fields.get("Status"),
+                "action": result["action"],
+                "record_id": result["record_id"],
+                "source_version": fields.get("Source Version", ""),
+            },
+        )
+
+    @app.post("/flash-sales/claims-table/sync")
+    def sync_flash_sale_claims_table(
+        request: FlashSaleClaimsTableSyncRequest,
+    ) -> dict[str, Any]:
+        """Sync Flash Sale Claims rows into the Feishu business read model.
+
+        Args:
+            request: Optional flash-sale id, optional claim status, and row
+                limit.
+
+        Returns:
+            Shared table-sync result containing table identity, table URL,
+            synced count, and per-row upsert actions.
+
+        Side Effects:
+            Reads mock-api claim-result rows, ensures the Flash Sale Claims
+            Bitable schema, and upserts records by `Claim ID`.
+        """
+
+        return sync_business_table(
+            request_payload={
+                "flash_sale_id": request.flash_sale_id,
+                "status": request.status,
+                "limit": max(min(int(request.limit or 100), 500), 1),
+            },
+            table_name="Flash Sale Claims",
+            state=flash_sale_claims_table_state,
+            schema_endpoint="/flash-sales/claims/table-schema",
+            rows_endpoint="/flash-sales/claims/table-rows",
+            identity_field="Claim ID",
+            workflow="/flash-sales/claims-table/sync",
+            not_configured_error="missing_feishu_flash_sale_claims_table_config",
+            not_configured_message="Feishu flash sale claims table sync is not configured.",
+            failure_error="feishu_flash_sale_claims_table_sync_failed",
+            item_builder=lambda row, fields, result: {
+                "claim_id": fields.get("Claim ID") or row.get("claim_id"),
+                "flash_sale_id": fields.get("Flash Sale ID"),
+                "status": fields.get("Status"),
                 "action": result["action"],
                 "record_id": result["record_id"],
                 "source_version": fields.get("Source Version", ""),

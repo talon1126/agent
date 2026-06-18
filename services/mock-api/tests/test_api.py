@@ -102,6 +102,20 @@ class FakeFlashSaleRepository:
         rows = [dict(sale) for sale in self.sales if status is None or sale["status"] == status]
         return rows[:limit]
 
+    def list_flash_sale_claims(
+        self,
+        *,
+        flash_sale_id: int | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ):
+        rows = [dict(claim) for claim in self.claims.values()]
+        if flash_sale_id is not None:
+            rows = [claim for claim in rows if int(claim["flash_sale_id"]) == flash_sale_id]
+        if status:
+            rows = [claim for claim in rows if claim["status"] == status]
+        return rows[:limit]
+
     def get_flash_sale_claim(self, *, flash_sale_id: int, user_id: int):
         claim = self.claims.get((flash_sale_id, user_id))
         return dict(claim) if claim else None
@@ -245,6 +259,7 @@ class FakeProductOperationsRepository(FakeRankingRepository):
                 "category_id": "electronics",
                 "category_name": "Electronics",
                 "price": 59.99,
+                "image": "https://oss.example.com/products/item_wireless_earbuds.jpg",
             }
         ]
         return [row for row in rows if category_id is None or row["category_id"] == category_id]
@@ -445,6 +460,7 @@ def test_product_search_returns_item_with_inventory_balances(monkeypatch):
             "spec": "250ml*24盒",
             "category_id": "dairy",
             "price": 18.40,
+            "image": "",
             "rating": {"score": 4.5, "count": 2},
             "balances": [
                 {
@@ -599,6 +615,49 @@ def test_order_fulfillment_table_schema_and_rows_expose_business_fields():
     assert "id" not in row["fields"]
 
 
+def test_order_items_table_schema_and_rows_expose_line_fields():
+    """Protect the H8 Order Items read model used by Feishu detail tables."""
+
+    create_response = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-LINES-1",
+            "customer_id": "cus_100",
+            "shipping_address": "广东省深圳市南山区",
+            "items": [{"item_id": "item_vinda_tissue", "quantity": 2}],
+            "delivery_provider_id": "sf",
+        },
+    )
+    assert create_response.status_code == 200
+
+    schema_response = client.get("/warehouse/orders/items/table-schema")
+    rows_response = client.post(
+        "/warehouse/orders/items/table-rows",
+        json={"order_id": "ORD-CODEX-LINES-1", "limit": 10},
+    )
+
+    assert schema_response.status_code == 200
+    schema = schema_response.json()
+    assert schema["ok"] is True
+    assert schema["schema_id"] == "order_items"
+    field_names = [field["name"] for field in schema["fields"]]
+    assert field_names[:4] == ["Order Item ID", "Order ID", "Status", "Customer"]
+    assert "id" not in field_names
+
+    assert rows_response.status_code == 200
+    body = rows_response.json()
+    assert body["ok"] is True
+    assert body["schema_id"] == "order_items"
+    assert body["count"] == 1
+    row = body["items"][0]
+    assert row["order_item_id"] == "ORD-CODEX-LINES-1:item_vinda_tissue::"
+    assert row["fields"]["Order Item ID"] == "ORD-CODEX-LINES-1:item_vinda_tissue::"
+    assert row["fields"]["Order ID"] == "ORD-CODEX-LINES-1"
+    assert row["fields"]["Item ID"] == "item_vinda_tissue"
+    assert row["fields"]["Quantity"] == 2
+    assert "id" not in row["fields"]
+
+
 def test_product_operations_table_schema_and_rows_merge_catalog_deal_and_ranking(monkeypatch):
     """Protect the H8 Product Operations read model contract for Feishu tables.
 
@@ -624,6 +683,7 @@ def test_product_operations_table_schema_and_rows_merge_catalog_deal_and_ranking
     assert schema["schema_id"] == "product_operations"
     field_names = [field["name"] for field in schema["fields"]]
     assert "Item ID" in field_names
+    assert "Image" in field_names
     assert "Category ID" not in field_names
     assert "Database ID" not in field_names
 
@@ -635,12 +695,97 @@ def test_product_operations_table_schema_and_rows_merge_catalog_deal_and_ranking
     row = body["items"][0]
     assert row["item_id"] == "item_wireless_earbuds"
     assert row["fields"]["Item ID"] == "item_wireless_earbuds"
+    assert row["fields"]["Image"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
     assert row["fields"]["Category"] == "Electronics"
     assert row["fields"]["Rating"] == 4.8
     assert row["fields"]["Review Count"] == 128
     assert row["fields"]["Flash Deal Status"] == "active"
     assert row["fields"]["Flash Sale Price"] == 49.99
     assert row["fields"]["Ranking Score"] == 91.0
+
+
+def test_items_table_schema_and_rows_expose_catalog_fields(monkeypatch):
+    """Protect the H9 Items read model used by Feishu product pages."""
+
+    repository = FakeProductOperationsRepository()
+    monkeypatch.setattr(search_router, "get_warehouse_repository", lambda: repository)
+
+    schema_response = client.get("/items/table-schema")
+    rows_response = client.post("/items/table-rows", json={"category_id": "electronics", "limit": 10})
+
+    assert schema_response.status_code == 200
+    schema = schema_response.json()
+    assert schema["ok"] is True
+    assert schema["schema_id"] == "items"
+    field_names = [field["name"] for field in schema["fields"]]
+    assert field_names[:4] == ["Item ID", "Image", "Item Name", "Brand"]
+    assert "Category ID" not in field_names
+
+    assert rows_response.status_code == 200
+    body = rows_response.json()
+    assert body["ok"] is True
+    assert body["schema_id"] == "items"
+    row = body["items"][0]
+    assert row["item_id"] == "item_wireless_earbuds"
+    assert row["fields"]["Image"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    assert row["fields"]["Category"] == "Electronics"
+    assert row["fields"]["Rating"] == 4.8
+
+
+def test_flash_sales_table_schema_and_rows_expose_activity_fields(monkeypatch):
+    """Protect the H10 Flash Sales read model used by Feishu operations."""
+
+    repository = FakeFlashSaleRepository()
+    redis_client = FakeFlashSaleRedis(stocks={1: 1})
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+
+    schema_response = client.get("/flash-sales/table-schema")
+    rows_response = client.post("/flash-sales/table-rows", json={"status": "active", "limit": 10})
+
+    assert schema_response.status_code == 200
+    assert schema_response.json()["schema_id"] == "flash_sales"
+    assert rows_response.status_code == 200
+    body = rows_response.json()
+    assert body["ok"] is True
+    row = body["items"][0]
+    assert row["flash_sale_id"] == "1"
+    assert row["fields"]["Flash Sale ID"] == "1"
+    assert row["fields"]["Item ID"] == "item_milk_pure"
+    assert row["fields"]["Original Price"] == 18.4
+    assert row["fields"]["Stock Remaining"] == 1
+
+
+def test_flash_sale_claims_table_schema_and_rows_expose_result_fields(monkeypatch):
+    """Protect the H10 Flash Sale Claims read model used by Feishu operations."""
+
+    repository = FakeFlashSaleRepository()
+    repository.claims[(1, 100)] = {
+        "id": 7,
+        "flash_sale_id": 1,
+        "user_id": 100,
+        "item_id": "item_milk_pure",
+        "order_id": "ORD-FLASH-1",
+        "status": "ordered",
+        "created_at": "2026-06-18T10:00:00+00:00",
+        "updated_at": "2026-06-18T10:01:00+00:00",
+    }
+    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+
+    schema_response = client.get("/flash-sales/claims/table-schema")
+    rows_response = client.post("/flash-sales/claims/table-rows", json={"status": "ordered", "limit": 10})
+
+    assert schema_response.status_code == 200
+    assert schema_response.json()["schema_id"] == "flash_sale_claims"
+    assert rows_response.status_code == 200
+    body = rows_response.json()
+    assert body["ok"] is True
+    row = body["items"][0]
+    assert row["claim_id"] == "7"
+    assert row["fields"]["Claim ID"] == "7"
+    assert row["fields"]["Flash Sale ID"] == "1"
+    assert row["fields"]["Order ID"] == "ORD-FLASH-1"
+    assert "id" not in row["fields"]
 
 
 def test_category_ranking_endpoint_uses_redis_zset_when_available(monkeypatch):
@@ -745,6 +890,7 @@ def test_product_search_returns_matching_item_without_balances(monkeypatch):
             "spec": "1件",
             "category_id": "paper",
             "price": 9.90,
+            "image": "",
             "rating": None,
             "balances": [],
         }
@@ -2120,7 +2266,6 @@ def test_warehouse_inventory_table_rows_return_batch_location_feishu_ready_field
             "Warehouse",
             "Location",
             "Category",
-            "Item ID",
             "Item Name",
             "Brand",
             "Spec",
@@ -2140,6 +2285,8 @@ def test_warehouse_inventory_table_rows_return_batch_location_feishu_ready_field
     assert first["fields"]["Location"] == "A1"
     assert first["fields"]["Category"] == "纸品"
     assert first["fields"]["Item Name"] == "维达纸巾"
+    assert "Category ID" not in first["fields"]
+    assert "Item ID" not in first["fields"]
 
 
 def test_warehouse_stock_balance_table_schema_uses_select_statuses_and_date_fields():

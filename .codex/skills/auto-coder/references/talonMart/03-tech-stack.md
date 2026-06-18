@@ -103,7 +103,7 @@ n8n Workflow
 | `warehouses` | 仓库主数据，保存仓库编号、名称、城市、区域和启用状态。 |
 | `storage_locations` | 库位主数据，保存仓库内 A1、B1、C1 等具体库位、温区和容量。 |
 | `categories` | 商品分类表，保存商品分类名称和默认存储要求。 |
-| `items` | 商品主数据，保存商品名称、品牌、规格、价格、搜索文本、单位和条码。 |
+| `items` | 商品主数据，保存商品名称、品牌、规格、价格、搜索文本、单位、条码和商品图片地址；商品图片可指向本地演示 URL 或后续 OSS URL，供前端与飞书商品表展示。 |
 | `item_reviews` | 商品评论表，保存用户评分、标题、正文和时间。 |
 | `inventory_batches` | 批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。 |
 | `inventory_location_balances` | 库位库存余额表，保存当前可售库存；飞书余额表使用数据库 `id` 作为 `Balance ID`，不展示 `category_id` 或 `item_id`。 |

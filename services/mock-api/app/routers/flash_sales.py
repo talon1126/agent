@@ -45,6 +45,74 @@ class FlashSalePurchaseRequest(BaseModel):
     delivery_provider_id: str = "sf"
 
 
+class FlashSalesTableRowsRequest(BaseModel):
+    """Filter payload used by the Feishu Flash Sales table sync endpoint.
+
+    The request is intentionally small because the Feishu read model only needs
+    a bounded activity list. `status` lets n8n refresh one operational state,
+    while `limit` protects mock-api and feishu-adapter from accidentally
+    transferring an unbounded result set during scheduled syncs.
+    """
+
+    status: str | None = None
+    limit: int = 100
+
+
+class FlashSaleClaimsTableRowsRequest(BaseModel):
+    """Filter payload used by the Feishu Flash Sale Claims sync endpoint.
+
+    Claims are the result rows for flash-sale participation. The optional
+    `flash_sale_id` and `status` filters support focused operator views, and
+    `limit` is capped again inside the route before the repository is called.
+    """
+
+    flash_sale_id: int | None = None
+    status: str | None = None
+    limit: int = 100
+
+
+FLASH_SALES_TABLE_SCHEMA = [
+    {"name": "Flash Sale ID", "type": "text"},
+    {"name": "Item ID", "type": "text"},
+    {"name": "Sale Price", "type": "number"},
+    {"name": "Original Price", "type": "number"},
+    {"name": "Stock Limit", "type": "number"},
+    {"name": "Stock Remaining", "type": "number"},
+    {
+        "name": "Status",
+        "type": "single_select",
+        "options": [
+            {"name": "draft", "color": 21},
+            {"name": "active", "color": 28},
+            {"name": "paused", "color": 19},
+            {"name": "ended", "color": 20},
+        ],
+    },
+    {"name": "Starts At", "type": "datetime"},
+    {"name": "Ends At", "type": "datetime"},
+    {"name": "Source Version", "type": "text"},
+]
+
+FLASH_SALE_CLAIMS_TABLE_SCHEMA = [
+    {"name": "Claim ID", "type": "text"},
+    {"name": "Flash Sale ID", "type": "text"},
+    {"name": "User ID", "type": "number"},
+    {"name": "Item ID", "type": "text"},
+    {"name": "Order ID", "type": "text"},
+    {
+        "name": "Status",
+        "type": "single_select",
+        "options": [
+            {"name": "pending", "color": 24},
+            {"name": "ordered", "color": 28},
+            {"name": "failed", "color": 17},
+        ],
+    },
+    {"name": "Created At", "type": "datetime"},
+    {"name": "Updated At", "type": "datetime"},
+    {"name": "Source Version", "type": "text"},
+]
+
 def error_response(status_code: int, error: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -97,6 +165,65 @@ def format_flash_sale(sale: dict[str, Any], stock_remaining: int | None) -> dict
     }
 
 
+def flash_sale_table_fields(sale: dict[str, Any], stock_remaining: int | None) -> dict[str, Any]:
+    """Convert one flash sale row into employee-facing Feishu fields.
+
+    Args:
+        sale: PostgreSQL flash-sale row containing item, price, quota, status,
+            and activity window fields.
+        stock_remaining: Redis-backed live quota value. `None` means Redis is
+            unavailable or the sale has not been initialized, so the Feishu
+            cell is left blank instead of inventing a value.
+
+    Returns:
+        A field map using business-readable names that match the Flash Sales
+        Bitable schema. The Source Version field gives the upsert layer a
+        simple change marker without exposing internal database row versions.
+    """
+
+    flash_sale_id = str(sale["id"])
+    return {
+        "Flash Sale ID": flash_sale_id,
+        "Item ID": str(sale["item_id"]),
+        "Sale Price": float(sale["sale_price"]),
+        "Original Price": float(sale["item_price"]) if sale.get("item_price") is not None else "",
+        "Stock Limit": int(sale["stock_limit"]),
+        "Stock Remaining": int(stock_remaining) if stock_remaining is not None else "",
+        "Status": str(sale["status"]),
+        "Starts At": str(sale["starts_at"]),
+        "Ends At": str(sale["ends_at"]),
+        "Source Version": f"mock-api:flash-sale:{flash_sale_id}:{sale.get('updated_at') or sale.get('status')}",
+    }
+
+
+def flash_sale_claim_table_fields(claim: dict[str, Any]) -> dict[str, Any]:
+    """Convert one flash-sale claim row into Feishu result-table fields.
+
+    Args:
+        claim: PostgreSQL claim row with user, item, order, status, and
+            timestamp fields.
+
+    Returns:
+        A field map for the Flash Sale Claims table. The public Claim ID is the
+        sync identity, while related ids are kept as business references for
+        operators who need to reconcile claims with orders.
+    """
+
+    claim_id = str(claim["id"])
+    status = str(claim.get("status") or "")
+    return {
+        "Claim ID": claim_id,
+        "Flash Sale ID": str(claim.get("flash_sale_id") or ""),
+        "User ID": int(claim.get("user_id") or 0),
+        "Item ID": str(claim.get("item_id") or ""),
+        "Order ID": str(claim.get("order_id") or ""),
+        "Status": status,
+        "Created At": str(claim.get("created_at") or ""),
+        "Updated At": str(claim.get("updated_at") or ""),
+        "Source Version": f"mock-api:flash-sale-claim:{claim_id}:{status}",
+    }
+
+
 def normalize_redis_result(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8")
@@ -138,7 +265,8 @@ def initialize_active_flash_sales() -> dict[str, int]:
     initialized = 0
     for sale in repository.list_flash_sales(status="active", limit=100):
         flash_sale_id = int(sale["id"])
-        # mock-api 启动时数据库会重置演示 claim，Redis 用户集合也要同步清空。
+        # Demo database startup resets flash-sale claims, so Redis participation
+        # sets must be reset at the same time to keep the local demo coherent.
         redis_client.set(flash_sale_stock_key(flash_sale_id), int(sale["stock_limit"]))
         redis_client.delete(flash_sale_users_key(flash_sale_id))
         initialized += 1
@@ -169,6 +297,104 @@ def list_flash_sales(
         "count": len(formatted_sales),
         "flash_sales": formatted_sales,
     }
+
+
+@router.get("/flash-sales/table-schema")
+def get_flash_sales_table_schema() -> dict[str, Any]:
+    """Return the schema contract consumed by feishu-adapter.
+
+    Returns:
+        A stable schema id and field list for the Flash Sales Bitable. The
+        adapter uses this response to create missing fields and to keep field
+        names consistent across scheduled sync runs.
+    """
+
+    return {
+        "ok": True,
+        "schema_id": "flash_sales",
+        "source": "mock-api",
+        "fields": FLASH_SALES_TABLE_SCHEMA,
+    }
+
+
+@router.post("/flash-sales/table-rows", response_model=None)
+def get_flash_sales_table_rows(payload: FlashSalesTableRowsRequest) -> Any:
+    """Return Flash Sales rows for the scheduled Feishu table sync.
+
+    Args:
+        payload: Optional status filter and requested row limit from n8n or a
+            manual sync call.
+
+    Returns:
+        On success, a read-model payload containing row count and Feishu field
+        maps. On backend failure, a JSONResponse with the existing mock-api
+        error envelope is returned so the adapter can log a clear sync failure.
+
+    Side Effects:
+        Reads PostgreSQL flash-sale facts and, when Redis is available, reads
+        live stock counters. It does not mutate sale state.
+    """
+
+    repository = get_warehouse_repository()
+    if not repository:
+        return error_response(503, "flash_sale_backend_unavailable", "Postgres backend is required")
+    redis_client = get_flash_sale_redis()
+    sales = repository.list_flash_sales(status=payload.status, limit=max(min(int(payload.limit or 100), 500), 1))
+    rows = []
+    for sale in sales:
+        stock_remaining = None
+        if redis_client:
+            raw_stock = redis_client.get(flash_sale_stock_key(int(sale["id"])))
+            stock_remaining = int(raw_stock) if raw_stock is not None else None
+        flash_sale_id = str(sale["id"])
+        rows.append({"flash_sale_id": flash_sale_id, "fields": flash_sale_table_fields(sale, stock_remaining)})
+    return {"ok": True, "schema_id": "flash_sales", "source": "mock-api", "count": len(rows), "items": rows}
+
+
+@router.get("/flash-sales/claims/table-schema")
+def get_flash_sale_claims_table_schema() -> dict[str, Any]:
+    """Return the schema contract for Flash Sale Claims.
+
+    Returns:
+        A stable schema id and field list for the claim-result table used by
+        the Feishu business application.
+    """
+
+    return {
+        "ok": True,
+        "schema_id": "flash_sale_claims",
+        "source": "mock-api",
+        "fields": FLASH_SALE_CLAIMS_TABLE_SCHEMA,
+    }
+
+
+@router.post("/flash-sales/claims/table-rows", response_model=None)
+def get_flash_sale_claims_table_rows(payload: FlashSaleClaimsTableRowsRequest) -> Any:
+    """Return Flash Sale Claims rows for the scheduled Feishu table sync.
+
+    Args:
+        payload: Optional flash-sale id, optional claim status, and requested
+            row limit.
+
+    Returns:
+        A read-model payload containing claim identities and Feishu field maps,
+        or the standard mock-api JSON error envelope when the repository cannot
+        provide claim rows.
+    """
+
+    repository = get_warehouse_repository()
+    if not repository or not hasattr(repository, "list_flash_sale_claims"):
+        return error_response(503, "flash_sale_claim_backend_unavailable", "Postgres backend is required")
+    claims = repository.list_flash_sale_claims(
+        flash_sale_id=payload.flash_sale_id,
+        status=payload.status,
+        limit=max(min(int(payload.limit or 100), 500), 1),
+    )
+    rows = [
+        {"claim_id": str(claim["id"]), "fields": flash_sale_claim_table_fields(claim)}
+        for claim in claims
+    ]
+    return {"ok": True, "schema_id": "flash_sale_claims", "source": "mock-api", "count": len(rows), "items": rows}
 
 
 @router.get("/flash-sales/{flash_sale_id}", response_model=None)

@@ -172,7 +172,7 @@ n8n Workflow
 | `warehouses` | 仓库主数据，保存仓库编号、名称、城市、区域和启用状态。 |
 | `storage_locations` | 库位主数据，保存仓库内 A1、B1、C1 等具体库位、温区和容量。 |
 | `categories` | 商品分类表，保存商品分类名称和默认存储要求。 |
-| `items` | 商品主数据，保存商品名称、品牌、规格、价格、搜索文本、单位和条码。 |
+| `items` | 商品主数据，保存商品名称、品牌、规格、价格、搜索文本、单位、条码和商品图片地址；商品图片可指向本地演示 URL 或后续 OSS URL，供前端与飞书商品表展示。 |
 | `item_reviews` | 商品评论表，保存用户评分、标题、正文和时间。 |
 | `inventory_batches` | 批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。 |
 | `inventory_location_balances` | 库位库存余额表，保存当前可售库存；飞书余额表使用数据库 `id` 作为 `Balance ID`，不展示 `category_id` 或 `item_id`。 |
@@ -468,6 +468,12 @@ agent/                                                      # 项目根目录
 │       ├── procurement-workflow.json                       # 采购工作流
 │       ├── procurement-replenishment-requests-sync.json    # 补货申请表定时同步
 │       ├── procurement-purchase-orders-sync.json           # 采购单表定时同步
+│       ├── order-fulfillment-table-sync.json               # 订单履约表定时同步
+│       ├── order-items-table-sync.json                     # 订单明细表定时同步
+│       ├── items-table-sync.json                           # 商品主数据表定时同步
+│       ├── product-operations-table-sync.json              # 商品运营表定时同步
+│       ├── flash-sales-table-sync.json                     # 秒杀活动表定时同步
+│       ├── flash-sale-claims-table-sync.json               # 秒杀结果表定时同步
 │       ├── delivery-workflow.json                          # 物流工作流
 │       └── operations-workflow.json                        # 运营工作流
 ├── fixtures/                                               # 测试与演示数据
@@ -539,6 +545,12 @@ agent/                                                      # 项目根目录
 | 飞书应用 | 飞书多维表格应用页面配置 | 企业管理后台页面 | 运营驾驶舱、业务操作台、组件绑定和人工验收 |
 | Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约和补货工具 |
 | Workflow | `n8n/workflows/warehouse-purchase-arrival-notify.json` | 采购到货入库通知 | 定时扫描今日到货采购单并触发飞书群通知 |
+| Workflow | `n8n/workflows/order-fulfillment-table-sync.json` | 订单履约表同步 | 每 10 分钟刷新 Order Fulfillment 飞书 read model |
+| Workflow | `n8n/workflows/order-items-table-sync.json` | 订单明细表同步 | 每 10 分钟刷新 Order Items 飞书 read model |
+| Workflow | `n8n/workflows/items-table-sync.json` | 商品主数据表同步 | 每 10 分钟刷新 Items 飞书 read model |
+| Workflow | `n8n/workflows/product-operations-table-sync.json` | 商品运营表同步 | 每 10 分钟刷新 Product Operations 飞书 read model |
+| Workflow | `n8n/workflows/flash-sales-table-sync.json` | 秒杀活动表同步 | 每 10 分钟刷新 Flash Sales 飞书 read model |
+| Workflow | `n8n/workflows/flash-sale-claims-table-sync.json` | 秒杀结果表同步 | 每 10 分钟刷新 Flash Sale Claims 飞书 read model |
 | Workflow | `n8n/workflows/procurement-workflow.json` | Procurement 编排 | 审批和采购单查询 |
 | Workflow | `n8n/workflows/delivery-workflow.json` | Delivery 编排 | 物流查询、异常、case |
 | Workflow | `n8n/workflows/operations-workflow.json` | Operations 编排 | 跨领域摘要和只读汇总 |
@@ -702,7 +714,7 @@ mock-api / PostgreSQL 业务事实
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
 | 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
 | 阶段 G | AImodel 可用 | 流式聊天、工具调用、会话记忆、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 |  |
-| 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、业务操作页、订单与商品运营 read model 同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
+| 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、业务操作页、订单明细、商品、秒杀 read model 同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
 | 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
 
 ### 6.3 任务跟踪表
@@ -789,16 +801,19 @@ mock-api / PostgreSQL 业务事实
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| H1 | 建立 feishu-adapter 基础能力 | [✔] |  | 长连接、多机器人、事件解析、n8n 转发、回复、run log |
+| H1 | 建立 feishu-adapter 基础能力 | [✔] | 2026-06-18 | 长连接、多机器人、事件解析、n8n 转发、回复、run log、table_id-first 表定位 |
 | H2 | 实现仓储飞书表和余额表同步 | [✔] |  | Warehouse Inventory Snapshots / Balances |
 | H3 | 实现采购到仓库存同步和采购飞书表同步 | [✔] |  | arrived_unsynced -> synced、Replenishment Requests、Purchase Orders |
 | H4 | 实现订单发仓确认通知 | [✔] | 2026-06-17 | 支付后发仓确认、候选发仓、物流选择、员工确认后扣减 |
 | H5 | 实现采购到货入库确认通知 | [✔] | 2026-06-17 | 今日到货采购单、飞书通知、员工入库确认 |
 | H6 | 设计飞书应用信息架构和首页草图 | [✔] | 2026-06-17 | 运营驾驶舱 + 业务操作台 |
 | H7 | 搭建飞书应用首页运营驾驶舱 | [✔] | 2026-06-18 | 指标卡、图表、排行榜、待办列表、快捷按钮 |
-| H8 | 实现订单与商品运营飞书表同步 | [✔] | 2026-06-18 | Order Fulfillment / Product Operations read model |
-| H9 | 搭建飞书应用业务操作页 | [✔] | 2026-06-18 | 订单、库存、采购、商品运营页面 |
-| H10 | 实现飞书应用联调与验收门禁 | [ ] |  | Chrome 验证、表格数据校验、关键按钮动作验证 |
+| H8 | 实现订单与订单明细飞书表同步 | [✔] | 2026-06-18 | Order Fulfillment / Order Items read model |
+| H9 | 实现商品飞书表同步 | [✔] | 2026-06-18 | Items read model、商品图片 |
+| H10 | 实现秒杀活动和秒杀结果飞书表同步 | [✔] | 2026-06-18 | Flash Sales / Flash Sale Claims read model |
+| H11 | 搭建飞书应用业务操作页 | [✔] | 2026-06-18 | 订单、库存、采购、商品运营页面 |
+| H12 | 实现飞书应用联调与验收门禁 | [ ] |  | Chrome 验证、表格数据校验、关键按钮动作验证 |
+| H13 | 实现飞书表全量对账策略 | [ ] |  | 源端删除、失效标记、table_id 审计 |
 
 #### 阶段 I：Quality And Delivery
 
@@ -823,9 +838,9 @@ mock-api / PostgreSQL 业务事实
 | 阶段 E | 5 | 5 | 100% |
 | 阶段 F | 8 | 8 | 100% |
 | 阶段 G | 8 | 8 | 100% |
-| 阶段 H | 10 | 9 | 90% |
+| 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| **总计** | **60** | **54** | **90%** |
+| **总计** | **63** | **57** | **90%** |
 
 ### 6.5 阶段实施明细
 
@@ -1807,7 +1822,7 @@ mock-api / PostgreSQL 业务事实
 
 ##### H1：建立 feishu-adapter 基础能力
 
-目标：提供飞书长连接、多机器人事件接入、n8n 转发、飞书回复和 run log 记录能力。
+目标：提供飞书长连接、多机器人事件接入、n8n 转发、飞书回复、run log 记录和 table_id-first 多维表格定位能力。
 
 修改文件：
 
@@ -1826,6 +1841,7 @@ mock-api / PostgreSQL 业务事实
 - `reply_text_message()`：向原消息线程发送机器人回复。
 - `send_group_text_message()`：向指定群主动发送业务通知。
 - `write_run_log()`：记录事件、工作流、工具调用、耗时和回复状态。
+- `ensure_*_table()`：所有飞书表同步优先使用已配置或已记忆的 `table_id` 校验表是否存在，表名只用于首次创建或 `table_id` 缺失时的兜底查找。
 
 验收标准：
 
@@ -1833,10 +1849,12 @@ mock-api / PostgreSQL 业务事实
 - 飞书消息可以按机器人名称转发到对应 n8n webhook。
 - 机器人回复和主动群消息都通过统一 Feishu client 发送。
 - run log 记录 event_id、message_id、bot_name、workflow、status、latency_ms、tool_calls 和 error。
+- 所有表同步端点以 `table_id` 为主定位飞书表；业务人员修改飞书表名后，只要 `table_id` 仍有效，同步不得创建重复表。
+- `table_id` 无效或表被删除时，系统清空失效状态并按当前默认表名或请求表名重新创建。
 
 测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`
 
-##### H2：实现仓储飞书表和余额表同步
+##### H2：实现仓储批次表和余额表同步
 
 目标：将仓储库存快照和库存余额 read model 同步到飞书多维表格，供飞书应用页面引用。
 
@@ -1860,6 +1878,8 @@ mock-api / PostgreSQL 业务事实
 - 接口返回 table_id、table_url、synced_count 和错误摘要。
 - 库存余额表展示 `Balance ID`、Warehouse、Location、Item Name、数量、状态和更新时间。
 - 库存余额表不展示 `Category ID` 或 `Item ID`。
+- 库存批次快照表展示 Warehouse、Location、Category、Item Name、Brand、Spec、Unit、Batch No、数量、风险、同步状态和来源版本，不展示 `Category ID` 或 `Item ID`。
+- 库存批次快照表优先使用 `Source Version` 作为同步幂等身份键，避免同名商品在同一仓库和批次下误更新。
 - `Balance ID` 来源于数据库 `inventory_location_balances.id`；无数据库 fallback 时使用稳定可读的 `fallback:{item_id}:{warehouse_id}:{location}`。
 - 定时任务调用 `/warehouse/inventory-balances-table/sync` 刷新飞书余额表。
 
@@ -2035,50 +2055,131 @@ mock-api / PostgreSQL 业务事实
 
 测试方法：使用 Chrome 打开飞书应用预览并截图/人工核对；检查相关表同步接口返回正常。
 
-##### H8：实现订单与商品运营飞书表同步
+##### H8：实现订单与订单明细飞书表同步
 
-目标：为飞书应用业务操作页补齐订单履约和商品运营真实数据源，使后续页面组件能够绑定真实 read model。
+目标：为飞书应用业务操作页补齐订单履约和订单明细真实数据源，使订单履约中心能够同时查看订单主状态和订单行明细。
 
 修改文件：
 
 - `services/mock-api/app/routers/warehouse/orders.py`
-- `services/mock-api/app/routers/search.py`
-- `services/mock-api/app/routers/category_rankings.py`
 - `services/mock-api/app/warehouse_store.py`
 - `services/feishu-adapter/app/main.py`
 - `services/feishu-adapter/tests/test_feishu_adapter.py`
 - `services/mock-api/tests/test_api.py`
 - `services/mock-api/tests/test_warehouse_store.py`
+- `n8n/workflows/order-fulfillment-table-sync.json`
+- `n8n/workflows/order-items-table-sync.json`
+- `tests/test_department_workflows.py`
 - `DEV_SPEC.md`
 
 实现类/函数：
 
 - `get_order_fulfillment_table_schema()`：返回订单履约飞书表字段契约。
 - `get_order_fulfillment_table_rows()`：返回待付款、待发仓确认、待出库和已发货订单 read model。
-- `get_product_operations_table_schema()`：返回商品运营飞书表字段契约。
-- `get_product_operations_table_rows()`：返回商品、分类、Flash Deals、评分评论和排行榜摘要 read model。
+- `get_order_items_table_schema()`：返回订单明细飞书表字段契约。
+- `get_order_items_table_rows()`：返回订单、商品、仓库、库位、批次、数量和状态组成的订单明细 read model。
 - `sync_order_fulfillment_table()`：创建或复用 `Order Fulfillment` 飞书表并按 `Order ID` upsert 订单履约记录。
-- `sync_product_operations_table()`：创建或复用 `Product Operations` 飞书表并按 `Item ID` upsert 商品运营记录。
+- `sync_order_items_table()`：创建或复用 `Order Items` 飞书表并按 `Order Item ID` upsert 订单明细记录。
+- `Order Fulfillment Table Sync`：每 10 分钟调用 `/orders/fulfillment-table/sync` 刷新订单履约飞书表。
+- `Order Items Table Sync`：每 10 分钟调用 `/orders/items-table/sync` 刷新订单明细飞书表。
 
 验收标准：
 
-- mock-api 提供订单履约和商品运营的 table schema / table rows 端点。
-- feishu-adapter 提供 `/orders/fulfillment-table/sync` 和 `/products/operations-table/sync` 端点。
+- mock-api 提供订单履约和订单明细的 table schema / table rows 端点。
+- feishu-adapter 提供 `/orders/fulfillment-table/sync` 和 `/orders/items-table/sync` 端点。
 - 两个同步端点在配置缺失时返回明确 not configured 响应。
-- 两个同步端点在配置完整时能够自动创建缺失表、补齐字段并 upsert 记录。
+- 两个同步端点在配置完整时能够使用 table_id-first 策略补齐字段并 upsert 记录。
 - 返回结果包含 table_id、table_name、table_url、synced_count 和 items。
 - 字段使用 TalonMart 业务可读名称，不暴露内部数据库主键以外的实现细节。
-- 商品运营表的分类字段使用分类展示名，不直接展示内部 category_id。
+- 订单明细表可以展示 `Order Item ID` 作为业务行标识，但不展示数据库自增 `id`。
+- 订单履约表有独立 n8n 定时同步任务，并调用 `/orders/fulfillment-table/sync` 端点。
+- 订单明细表有独立 n8n 定时同步任务，并调用 `/orders/items-table/sync` 端点。
 
-测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`
+测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
-##### H9：搭建飞书应用业务操作页
+##### H9：实现商品飞书表同步
+
+目标：为飞书应用商品运营中心补齐独立商品主数据表，使员工能够在飞书中查看商品图片、价格、分类、评分、库存摘要和排行榜摘要。
+
+修改文件：
+
+- `services/mock-api/app/warehouse_store.py`
+- `services/mock-api/app/routers/search.py`
+- `services/mock-api/app/routers/product_details.py`
+- `services/mock-api/tests/test_api.py`
+- `services/mock-api/tests/test_warehouse_store.py`
+- `services/feishu-adapter/app/main.py`
+- `services/feishu-adapter/tests/test_feishu_adapter.py`
+- `n8n/workflows/items-table-sync.json`
+- `fixtures/data/items.json`
+- `tests/test_department_workflows.py`
+- `DEV_SPEC.md`
+
+实现类/函数：
+
+- `items.image`：商品主数据图片地址字段，首版保存可直接访问的 URL，后续可替换为 OSS URL。
+- `get_items_table_schema()`：返回商品飞书表字段契约，包含 Image、Item Name、Brand、Category、Price、Rating、Review Count 和 Source Version。
+- `get_items_table_rows()`：返回商品主数据 read model。
+- `sync_items_table()`：创建或复用 `Items` 飞书表并按 `Item ID` upsert 商品记录。
+- `Items Table Sync`：每 10 分钟调用 `/items/table/sync` 刷新商品主数据飞书表。
+
+验收标准：
+
+- `items` 表包含 `image` 字段，fixture 和 PostgreSQL schema 初始化都能写入默认图片 URL。
+- 商品详情和商品飞书 read model 优先使用 `items.image`，缺失时才使用占位图。
+- 飞书商品表包含商品图片 URL，后续 OSS URL 可直接同步展示。
+- 商品表分类字段使用分类展示名，不直接展示内部 `category_id`。
+- 商品表有独立 n8n 定时同步任务，并调用 `/items/table/sync` 端点。
+
+测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
+
+##### H10：实现秒杀活动和秒杀结果飞书表同步
+
+目标：为飞书应用商品运营中心补齐秒杀活动和秒杀结果数据源，使运营人员能查看活动配置、库存配额、实时结果和关联订单。
+
+修改文件：
+
+- `services/mock-api/app/routers/flash_sales.py`
+- `services/mock-api/app/warehouse_store.py`
+- `services/mock-api/tests/test_api.py`
+- `services/mock-api/tests/test_warehouse_store.py`
+- `services/feishu-adapter/app/main.py`
+- `services/feishu-adapter/tests/test_feishu_adapter.py`
+- `n8n/workflows/flash-sales-table-sync.json`
+- `n8n/workflows/flash-sale-claims-table-sync.json`
+- `tests/test_department_workflows.py`
+- `DEV_SPEC.md`
+
+实现类/函数：
+
+- `get_flash_sales_table_schema()`：返回秒杀活动飞书表字段契约。
+- `get_flash_sales_table_rows()`：返回活动商品、价格、库存配额、状态和时间窗口 read model。
+- `get_flash_sale_claims_table_schema()`：返回秒杀结果飞书表字段契约。
+- `get_flash_sale_claims_table_rows()`：返回用户、商品、订单和结果状态 read model。
+- `sync_flash_sales_table()`：创建或复用 `Flash Sales` 飞书表并按 `Flash Sale ID` upsert 活动记录。
+- `sync_flash_sale_claims_table()`：创建或复用 `Flash Sale Claims` 飞书表并按 `Claim ID` upsert 抢购结果记录。
+- `Flash Sales Table Sync`：每 10 分钟调用 `/flash-sales/table/sync` 刷新秒杀活动飞书表。
+- `Flash Sale Claims Table Sync`：每 10 分钟调用 `/flash-sales/claims-table/sync` 刷新秒杀结果飞书表。
+
+验收标准：
+
+- mock-api 提供秒杀活动和秒杀结果的 table schema / table rows 端点。
+- feishu-adapter 提供 `/flash-sales/table/sync` 和 `/flash-sales/claims-table/sync` 端点。
+- 秒杀活动表展示商品名称、活动价、商品原价、库存配额、状态和时间窗口。
+- 秒杀结果表展示用户、商品、订单、状态和时间，不展示内部数据库实现字段。
+- 秒杀活动表和秒杀结果表都有独立 n8n 定时同步任务。
+
+测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
+
+##### H11：搭建飞书应用业务操作页
 
 目标：搭建订单、库存、采购和商品运营页面，让员工能从飞书应用处理核心业务，并形成接近应用预览图的业务操作台布局。
 
 修改文件：
 
 - 飞书多维表格应用页面配置
+- `n8n/workflows/product-operations-table-sync.json`
+- `tests/test_department_workflows.py`
 - `DEV_SPEC.md`
 
 实现类/函数：
@@ -2087,6 +2188,7 @@ mock-api / PostgreSQL 业务事实
 - 库存管理中心：使用库存状态摘要、库存余额列表、低库存视图和仓库/库位筛选支撑库存处理。
 - 采购管理中心：使用采购待办摘要、补货申请列表、采购单列表和今日到货入口支撑采购处理。
 - 商品运营中心：使用商品运营摘要、商品运营列表、Flash Deals/排行榜字段和筛选入口支撑商品运营。
+- `Product Operations Table Sync`：每 10 分钟调用 `/products/operations-table/sync` 刷新商品运营飞书表。
 
 验收标准：
 
@@ -2096,10 +2198,11 @@ mock-api / PostgreSQL 业务事实
 - 页面命名、组件标题和字段展示与 TalonMart 业务术语一致。
 - 页面布局避免只堆一个空表，应呈现“顶部看状态、下方处理列表”的业务操作台结构。
 - 所有页面组件只能绑定真实飞书表或明确的空状态，不展示误导性假数据。
+- 商品运营表有独立 n8n 定时同步任务，并调用 `/products/operations-table/sync` 端点。
 
-测试方法：使用 Chrome 逐页预览；人工核对页面组件、数据源、筛选行为和业务操作台布局。
+测试方法：使用 Chrome 逐页预览；人工核对页面组件、数据源、筛选行为和业务操作台布局；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
-##### H10：实现飞书应用联调与验收门禁
+##### H12：实现飞书应用联调与验收门禁
 
 目标：验证飞书应用、feishu-adapter、多维表格同步和业务 API 的端到端协作。
 
@@ -2124,6 +2227,30 @@ mock-api / PostgreSQL 业务事实
 - 任务结束摘要包含飞书页面验证结果、未接入的数据源和后续补齐任务。
 
 测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`；Chrome 人工验收飞书应用页面。
+
+##### H13：实现飞书表全量对账策略
+
+目标：为所有飞书表同步补齐源端删除和飞书旧记录处理策略，使飞书表不因历史同步产生长期脏数据。
+
+修改文件：
+
+- `services/feishu-adapter/app/main.py`
+- `services/feishu-adapter/tests/test_feishu_adapter.py`
+- `DEV_SPEC.md`
+
+实现类/函数：
+
+- `reconcile_missing_records()`：比较本次源端 keys 和飞书现有 keys。
+- `mark_feishu_record_inactive()`：对源端已不存在的飞书记录写入 inactive 状态或同步备注。
+- `delete_feishu_record()`：在显式参数允许时删除源端已不存在的飞书记录。
+
+验收标准：
+
+- 默认策略为标记 inactive，不直接删除飞书记录。
+- 显式传入 `delete_missing=true` 时才允许删除源端不存在的飞书记录。
+- 对账结果返回 active_count、inactive_count、deleted_count 和 skipped_count。
+
+测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`
 
 #### 阶段 I：Quality And Delivery
 

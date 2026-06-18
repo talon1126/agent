@@ -78,6 +78,7 @@ items = Table(
     Column("unit", String, nullable=False),
     Column("barcode", String, nullable=False),
     Column("shelf_life_days", Integer, nullable=False, default=365),
+    Column("image", Text, nullable=False, default=""),
 )
 
 item_reviews = Table(
@@ -380,7 +381,7 @@ WAREHOUSE_TABLE_COMMENTS = {
     "warehouses": "仓库主数据表，保存企业仓库的编号、名称、城市和启用状态。",
     "storage_locations": "具体库位表，保存仓库内 A1、B1、C1 等可存储位置及容量属性。",
     "categories": "商品分类表，保存纸品、乳制品、饮料等业务分类和存储要求。",
-    "items": "商品主数据表，保存每个商品的名称、品牌、规格、单位和条码。",
+    "items": "商品主数据表，保存每个商品的名称、品牌、规格、单位、条码和图片地址。",
     "item_reviews": "商品评论表，保存用户对商品的星级评分、标题和正文。",
     "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
     "inventory_location_balances": "批次级库位库存余额表，保存员工确认发仓扣减和退回后的当前可售库存。",
@@ -433,6 +434,7 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "unit": "库存计量单位。",
         "barcode": "商品条码。",
         "shelf_life_days": "商品实际保质期天数，用于采购到仓同步时计算批次过期日期。",
+        "image": "商品主图 URL，可指向本地演示图片或后续 OSS 图片地址。",
     },
     "item_reviews": {
         "id": "评论自增整数主键。",
@@ -766,6 +768,15 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
                 connection.execute(text("ALTER TABLE items ADD COLUMN price NUMERIC(12, 2) NOT NULL DEFAULT 0"))
             if "search_text" not in item_columns:
                 connection.execute(text("ALTER TABLE items ADD COLUMN search_text TEXT NOT NULL DEFAULT ''"))
+            if "image" not in item_columns:
+                connection.execute(text("ALTER TABLE items ADD COLUMN image TEXT NOT NULL DEFAULT ''"))
+            connection.execute(
+                text(
+                    "UPDATE items "
+                    "SET image = 'https://static.talonmart.local/products/' || item_id || '.jpg' "
+                    "WHERE image = ''"
+                )
+            )
             connection.execute(
                 text(
                     "UPDATE items "
@@ -892,9 +903,32 @@ def item_search_text(row: dict[str, Any]) -> str:
     )
 
 
+def default_item_image_url(row: dict[str, Any]) -> str:
+    """Return a deterministic product image URL for seeded catalog rows.
+
+    Args:
+        row: Item fixture row. The function reads `item_id` so the generated
+            URL is stable across reseeds and can later be replaced by an OSS URL
+            without changing table contracts.
+
+    Returns:
+        A URL string suitable for frontend image tags and Feishu text/url fields.
+    """
+
+    item_id = str(row.get("item_id") or "item")
+    return f"https://static.talonmart.local/products/{item_id}.jpg"
+
+
 def load_item_fixture_rows(fixture_dir: Path) -> list[dict[str, Any]]:
     rows = load_fixture_rows(fixture_dir, "items.json")
-    return [{**row, "search_text": item_search_text(row)} for row in rows]
+    return [
+        {
+            **row,
+            "image": str(row.get("image") or default_item_image_url(row)),
+            "search_text": item_search_text(row),
+        }
+        for row in rows
+    ]
 
 
 def default_item_rank_event_rows(item_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1130,6 +1164,7 @@ def build_item_search_sql():
             items.brand,
             items.spec,
             items.price,
+            items.image,
             items.category_id,
             categories.category_name,
             pdb.score(items.item_id) AS score
@@ -1162,6 +1197,7 @@ def build_item_category_search_sql():
             items.brand,
             items.spec,
             items.price,
+            items.image,
             items.category_id,
             categories.category_name,
             1.0 AS score
@@ -1192,6 +1228,7 @@ def build_item_catalog_listing_sql():
             items.brand,
             items.spec,
             items.price,
+            items.image,
             items.category_id,
             categories.category_name,
             1.0 AS score
@@ -1754,6 +1791,7 @@ class WarehouseRepository:
                 items.c.spec,
                 items.c.category_id,
                 items.c.price,
+                items.c.image,
                 items.c.unit,
                 items.c.barcode,
             )
@@ -1948,6 +1986,34 @@ class WarehouseRepository:
                 .one_or_none()
             )
         return dict(row) if row else None
+
+    def list_flash_sale_claims(
+        self,
+        *,
+        flash_sale_id: int | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return flash sale claim rows for Feishu read-model synchronization.
+
+        Args:
+            flash_sale_id: Optional flash sale id filter.
+            status: Optional claim status filter.
+            limit: Maximum number of claim rows returned to callers.
+
+        Returns:
+            Claim dictionaries ordered by id so scheduled syncs are stable.
+        """
+
+        capped_limit = max(1, min(int(limit or 100), 500))
+        statement = select(flash_sale_claims).order_by(flash_sale_claims.c.id).limit(capped_limit)
+        if flash_sale_id is not None:
+            statement = statement.where(flash_sale_claims.c.flash_sale_id == int(flash_sale_id))
+        if status:
+            statement = statement.where(flash_sale_claims.c.status == status)
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement).mappings().all()
+        return [dict(row) for row in rows]
 
     def mark_flash_sale_claim_ordered(
         self,

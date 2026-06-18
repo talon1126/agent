@@ -237,6 +237,12 @@ agent/                                                      # 项目根目录
 │       ├── procurement-workflow.json                       # 采购工作流
 │       ├── procurement-replenishment-requests-sync.json    # 补货申请表定时同步
 │       ├── procurement-purchase-orders-sync.json           # 采购单表定时同步
+│       ├── order-fulfillment-table-sync.json               # 订单履约表定时同步
+│       ├── order-items-table-sync.json                     # 订单明细表定时同步
+│       ├── items-table-sync.json                           # 商品主数据表定时同步
+│       ├── product-operations-table-sync.json              # 商品运营表定时同步
+│       ├── flash-sales-table-sync.json                     # 秒杀活动表定时同步
+│       ├── flash-sale-claims-table-sync.json               # 秒杀结果表定时同步
 │       ├── delivery-workflow.json                          # 物流工作流
 │       └── operations-workflow.json                        # 运营工作流
 ├── fixtures/                                               # 测试与演示数据
@@ -308,6 +314,12 @@ agent/                                                      # 项目根目录
 | 飞书应用 | 飞书多维表格应用页面配置 | 企业管理后台页面 | 运营驾驶舱、业务操作台、组件绑定和人工验收 |
 | Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约和补货工具 |
 | Workflow | `n8n/workflows/warehouse-purchase-arrival-notify.json` | 采购到货入库通知 | 定时扫描今日到货采购单并触发飞书群通知 |
+| Workflow | `n8n/workflows/order-fulfillment-table-sync.json` | 订单履约表同步 | 每 10 分钟刷新 Order Fulfillment 飞书 read model |
+| Workflow | `n8n/workflows/order-items-table-sync.json` | 订单明细表同步 | 每 10 分钟刷新 Order Items 飞书 read model |
+| Workflow | `n8n/workflows/items-table-sync.json` | 商品主数据表同步 | 每 10 分钟刷新 Items 飞书 read model |
+| Workflow | `n8n/workflows/product-operations-table-sync.json` | 商品运营表同步 | 每 10 分钟刷新 Product Operations 飞书 read model |
+| Workflow | `n8n/workflows/flash-sales-table-sync.json` | 秒杀活动表同步 | 每 10 分钟刷新 Flash Sales 飞书 read model |
+| Workflow | `n8n/workflows/flash-sale-claims-table-sync.json` | 秒杀结果表同步 | 每 10 分钟刷新 Flash Sale Claims 飞书 read model |
 | Workflow | `n8n/workflows/procurement-workflow.json` | Procurement 编排 | 审批和采购单查询 |
 | Workflow | `n8n/workflows/delivery-workflow.json` | Delivery 编排 | 物流查询、异常、case |
 | Workflow | `n8n/workflows/operations-workflow.json` | Operations 编排 | 跨领域摘要和只读汇总 |

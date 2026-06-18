@@ -74,6 +74,7 @@ def build_product_detail(
     spec = str(item["spec"])
     unit = str(item.get("unit") or "")
     barcode = str(item.get("barcode") or "")
+    image_url = str(item.get("image") or "").strip() or product_image_url(str(item["item_id"]), item_name)
     return {
         "item_id": str(item["item_id"]),
         "item_name": item_name,
@@ -84,7 +85,7 @@ def build_product_detail(
         "currency": "USD",
         "images": [
             {
-                "url": product_image_url(str(item["item_id"]), item_name),
+                "url": image_url,
                 "alt": f"{item_name} main product image",
                 "sort_order": 1,
             }

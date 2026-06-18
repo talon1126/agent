@@ -52,18 +52,6 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
         "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_name"],
     },
     {
-        "name": "Category ID",
-        "source": "categories.category_id",
-        "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_id"],
-    },
-    {
-        "name": "Item ID",
-        "source": "items.item_id",
-        "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["item_id"],
-    },
-    {
         "name": "Item Name",
         "source": "items.item_name",
         "type": "text",
@@ -495,8 +483,6 @@ def batch_inventory_table_fields(row: dict[str, Any]) -> dict[str, Any]:
         "Warehouse ID": row["warehouse_id"],
         "Location": row["location_code"],
         "Category": row["category_name"],
-        "Category ID": row["category_id"],
-        "Item ID": row["item_id"],
         "Item Name": row["item_name"],
         "Brand": row["brand"],
         "Spec": row["spec"],
