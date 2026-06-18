@@ -2168,10 +2168,20 @@ def test_product_operations_table_sync_upserts_by_item_id(monkeypatch) -> None:
         if url == "http://mock-api.local/products/operations/table-schema":
             return httpx.Response(
                 200,
-                json={"ok": True, "fields": [{"name": "Item ID", "type": "text"}]},
+                json={
+                    "ok": True,
+                    "fields": [
+                        {"name": "Item ID", "type": "text"},
+                        {"name": "Flash Sale Price", "type": "number"},
+                        {"name": "Ranking Score", "type": "number"},
+                    ],
+                },
             )
         if url == "http://mock-api.local/products/operations/table-rows":
-            return httpx.Response(200, json=product_operations_table_rows_response())
+            payload = product_operations_table_rows_response()
+            payload["items"][0]["fields"]["Flash Sale Price"] = ""
+            payload["items"][0]["fields"]["Ranking Score"] = ""
+            return httpx.Response(200, json=payload)
         if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
         if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_product_operations/fields":
@@ -2220,6 +2230,8 @@ def test_product_operations_table_sync_upserts_by_item_id(monkeypatch) -> None:
     update_request = next(request for request in requests if request.method == "PUT")
     update_fields = json.loads(update_request.content)["fields"]
     assert update_fields["Item ID"] == "item_wireless_earbuds"
+    assert "Flash Sale Price" not in update_fields
+    assert "Ranking Score" not in update_fields
     assert "Category ID" not in update_fields
     assert "Database ID" not in update_fields
 

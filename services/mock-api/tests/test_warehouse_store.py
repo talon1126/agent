@@ -416,6 +416,27 @@ def test_warehouse_repository_searches_items_by_category_without_keyword(tmp_pat
     assert all(isinstance(item["price"], float) for item in rows)
 
 
+def test_warehouse_repository_lists_catalog_without_keyword_or_category(tmp_path: Path) -> None:
+    """Protect Product Operations table sync from empty pg_search queries.
+
+    Feishu Product Operations can request a full catalog refresh without a
+    category filter. That path must return deterministic catalog rows instead of
+    sending an empty string into pg_search and producing an empty table.
+    """
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    rows = repository.search_items(limit=3)
+
+    assert len(rows) == 3
+    assert all(item["item_id"] for item in rows)
+    assert all(item["category_name"] for item in rows)
+    assert all(isinstance(item["price"], float) for item in rows)
+
+
 def test_item_pg_search_index_uses_chinese_compatible_tokenizer() -> None:
     statement = build_item_pg_search_index_sql()
 

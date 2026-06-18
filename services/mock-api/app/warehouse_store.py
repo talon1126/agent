@@ -1174,6 +1174,35 @@ def build_item_category_search_sql():
     )
 
 
+def build_item_catalog_listing_sql():
+    """Build the deterministic catalog listing statement for operations sync.
+
+    Returns:
+        A SQLAlchemy text statement that lists catalog products with display
+        category names when no keyword or category filter is provided. This path
+        avoids running pg_search with an empty query during Feishu read-model
+        synchronization.
+    """
+
+    return text(
+        """
+        SELECT
+            items.item_id,
+            items.item_name,
+            items.brand,
+            items.spec,
+            items.price,
+            items.category_id,
+            categories.category_name,
+            1.0 AS score
+        FROM items
+        JOIN categories ON categories.category_id = items.category_id
+        ORDER BY items.category_id, items.item_id
+        LIMIT :limit
+        """
+    )
+
+
 def ensure_item_pg_search_index(engine: Engine) -> None:
     if engine.dialect.name != "postgresql":
         return
@@ -1493,14 +1522,18 @@ class WarehouseRepository:
             router because search results and balance snapshots have different
             fallback sources.
         """
-        if category_id and not (query or "").strip():
+        normalized_query = (query or "").strip()
+        if category_id and not normalized_query:
             statement = build_item_category_search_sql()
             params = {"category_id": category_id, "limit": limit}
+        elif not category_id and not normalized_query:
+            statement = build_item_catalog_listing_sql()
+            params = {"limit": limit}
         else:
             statement = build_item_search_sql()
             params = {
                 "category_id": category_id,
-                "query": (query or "").strip(),
+                "query": normalized_query,
                 "limit": limit,
             }
         with self.engine.connect() as connection:

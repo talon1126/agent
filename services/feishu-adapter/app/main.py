@@ -1895,7 +1895,9 @@ def create_app(
 
         Returns:
             Field values normalized with the same single-select and date logic
-            used by inventory table sync. Missing specs leave fields unchanged.
+            used by inventory table sync. Empty numeric and date values are
+            omitted because Feishu rejects blank strings for typed fields.
+            Missing specs leave fields unchanged.
         """
 
         if not field_specs:
@@ -1905,7 +1907,15 @@ def create_app(
             for field in field_specs
             if str(field.get("field_name") or "").strip()
         }
-        return normalize_inventory_record_fields(fields, fields_by_name)
+        normalized = normalize_inventory_record_fields(fields, fields_by_name)
+        return {
+            field_name: value
+            for field_name, value in normalized.items()
+            if not (
+                fields_by_name.get(field_name, {}).get("type") in {2, 5}
+                and value in {None, ""}
+            )
+        }
 
     def upsert_procurement_table_record(
         *,
