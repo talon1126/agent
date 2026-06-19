@@ -1,3 +1,7 @@
+import base64
+import hashlib
+import hmac
+import mimetypes
 import os
 import logging
 import threading
@@ -8,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from urllib.parse import quote, urlparse
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -444,6 +449,77 @@ def save_feishu_table_state(state_path: str, state: dict[str, dict[str, str]]) -
     temp_path.replace(path)
 
 
+def load_feishu_image_token_cache(cache_path: str) -> dict[str, dict[str, str]]:
+    """Load persisted Feishu image tokens keyed by source image URL.
+
+    Feishu file uploads are rate-limited and relatively expensive. Product
+    table syncs may run every few minutes, so the adapter keeps the last known
+    content hash and Feishu `file_token` for each source image URL in a local
+    JSON file. A missing or malformed cache degrades to an empty mapping because
+    image upload failures must not block business table synchronization.
+
+    Args:
+        cache_path: JSON path from `FEISHU_IMAGE_TOKEN_CACHE_PATH`. An empty
+            path disables durable cache persistence while still allowing in
+            memory reuse during the current process.
+
+    Returns:
+        A mapping of image URL to cache entries containing `content_hash` and
+        `file_token` strings.
+    """
+
+    if not cache_path:
+        return {}
+    path = Path(cache_path)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        logger.warning("failed to load Feishu image token cache from %s: %s", path, error)
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    cache: dict[str, dict[str, str]] = {}
+    for image_url, value in payload.items():
+        if not isinstance(image_url, str) or not isinstance(value, dict):
+            continue
+        file_token = str(value.get("file_token") or "").strip()
+        content_hash = str(value.get("content_hash") or "").strip()
+        if image_url and file_token and content_hash:
+            cache[image_url] = {
+                "content_hash": content_hash,
+                "file_token": file_token,
+            }
+    return cache
+
+
+def save_feishu_image_token_cache(cache_path: str, cache: dict[str, dict[str, str]]) -> None:
+    """Persist the Feishu image-token cache without interrupting table syncs.
+
+    Args:
+        cache_path: JSON path from `FEISHU_IMAGE_TOKEN_CACHE_PATH`. An empty
+            path intentionally disables disk writes.
+        cache: Complete in-memory cache to persist.
+
+    Side Effects:
+        Creates the parent directory and atomically replaces the JSON cache
+        file. Callers catch any `OSError` so a local disk problem cannot make a
+        Feishu table sync fail after the row itself was already uploaded.
+    """
+
+    if not cache_path:
+        return
+    path = Path(cache_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp")
+    temp_path.write_text(
+        json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    temp_path.replace(path)
+
+
 def _clean_bot_name(value: str) -> str:
     name = value.strip().lower().replace("-", "_")
     return name or "default"
@@ -597,6 +673,13 @@ def create_app(
     table_state_path = os.getenv("FEISHU_TABLE_STATE_PATH", "").strip()
     durable_table_state = load_feishu_table_state(table_state_path)
     durable_table_state_lock = threading.RLock()
+    image_token_cache_path = os.getenv("FEISHU_IMAGE_TOKEN_CACHE_PATH", "").strip()
+    image_token_cache = load_feishu_image_token_cache(image_token_cache_path)
+    image_token_cache_lock = threading.RLock()
+    aliyun_oss_access_key_id = os.getenv("ALIYUN_OSS_ACCESS_KEY_ID", "").strip()
+    aliyun_oss_access_key_secret = os.getenv("ALIYUN_OSS_ACCESS_KEY_SECRET", "").strip()
+    aliyun_oss_endpoint = os.getenv("ALIYUN_OSS_ENDPOINT", "").strip()
+    aliyun_oss_bucket = os.getenv("ALIYUN_OSS_BUCKET", "").strip()
 
     def table_state_value(
         *,
@@ -1279,6 +1362,8 @@ def create_app(
             "single_select": 3,
             "date": 5,
             "datetime": 5,
+            "image": 17,
+            "attachment": 17,
         }
         field_name = str(field.get("name") or field.get("field_name") or "").strip()
         field_type = str(field.get("type") or "text").strip()
@@ -4138,6 +4223,268 @@ def create_app(
             "message": message,
         }
 
+    def oss_signed_url(*, bucket: str, object_key: str) -> str:
+        """Create a short-lived Aliyun OSS GET URL for private product images.
+
+        Args:
+            bucket: OSS bucket that stores product images.
+            object_key: Object path inside the bucket, without a leading slash.
+
+        Returns:
+            A signed HTTPS URL that the adapter can download before uploading
+            the image content to Feishu.
+
+        Raises:
+            RuntimeError: If any required OSS credential or location setting is
+                missing. The caller reports this as a non-blocking image upload
+                failure so the business row still syncs.
+        """
+
+        if not (
+            aliyun_oss_access_key_id
+            and aliyun_oss_access_key_secret
+            and aliyun_oss_endpoint
+            and bucket
+            and object_key
+        ):
+            raise RuntimeError("Aliyun OSS credentials are required for private OSS image URLs")
+        endpoint = aliyun_oss_endpoint.removeprefix("https://").removeprefix("http://").rstrip("/")
+        normalized_key = object_key.lstrip("/")
+        expires = int(datetime.now(UTC).timestamp()) + 900
+        string_to_sign = f"GET\n\n\n{expires}\n/{bucket}/{normalized_key}"
+        signature = base64.b64encode(
+            hmac.new(
+                aliyun_oss_access_key_secret.encode("utf-8"),
+                string_to_sign.encode("utf-8"),
+                hashlib.sha1,
+            ).digest()
+        ).decode("utf-8")
+        encoded_key = quote(normalized_key, safe="/")
+        return (
+            f"https://{bucket}.{endpoint}/{encoded_key}"
+            f"?OSSAccessKeyId={quote(aliyun_oss_access_key_id, safe='')}"
+            f"&Expires={expires}"
+            f"&Signature={quote(signature, safe='')}"
+        )
+
+    def resolve_image_source_url(image_url: str) -> str:
+        """Resolve a database image reference into a downloadable URL.
+
+        Args:
+            image_url: Raw value from `items.image`. It may be a public HTTPS
+                URL, an `oss://bucket/key` URI, or a bare OSS object key when
+                the bucket is supplied by environment configuration.
+
+        Returns:
+            A URL suitable for `httpx.Client.get`.
+
+        Raises:
+            RuntimeError: If a private OSS-style reference cannot be signed
+                because Aliyun OSS configuration is incomplete.
+        """
+
+        value = str(image_url or "").strip()
+        if not value:
+            raise RuntimeError("Image URL is empty")
+        parsed = urlparse(value)
+        if parsed.scheme in {"http", "https"}:
+            return value
+        if parsed.scheme == "oss":
+            bucket = parsed.netloc or aliyun_oss_bucket
+            return oss_signed_url(bucket=bucket, object_key=parsed.path.lstrip("/"))
+        if aliyun_oss_bucket:
+            return oss_signed_url(bucket=aliyun_oss_bucket, object_key=value)
+        raise RuntimeError("Image URL is not directly downloadable and OSS bucket is not configured")
+
+    def download_image_content(image_url: str) -> dict[str, Any]:
+        """Download product image bytes for Feishu upload.
+
+        Args:
+            image_url: Raw source image URL from the Items read model.
+
+        Returns:
+            A dictionary containing resolved URL, image bytes, content hash,
+            guessed filename, and MIME type.
+
+        Raises:
+            RuntimeError: If the source URL cannot be resolved or the download
+                response is not successful.
+        """
+
+        resolved_url = resolve_image_source_url(image_url)
+        response = client.get(resolved_url)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            status_code = error.response.status_code
+            reason_phrase = error.response.reason_phrase or "HTTP error"
+            raise RuntimeError(
+                f"Unable to download product image: HTTP {status_code} {reason_phrase}"
+            ) from error
+        content = response.content
+        if not content:
+            raise RuntimeError("Downloaded product image is empty")
+        content_hash = hashlib.sha256(content).hexdigest()
+        parsed_path = urlparse(resolved_url).path
+        filename = Path(parsed_path).name or "product-image.jpg"
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
+        mime_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        return {
+            "resolved_url": resolved_url,
+            "content": content,
+            "content_hash": content_hash,
+            "filename": filename,
+            "mime_type": mime_type,
+        }
+
+    def upload_image_to_feishu(
+        *,
+        token: str,
+        filename: str,
+        content: bytes,
+        mime_type: str,
+    ) -> str:
+        """Upload one product image to Feishu and return its `file_token`.
+
+        Args:
+            token: Tenant access token used for Feishu OpenAPI calls.
+            filename: Display filename sent with the multipart upload.
+            content: Image bytes downloaded from the source catalog URL.
+            mime_type: MIME type used by Feishu to classify the attachment.
+
+        Returns:
+            Feishu `file_token` that can be written into a Bitable image or
+            attachment field as `[{"file_token": "..."}]`.
+
+        Raises:
+            RuntimeError: If Feishu rejects the upload or omits `file_token`.
+        """
+
+        response = client.post(
+            f"{api_base_url}/open-apis/drive/v1/medias/upload_all",
+            headers={"Authorization": f"Bearer {token}"},
+            data={
+                "file_name": filename,
+                "parent_type": "bitable_image",
+                "parent_node": table_app_token,
+                "size": str(len(content)),
+            },
+            files={"file": (filename, content, mime_type)},
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise RuntimeError(f"Unable to upload image to Feishu: {describe_http_error(error)}") from error
+        payload = response.json()
+        if payload.get("code", 0) != 0:
+            raise RuntimeError(f"Feishu image upload failed: {payload}")
+        file_token = str((payload.get("data") or {}).get("file_token") or "").strip()
+        if not file_token:
+            raise RuntimeError(f"Feishu image upload did not return file_token: {payload}")
+        return file_token
+
+    def get_or_upload_feishu_image_token(*, token: str, image_url: str) -> dict[str, Any]:
+        """Return a cached or newly uploaded Feishu image token for a URL.
+
+        Args:
+            token: Tenant access token used when a new upload is required.
+            image_url: Raw image URL from the Items read model.
+
+        Returns:
+            A dictionary with `file_token`, `content_hash`, and `status` where
+            status is either `uploaded` or `reused`.
+
+        Side Effects:
+            Downloads the image to compute its content hash, uploads it to
+            Feishu when the cached hash differs, and persists the cache file
+            after a successful upload.
+        """
+
+        image = download_image_content(image_url)
+        content_hash = str(image["content_hash"])
+        with image_token_cache_lock:
+            cached = image_token_cache.get(image_url)
+            if cached and cached.get("content_hash") == content_hash and cached.get("file_token"):
+                return {
+                    "file_token": cached["file_token"],
+                    "content_hash": content_hash,
+                    "status": "reused",
+                }
+        file_token = upload_image_to_feishu(
+            token=token,
+            filename=str(image["filename"]),
+            content=image["content"],
+            mime_type=str(image["mime_type"]),
+        )
+        with image_token_cache_lock:
+            image_token_cache[image_url] = {
+                "content_hash": content_hash,
+                "file_token": file_token,
+            }
+            try:
+                save_feishu_image_token_cache(image_token_cache_path, image_token_cache)
+            except OSError as error:
+                logger.warning("failed to persist Feishu image token cache: %s", error)
+        return {
+            "file_token": file_token,
+            "content_hash": content_hash,
+            "status": "uploaded",
+        }
+
+    def build_items_table_record_fields(
+        *,
+        token: str,
+        source_fields: dict[str, Any],
+        image_upload_summary: dict[str, Any],
+        current_table_fields: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Convert Items read-model fields into Feishu-ready record fields.
+
+        Args:
+            token: Tenant access token used for image uploads.
+            source_fields: Field dictionary returned by mock-api. It must keep
+                `Image URL` as the raw text value and may omit `Product Image`.
+            image_upload_summary: Mutable per-sync summary that receives upload
+                counts and non-blocking failure details.
+            current_table_fields: Feishu table fields that already exist on the
+                target Items table. Legacy tables may still contain an `Image`
+                text field from the first H9 implementation, and this function
+                backfills that field only when it is actually present.
+
+        Returns:
+            A copy of the source fields where `Product Image` contains a Feishu
+            `file_token` list when upload succeeds. On failure the raw `Image
+            URL` remains and `Product Image` is omitted. Existing legacy
+            `Image` columns receive the same raw image reference as `Image URL`.
+        """
+
+        fields = dict(source_fields)
+        image_url = str(fields.get("Image URL") or "").strip()
+        fields.pop("Image", None)
+        fields.pop("Product Image", None)
+        if not image_url:
+            return fields
+        legacy_image_field = current_table_fields.get("Image") or {}
+        if legacy_image_field.get("type") == 1:
+            fields["Image"] = image_url
+        try:
+            upload_result = get_or_upload_feishu_image_token(token=token, image_url=image_url)
+        except (RuntimeError, httpx.HTTPError, ValueError) as error:
+            image_upload_summary["failed_count"] += 1
+            image_upload_summary["failures"].append(
+                {
+                    "image_url": image_url,
+                    "reason": str(error),
+                }
+            )
+            return fields
+        if upload_result["status"] == "reused":
+            image_upload_summary["reused_count"] += 1
+        else:
+            image_upload_summary["uploaded_count"] += 1
+        fields["Product Image"] = [{"file_token": upload_result["file_token"]}]
+        return fields
+
     def sync_business_table(
         *,
         request_payload: dict[str, Any],
@@ -4151,6 +4498,8 @@ def create_app(
         not_configured_message: str,
         failure_error: str,
         item_builder: Any,
+        field_transformer: Any | None = None,
+        response_extras: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Sync a mock-api business read model into a Feishu bitable table.
 
@@ -4170,6 +4519,11 @@ def create_app(
             failure_error: Error code returned for runtime sync failures.
             item_builder: Callable that converts source fields and upsert result
                 into the compact `items[]` response row.
+            field_transformer: Optional callable that can adapt source fields
+                before Feishu upsert. Items uses this to convert raw image URLs
+                into Feishu `file_token` attachments.
+            response_extras: Optional extra keys appended to successful sync
+                responses, such as non-blocking image upload summaries.
 
         Returns:
             A sync result containing table metadata, count, and per-row actions.
@@ -4203,11 +4557,18 @@ def create_app(
                 schema_endpoint=schema_endpoint,
                 field_specs=field_specs,
             )
+            current_table_fields = (
+                fields_by_name_for_table(token=token, table_identifier=table_result["table_id"])
+                if field_transformer is not None
+                else {}
+            )
             synced_items: list[dict[str, Any]] = []
             for row in rows:
                 if not isinstance(row, dict) or not isinstance(row.get("fields"), dict):
                     continue
                 fields = row["fields"]
+                if field_transformer is not None:
+                    fields = field_transformer(fields, token, current_table_fields)
                 upsert_result = upsert_procurement_table_record(
                     token=token,
                     table_identifier=table_result["table_id"],
@@ -4230,7 +4591,7 @@ def create_app(
                     }
                 ],
             )
-            return {
+            result = {
                 "ok": True,
                 "configured": True,
                 "synced_count": len(synced_items),
@@ -4240,6 +4601,9 @@ def create_app(
                 "table_name": table_name,
                 "table_url": procurement_table_url_for(state, table_result["table_id"]),
             }
+            if response_extras:
+                result.update(response_extras)
+            return result
         except (httpx.HTTPError, RuntimeError) as error:
             latency_ms = (perf_counter() - started) * 1000
             message = describe_http_error(error) if isinstance(error, httpx.HTTPError) else str(error)
@@ -4410,6 +4774,12 @@ def create_app(
             upserts records by `Item ID`.
         """
 
+        image_upload_summary = {
+            "uploaded_count": 0,
+            "reused_count": 0,
+            "failed_count": 0,
+            "failures": [],
+        }
         return sync_business_table(
             request_payload={
                 "category_id": request.category_id,
@@ -4424,6 +4794,13 @@ def create_app(
             not_configured_error="missing_feishu_items_table_config",
             not_configured_message="Feishu items table sync is not configured.",
             failure_error="feishu_items_table_sync_failed",
+            field_transformer=lambda fields, token, current_table_fields: build_items_table_record_fields(
+                token=token,
+                source_fields=fields,
+                image_upload_summary=image_upload_summary,
+                current_table_fields=current_table_fields,
+            ),
+            response_extras={"image_upload": image_upload_summary},
             item_builder=lambda row, fields, result: {
                 "item_id": fields.get("Item ID") or row.get("item_id"),
                 "action": result["action"],

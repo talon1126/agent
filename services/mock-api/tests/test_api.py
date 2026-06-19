@@ -752,7 +752,11 @@ def test_items_table_schema_and_rows_expose_catalog_fields(monkeypatch):
     assert schema["ok"] is True
     assert schema["schema_id"] == "items"
     field_names = [field["name"] for field in schema["fields"]]
-    assert field_names[:4] == ["Item ID", "Image", "Item Name", "Brand"]
+    field_types = {field["name"]: field["type"] for field in schema["fields"]}
+    assert field_names[:5] == ["Item ID", "Product Image", "Image URL", "Item Name", "Brand"]
+    assert field_types["Product Image"] == "image"
+    assert field_types["Image URL"] == "text"
+    assert "Image" not in field_names
     assert "Category ID" not in field_names
 
     assert rows_response.status_code == 200
@@ -761,7 +765,9 @@ def test_items_table_schema_and_rows_expose_catalog_fields(monkeypatch):
     assert body["schema_id"] == "items"
     row = body["items"][0]
     assert row["item_id"] == "item_wireless_earbuds"
-    assert row["fields"]["Image"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    assert row["fields"]["Image URL"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    assert "Product Image" not in row["fields"]
+    assert "Image" not in row["fields"]
     assert row["fields"]["Category"] == "Electronics"
     assert row["fields"]["Rating"] == 4.8
 

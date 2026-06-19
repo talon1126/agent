@@ -162,7 +162,8 @@
     "price": 59.99,
     "unit": "set",
     "barcode": "6901234567401",
-    "shelf_life_days": 1460
+    "shelf_life_days": 1460,
+    "image": "products/electronics/wireless-noise-cancelling-earbuds.jpg"
   },
   {
     "item_id": "item_smart_tv_43",
@@ -173,6 +174,55 @@
     "price": 249.00,
     "unit": "piece",
     "barcode": "6901234567402",
-    "shelf_life_days": 1460
+    "shelf_life_days": 1460,
+    "image": "products/electronics/43-inch-4k-smart-tv.jpg"
+  },
+  {
+    "item_id": "item_xiaomi_air_fryer_6_5l",
+    "category_id": "electronics",
+    "item_name": "Xiaomi Smart Air Fryer 6.5L",
+    "brand": "Xiaomi",
+    "spec": "6.5L smart air fryer with app recipes",
+    "price": 89.99,
+    "unit": "piece",
+    "barcode": "6901234567403",
+    "shelf_life_days": 1460,
+    "image": "products/xiaomi/smart-air-fryer-6-5l.jpg"
+  },
+  {
+    "item_id": "item_xiaomi_robot_vacuum_x20_plus",
+    "category_id": "electronics",
+    "item_name": "Xiaomi Robot Vacuum X20+",
+    "brand": "Xiaomi",
+    "spec": "Robot vacuum and mop with auto-empty station",
+    "price": 399.99,
+    "unit": "piece",
+    "barcode": "6901234567404",
+    "shelf_life_days": 1460,
+    "image": "products/xiaomi/robot-vacuum-x20-plus.jpg"
+  },
+  {
+    "item_id": "item_xiaomi_air_purifier_4",
+    "category_id": "electronics",
+    "item_name": "Xiaomi Smart Air Purifier 4",
+    "brand": "Xiaomi",
+    "spec": "Smart air purifier for rooms up to 48m2",
+    "price": 179.99,
+    "unit": "piece",
+    "barcode": "6901234567405",
+    "shelf_life_days": 1460,
+    "image": "products/xiaomi/smart-air-purifier-4.jpg"
+  },
+  {
+    "item_id": "item_xiaomi_electric_kettle_2",
+    "category_id": "electronics",
+    "item_name": "Xiaomi Electric Kettle 2",
+    "brand": "Xiaomi",
+    "spec": "1.7L stainless steel electric kettle",
+    "price": 34.99,
+    "unit": "piece",
+    "barcode": "6901234567406",
+    "shelf_life_days": 1460,
+    "image": "products/xiaomi/electric-kettle-2.jpg"
   }
 ]

@@ -39,7 +39,8 @@ PRODUCT_OPERATIONS_TABLE_SCHEMA = [
 
 ITEMS_TABLE_SCHEMA = [
     {"name": "Item ID", "type": "text"},
-    {"name": "Image", "type": "text"},
+    {"name": "Product Image", "type": "image"},
+    {"name": "Image URL", "type": "text"},
     {"name": "Item Name", "type": "text"},
     {"name": "Brand", "type": "text"},
     {"name": "Category", "type": "text"},
@@ -306,14 +307,16 @@ def items_table_fields(product: dict[str, Any], *, rating: dict[str, Any]) -> di
         rating: Review summary for the product.
 
     Returns:
-        Employee-facing field map with image, display category, price, and
-        rating fields. Internal category ids remain out of the Feishu table.
+        Employee-facing field map with a raw image URL, display category,
+        price, and rating fields. The real Feishu image field is intentionally
+        left empty here because feishu-adapter owns Feishu file upload and
+        token caching.
     """
 
     category_name = product.get("category_name") or product.get("category_id") or ""
     return {
         "Item ID": product["item_id"],
-        "Image": str(product.get("image") or ""),
+        "Image URL": str(product.get("image") or ""),
         "Item Name": product["item_name"],
         "Brand": product.get("brand") or "",
         "Category": category_name,

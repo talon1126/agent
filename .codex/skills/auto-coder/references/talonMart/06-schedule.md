@@ -117,7 +117,7 @@
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| H1 | 建立 feishu-adapter 基础能力 | [✔] | 2026-06-18 | 长连接、多机器人、事件解析、n8n 转发、回复、run log、table_id-first 表定位、table_id 持久记忆、分页同步基础能力 |
+| H1 | 建立 feishu-adapter 基础能力 | [✔] | 2026-06-18 | 长连接、多机器人、事件解析、n8n 转发、回复、run log、table_id-first 表定位、table_id 持久记忆、分页同步和图片上传基础能力 |
 | H2 | 实现仓储飞书表和余额表同步 | [✔] |  | Warehouse Inventory Snapshots / Balances |
 | H3 | 实现采购到仓库存同步和采购飞书表同步 | [✔] |  | arrived_unsynced -> synced、Replenishment Requests、Purchase Orders |
 | H4 | 实现订单发仓确认通知 | [✔] | 2026-06-17 | 支付后发仓确认、候选发仓、物流选择、员工确认后扣减 |
@@ -125,7 +125,7 @@
 | H6 | 设计飞书应用信息架构和首页草图 | [✔] | 2026-06-17 | 运营驾驶舱 + 业务操作台 |
 | H7 | 搭建飞书应用首页运营驾驶舱 | [✔] | 2026-06-18 | 指标卡、图表、排行榜、待办列表、快捷按钮 |
 | H8 | 实现订单与订单明细飞书表同步 | [✔] | 2026-06-18 | Order Fulfillment / Order Items read model |
-| H9 | 实现商品飞书表同步 | [✔] | 2026-06-18 | Items read model、商品图片 |
+| H9 | 实现商品飞书表同步 | [✔] | 2026-06-18 | Items read model、商品图片 URL 转飞书真实图片 |
 | H10 | 实现秒杀活动和秒杀结果飞书表同步 | [✔] | 2026-06-18 | Flash Sales / Flash Sale Claims read model |
 | H11 | 搭建飞书应用业务操作页 | [✔] | 2026-06-18 | 订单、库存、采购、商品运营页面 |
 | H12 | 实现飞书应用联调与验收门禁 | [ ] |  | Chrome 验证、表格数据校验、关键按钮动作验证 |
@@ -1138,7 +1138,7 @@
 
 ##### H1：建立 feishu-adapter 基础能力
 
-目标：提供飞书长连接、多机器人事件接入、n8n 转发、飞书回复、run log 记录、table_id-first 多维表格定位和 table_id 持久记忆能力。
+目标：提供飞书长连接、多机器人事件接入、n8n 转发、飞书回复、run log 记录、table_id-first 多维表格定位、table_id 持久记忆、分页同步和图片上传基础能力。
 
 修改文件：
 
@@ -1162,6 +1162,11 @@
 - `remember_feishu_table_state()`：表创建或首次按名称解析成功后，持久化 `table_id`、`view_id` 和 `table_url` 状态。
 - `fetch_business_table_rows_paginated()`：按 `limit + offset` 从 mock-api 拉取多页 read model，并兼容旧版单页响应。
 - `sync_business_table()`：统一编排 schema 获取、分页取数、飞书字段补齐和按业务键 upsert。
+- `resolve_image_source_url()`：根据数据库图片 URL 和 OSS 配置解析可下载图片地址，支持公开 URL 和阿里云 OSS 签名 URL。
+- `upload_image_to_feishu()`：将图片内容上传到飞书文件接口并返回可写入多维表格图片字段的 `file_token`。
+- `get_or_upload_feishu_image_token()`：以图片 URL 和内容摘要为缓存键复用已上传图片，避免每次同步重复上传。
+- `FEISHU_IMAGE_TOKEN_CACHE_PATH`：本地图片 token 缓存文件路径，缓存 `image_url -> file_token` 映射。
+- `ALIYUN_OSS_ACCESS_KEY_ID` / `ALIYUN_OSS_ACCESS_KEY_SECRET` / `ALIYUN_OSS_ENDPOINT` / `ALIYUN_OSS_BUCKET`：阿里云 OSS 读取配置，仅在处理私有 OSS 图片时需要。
 
 验收标准：
 
@@ -1176,6 +1181,10 @@
 - 通用表同步在多页场景下持续请求下一页，直到 `has_more=false` 或 `next_offset` 为空，不因默认单页限制丢失记录。
 - n8n 定时任务只触发对应同步端点，不在 workflow 内实现分页循环。
 - 表同步响应包含 table_id、table_name、table_url、synced_count、page_count 和错误摘要。
+- 图片上传能力从数据库保存的图片 URL 读取图片，上传到飞书后返回稳定 `file_token`，供各业务表写入真实图片字段。
+- 阿里云 OSS 访问参数通过环境变量配置，不得硬编码；缺少 OSS 密钥时只能处理可直接访问的公开图片 URL。
+- 需要阿里云 OSS 密钥时，开发流程必须停止并等待用户填写环境变量，不能在代码、文档或测试输出中暴露真实密钥。
+- 图片上传失败不能阻塞整张表同步，应保留图片 URL 文本字段并返回明确的图片上传错误摘要。
 
 测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`docker compose -p after-sales-implementation config --quiet`
 
@@ -1428,7 +1437,7 @@
 
 ##### H9：实现商品飞书表同步
 
-目标：为飞书应用商品运营中心补齐独立商品主数据表，使员工能够在飞书中查看商品图片、价格、分类、评分、库存摘要和排行榜摘要。
+目标：为飞书应用商品运营中心补齐独立商品主数据表，使员工能够在飞书中查看真实商品图片、价格、分类、评分、库存摘要和排行榜摘要。
 
 修改文件：
 
@@ -1446,17 +1455,22 @@
 
 实现类/函数：
 
-- `items.image`：商品主数据图片地址字段，首版保存可直接访问的 URL，后续可替换为 OSS URL。
-- `get_items_table_schema()`：返回商品飞书表字段契约，包含 Image、Item Name、Brand、Category、Price、Rating、Review Count 和 Source Version。
+- `items.image`：商品主数据图片地址字段，保存可直接访问的 URL、OSS 对象 URL 或不含 bucket 的 OSS object key，由 `ALIYUN_OSS_BUCKET` 决定运行环境中的真实 bucket。
+- `get_items_table_schema()`：返回商品飞书表字段契约，包含 Product Image、Image URL、Item Name、Brand、Category、Price、Rating、Review Count 和 Source Version。
 - `get_items_table_rows()`：返回商品主数据 read model。
 - `sync_items_table()`：创建或复用 `Items` 飞书表并按 `Item ID` upsert 商品记录。
+- `build_items_table_record_fields()`：将数据库 `items.image` 转换为飞书图片字段值，并同时保留原始 Image URL 便于排查。
 - `Items Table Sync`：每 10 分钟调用 `/items/table/sync` 刷新商品主数据飞书表。
 
 验收标准：
 
 - `items` 表包含 `image` 字段，fixture 和 PostgreSQL schema 初始化都能写入默认图片 URL。
 - 商品详情和商品飞书 read model 优先使用 `items.image`，缺失时才使用占位图。
-- 飞书商品表包含商品图片 URL，后续 OSS URL 可直接同步展示。
+- 飞书商品表包含 `Product Image` 真实图片字段和 `Image URL` 文本字段；`Product Image` 使用 H1 图片上传能力写入飞书 `file_token`。
+- 已存在的旧版 Items 表如果保留 `Image` 文本字段，同步时也应回填该字段为 `Image URL` 的同一原始图片引用，保证旧视图不显示空值；新建表不再主动创建 `Image` 字段。
+- 数据库中的 OSS 图片 URL 可以通过配置生成可下载地址并上传到飞书，多维表格中展示真实图片缩略图。
+- 同一图片 URL 多次同步应复用已上传的飞书图片 token，避免重复上传和触发飞书限流。
+- 图片上传失败时商品行仍应同步，`Image URL` 保留原始地址，响应中返回失败数量和失败原因。
 - 商品表分类字段使用分类展示名，不直接展示内部 `category_id`。
 - 商品表有独立 n8n 定时同步任务，并调用 `/items/table/sync` 端点。
 - 商品同步复用 H1 分页能力，支持超过 100 条商品主数据同步。

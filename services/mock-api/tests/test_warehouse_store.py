@@ -106,7 +106,7 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert warehouse_count == 2
     assert location_count == 6
     assert category_count == 9
-    assert item_count == 16
+    assert item_count == 20
     assert batch_count == 10
     assert replenishment_count == 0
     assert delivery_provider_count == 3
@@ -122,7 +122,7 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert flash_sale_count == 8
     assert active_flash_sale_count == 7
     assert flash_sale_claim_count == 0
-    assert rank_event_count >= 16
+    assert rank_event_count >= 20
     assert rank_snapshot_count >= 9
     assert item_review_count == 4
     assert default_address == "广东省深圳市南山区示例路 100 号"
@@ -407,13 +407,22 @@ def test_warehouse_repository_searches_items_by_category_without_keyword(tmp_pat
 
     rows = repository.search_items(category_id="electronics")
 
-    assert [item["item_id"] for item in rows] == [
+    item_ids = {item["item_id"] for item in rows}
+    assert {
         "item_smart_tv_43",
         "item_wireless_earbuds",
-    ]
+        "item_xiaomi_air_fryer_6_5l",
+        "item_xiaomi_robot_vacuum_x20_plus",
+        "item_xiaomi_air_purifier_4",
+        "item_xiaomi_electric_kettle_2",
+    }.issubset(item_ids)
     assert {item["category_id"] for item in rows} == {"electronics"}
     assert {item["category_name"] for item in rows} == {"Electronics"}
     assert all(isinstance(item["price"], float) for item in rows)
+    assert all(
+        str(item["image"]).startswith(("https://", "oss://", "products/"))
+        for item in rows
+    )
 
 
 def test_warehouse_repository_lists_catalog_without_keyword_or_category(tmp_path: Path) -> None:

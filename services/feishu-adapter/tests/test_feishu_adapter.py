@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -210,7 +211,7 @@ def items_table_rows_response() -> dict:
                 "item_id": "item_wireless_earbuds",
                 "fields": {
                     "Item ID": "item_wireless_earbuds",
-                    "Image": "https://oss.example.com/products/item_wireless_earbuds.jpg",
+                    "Image URL": "https://oss.example.com/products/item_wireless_earbuds.jpg",
                     "Item Name": "Wireless Earbuds",
                     "Brand": "Talon Audio",
                     "Category": "Electronics",
@@ -2612,6 +2613,314 @@ def test_items_table_sync_upserts_by_item_id() -> None:
     assert body["ok"] is True, body
     assert body["table_id"] == "tbl_items"
     assert body["items"][0]["item_id"] == "item_wireless_earbuds"
+
+
+def test_items_table_sync_uploads_product_image_and_reuses_cached_token(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Protect H1/H9 Feishu image upload and local token reuse.
+
+    The Items read model keeps the raw `Image URL` text for troubleshooting but
+    Feishu operators need a real Bitable image/attachment field. The first sync
+    downloads the image and uploads it to Feishu. The second sync sees the same
+    URL and content hash in the local cache, so it must reuse the prior
+    `file_token` instead of uploading again.
+    """
+
+    cache_path = tmp_path / "feishu_image_token_cache.json"
+    monkeypatch.setenv("FEISHU_IMAGE_TOKEN_CACHE_PATH", str(cache_path))
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/items/table-schema":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "fields": [
+                        {"name": "Item ID", "type": "text"},
+                        {"name": "Product Image", "type": "image"},
+                        {"name": "Image URL", "type": "text"},
+                    ],
+                },
+            )
+        if url == "http://mock-api.local/items/table-rows":
+            return httpx.Response(200, json=items_table_rows_response())
+        if url == "https://oss.example.com/products/item_wireless_earbuds.jpg":
+            return httpx.Response(200, content=b"image-content-v1", headers={"content-type": "image/jpeg"})
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/drive/v1/medias/upload_all":
+            return httpx.Response(200, json={"code": 0, "data": {"file_token": "file_token_earbuds"}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records":
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_item"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        items_table_id="tbl_items",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    first_response = client.post("/items/table/sync", json={"category_id": "electronics"})
+    second_response = client.post("/items/table/sync", json={"category_id": "electronics"})
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json()["image_upload"] == {
+        "uploaded_count": 1,
+        "reused_count": 0,
+        "failed_count": 0,
+        "failures": [],
+    }
+    assert second_response.json()["image_upload"] == {
+        "uploaded_count": 0,
+        "reused_count": 1,
+        "failed_count": 0,
+        "failures": [],
+    }
+    upload_requests = [
+        request
+        for request in requests
+        if str(request.url) == "https://open.feishu.cn/open-apis/drive/v1/medias/upload_all"
+    ]
+    assert len(upload_requests) == 1
+    record_payloads = [
+        json.loads(request.content)
+        for request in requests
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records"
+    ]
+    assert record_payloads
+    assert record_payloads[0]["fields"]["Image URL"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    assert record_payloads[0]["fields"]["Product Image"] == [{"file_token": "file_token_earbuds"}]
+    cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert cache["https://oss.example.com/products/item_wireless_earbuds.jpg"]["file_token"] == "file_token_earbuds"
+
+
+def test_items_table_sync_keeps_row_when_image_upload_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Protect H1's non-blocking image failure contract for table sync.
+
+    Feishu image upload is useful but not the source of truth. When downloading
+    or uploading the product image fails, the Items row must still be upserted
+    with its raw `Image URL`, and the response must expose an operator-readable
+    failure summary.
+    """
+
+    monkeypatch.setenv("FEISHU_IMAGE_TOKEN_CACHE_PATH", str(tmp_path / "feishu_image_token_cache.json"))
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/items/table-schema":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "fields": [
+                        {"name": "Item ID", "type": "text"},
+                        {"name": "Product Image", "type": "image"},
+                        {"name": "Image URL", "type": "text"},
+                    ],
+                },
+            )
+        if url == "http://mock-api.local/items/table-rows":
+            return httpx.Response(200, json=items_table_rows_response())
+        if url == "https://oss.example.com/products/item_wireless_earbuds.jpg":
+            return httpx.Response(503, json={"error": "oss unavailable"})
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records":
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_item"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        items_table_id="tbl_items",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/items/table/sync", json={"category_id": "electronics"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True, body
+    assert body["synced_count"] == 1
+    assert body["image_upload"]["failed_count"] == 1
+    assert body["image_upload"]["failures"][0]["image_url"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    record_payload = next(
+        json.loads(request.content)
+        for request in requests
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records"
+    )
+    assert record_payload["fields"]["Image URL"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    assert "Product Image" not in record_payload["fields"]
+
+
+def test_items_table_sync_redacts_signed_oss_url_when_download_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Ensure OSS download errors do not expose signed URL credentials.
+
+    Signed OSS URLs include access-key id, expiry, and signature query
+    parameters. Operators need to know that image upload failed, but the sync
+    response must never echo those signed query parameters back to callers or
+    logs because they are short-lived credentials.
+    """
+
+    monkeypatch.setenv("FEISHU_IMAGE_TOKEN_CACHE_PATH", str(tmp_path / "feishu_image_token_cache.json"))
+    monkeypatch.setenv("ALIYUN_OSS_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("ALIYUN_OSS_ACCESS_KEY_SECRET", "test-secret")
+    monkeypatch.setenv("ALIYUN_OSS_ENDPOINT", "oss-cn-test.aliyuncs.com")
+    monkeypatch.setenv("ALIYUN_OSS_BUCKET", "talonmart-products")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == "http://mock-api.local/items/table-schema":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "fields": [
+                        {"name": "Item ID", "type": "text"},
+                        {"name": "Product Image", "type": "image"},
+                        {"name": "Image URL", "type": "text"},
+                    ],
+                },
+            )
+        if url == "http://mock-api.local/items/table-rows":
+            payload = items_table_rows_response()
+            payload["items"][0]["fields"]["Image URL"] = "oss://talonmart-products/products/xiaomi/missing.jpg"
+            return httpx.Response(200, json=payload)
+        if url.startswith("https://talonmart-products.oss-cn-test.aliyuncs.com/products/xiaomi/missing.jpg?"):
+            return httpx.Response(404, json={"error": "missing object"})
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records":
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_item"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        items_table_id="tbl_items",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/items/table/sync", json={"category_id": "electronics"})
+
+    assert response.status_code == 200
+    failure_reason = response.json()["image_upload"]["failures"][0]["reason"]
+    assert "Unable to download product image: HTTP 404" in failure_reason
+    assert "OSSAccessKeyId" not in failure_reason
+    assert "Signature" not in failure_reason
+    assert "test-access-key" not in failure_reason
+
+
+def test_items_table_sync_backfills_legacy_image_field_when_table_has_it(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Keep renamed Items tables compatible with the legacy `Image` column.
+
+    Early H9 versions created an `Image` text field before the contract split
+    the table into `Product Image` and `Image URL`. Existing Feishu views may
+    still display that legacy column, so the adapter should populate it when it
+    already exists while avoiding it for newly created tables.
+    """
+
+    cache_path = tmp_path / "feishu_image_token_cache.json"
+    monkeypatch.setenv("FEISHU_IMAGE_TOKEN_CACHE_PATH", str(cache_path))
+    requests: list[httpx.Request] = []
+
+    existing_fields = [
+        {"field_id": "fld_item_id", "field_name": "Item ID", "type": 1},
+        {"field_id": "fld_legacy_image", "field_name": "Image", "type": 1},
+        {"field_id": "fld_product_image", "field_name": "Product Image", "type": 17},
+        {"field_id": "fld_image_url", "field_name": "Image URL", "type": 1},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/items/table-schema":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "fields": [
+                        {"name": "Item ID", "type": "text"},
+                        {"name": "Product Image", "type": "image"},
+                        {"name": "Image URL", "type": "text"},
+                    ],
+                },
+            )
+        if url == "http://mock-api.local/items/table-rows":
+            return httpx.Response(200, json=items_table_rows_response())
+        if url == "https://oss.example.com/products/item_wireless_earbuds.jpg":
+            return httpx.Response(200, content=b"image-content-v1", headers={"content-type": "image/jpeg"})
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/drive/v1/medias/upload_all":
+            return httpx.Response(200, json={"code": 0, "data": {"file_token": "file_token_earbuds"}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": existing_fields}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records":
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_item"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        items_table_id="tbl_items",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/items/table/sync", json={"category_id": "electronics"})
+
+    assert response.status_code == 200
+    record_payload = next(
+        json.loads(request.content)
+        for request in requests
+        if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_items/records"
+    )
+    assert record_payload["fields"]["Image URL"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    assert record_payload["fields"]["Image"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
 
 
 def test_business_table_sync_fetches_all_offset_pages() -> None:
