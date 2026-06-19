@@ -77,6 +77,7 @@ def procurement_purchase_order_table_rows_response() -> dict:
                     "Lead Time Days": 3,
                     "Estimated Arrival Date": "2026-05-29",
                     "Reason": "available_quantity_below_reorder_threshold",
+                    "Sync Inventory": "同步库存",
                 },
             }
         ],
@@ -2043,6 +2044,7 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
                     "fields": [
                         {"name": "Purchase Order ID", "type": "text"},
                         {"name": "Reason", "type": "text"},
+                        {"name": "Sync Inventory", "type": "text"},
                     ],
                 },
             )
@@ -2059,6 +2061,7 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
                         "items": [
                             {"field_id": "fld_po", "field_name": "Purchase Order ID", "type": 1},
                             {"field_id": "fld_reason", "field_name": "Reason", "type": 1},
+                            {"field_id": "fld_sync_inventory", "field_name": "Sync Inventory", "type": 1},
                             {"field_id": "fld_sync_at", "field_name": "Last Synced At", "type": 1},
                             {"field_id": "fld_sync_status", "field_name": "Sync Status", "type": 3},
                             {"field_id": "fld_source", "field_name": "Source Version", "type": 1},
@@ -2096,6 +2099,7 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
     assert body["items"] == [
         {
             "purchase_order_id": "PO-5001",
+            "Purchase Order ID": "PO-5001",
             "status": "pending_arrival",
             "approval_status": "pending",
             "payment_status": "unpaid",
@@ -2116,6 +2120,7 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
     assert create_fields["Estimated Arrival Date"] == "2026-05-29"
     assert create_fields["Approval Status"] == "pending"
     assert create_fields["Reason"] == "available_quantity_below_reorder_threshold"
+    assert create_fields["Sync Inventory"] == "同步库存"
     assert "Request ID" not in create_fields
     assert "Supplier ID" not in create_fields
     assert "Item ID" not in create_fields
@@ -3868,7 +3873,6 @@ def balance_table_schema_response() -> dict:
             {"name": "warehouse_id", "type": "text"},
             {"name": "location_code", "type": "text"},
             {"name": "item_id", "type": "text"},
-            {"name": "batch_no", "type": "text"},
             {"name": "production_date", "type": "date"},
             {"name": "expiry_date", "type": "date"},
             {"name": "quantity_on_hand", "type": "number"},
@@ -3901,7 +3905,6 @@ def balance_table_rows_response(*, next_cursor: str = "") -> dict:
                     "warehouse_id": "wh_sz_1",
                     "location_code": "A1",
                     "item_id": "item_vinda_tissue",
-                    "batch_no": "BATCH-20260501",
                     "production_date": "2026-05-01",
                     "expiry_date": "2028-05-01",
                     "quantity_on_hand": 136,
@@ -3913,6 +3916,92 @@ def balance_table_rows_response(*, next_cursor: str = "") -> dict:
             }
         ],
     }
+
+
+def movement_table_schema_response() -> dict:
+    return {
+        "ok": True,
+        "schema_id": "warehouse_inventory_movements",
+        "fields": [
+            {"name": "movement_id", "type": "text"},
+            {"name": "order_id", "type": "text"},
+            {"name": "movement_type", "type": "single_select", "options": [{"name": "purchase_order_received", "color": 21}]},
+            {"name": "item_id", "type": "text"},
+            {"name": "warehouse_id", "type": "text"},
+            {"name": "location_code", "type": "text"},
+            {"name": "quantity_delta", "type": "number"},
+            {"name": "created_by", "type": "text"},
+            {"name": "created_at", "type": "date"},
+        ],
+    }
+
+
+def movement_table_rows_response() -> dict:
+    return {
+        "ok": True,
+        "schema_id": "warehouse_inventory_movements",
+        "count": 1,
+        "has_more": False,
+        "next_offset": None,
+        "items": [
+            {
+                "movement_id": "IM-202605291001000000-1",
+                "order_id": "PO-6001",
+                "fields": {
+                    "movement_id": "IM-202605291001000000-1",
+                    "order_id": "PO-6001",
+                    "movement_type": "purchase_order_received",
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "location_code": "A1",
+                    "quantity_delta": 104,
+                    "created_by": "warehouse-agent",
+                    "created_at": "2026-05-29T10:01:00+00:00",
+                },
+            }
+        ],
+    }
+
+
+def test_inventory_movements_table_sync_upserts_by_movement_id() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        url = str(request.url)
+        if url == "http://mock-api.local/warehouse/inventory-movements/table-schema":
+            return httpx.Response(200, json=movement_table_schema_response())
+        if url == "http://mock-api.local/warehouse/inventory-movements/table-rows":
+            return httpx.Response(200, json=movement_table_rows_response())
+        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_movement/fields":
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_movement/records?"):
+            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_movement/records":
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_movement"}}})
+        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+
+    app = create_app(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        inventory_table_app_id="cli_table",
+        inventory_table_app_secret="secret_table",
+        inventory_table_app_token="app_token",
+        inventory_movement_table_id="tbl_movement",
+        mock_api_url="http://mock-api.local",
+    )
+    client = TestClient(app)
+
+    response = client.post("/warehouse/inventory-movements-table/sync", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True, body
+    assert body["table_id"] == "tbl_movement"
+    assert body["synced_count"] == 1
+    assert body["items"][0]["movement_id"] == "IM-202605291001000000-1"
+    assert requests[-1].method == "POST"
 
 
 def test_inventory_balances_table_sync_provisions_pages_and_writes_date_fields_as_millis() -> None:
@@ -4008,7 +4097,6 @@ def test_inventory_balances_table_sync_provisions_pages_and_writes_date_fields_a
     fields = json.loads(batch_create.content)["records"][0]["fields"]
     assert fields["id"] == "7"
     assert fields["item_id"] == "item_vinda_tissue"
-    assert fields["batch_no"] == "BATCH-20260501"
     assert isinstance(fields["production_date"], int)
     assert isinstance(fields["expiry_date"], int)
     assert isinstance(fields["created_at"], int)

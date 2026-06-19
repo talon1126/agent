@@ -9,7 +9,7 @@ TalonMart Agent 是一个本地优先的电商业务 Agent 系统。项目用 Vu
 
 系统按 **Workflow + 项目模块** 划分业务能力，而不是把所有能力塞进一个大 Agent：
 
-- **Warehouse Workflow**：库存、批次、库位、履约风险和采购需求创建。
+- **Warehouse Workflow**：库存、库位、履约风险和采购需求创建。
 - **Procurement Workflow**：采购单审批、采购单查询和采购到仓状态跟踪。
 - **Delivery Workflow**：物流状态查询、物流异常查询、物流跟进 case。
 - **Operations Workflow**：跨领域异常摘要、运营风险汇总、后续动作建议。

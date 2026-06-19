@@ -99,7 +99,6 @@ ORDER_ITEMS_TABLE_SCHEMA = [
     {"name": "Item ID", "type": "text"},
     {"name": "Warehouse", "type": "text"},
     {"name": "Location", "type": "text"},
-    {"name": "Batch No", "type": "text"},
     {"name": "Quantity", "type": "number"},
     {"name": "Created At", "type": "datetime"},
     {"name": "Updated At", "type": "datetime"},
@@ -150,7 +149,7 @@ def available_order_batches(item_id: str, warehouse_id: str, location_code: str 
             and int(row["quantity_available"]) > 0
             and (not location_code or row["location_code"].casefold() == location_code.casefold())
         ],
-        key=lambda row: (row["expiry_date"], row["production_date"], row["batch_no"]),
+        key=lambda row: (row["expiry_date"], row["production_date"], row["location_code"]),
     )
 
 
@@ -387,7 +386,6 @@ def find_current_inventory_balance(line: dict[str, Any]) -> dict[str, Any]:
         item_id=line["item_id"],
         warehouse_id=line["warehouse_id"],
         location_code=line["location_code"],
-        batch_no=line["batch_no"],
     )
     if not rows:
         raise HTTPException(status_code=404, detail="inventory balance not found")
@@ -597,7 +595,6 @@ def order_item_business_id(item: dict[str, Any]) -> str:
             str(item.get("order_id") or ""),
             str(item.get("item_id") or ""),
             str(item.get("location_code") or ""),
-            str(item.get("batch_no") or ""),
         ]
     )
 
@@ -606,7 +603,7 @@ def order_item_table_fields(item: dict[str, Any]) -> dict[str, Any]:
     """Convert one order line into Feishu table fields.
 
     Args:
-        item: Order item row containing order, item, warehouse, batch, quantity,
+        item: Order item row containing order, item, warehouse, location, quantity,
             and timestamp facts.
 
     Returns:
@@ -624,7 +621,6 @@ def order_item_table_fields(item: dict[str, Any]) -> dict[str, Any]:
         "Item ID": item.get("item_id") or "",
         "Warehouse": warehouse_name_by_id(str(item.get("warehouse_id") or "")),
         "Location": item.get("location_code") or "",
-        "Batch No": item.get("batch_no") or "",
         "Quantity": int(item.get("quantity") or 0),
         "Created At": item.get("created_at") or "",
         "Updated At": updated_at,
@@ -803,7 +799,6 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
                 "item_id": requested["item_id"],
                 "warehouse_id": requested["warehouse_id"],
                 "location_code": requested.get("location_code") or "",
-                "batch_no": "",
                 "quantity": int(requested["quantity"]),
                 "created_at": now,
                 "updated_at": now,
@@ -861,7 +856,6 @@ def confirm_fallback_order_fulfillment(
                     "item_id": row["item_id"],
                     "warehouse_id": row["warehouse_id"],
                     "location_code": row["location_code"],
-                    "batch_no": row["batch_no"],
                     "quantity": quantity,
                     "created_at": requested["created_at"],
                     "updated_at": updated_at,

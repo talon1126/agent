@@ -50,7 +50,6 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_view_create_tool",
             "warehouse_purchase_order_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
-            "warehouse_inventory_sync_jobs_tool",
             "warehouse_order_tool",
         },
         "forbidden_tools": {
@@ -97,7 +96,6 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_view_create_tool",
             "warehouse_purchase_order_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
-            "warehouse_inventory_sync_jobs_tool",
             "warehouse_order_tool",
             "operations_mock_tool",
             "delivery_status_tool",
@@ -125,7 +123,6 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_view_create_tool",
             "warehouse_purchase_order_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
-            "warehouse_inventory_sync_jobs_tool",
             "procurement_mock_tool",
             "procurement_purchase_order_query_tool",
             "procurement_approve_purchase_order_tool",
@@ -162,7 +159,6 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_view_create_tool",
             "warehouse_purchase_order_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
-            "warehouse_inventory_sync_jobs_tool",
             "procurement_mock_tool",
             "procurement_purchase_order_query_tool",
             "procurement_approve_purchase_order_tool",
@@ -374,11 +370,8 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "warehouse_view_create_tool" in system_message
             assert "warehouse_purchase_order_request_tool" in system_message
             assert "warehouse_purchase_order_arrival_sync_tool" in system_message
-            assert "warehouse_inventory_sync_jobs_tool" in system_message
             assert "purchase_orders" in system_message
             assert "arrived_unsynced" in system_message
-            assert "处理库存同步任务" in system_message
-            assert "warehouse_inventory_sync_requested" in system_message
             assert "创建、初始化或配置飞书库存表" in system_message
             assert "同步、导出、发布、表格、飞书表格或看板" in system_message
             assert "必须先调用 warehouse_table_schema_tool" in system_message
@@ -386,7 +379,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "不要重复调用 warehouse_view_create_tool" in system_message
             assert "item_id" in system_message
             assert "库位" in system_message
-            assert "批次" in system_message
+            assert "库存流水" in system_message
             assert "临期" in system_message
             assert "请要求用户提供 SKU" not in system_message
             assert "sku_bag_1" not in system_message
@@ -476,7 +469,6 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "sku:" not in sync_request["parameters"]["jsonBody"]
             assert "warehouse_inventory_table_sync_fast_path" in sync_reply["parameters"]["jsCode"]
             assert "entry.item_id" in sync_reply["parameters"]["jsCode"]
-            assert "entry.batch_no" in sync_reply["parameters"]["jsCode"]
             assert "entry.location_code" in sync_reply["parameters"]["jsCode"]
             assert "SKU:" not in sync_reply["parameters"]["jsCode"]
             assert purchase_arrival_request["parameters"]["url"].endswith(
@@ -531,7 +523,6 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             table_sync_tool = node_by_name(workflow, "warehouse_inventory_table_sync_tool")
             purchase_order_request_tool = node_by_name(workflow, "warehouse_purchase_order_request_tool")
             purchase_order_sync_tool = node_by_name(workflow, "warehouse_purchase_order_arrival_sync_tool")
-            sync_jobs_tool = node_by_name(workflow, "warehouse_inventory_sync_jobs_tool")
             order_tool = node_by_name(workflow, "warehouse_order_tool")
             for tool in (inventory_tool, exception_tool, fulfillment_tool, table_sync_tool):
                 tool_code = tool["parameters"]["jsCode"]
@@ -547,15 +538,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "/procurement/purchase-orders" in purchase_order_request_tool["parameters"]["jsCode"]
             assert "purchase_order" in purchase_order_request_tool["parameters"]["jsCode"]
             assert "/warehouse/purchase-orders/sync-arrivals" in purchase_order_sync_tool["parameters"]["jsCode"]
-            assert "mock-warehouse-purchase-order-arrival-sync" in purchase_order_sync_tool["parameters"]["jsCode"]
-            assert "/warehouse/inventory-sync-jobs" in sync_jobs_tool["parameters"]["jsCode"]
-            assert "/warehouse/inventory-table/sync/jobs" in sync_jobs_tool["parameters"]["jsCode"]
-            assert "/warehouse/inventory-table/sync/filter" not in sync_jobs_tool["parameters"]["jsCode"]
-            assert "jobs: jobs.map" in sync_jobs_tool["parameters"]["jsCode"]
-            assert "/complete" in sync_jobs_tool["parameters"]["jsCode"]
-            assert "/fail" in sync_jobs_tool["parameters"]["jsCode"]
-            assert "syncJobsResult.ok !== true" in sync_jobs_tool["parameters"]["jsCode"]
-            assert "warehouse_inventory_sync_failed" in sync_jobs_tool["parameters"]["jsCode"]
+            assert "mock-warehouse-purchase-order-inventory-sync" in purchase_order_sync_tool["parameters"]["jsCode"]
             order_tool_code = order_tool["parameters"]["jsCode"]
             assert "confirm_fulfillment" in order_tool_code
             assert "确认发仓" in order_tool_code

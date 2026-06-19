@@ -12,7 +12,7 @@ TalonMart Agent 是一个本地优先的电商业务 Agent 系统。项目用 Vu
 
 系统按 **Workflow + 项目模块** 划分业务能力，而不是把所有能力塞进一个大 Agent：
 
-- **Warehouse Workflow**：库存、批次、库位、履约风险和采购需求创建。
+- **Warehouse Workflow**：库存、库位、履约风险和采购需求创建。
 - **Procurement Workflow**：采购单审批、采购单查询和采购到仓状态跟踪。
 - **Delivery Workflow**：物流状态查询、物流异常查询、物流跟进 case。
 - **Operations Workflow**：跨领域异常摘要、运营风险汇总、后续动作建议。
@@ -174,11 +174,9 @@ n8n Workflow
 | `categories` | 商品分类表，保存商品分类名称和默认存储要求。 |
 | `items` | 商品主数据，保存商品名称、品牌、规格、价格、搜索文本、单位、条码和商品图片地址；商品图片可指向本地演示 URL 或后续 OSS URL，供前端与飞书商品表展示。 |
 | `item_reviews` | 商品评论表，保存用户评分、标题、正文和时间。 |
-| `inventory_batches` | 批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。 |
-| `inventory_location_balances` | 库位库存余额表，保存当前可售库存；飞书库存余额表字段必须与该表列一一对应，不混入商品、分类、仓库展示名、计算状态或同步元字段。 |
-| `warehouse_inventory_sync_jobs` | 仓储库存同步任务表，保存采购到仓后需要写入库存批次与库存余额的待处理任务。 |
+| `inventory_location_balances` | 库位库存余额表，保存当前可售库存；采购单作为入库来源，库存流水记录库存流动，库存查询和风险判断均以该表为准。飞书库存余额表字段必须与该表列一一对应，不混入商品、分类、仓库展示名、计算状态或同步元字段。 |
 | `orders` | 订单主表，保存下单、发仓确认、付款、发货、到货、退款、退货和物流状态；状态统一使用英文枚举：`pending_fulfillment_review`、`unpaid`、`pending_shipment`、`shipped`、`arrived`、`refunded`、`returned`、`canceled`。 |
-| `order_items` | 订单明细表，保存订单命中的商品、仓库、库位、批次和数量。 |
+| `order_items` | 订单明细表，保存订单命中的商品、仓库、库位和数量。 |
 | `inventory_movements` | 库存流水表，记录员工确认发仓、退款和退货对库存余额的影响。 |
 | `delivery_providers` | 物流供应商表，保存承运商名称、热线、单号前缀和启用状态。 |
 | `users` | TalonMart 用户表，保存本地演示和购物车流程使用的用户资料。 |
@@ -411,7 +409,6 @@ agent/                                                      # 项目根目录
 │   │   │       │   ├── inventory.py                        # 库存查询路由
 │   │   │       │   ├── orders.py                           # 仓储订单路由
 │   │   │       │   ├── purchase_orders.py                  # 到仓同步路由
-│   │   │       │   └── sync_jobs.py                        # 库存同步任务路由
 │   │   │       ├── procurement/                            # 采购路由包
 │   │   │       │   ├── __init__.py                         # 采购包标记
 │   │   │       │   ├── router.py                           # 采购路由聚合
@@ -461,6 +458,7 @@ agent/                                                      # 项目根目录
 │   └── workflows/                                          # 工作流 JSON
 │       ├── warehouse-workflow.json                         # 仓储工作流
 │       ├── warehouse-inventory-balances-refresh.json       # 库存余额刷新
+│       ├── warehouse-inventory-movements-refresh.json      # 库存流水刷新
 │       ├── warehouse-order-timeout-release.json            # 订单超时释放
 │       ├── warehouse-purchase-arrival-notify.json          # 采购到货入库通知
 │       ├── procurement-workflow.json                       # 采购工作流
@@ -479,7 +477,7 @@ agent/                                                      # 项目根目录
 │   │   ├── customers.json                                  # 客户数据
 │   │   ├── delivery_providers.json                         # 物流供应商数据
 │   │   ├── inventory.json                                  # 库存快照数据
-│   │   ├── inventory_batches.json                          # 库存批次数据
+│   │   ├── inventory_location_balances.json                 # 库存余额数据
 │   │   ├── items.json                                      # 商品数据
 │   │   ├── orders.json                                     # 订单数据
 │   │   ├── procurement_suppliers.json                      # 采购供应商数据
@@ -730,7 +728,7 @@ mock-api / PostgreSQL 业务事实
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| B1 | 建立仓储数据模型和 repository | [✔] |  | 批次、库位、库存余额 |
+| B1 | 建立仓储数据模型和 repository | [✔] |  | 仓库、库位、库存余额 |
 | B2 | 实现库存查询与异常查询 API | [✔] |  | warehouse inventory |
 | B3 | 实现履约风险和订单确认后库存扣减 | [✔] |  | FEFO、整单同仓、员工确认扣减 |
 | B4 | 实现待审批采购单创建 | [✔] |  | purchase_orders.approval_status |
@@ -799,7 +797,7 @@ mock-api / PostgreSQL 业务事实
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | H1 | 建立 feishu-adapter 基础能力 | [✔] | 2026-06-18 | 长连接、多机器人、事件解析、n8n 转发、回复、run log、table_id-first 表定位、table_id 持久记忆、分页同步和图片上传基础能力 |
-| H2 | 实现仓储飞书表和余额表同步 | [✔] |  | Warehouse Inventory Snapshots / Balances |
+| H2 | 实现库存余额和库存流水飞书表同步 | [✔] |  | Inventory Balances / Movements |
 | H3 | 实现采购到仓库存同步和采购单飞书表同步 | [✔] |  | arrived_unsynced -> synced、Purchase Orders |
 | H4 | 实现订单发仓确认通知 | [✔] | 2026-06-17 | 支付后发仓确认、候选发仓、物流选择、员工确认后扣减 |
 | H5 | 实现采购到货入库确认通知 | [✔] | 2026-06-17 | 今日到货采购单、飞书通知、员工入库确认 |
@@ -907,7 +905,7 @@ mock-api / PostgreSQL 业务事实
 
 - `fixtures/data/items.json`：商品基础数据。
 - `fixtures/data/orders.json`：订单演示数据。
-- `fixtures/data/inventory_batches.json`：库存批次数据。
+- `fixtures/data/inventory_location_balances.json`：库存余额数据。
 - `fixtures/data/procurement_suppliers.json`：采购供应商数据。
 
 验收标准：
@@ -961,13 +959,13 @@ mock-api / PostgreSQL 业务事实
 
 ##### B1：建立仓储数据模型和 repository
 
-目标：以批次、库位和库存余额为核心维护仓储事实。
+目标：以仓库、库位和库存余额为核心维护仓储事实。
 
 修改文件：
 
 - `services/mock-api/app/warehouse_store.py`
 - `fixtures/data/warehouses.json`
-- `fixtures/data/inventory_batches.json`
+- `fixtures/data/inventory_location_balances.json`
 
 实现类/函数：
 
@@ -976,7 +974,7 @@ mock-api / PostgreSQL 业务事实
 
 验收标准：
 
-- 仓储数据可按商品、仓库、库位和批次读取。
+- 仓储数据可按商品、仓库和库位读取，库存查询与风险判断均来源于 `inventory_location_balances`。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py -q`
 
@@ -996,7 +994,7 @@ mock-api / PostgreSQL 业务事实
 
 验收标准：
 
-- 接口返回商品、仓库、库位、批次、可用库存和风险字段。
+- 接口返回商品、仓库、库位、可用库存和风险字段。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py -q`
 
@@ -1060,7 +1058,7 @@ mock-api / PostgreSQL 业务事实
 验收标准：
 
 - workflow 文件包含入口、Agent 和关键工具节点。
-- 飞书输入 `@warehouse 查询 item_vinda_tissue 库存` 后，应返回批次、库位、可用库存和风险建议。
+- 飞书输入 `@warehouse 查询 item_vinda_tissue 库存` 后，应返回仓库、库位、可用库存和风险建议。
 
 测试方法：`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
@@ -1883,9 +1881,9 @@ mock-api / PostgreSQL 业务事实
 
 测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`docker compose -p after-sales-implementation config --quiet`
 
-##### H2：实现仓储批次表和余额表同步
+##### H2：实现库存余额和库存流水飞书表同步
 
-目标：将仓储库存快照和库存余额 read model 同步到飞书多维表格，供飞书应用页面引用。
+目标：将库存余额和库存流水 read model 同步到飞书多维表格，供飞书应用页面引用。
 
 修改文件：
 
@@ -1893,37 +1891,39 @@ mock-api / PostgreSQL 业务事实
 - `services/feishu-adapter/app/view_template_builder.py`
 - `services/mock-api/app/routers/warehouse/inventory.py`
 - `n8n/workflows/warehouse-inventory-balances-refresh.json`
+- `n8n/workflows/warehouse-inventory-movements-refresh.json`
 - `tests/test_department_workflows.py`
 
 实现类/函数：
 
-- `provision_inventory_table()`：创建或复用库存快照表。
-- `sync_inventory_table()`：同步库存批次快照。
 - `sync_inventory_balances_table()`：同步库存余额。
+- `sync_inventory_movements_table()`：同步库存流水。
 - `Warehouse Inventory Balances Refresh`：定时刷新库存余额飞书表。
+- `Warehouse Inventory Movements Refresh`：定时刷新库存流水飞书表。
 
 验收标准：
 
 - 接口返回 table_id、table_url、synced_count 和错误摘要。
-- 库存余额表严格映射数据库 `inventory_location_balances`：`id`、`warehouse_id`、`location_code`、`item_id`、`batch_no`、`production_date`、`expiry_date`、`quantity_on_hand`、`reorder_threshold`、`storage_status`、`created_at`、`updated_at`。
+- 库存余额表严格映射数据库 `inventory_location_balances`：`id`、`warehouse_id`、`location_code`、`item_id`、`production_date`、`expiry_date`、`quantity_on_hand`、`reorder_threshold`、`storage_status`、`created_at`、`updated_at`。
 - 库存余额表不展示 `Warehouse`、`Category`、`Item Name`、`Brand`、`Risk Level`、`Balance Status`、`Last Synced At`、`Sync Status`、`Source Version` 等非本表字段。
-- 库存批次快照表展示 Warehouse、Location、Category、Item Name、Brand、Spec、Unit、Batch No、数量、风险、同步状态和来源版本，不展示 `Category ID` 或 `Item ID`。
-- 库存批次快照表优先使用 `Source Version` 作为同步幂等身份键，避免同名商品在同一仓库和批次下误更新。
-- `id` 来源于数据库 `inventory_location_balances.id`；无数据库 fallback 时使用稳定可读的 `fallback:{item_id}:{warehouse_id}:{location_code}:{batch_no}`。
+- `id` 来源于数据库 `inventory_location_balances.id`；无数据库 fallback 时使用稳定可读的 `fallback:{item_id}:{warehouse_id}:{location_code}`。
 - 定时任务调用 `/warehouse/inventory-balances-table/sync` 刷新飞书余额表。
-- 库存快照和库存余额同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
+- 库存余额同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
+- 库存流水表严格映射数据库 `inventory_movements`，展示库存变更的业务来源、商品、仓库、库位、数量变化、原因、关联订单或采购单和创建时间。
+- 定时任务调用 `/warehouse/inventory-movements-table/sync` 刷新飞书库存流水表。
+- 库存流水同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
 
 测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
 ##### H3：实现采购到仓库存同步和采购单飞书表同步
 
-目标：将已到仓未同步采购单写入库存批次和库位余额，并将采购单 read model 同步到飞书多维表格，供采购页面和运营驾驶舱使用。
+目标：将已到仓未同步采购单写入或更新库位库存余额，并将采购单 read model 同步到飞书多维表格，供采购页面和运营驾驶舱使用。
 
 修改文件：
 
 - `services/mock-api/app/routers/warehouse/purchase_orders.py`
-- `services/mock-api/app/routers/warehouse/sync_jobs.py`
 - `services/feishu-adapter/app/main.py`
+- `services/feishu-adapter/app/view_template_builder.py`
 - `services/mock-api/app/routers/procurement/service.py`
 - `n8n/workflows/procurement-purchase-orders-sync.json`
 - `tests/test_department_workflows.py`
@@ -1931,22 +1931,30 @@ mock-api / PostgreSQL 业务事实
 实现类/函数：
 
 - `sync_arrived_purchase_orders()`：扫描并同步到仓采购单。
+- `sync_purchase_order_inventory()`：按采购单触发库存余额同步。
+- `POST /warehouse/purchase-orders/{purchase_order_id}/sync-inventory`：供飞书按钮自动化调用的单据库存同步接口。
 - `mark_purchase_order_synced()`：更新采购单仓储同步状态。
 - `provision_procurement_purchase_orders_table()`：创建采购单表。
 - `sync_procurement_purchase_orders_table()`：同步采购单。
+- `Feishu Purchase Order Stock Sync Automation`：采购单飞书表按钮触发的原生自动化流程。
 - `Procurement Purchase Orders Sync`：定时同步采购单表。
 
 验收标准：
 
 - 同步后库存事实增加，采购单状态从 `arrived_unsynced` 进入 `synced`。
-- 飞书输入 `@warehouse 同步采购到仓库存` 后，Warehouse Workflow 应扫描已到仓未同步采购单并返回同步数量。
+- 采购单飞书表提供“同步库存”按钮，仅对 `warehouse_sync_status=arrived_unsynced` 的采购单可执行。
+- 用户点击采购单行内“同步库存”按钮后，飞书多维表格原生自动化流程应发送 `POST /warehouse/purchase-orders/{purchase_order_id}/sync-inventory` 到后端，由后端完成库存余额写入或更新。
+- 飞书原生自动化流程只负责传递采购单 ID、触发后端接口和回写执行结果，不借助 n8n，不在飞书侧计算库存数量。
+- 自动化流程请求体应包含采购单 ID、触发来源和操作者标识，后端响应应包含同步状态、更新库存行数和错误摘要。
+- 后端库存同步成功后，应写入 `inventory_movements`，并将采购单状态从 `arrived_unsynced` 更新为 `synced`。
+- 采购到仓同步直接根据 `purchase_orders.warehouse_sync_status` 控制幂等，不依赖单独同步任务表。
 - 表同步结果包含写入数量和表链接。
 - 采购单飞书表展示 `Approval Status`，用于区分待审批、已批准和已驳回采购单。
 - 采购单飞书表展示 `Reason`。
 - 采购单飞书表不展示 `Request ID`、`Supplier ID`、`Item ID`、`Last Synced At`、`Sync Status`、`Source Version`、`current_quantity`、`reorder_threshold` 或 `suggested_quantity`。
 - `purchase_orders` 数据库表不保存 `current_quantity`、`reorder_threshold` 或 `suggested_quantity`。
 - 飞书端不存在独立的 `Procurement Replenishment Requests` 表。
-- 采购单有独立 n8n 定时同步任务，并调用 `/procurement/purchase-orders-table/sync` 端点。
+- 采购单表有独立 n8n 定时同步任务，并调用 `/procurement/purchase-orders-table/sync` 端点刷新 read model。
 - 采购单同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
@@ -2027,7 +2035,7 @@ mock-api / PostgreSQL 业务事实
 - 今日到货通知只包含已支付且 `warehouse_sync_status=pending_arrival` 的采购单。
 - 飞书消息包含采购单号、商品、数量、仓库、库位、预计到货日期和确认入口文本。
 - 员工可以确认全部到货采购单，也可以指定部分采购单入库。
-- 入库确认后采购单进入 `arrived_unsynced`，后续由仓储同步工具写入库存批次和库存余额。
+- 入库确认后采购单进入 `arrived_unsynced`，后续由仓储同步工具写入或更新库存余额。
 - 明确的 `@procurement PO-* arrived at warehouse` 指令应命中 fast path，不依赖 LLM 解析。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
@@ -2107,7 +2115,7 @@ mock-api / PostgreSQL 业务事实
 - `get_order_fulfillment_table_schema()`：返回订单履约飞书表字段契约。
 - `get_order_fulfillment_table_rows()`：返回待付款、待发仓确认、待出库和已发货订单 read model。
 - `get_order_items_table_schema()`：返回订单明细飞书表字段契约。
-- `get_order_items_table_rows()`：返回订单、商品、仓库、库位、批次、数量和状态组成的订单明细 read model。
+- `get_order_items_table_rows()`：返回订单、商品、仓库、库位、数量和状态组成的订单明细 read model。
 - `sync_order_fulfillment_table()`：创建或复用 `Order Fulfillment` 飞书表并按 `Order ID` upsert 订单履约记录。
 - `sync_order_items_table()`：创建或复用 `Order Items` 飞书表并按 `Order Item ID` upsert 订单明细记录。
 - `Order Fulfillment Table Sync`：每 10 分钟调用 `/orders/fulfillment-table/sync` 刷新订单履约飞书表。

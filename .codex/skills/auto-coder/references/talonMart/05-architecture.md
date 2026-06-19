@@ -181,7 +181,6 @@ agent/                                                      # 项目根目录
 │   │   │       │   ├── inventory.py                        # 库存查询路由
 │   │   │       │   ├── orders.py                           # 仓储订单路由
 │   │   │       │   ├── purchase_orders.py                  # 到仓同步路由
-│   │   │       │   └── sync_jobs.py                        # 库存同步任务路由
 │   │   │       ├── procurement/                            # 采购路由包
 │   │   │       │   ├── __init__.py                         # 采购包标记
 │   │   │       │   ├── router.py                           # 采购路由聚合
@@ -231,6 +230,7 @@ agent/                                                      # 项目根目录
 │   └── workflows/                                          # 工作流 JSON
 │       ├── warehouse-workflow.json                         # 仓储工作流
 │       ├── warehouse-inventory-balances-refresh.json       # 库存余额刷新
+│       ├── warehouse-inventory-movements-refresh.json      # 库存流水刷新
 │       ├── warehouse-order-timeout-release.json            # 订单超时释放
 │       ├── warehouse-purchase-arrival-notify.json          # 采购到货入库通知
 │       ├── procurement-workflow.json                       # 采购工作流
@@ -249,7 +249,7 @@ agent/                                                      # 项目根目录
 │   │   ├── customers.json                                  # 客户数据
 │   │   ├── delivery_providers.json                         # 物流供应商数据
 │   │   ├── inventory.json                                  # 库存快照数据
-│   │   ├── inventory_batches.json                          # 库存批次数据
+│   │   ├── inventory_location_balances.json                 # 库存余额数据
 │   │   ├── items.json                                      # 商品数据
 │   │   ├── orders.json                                     # 订单数据
 │   │   ├── procurement_suppliers.json                      # 采购供应商数据

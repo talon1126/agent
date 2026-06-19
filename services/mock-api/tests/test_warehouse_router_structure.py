@@ -9,7 +9,8 @@ def test_warehouse_routes_are_registered_from_module_router() -> None:
     assert "/warehouse/orders/{order_id}/pay" in route_paths
     assert "/warehouse/orders/release-expired" in route_paths
     assert "/warehouse/purchase-orders/sync-arrivals" in route_paths
-    assert "/warehouse/inventory-sync-jobs/{job_id}/complete" in route_paths
+    assert "/warehouse/inventory-movements/table-schema" in route_paths
+    assert "/warehouse/inventory-movements/table-rows" in route_paths
 
     app_paths = {route.path for route in app.routes}
     assert route_paths.issubset(app_paths)

@@ -3,8 +3,7 @@ from pathlib import Path
 from app.store import FIXTURE_DIR
 from app.warehouse_store import WarehouseRepository, create_warehouse_repository_from_env
 
-RECEIVED_INVENTORY_BATCHES: list[dict] = []
-WAREHOUSE_INVENTORY_SYNC_JOBS: list[dict] = []
+RECEIVED_INVENTORY_BALANCES: list[dict] = []
 WAREHOUSE_INVENTORY_MOVEMENTS: list[dict] = []
 WAREHOUSE_BATCH_QUANTITY_OVERRIDES: dict[str, dict[str, int]] = {}
 WAREHOUSE_ORDERS: list[dict] = []

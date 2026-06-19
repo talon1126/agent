@@ -94,22 +94,6 @@ item_reviews = Table(
     Column("updated_at", String, nullable=False),
 )
 
-inventory_batches = Table(
-    "inventory_batches",
-    metadata,
-    Column("batch_id", Integer, primary_key=True, autoincrement=True),
-    Column("warehouse_id", String, nullable=False, index=True),
-    Column("location_code", String, nullable=False, index=True),
-    Column("item_id", String, nullable=False, index=True),
-    Column("batch_no", String, nullable=False, index=True),
-    Column("production_date", String, nullable=False),
-    Column("expiry_date", String, nullable=False),
-    Column("quantity_on_hand", Integer, nullable=False, default=0),
-    Column("quantity_reserved", Integer, nullable=False, default=0),
-    Column("reorder_threshold", Integer, nullable=False, default=0),
-    Column("storage_status", String, nullable=False),
-)
-
 inventory_location_balances = Table(
     "inventory_location_balances",
     metadata,
@@ -117,7 +101,6 @@ inventory_location_balances = Table(
     Column("warehouse_id", String, nullable=False, index=True),
     Column("location_code", String, nullable=False, index=True),
     Column("item_id", String, nullable=False, index=True),
-    Column("batch_no", String, nullable=False, index=True),
     Column("production_date", String, nullable=False),
     Column("expiry_date", String, nullable=False),
     Column("quantity_on_hand", Integer, nullable=False, default=0),
@@ -125,32 +108,6 @@ inventory_location_balances = Table(
     Column("storage_status", String, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
-)
-
-warehouse_inventory_sync_jobs = Table(
-    "warehouse_inventory_sync_jobs",
-    metadata,
-    Column("job_id", String, primary_key=True),
-    Column("team", String, nullable=False),
-    Column("event", String, nullable=False, index=True),
-    Column("po_draft_id", String, nullable=False, index=True),
-    Column("request_id", String, nullable=False, index=True),
-    Column("item_id", String, nullable=False, index=True),
-    Column("warehouse_id", String, nullable=False, index=True),
-    Column("warehouse_name", String, nullable=False),
-    Column("location_code", String, nullable=True, index=True),
-    Column("batch_no", String, nullable=False, index=True),
-    Column("quantity", Integer, nullable=False),
-    Column("next_action", String, nullable=False),
-    Column("suggested_message", String, nullable=False),
-    Column("status", String, nullable=False, index=True),
-    Column("created_by", String, nullable=False),
-    Column("created_at", String, nullable=False),
-    Column("updated_at", String, nullable=False),
-    Column("processed_by", String, nullable=False, default=""),
-    Column("processed_at", String, nullable=False, default=""),
-    Column("result_json", Text, nullable=False, default="{}"),
-    Column("error", Text, nullable=True),
 )
 
 orders = Table(
@@ -191,7 +148,6 @@ order_items = Table(
     Column("item_id", String, nullable=False, index=True),
     Column("warehouse_id", String, nullable=False, index=True),
     Column("location_code", String, nullable=False, index=True),
-    Column("batch_no", String, nullable=False, index=True),
     Column("quantity", Integer, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
@@ -367,8 +323,7 @@ WAREHOUSE_TABLE_COMMENTS = {
     "categories": "商品分类表，保存纸品、乳制品、饮料等业务分类和存储要求。",
     "items": "商品主数据表，保存每个商品的名称、品牌、规格、单位、条码和图片地址。",
     "item_reviews": "商品评论表，保存用户对商品的星级评分、标题和正文。",
-    "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
-    "inventory_location_balances": "批次级库位库存余额表，保存员工确认发仓扣减和退回后的当前可售库存。",
+    "inventory_location_balances": "库位库存余额表，保存当前可售库存；采购入库、发仓扣减和退回通过库存流水追踪。",
     "delivery_providers": "物流供应商表，保存顺丰、京东、圆通等承运商基础信息供订单和 Delivery Agent 使用。",
     "users": "TalonMart 用户表，保存购物车 v1 使用的测试用户资料。",
     "delivery_addresses": "TalonMart 配送地址表，保存购物车结算创建订单时使用的用户收货地址。",
@@ -379,9 +334,8 @@ WAREHOUSE_TABLE_COMMENTS = {
     "category_rank_snapshots": "分类排行榜快照表，保存各分类下的商品排名、分数和生成时间。",
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
     "purchase_orders": "采购单表，保存低库存采购需求、审批状态、供应商、支付状态和仓库同步状态。",
-    "warehouse_inventory_sync_jobs": "仓储库存同步任务表，保存采购到仓后需要 Warehouse Agent 同步飞书库存视图的待处理任务。",
     "orders": "订单主表，保存下单、发仓确认、付款、发货、到货、退款和退货状态，并保留物流供应商与快递员联系方式供 Delivery Agent 查询。",
-    "order_items": "订单明细表，保存待发仓确认商品和确认后扣减命中的仓库、库位、批次和数量。",
+    "order_items": "订单明细表，保存待发仓确认商品和确认后扣减命中的仓库、库位和数量。",
     "inventory_movements": "库存流水表，记录发仓确认、退款、退货和未付款超时释放对库位库存余额的影响。",
 }
 
@@ -429,27 +383,13 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "created_at": "评论创建时间。",
         "updated_at": "评论更新时间。",
     },
-    "inventory_batches": {
-        "batch_id": "库存批次自增整数主键。",
-        "warehouse_id": "批次库存所在仓库编号。",
-        "location_code": "批次库存所在具体库位编号。",
-        "item_id": "批次库存对应商品编号。",
-        "batch_no": "业务批次号，用于追踪入库批次。",
-        "production_date": "生产日期。",
-        "expiry_date": "保质期到期日期。",
-        "quantity_on_hand": "账面库存数量。",
-        "quantity_reserved": "已被订单或作业预留的库存数量。",
-        "reorder_threshold": "补货预警阈值。",
-        "storage_status": "库存存储状态，例如 available、quality_hold。",
-    },
     "inventory_location_balances": {
-        "id": "批次级库位余额自增整数主键。",
+        "id": "库位余额自增整数主键。",
         "warehouse_id": "余额所在仓库编号。",
         "location_code": "余额所在具体库位编号。",
         "item_id": "余额对应商品编号。",
-        "batch_no": "余额对应批次号，用于商品溯源。",
-        "production_date": "批次生产日期。",
-        "expiry_date": "批次保质期到期日期。",
+        "production_date": "当前余额的最早生产日期，用于 FEFO 和风险展示。",
+        "expiry_date": "当前余额的最早保质期到期日期，用于 FEFO 和风险展示。",
         "quantity_on_hand": "当前可售库存余额；员工确认发仓扣减，取消或退货时加回。",
         "reorder_threshold": "补货预警阈值。",
         "storage_status": "余额库存状态，例如 available、quality_hold。",
@@ -493,29 +433,6 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "updated_at": "采购单更新时间。",
         "updated_by": "最近更新采购单的用户或系统身份。",
     },
-    "warehouse_inventory_sync_jobs": {
-        "job_id": "库存同步任务编号，例如 WSJ-POD-5001。",
-        "team": "消费任务的团队，例如 warehouse。",
-        "event": "任务事件类型，例如 warehouse_inventory_sync_requested。",
-        "po_draft_id": "触发任务的采购单草稿编号。",
-        "request_id": "关联的补货申请编号。",
-        "item_id": "需要同步到飞书库存视图的商品编号。",
-        "warehouse_id": "需要同步的仓库编号。",
-        "warehouse_name": "需要同步的仓库名称。",
-        "location_code": "需要同步的具体库位。",
-        "batch_no": "到仓入库批次号。",
-        "quantity": "本次到仓数量。",
-        "next_action": "Warehouse Agent 下一步动作。",
-        "suggested_message": "建议发送给 Warehouse Agent 的同步消息。",
-        "status": "任务状态，例如 pending、completed、failed。",
-        "created_by": "创建任务的用户或系统身份。",
-        "created_at": "任务创建时间。",
-        "updated_at": "任务更新时间。",
-        "processed_by": "处理任务的用户或系统身份。",
-        "processed_at": "任务处理时间。",
-        "result_json": "任务处理结果 JSON 字符串。",
-        "error": "任务失败原因，可为空。",
-    },
     "orders": {
         "id": "订单自增整数主键。",
         "order_id": "订单业务编号，例如 ORD-CODEX-9001。",
@@ -549,7 +466,6 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "item_id": "明细商品编号。",
         "warehouse_id": "扣减或加回库存所在仓库编号。",
         "location_code": "扣减或加回库存所在库位。",
-        "batch_no": "扣减或加回库存对应批次号。",
         "quantity": "明细数量。",
         "created_at": "明细创建时间。",
         "updated_at": "明细更新时间。",
@@ -640,7 +556,6 @@ WAREHOUSE_COLUMN_COMMENTS = {
 
 
 def init_warehouse_schema(engine: Engine) -> None:
-    ensure_inventory_batch_id_integer(engine)
     metadata.create_all(
         engine,
         tables=[
@@ -649,7 +564,6 @@ def init_warehouse_schema(engine: Engine) -> None:
             categories,
             items,
             item_reviews,
-            inventory_batches,
             inventory_location_balances,
             procurement_suppliers,
             users,
@@ -660,7 +574,6 @@ def init_warehouse_schema(engine: Engine) -> None:
             item_rank_events,
             category_rank_snapshots,
             purchase_orders,
-            warehouse_inventory_sync_jobs,
             orders,
             order_items,
             inventory_movements,
@@ -672,6 +585,20 @@ def init_warehouse_schema(engine: Engine) -> None:
 
 
 def ensure_warehouse_schema_columns(engine: Engine) -> None:
+    inspector = inspect(engine)
+    with engine.begin() as connection:
+        if inspector.has_table("inventory_batches"):
+            connection.execute(text("DROP TABLE inventory_batches"))
+        if inspector.has_table("warehouse_inventory_sync_jobs"):
+            connection.execute(text("DROP TABLE warehouse_inventory_sync_jobs"))
+        if inspector.has_table(inventory_location_balances.name):
+            balance_columns = {column["name"] for column in inspector.get_columns(inventory_location_balances.name)}
+            if "batch_no" in balance_columns:
+                connection.execute(text("ALTER TABLE inventory_location_balances DROP COLUMN batch_no"))
+        if inspector.has_table(order_items.name):
+            item_columns = {column["name"] for column in inspector.get_columns(order_items.name)}
+            if "batch_no" in item_columns:
+                connection.execute(text("ALTER TABLE order_items DROP COLUMN batch_no"))
     inspector = inspect(engine)
     if not inspector.has_table(purchase_orders.name):
         return
@@ -767,25 +694,6 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
                     "WHERE search_text = ''"
                 )
             )
-
-
-def ensure_inventory_batch_id_integer(engine: Engine) -> None:
-    inspector = inspect(engine)
-    if not inspector.has_table(inventory_batches.name):
-        return
-    batch_id_column = next(
-        (column for column in inspector.get_columns(inventory_batches.name) if column["name"] == "batch_id"),
-        None,
-    )
-    if not batch_id_column:
-        return
-    column_type = str(batch_id_column["type"]).upper()
-    if "INT" in column_type:
-        return
-    with engine.begin() as connection:
-        connection.execute(text(f"DROP TABLE {_quote_identifier(inventory_batches.name)}"))
-
-
 def apply_warehouse_comments(engine: Engine) -> None:
     if engine.dialect.name != "postgresql":
         return
@@ -823,22 +731,14 @@ def load_fixture_rows(fixture_dir: Path, name: str) -> list[dict[str, Any]]:
         return json.load(handle)
 
 
-def load_inventory_batch_fixture_rows(fixture_dir: Path) -> list[dict[str, Any]]:
-    rows = load_fixture_rows(fixture_dir, "inventory_batches.json")
-    return [
-        {key: value for key, value in row.items() if key != "batch_id"}
-        for row in rows
-    ]
-
-
-def inventory_location_balance_rows_from_batches(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def load_inventory_location_balance_fixture_rows(fixture_dir: Path) -> list[dict[str, Any]]:
     now = "2026-05-24T00:00:00+00:00"
+    rows = load_fixture_rows(fixture_dir, "inventory_location_balances.json")
     return [
         {
             "warehouse_id": row["warehouse_id"],
             "location_code": row["location_code"],
             "item_id": row["item_id"],
-            "batch_no": row["batch_no"],
             "production_date": row["production_date"],
             "expiry_date": row["expiry_date"],
             "quantity_on_hand": int(row["quantity_on_hand"]),
@@ -1358,7 +1258,6 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
         connection.execute(item_reviews.delete())
         connection.execute(delivery_addresses.delete())
         connection.execute(inventory_location_balances.delete())
-        connection.execute(inventory_batches.delete())
         connection.execute(procurement_suppliers.delete())
         connection.execute(items.delete())
         connection.execute(users.delete())
@@ -1392,11 +1291,9 @@ def seed_warehouse_fixtures(engine: Engine, fixture_dir: Path) -> None:
             delivery_providers.insert(),
             load_fixture_rows(fixture_dir, "delivery_providers.json"),
         )
-        batch_rows = load_inventory_batch_fixture_rows(fixture_dir)
-        connection.execute(inventory_batches.insert(), batch_rows)
         connection.execute(
             inventory_location_balances.insert(),
-            inventory_location_balance_rows_from_batches(batch_rows),
+            load_inventory_location_balance_fixture_rows(fixture_dir),
         )
         connection.execute(
             procurement_suppliers.insert(),
@@ -1416,22 +1313,20 @@ class WarehouseRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
 
-    def list_inventory_batches(
+    def list_inventory_balances(
         self,
         *,
         item_id: str | None = None,
         warehouse_id: str | None = None,
         location_code: str | None = None,
         category_id: str | None = None,
-        batch_no: str | None = None,
     ) -> list[dict[str, Any]]:
         statement = (
             select(
-                inventory_location_balances.c.id.label("batch_id"),
+                inventory_location_balances.c.id.label("balance_id"),
                 inventory_location_balances.c.warehouse_id,
                 inventory_location_balances.c.location_code,
                 inventory_location_balances.c.item_id,
-                inventory_location_balances.c.batch_no,
                 inventory_location_balances.c.production_date,
                 inventory_location_balances.c.expiry_date,
                 inventory_location_balances.c.quantity_on_hand,
@@ -1469,13 +1364,10 @@ class WarehouseRepository:
             statement = statement.where(inventory_location_balances.c.location_code == location_code)
         if category_id:
             statement = statement.where(categories.c.category_id == category_id)
-        if batch_no:
-            statement = statement.where(inventory_location_balances.c.batch_no == batch_no)
         statement = statement.order_by(
             inventory_location_balances.c.warehouse_id,
             inventory_location_balances.c.location_code,
             items.c.item_name,
-            inventory_location_balances.c.batch_no,
         )
         with self.engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
@@ -1499,7 +1391,6 @@ class WarehouseRepository:
             inventory_location_balances.c.warehouse_id,
             inventory_location_balances.c.location_code,
             inventory_location_balances.c.expiry_date,
-            inventory_location_balances.c.batch_no,
         )
         with self.engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
@@ -2060,7 +1951,6 @@ class WarehouseRepository:
                 inventory_location_balances.c.warehouse_id,
                 inventory_location_balances.c.location_code,
                 inventory_location_balances.c.item_id,
-                inventory_location_balances.c.batch_no,
                 inventory_location_balances.c.production_date,
                 inventory_location_balances.c.expiry_date,
                 inventory_location_balances.c.quantity_on_hand,
@@ -2080,45 +1970,10 @@ class WarehouseRepository:
             inventory_location_balances.c.warehouse_id,
             inventory_location_balances.c.location_code,
             inventory_location_balances.c.item_id,
-            inventory_location_balances.c.batch_no,
         )
         with self.engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
         return [dict(row) for row in rows]
-
-    def get_inventory_batch_by_batch_no(self, batch_no: str) -> dict[str, Any] | None:
-        with self.engine.connect() as connection:
-            row = (
-                connection.execute(
-                    select(inventory_batches).where(inventory_batches.c.batch_no == batch_no)
-                )
-                .mappings()
-                .one_or_none()
-            )
-        return dict(row) if row else None
-
-    def create_inventory_batch(self, payload: dict[str, Any]) -> dict[str, Any]:
-        values = {key: value for key, value in payload.items() if key != "batch_id"}
-        now = values.get("created_at") or "2026-05-24T00:00:00+00:00"
-        with self.engine.begin() as connection:
-            connection.execute(inventory_batches.insert().values(**values))
-            connection.execute(
-                inventory_location_balances.insert().values(
-                    warehouse_id=values["warehouse_id"],
-                    location_code=values["location_code"],
-                    item_id=values["item_id"],
-                    batch_no=values["batch_no"],
-                    production_date=values["production_date"],
-                    expiry_date=values["expiry_date"],
-                    quantity_on_hand=int(values["quantity_on_hand"]),
-                    reorder_threshold=int(values["reorder_threshold"]),
-                    storage_status=values["storage_status"],
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-        batch = self.get_inventory_batch_by_batch_no(str(values["batch_no"]))
-        return batch or values
 
     def get_default_supplier(self, item_id: str) -> dict[str, Any] | None:
         with self.engine.connect() as connection:
@@ -2302,6 +2157,7 @@ class WarehouseRepository:
         limit: int,
         processed_by: str,
         processed_at: str,
+        purchase_order_id: str | None = None,
     ) -> list[dict[str, Any]]:
         statement = (
             select(purchase_orders)
@@ -2310,6 +2166,8 @@ class WarehouseRepository:
             .order_by(purchase_orders.c.arrived_at, purchase_orders.c.purchase_order_id)
             .limit(limit)
         )
+        if purchase_order_id:
+            statement = statement.where(purchase_orders.c.purchase_order_id == purchase_order_id)
         synced_items: list[dict[str, Any]] = []
         with self.engine.begin() as connection:
             rows = connection.execute(statement).mappings().all()
@@ -2323,7 +2181,6 @@ class WarehouseRepository:
                 location_code = self._resolve_purchase_order_location(connection, order)
                 arrived_at = order.get("arrived_at") or processed_at
                 production_day = _date_from_iso(arrived_at)
-                batch_no = f"BATCH-{production_day:%Y%m%d}"
                 expiry_day = production_day.toordinal() + int(item_row["shelf_life_days"])
                 expiry_date = date.fromordinal(expiry_day).isoformat()
                 reorder_threshold = _deterministic_reorder_threshold(
@@ -2332,27 +2189,12 @@ class WarehouseRepository:
                     order["warehouse_id"],
                 )
                 quantity = int(order["quantity"])
-                connection.execute(
-                    inventory_batches.insert().values(
-                        warehouse_id=order["warehouse_id"],
-                        location_code=location_code,
-                        item_id=order["item_id"],
-                        batch_no=batch_no,
-                        production_date=production_day.isoformat(),
-                        expiry_date=expiry_date,
-                        quantity_on_hand=quantity,
-                        quantity_reserved=0,
-                        reorder_threshold=reorder_threshold,
-                        storage_status="available",
-                    )
-                )
                 existing_balance = (
                     connection.execute(
                         select(inventory_location_balances)
                         .where(inventory_location_balances.c.warehouse_id == order["warehouse_id"])
                         .where(inventory_location_balances.c.location_code == location_code)
                         .where(inventory_location_balances.c.item_id == order["item_id"])
-                        .where(inventory_location_balances.c.batch_no == batch_no)
                     )
                     .mappings()
                     .one_or_none()
@@ -2365,6 +2207,8 @@ class WarehouseRepository:
                             quantity_on_hand=inventory_location_balances.c.quantity_on_hand + quantity,
                             reorder_threshold=reorder_threshold,
                             storage_status="available",
+                            production_date=production_day.isoformat(),
+                            expiry_date=expiry_date,
                             updated_at=processed_at,
                         )
                     )
@@ -2374,7 +2218,6 @@ class WarehouseRepository:
                             warehouse_id=order["warehouse_id"],
                             location_code=location_code,
                             item_id=order["item_id"],
-                            batch_no=batch_no,
                             production_date=production_day.isoformat(),
                             expiry_date=expiry_date,
                             quantity_on_hand=quantity,
@@ -2393,6 +2236,24 @@ class WarehouseRepository:
                         updated_at=processed_at,
                     )
                 )
+                connection.execute(
+                    inventory_movements.insert(),
+                    self._inventory_movement_values(
+                        [
+                            {
+                                "order_id": order["purchase_order_id"],
+                                "item_id": order["item_id"],
+                                "warehouse_id": order["warehouse_id"],
+                                "location_code": location_code,
+                                "quantity": quantity,
+                            }
+                        ],
+                        movement_type="purchase_order_received",
+                        created_by=processed_by,
+                        created_at=processed_at,
+                        direction=1,
+                    ),
+                )
                 synced_items.append(
                     {
                         "purchase_order_id": order["purchase_order_id"],
@@ -2400,7 +2261,6 @@ class WarehouseRepository:
                         "warehouse_id": order["warehouse_id"],
                         "warehouse_name": order["warehouse_name"],
                         "location_code": location_code,
-                        "batch_no": batch_no,
                         "production_date": production_day.isoformat(),
                         "expiry_date": expiry_date,
                         "quantity": quantity,
@@ -2413,6 +2273,21 @@ class WarehouseRepository:
                     }
                 )
         return synced_items
+
+    def sync_purchase_order_inventory(
+        self,
+        *,
+        purchase_order_id: str,
+        processed_by: str,
+        processed_at: str,
+    ) -> dict[str, Any] | None:
+        synced_items = self.sync_arrived_purchase_orders(
+            limit=1,
+            processed_by=processed_by,
+            processed_at=processed_at,
+            purchase_order_id=purchase_order_id,
+        )
+        return synced_items[0] if synced_items else None
 
     @staticmethod
     def _resolve_purchase_order_location(connection: Any, order: dict[str, Any]) -> str:
@@ -2443,131 +2318,6 @@ class WarehouseRepository:
         if not first_location:
             raise ValueError("warehouse_location_not_found")
         return str(first_location)
-
-    def upsert_warehouse_inventory_sync_job(self, payload: dict[str, Any]) -> dict[str, Any]:
-        values = self._warehouse_inventory_sync_job_values(payload)
-        with self.engine.begin() as connection:
-            existing = (
-                connection.execute(
-                    select(warehouse_inventory_sync_jobs).where(
-                        warehouse_inventory_sync_jobs.c.job_id == values["job_id"]
-                    )
-                )
-                .mappings()
-                .one_or_none()
-            )
-            if existing:
-                status = existing["status"] if existing["status"] in {"pending", "processing"} else "pending"
-                update_values = {
-                    key: value
-                    for key, value in values.items()
-                    if key not in {"job_id", "created_by", "created_at"}
-                }
-                update_values["status"] = status
-                update_values["processed_by"] = "" if status == "pending" else existing["processed_by"]
-                update_values["processed_at"] = "" if status == "pending" else existing["processed_at"]
-                update_values["result_json"] = "{}" if status == "pending" else existing["result_json"]
-                update_values["error"] = None
-                connection.execute(
-                    warehouse_inventory_sync_jobs.update()
-                    .where(warehouse_inventory_sync_jobs.c.job_id == values["job_id"])
-                    .values(**update_values)
-                )
-            else:
-                connection.execute(warehouse_inventory_sync_jobs.insert().values(**values))
-            row = (
-                connection.execute(
-                    select(warehouse_inventory_sync_jobs).where(
-                        warehouse_inventory_sync_jobs.c.job_id == values["job_id"]
-                    )
-                )
-                .mappings()
-                .one()
-            )
-        return self._format_warehouse_inventory_sync_job(row)
-
-    def list_warehouse_inventory_sync_jobs(self, *, status: str | None = None) -> list[dict[str, Any]]:
-        statement = select(warehouse_inventory_sync_jobs)
-        if status:
-            statement = statement.where(warehouse_inventory_sync_jobs.c.status == status)
-        statement = statement.order_by(
-            warehouse_inventory_sync_jobs.c.created_at,
-            warehouse_inventory_sync_jobs.c.job_id,
-        )
-        with self.engine.connect() as connection:
-            rows = connection.execute(statement).mappings().all()
-        return [self._format_warehouse_inventory_sync_job(row) for row in rows]
-
-    def update_warehouse_inventory_sync_job(
-        self,
-        job_id: str,
-        *,
-        status: str,
-        processed_by: str,
-        processed_at: str,
-        updated_at: str,
-        result: dict[str, Any] | None = None,
-        error: str | None = None,
-    ) -> dict[str, Any] | None:
-        with self.engine.begin() as connection:
-            connection.execute(
-                warehouse_inventory_sync_jobs.update()
-                .where(warehouse_inventory_sync_jobs.c.job_id == job_id)
-                .values(
-                    status=status,
-                    processed_by=processed_by,
-                    processed_at=processed_at,
-                    updated_at=updated_at,
-                    result_json=json.dumps(result or {}, ensure_ascii=False),
-                    error=error,
-                )
-            )
-            row = (
-                connection.execute(
-                    select(warehouse_inventory_sync_jobs).where(
-                        warehouse_inventory_sync_jobs.c.job_id == job_id
-                    )
-                )
-                .mappings()
-                .one_or_none()
-            )
-        return self._format_warehouse_inventory_sync_job(row) if row else None
-
-    @staticmethod
-    def _warehouse_inventory_sync_job_values(payload: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "job_id": payload["job_id"],
-            "team": payload["team"],
-            "event": payload["event"],
-            "po_draft_id": payload["po_draft_id"],
-            "request_id": payload["request_id"],
-            "item_id": payload["item_id"],
-            "warehouse_id": payload["warehouse_id"],
-            "warehouse_name": payload["warehouse_name"],
-            "location_code": payload.get("location_code") or "",
-            "batch_no": payload["batch_no"],
-            "quantity": int(payload["quantity"]),
-            "next_action": payload["next_action"],
-            "suggested_message": payload["suggested_message"],
-            "status": payload.get("status") or "pending",
-            "created_by": payload["created_by"],
-            "created_at": payload["created_at"],
-            "updated_at": payload["updated_at"],
-            "processed_by": payload.get("processed_by") or "",
-            "processed_at": payload.get("processed_at") or "",
-            "result_json": json.dumps(payload.get("result") or {}, ensure_ascii=False),
-            "error": payload.get("error"),
-        }
-
-    @staticmethod
-    def _format_warehouse_inventory_sync_job(row: Any) -> dict[str, Any]:
-        item = dict(row)
-        raw_result = item.pop("result_json", "{}") or "{}"
-        try:
-            item["result"] = json.loads(raw_result)
-        except json.JSONDecodeError:
-            item["result"] = {}
-        return item
 
     def list_delivery_providers(self) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:
@@ -2724,7 +2474,6 @@ class WarehouseRepository:
                     .where(inventory_location_balances.c.item_id == item["item_id"])
                     .where(inventory_location_balances.c.warehouse_id == item["warehouse_id"])
                     .where(inventory_location_balances.c.location_code == item["location_code"])
-                    .where(inventory_location_balances.c.batch_no == item["batch_no"])
                     .values(
                         quantity_on_hand=inventory_location_balances.c.quantity_on_hand - int(item["quantity"]),
                         updated_at=updated_at,
@@ -2772,7 +2521,6 @@ class WarehouseRepository:
                 "item_id": request["item_id"],
                 "warehouse_id": request.get("warehouse_id") or order.get("selected_warehouse_id") or "",
                 "location_code": request.get("location_code") or "",
-                "batch_no": "",
                 "quantity": int(request["quantity"]),
                 "created_at": updated_at,
                 "updated_at": updated_at,
@@ -2810,7 +2558,7 @@ class WarehouseRepository:
                 .order_by(
                     inventory_location_balances.c.expiry_date,
                     inventory_location_balances.c.production_date,
-                    inventory_location_balances.c.batch_no,
+                    inventory_location_balances.c.location_code,
                 )
             ).with_for_update()
             rows = connection.execute(statement).mappings().all()
@@ -2826,7 +2574,6 @@ class WarehouseRepository:
                         "item_id": row["item_id"],
                         "warehouse_id": row["warehouse_id"],
                         "location_code": row["location_code"],
-                        "batch_no": row["batch_no"],
                         "quantity": quantity,
                         "created_at": updated_at,
                         "updated_at": updated_at,
@@ -2982,7 +2729,6 @@ class WarehouseRepository:
                     .where(inventory_location_balances.c.item_id == item["item_id"])
                     .where(inventory_location_balances.c.warehouse_id == item["warehouse_id"])
                     .where(inventory_location_balances.c.location_code == item["location_code"])
-                    .where(inventory_location_balances.c.batch_no == item["batch_no"])
                     .values(
                         quantity_on_hand=inventory_location_balances.c.quantity_on_hand + int(item["quantity"]),
                         updated_at=updated_at,

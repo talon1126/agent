@@ -105,11 +105,9 @@ n8n Workflow
 | `categories` | 商品分类表，保存商品分类名称和默认存储要求。 |
 | `items` | 商品主数据，保存商品名称、品牌、规格、价格、搜索文本、单位、条码和商品图片地址；商品图片可指向本地演示 URL 或后续 OSS URL，供前端与飞书商品表展示。 |
 | `item_reviews` | 商品评论表，保存用户评分、标题、正文和时间。 |
-| `inventory_batches` | 批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。 |
-| `inventory_location_balances` | 库位库存余额表，保存当前可售库存；飞书库存余额表字段必须与该表列一一对应，不混入商品、分类、仓库展示名、计算状态或同步元字段。 |
-| `warehouse_inventory_sync_jobs` | 仓储库存同步任务表，保存采购到仓后需要写入库存批次与库存余额的待处理任务。 |
+| `inventory_location_balances` | 库位库存余额表，保存当前可售库存；采购单作为入库来源，库存流水记录库存流动，库存查询和风险判断均以该表为准。飞书库存余额表字段必须与该表列一一对应，不混入商品、分类、仓库展示名、计算状态或同步元字段。 |
 | `orders` | 订单主表，保存下单、发仓确认、付款、发货、到货、退款、退货和物流状态；状态统一使用英文枚举：`pending_fulfillment_review`、`unpaid`、`pending_shipment`、`shipped`、`arrived`、`refunded`、`returned`、`canceled`。 |
-| `order_items` | 订单明细表，保存订单命中的商品、仓库、库位、批次和数量。 |
+| `order_items` | 订单明细表，保存订单命中的商品、仓库、库位和数量。 |
 | `inventory_movements` | 库存流水表，记录员工确认发仓、退款和退货对库存余额的影响。 |
 | `delivery_providers` | 物流供应商表，保存承运商名称、热线、单号前缀和启用状态。 |
 | `users` | TalonMart 用户表，保存本地演示和购物车流程使用的用户资料。 |

@@ -11,10 +11,9 @@ from app.main import (
     CART_ITEMS,
     DELIVERY_CASES,
     PURCHASE_ORDERS,
-    RECEIVED_INVENTORY_BATCHES,
+    RECEIVED_INVENTORY_BALANCES,
     WAREHOUSE_BATCH_QUANTITY_OVERRIDES,
     WAREHOUSE_INVENTORY_MOVEMENTS,
-    WAREHOUSE_INVENTORY_SYNC_JOBS,
     WAREHOUSE_ORDER_ITEMS,
     WAREHOUSE_ORDERS,
     app,
@@ -360,8 +359,7 @@ def purchase_order_fixture(**overrides: Any) -> dict[str, Any]:
 @pytest.fixture(autouse=True)
 def clear_received_inventory_batches():
     DELIVERY_CASES.clear()
-    RECEIVED_INVENTORY_BATCHES.clear()
-    WAREHOUSE_INVENTORY_SYNC_JOBS.clear()
+    RECEIVED_INVENTORY_BALANCES.clear()
     WAREHOUSE_BATCH_QUANTITY_OVERRIDES.clear()
     WAREHOUSE_INVENTORY_MOVEMENTS.clear()
     WAREHOUSE_ORDERS.clear()
@@ -370,8 +368,7 @@ def clear_received_inventory_batches():
     CART_ITEMS.clear()
     yield
     DELIVERY_CASES.clear()
-    RECEIVED_INVENTORY_BATCHES.clear()
-    WAREHOUSE_INVENTORY_SYNC_JOBS.clear()
+    RECEIVED_INVENTORY_BALANCES.clear()
     WAREHOUSE_BATCH_QUANTITY_OVERRIDES.clear()
     WAREHOUSE_INVENTORY_MOVEMENTS.clear()
     WAREHOUSE_ORDERS.clear()
@@ -650,8 +647,8 @@ def test_order_items_table_schema_and_rows_expose_line_fields():
     assert body["schema_id"] == "order_items"
     assert body["count"] == 1
     row = body["items"][0]
-    assert row["order_item_id"] == "ORD-CODEX-LINES-1:item_vinda_tissue::"
-    assert row["fields"]["Order Item ID"] == "ORD-CODEX-LINES-1:item_vinda_tissue::"
+    assert row["order_item_id"] == "ORD-CODEX-LINES-1:item_vinda_tissue:"
+    assert row["fields"]["Order Item ID"] == "ORD-CODEX-LINES-1:item_vinda_tissue:"
     assert row["fields"]["Order ID"] == "ORD-CODEX-LINES-1"
     assert row["fields"]["Item ID"] == "item_vinda_tissue"
     assert row["fields"]["Quantity"] == 2
@@ -1518,13 +1515,13 @@ def test_records_internal_notifications_and_run_logs():
     assert client.get("/run-logs").json()[-1]["status"] == "succeeded"
 
 
-def test_procurement_mock_recommends_replenishment_for_low_batch_stock():
-    response = client.post("/procurement/mock", json={"item_id": "item_vinda_tissue"})
+def test_procurement_mock_recommends_replenishment_for_low_balance_stock():
+    response = client.post("/procurement/mock", json={"item_id": "item_cola_zero"})
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["item_id"] == "item_vinda_tissue"
+    assert body["item_id"] == "item_cola_zero"
     assert body["recommendation"] == "create_purchase_request"
     assert body["system"] == "mock-procurement"
 
@@ -1737,7 +1734,7 @@ def test_approve_purchase_order_batch_processes_pending_orders():
     assert statuses[rejected["purchase_order_id"]] == "rejected"
 
 
-def test_confirm_purchase_order_arrival_batch_marks_unsynced_without_inventory_sync_job():
+def test_confirm_purchase_order_arrival_batch_marks_unsynced_without_inventory_mutation():
     first_order = create_purchase_order_for_test(
         item_id="item_vinda_tissue",
         location_code="A1",
@@ -1785,22 +1782,20 @@ def test_confirm_purchase_order_arrival_batch_marks_unsynced_without_inventory_s
     assert sync_statuses[first_order["purchase_order_id"]] == "arrived_unsynced"
     assert sync_statuses[second_order["purchase_order_id"]] == "arrived_unsynced"
 
-    first_inventory = client.get("/warehouse/inventory/item_vinda_tissue").json()
-    second_inventory = client.get("/warehouse/inventory/item_milk_pure").json()
-    assert all(
-        item["batch_no"] != f"RCV-{first_order['purchase_order_id']}"
-        for item in first_inventory["batches"]
-    )
-    assert all(
-        item["batch_no"] != f"RCV-{second_order['purchase_order_id']}"
-        for item in second_inventory["batches"]
-    )
+    first_inventory = client.get(
+        "/warehouse/stock/balances",
+        params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
+    ).json()
+    second_inventory = client.get(
+        "/warehouse/stock/balances",
+        params={"item_id": "item_milk_pure", "warehouse_id": "wh_sz_1"},
+    ).json()
+    assert first_inventory["total_quantity_on_hand"] == 136
+    assert second_inventory["total_quantity_on_hand"] == 140
+    assert WAREHOUSE_INVENTORY_MOVEMENTS == []
 
-    pending_jobs = client.get("/warehouse/inventory-sync-jobs?status=pending").json()
-    assert all(
-        item.get("purchase_order_id") not in {first_order["purchase_order_id"], second_order["purchase_order_id"]}
-        for item in pending_jobs.get("items", [])
-    )
+    removed_jobs_route = client.get("/warehouse/inventory-sync-jobs?status=pending")
+    assert removed_jobs_route.status_code == 404
 
     repeat = client.post(
         "/procurement/purchase-orders/confirm-arrival-batch",
@@ -1830,8 +1825,7 @@ def test_warehouse_syncs_paid_arrived_purchase_orders_to_inventory_balances():
         "/procurement/purchase-orders/confirm-arrival-batch",
         json={"purchase_order_ids": [order["purchase_order_id"]], "received_by": "warehouse:user-001"},
     ).json()
-    arrived_at = arrival["confirmed_items"][0]["arrived_at"]
-    batch_no = f"BATCH-{datetime.fromisoformat(arrived_at).strftime('%Y%m%d')}"
+    assert arrival["confirmed_items"][0]["arrived_at"]
 
     response = client.post(
         "/warehouse/purchase-orders/sync-arrivals",
@@ -1845,19 +1839,10 @@ def test_warehouse_syncs_paid_arrived_purchase_orders_to_inventory_balances():
     assert body["synced_count"] == 1
     synced = body["synced_items"][0]
     assert synced["purchase_order_id"] == order["purchase_order_id"]
-    assert synced["batch_no"] == batch_no
+    assert "batch_no" not in synced
     assert synced["location_code"] == "A1"
     assert synced["warehouse_sync_status"] == "synced"
 
-    inventory = client.get("/warehouse/inventory/item_vinda_tissue").json()
-    created_batch = next(item for item in inventory["batches"] if item["batch_no"] == batch_no)
-    production_date = datetime.fromisoformat(arrived_at).date()
-    assert created_batch["location_code"] == "A1"
-    assert created_batch["quantity_on_hand"] == order["quantity"]
-    assert created_batch["production_date"] == production_date.isoformat()
-    assert created_batch["expiry_date"] == (production_date + timedelta(days=365)).isoformat()
-    assert created_batch["storage_status"] == "available"
-    assert 20 <= int(created_batch["reorder_threshold"]) <= 120
 
     balances = client.get(
         "/warehouse/stock/balances",
@@ -1871,6 +1856,52 @@ def test_warehouse_syncs_paid_arrived_purchase_orders_to_inventory_balances():
         params={"purchase_order_id": order["purchase_order_id"]},
     ).json()["items"][0]
     assert refreshed["warehouse_sync_status"] == "synced"
+    movement = next(
+        item for item in WAREHOUSE_INVENTORY_MOVEMENTS if item["order_id"] == order["purchase_order_id"]
+    )
+    assert movement["movement_type"] == "purchase_order_received"
+    assert movement["quantity_delta"] == order["quantity"]
+    assert movement["location_code"] == "A1"
+
+
+def test_purchase_order_sync_inventory_endpoint_updates_one_order_and_records_movement():
+    pending_order = create_purchase_order_for_test(
+        item_id="item_vinda_tissue",
+        location_code="A1",
+    )
+    order = client.post(
+        f"/procurement/purchase-orders/{pending_order['purchase_order_id']}/approve",
+        json={"created_by": "procurement:user-001"},
+    ).json()["purchase_order"]
+    for item in PURCHASE_ORDERS:
+        if item["purchase_order_id"] == order["purchase_order_id"]:
+            item["payment_status"] = "paid"
+            item["location_code"] = "B1"
+
+    client.post(
+        "/procurement/purchase-orders/confirm-arrival-batch",
+        json={"purchase_order_ids": [order["purchase_order_id"]], "received_by": "warehouse:user-001"},
+    )
+
+    response = client.post(
+        f"/warehouse/purchase-orders/{order['purchase_order_id']}/sync-inventory",
+        json={"processed_by": "feishu:user-001", "trigger_source": "feishu_bitable_button"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["status"] == "synced"
+    assert body["updated_balance_count"] == 1
+    assert body["purchase_order"]["purchase_order_id"] == order["purchase_order_id"]
+    assert body["purchase_order"]["warehouse_sync_status"] == "synced"
+    assert body["movement_count"] == 1
+    movement = next(
+        item for item in WAREHOUSE_INVENTORY_MOVEMENTS if item["order_id"] == order["purchase_order_id"]
+    )
+    assert movement["movement_type"] == "purchase_order_received"
+    assert movement["quantity_delta"] == order["quantity"]
+    assert movement["created_by"] == "feishu:user-001"
 
 
 def test_warehouse_lists_today_paid_purchase_order_arrivals_only():
@@ -2316,7 +2347,7 @@ def test_warehouse_inventory_returns_batches_locations_and_risk():
     assert body["item_name"] == "维达纸巾"
     assert body["category_name"] == "纸品"
     assert body["total_quantity_available"] == 136
-    assert body["risk_level"] == "high"
+    assert body["risk_level"] == "medium"
     assert body["batches"][0]["warehouse_id"] == "wh_sz_1"
     assert body["batches"][0]["location_code"] == "A1"
     assert body["recommendation"]
@@ -2367,7 +2398,7 @@ def test_warehouse_inventory_table_schema_exposes_business_fields():
     }
     assert any(item["name"] == "Location" for item in body["fields"])
     assert any(item["name"] == "Category" for item in body["fields"])
-    assert any(item["name"] == "Batch No" for item in body["fields"])
+    assert not any(item["name"] == "Batch No" for item in body["fields"])
     assert any(item["name"] == "Expiry Date" for item in body["fields"])
     risk_field = next(item for item in body["fields"] if item["name"] == "Risk Level")
     assert risk_field["type"] == "single_select"
@@ -2391,7 +2422,7 @@ def test_warehouse_inventory_table_rows_return_batch_location_feishu_ready_field
     assert body["schema_id"] == "warehouse_batch_inventory"
     assert body["count"] >= 1
     first = body["items"][0]
-    assert first["batch_key"].startswith("wh_sz_1:A1:item_vinda_tissue:")
+    assert first["batch_key"] == "wh_sz_1:A1:item_vinda_tissue"
     assert set(first["fields"]).issuperset(
         {
             "Warehouse",
@@ -2400,7 +2431,6 @@ def test_warehouse_inventory_table_rows_return_batch_location_feishu_ready_field
             "Item Name",
             "Brand",
             "Spec",
-            "Batch No",
             "Quantity On Hand",
             "Quantity Available",
             "Quantity Reserved",
@@ -2458,7 +2488,6 @@ def test_warehouse_stock_balance_table_schema_uses_select_statuses_and_date_fiel
         "warehouse_id",
         "location_code",
         "item_id",
-        "batch_no",
         "production_date",
         "expiry_date",
         "quantity_on_hand",
@@ -2496,7 +2525,6 @@ def test_warehouse_stock_balance_table_rows_match_inventory_location_balance_col
         "warehouse_id",
         "location_code",
         "item_id",
-        "batch_no",
         "production_date",
         "expiry_date",
         "quantity_on_hand",
@@ -2507,7 +2535,6 @@ def test_warehouse_stock_balance_table_rows_match_inventory_location_balance_col
     }
     assert first["fields"]["warehouse_id"] == "wh_sz_1"
     assert first["fields"]["item_id"]
-    assert first["fields"]["batch_no"]
     assert first["fields"]["quantity_on_hand"] >= 0
     assert first["fields"]["storage_status"] in {"available", "quality_hold"}
     assert first["fields"]["created_at"]
@@ -2599,13 +2626,13 @@ def test_warehouse_exception_search_returns_expiring_batch_risks():
 def test_warehouse_fulfillment_check_blocks_low_stock_sku():
     response = client.post(
         "/warehouse/fulfillment/check",
-        json={"item_id": "item_vinda_tissue"},
+        json={"item_id": "item_cola_zero"},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["item_id"] == "item_vinda_tissue"
+    assert body["item_id"] == "item_cola_zero"
     assert body["can_ship"] is False
     assert "insufficient_available_stock" in body["blockers"]
     assert body["next_action"] == "notify_procurement"
@@ -2645,7 +2672,7 @@ def test_warehouse_stock_balances_group_item_by_location():
     assert locations["A1"]["earliest_expiry_date"] == "2027-04-01"
 
 
-def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_preserves_batch_facts():
+def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_records_movements():
     before = client.get(
         "/warehouse/stock/balances",
         params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
@@ -2698,12 +2725,10 @@ def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_
     assert confirmed["order"]["status"] == "pending_shipment"
     assert confirmed["order"]["delivery_provider_id"] == "jd"
     assert confirmed["order"]["delivery_provider_name"] == "京东"
-    assert [line["location_code"] for line in confirmed["items"] if line["item_id"] == "item_vinda_tissue"] == ["A1", "A1"]
-    assert [line["batch_no"] for line in confirmed["items"] if line["item_id"] == "item_vinda_tissue"] == [
-        "BATCH-20260401",
-        "BATCH-20260501",
-    ]
-    assert [line["quantity"] for line in confirmed["items"] if line["item_id"] == "item_vinda_tissue"] == [16, 4]
+    vinda_lines = [line for line in confirmed["items"] if line["item_id"] == "item_vinda_tissue"]
+    assert [line["location_code"] for line in vinda_lines] == ["A1"]
+    assert all("batch_no" not in line for line in vinda_lines)
+    assert [line["quantity"] for line in vinda_lines] == [20]
     balances = client.get(
         "/warehouse/stock/balances",
         params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
@@ -2716,6 +2741,13 @@ def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_
     assert sum(int(batch["quantity_on_hand"]) for batch in inventory["batches"]) == 116
 
     assert all(line["status"] == "pending_shipment" for line in confirmed["items"])
+    movements = [item for item in WAREHOUSE_INVENTORY_MOVEMENTS if item["order_id"] == "ORD-CODEX-9001"]
+    assert any(
+        item["item_id"] == "item_vinda_tissue"
+        and item["location_code"] == "A1"
+        and item["quantity_delta"] == -20
+        for item in movements
+    )
 
 
 def test_warehouse_order_tool_normalizes_lowercase_order_id_for_fulfillment_confirmation():

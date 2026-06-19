@@ -19,10 +19,9 @@ from app.routers.procurement.state import PURCHASE_ORDERS, REPLENISHMENT_REQUEST
 from app.routers.search import router as search_router
 from app.routers.warehouse.router import router as warehouse_router
 from app.routers.warehouse.state import (
-    RECEIVED_INVENTORY_BATCHES,
+    RECEIVED_INVENTORY_BALANCES,
     WAREHOUSE_BATCH_QUANTITY_OVERRIDES,
     WAREHOUSE_INVENTORY_MOVEMENTS,
-    WAREHOUSE_INVENTORY_SYNC_JOBS,
     WAREHOUSE_ORDER_ITEMS,
     WAREHOUSE_ORDERS,
     get_warehouse_repository,
@@ -44,10 +43,9 @@ __all__ = [
     "app",
     "CART_ITEMS",
     "DEFAULT_DELIVERY_ADDRESSES",
-    "RECEIVED_INVENTORY_BATCHES",
+    "RECEIVED_INVENTORY_BALANCES",
     "WAREHOUSE_BATCH_QUANTITY_OVERRIDES",
     "WAREHOUSE_INVENTORY_MOVEMENTS",
-    "WAREHOUSE_INVENTORY_SYNC_JOBS",
     "WAREHOUSE_ORDER_ITEMS",
     "WAREHOUSE_ORDERS",
     "REPLENISHMENT_REQUESTS",

@@ -114,6 +114,16 @@ class InventoryBalancesTableSyncRequest(BaseModel):
     max_pages: int = 50
 
 
+class InventoryMovementsTableSyncRequest(BaseModel):
+    table_name: str = "Warehouse Inventory Movements"
+    order_id: str | None = None
+    movement_type: str | None = None
+    item_id: str | None = None
+    warehouse_id: str | None = None
+    limit: int = 500
+    max_pages: int = 50
+
+
 class ProcurementTableProvisionRequest(BaseModel):
     table_name: str | None = None
 
@@ -372,6 +382,7 @@ DEFAULT_INVENTORY_TABLE_NAME = "Warehouse Inventory Snapshot"
 DEFAULT_INVENTORY_TABLE_ALIASES = ["库存表", DEFAULT_INVENTORY_TABLE_NAME]
 DEFAULT_INVENTORY_BALANCE_TABLE_NAME = "Warehouse Inventory Balances"
 DEFAULT_INVENTORY_BALANCE_TABLE_ALIASES = ["库存余额表", DEFAULT_INVENTORY_BALANCE_TABLE_NAME]
+DEFAULT_INVENTORY_MOVEMENT_TABLE_NAME = "Warehouse Inventory Movements"
 
 
 def load_feishu_table_state(state_path: str) -> dict[str, dict[str, str]]:
@@ -607,6 +618,9 @@ def create_app(
     inventory_balance_table_id: str | None = None,
     inventory_balance_table_view_id: str | None = None,
     inventory_balance_table_url: str | None = None,
+    inventory_movement_table_id: str | None = None,
+    inventory_movement_table_view_id: str | None = None,
+    inventory_movement_table_url: str | None = None,
     procurement_purchase_order_table_id: str | None = None,
     procurement_purchase_order_table_view_id: str | None = None,
     procurement_purchase_order_table_url: str | None = None,
@@ -747,6 +761,27 @@ def create_app(
             explicit_value=inventory_balance_table_url,
             env_name="FEISHU_INVENTORY_BALANCE_TABLE_URL",
             state_key="inventory_balance_table",
+            field_name="table_url",
+        ),
+    }
+    inventory_movement_table_state = {
+        "_state_key": "inventory_movement_table",
+        "table_id": table_state_value(
+            explicit_value=inventory_movement_table_id,
+            env_name="FEISHU_INVENTORY_MOVEMENT_TABLE_ID",
+            state_key="inventory_movement_table",
+            field_name="table_id",
+        ),
+        "view_id": table_state_value(
+            explicit_value=inventory_movement_table_view_id,
+            env_name="FEISHU_INVENTORY_MOVEMENT_TABLE_VIEW_ID",
+            state_key="inventory_movement_table",
+            field_name="view_id",
+        ),
+        "table_url": table_state_value(
+            explicit_value=inventory_movement_table_url,
+            env_name="FEISHU_INVENTORY_MOVEMENT_TABLE_URL",
+            state_key="inventory_movement_table",
             field_name="table_url",
         ),
     }
@@ -3663,6 +3698,26 @@ def create_app(
                 "message": message,
             }
 
+    @app.post("/warehouse/inventory-movements-table/sync")
+    def sync_inventory_movements_table(request: InventoryMovementsTableSyncRequest) -> dict[str, Any]:
+        return sync_procurement_table(
+            request_payload={
+                "order_id": (request.order_id or "").strip() or None,
+                "movement_type": (request.movement_type or "").strip() or None,
+                "item_id": (request.item_id or "").strip() or None,
+                "warehouse_id": (request.warehouse_id or "").strip() or None,
+                "limit": max(min(int(request.limit or 500), 500), 1),
+            },
+            table_name=request.table_name.strip() or DEFAULT_INVENTORY_MOVEMENT_TABLE_NAME,
+            state=inventory_movement_table_state,
+            schema_endpoint="/warehouse/inventory-movements/table-schema",
+            rows_endpoint="/warehouse/inventory-movements/table-rows",
+            identity_field="movement_id",
+            workflow="/warehouse/inventory-movements-table/sync",
+            tool_name="warehouse_inventory_movements_table_sync_tool",
+            max_pages=max(min(int(request.max_pages or 50), 500), 1),
+        )
+
     @app.post("/warehouse/inventory-table/provision")
     def provision_inventory_table(request: InventoryTableProvisionRequest) -> dict[str, Any]:
         started = perf_counter()
@@ -4159,6 +4214,8 @@ def create_app(
         identity_field: str,
         workflow: str,
         prune_extra_fields_enabled: bool = False,
+        max_pages: int = 500,
+        tool_name: str | None = None,
     ) -> dict[str, Any]:
         started = perf_counter()
         if not procurement_table_configured():
@@ -4168,6 +4225,7 @@ def create_app(
                 rows_endpoint=rows_endpoint,
                 request_payload=request_payload,
                 error_context="procurement table",
+                max_pages=max_pages,
             )
             rows = paginated_rows["items"]
             page_count = int(paginated_rows["page_count"])
@@ -4205,6 +4263,7 @@ def create_app(
                 item["approval_status"] = fields.get("Approval Status")
                 item["payment_status"] = fields.get("Payment Status")
                 item["warehouse_sync_status"] = fields.get("Warehouse Sync Status")
+                item[identity_field] = fields.get(identity_field)
                 synced_items.append(item)
             latency_ms = (perf_counter() - started) * 1000
             write_inventory_table_run_log(
@@ -4214,7 +4273,7 @@ def create_app(
                 latency_ms=latency_ms,
                 tool_calls=[
                     {
-                        "tool": workflow.rsplit("/", 1)[-1],
+                        "tool": tool_name or workflow.rsplit("/", 1)[-1],
                         "input": request_payload,
                         "output": {"synced_count": len(synced_items), "page_count": page_count},
                     }

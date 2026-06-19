@@ -11,8 +11,12 @@ from app.routers.procurement.service import list_purchase_orders
 from app.store import load_json
 from app.warehouse_store import _date_from_iso, _deterministic_reorder_threshold
 
-from .schemas import WarehousePurchaseOrderArrivalNotifyRequest, WarehousePurchaseOrderArrivalSyncRequest
-from .state import RECEIVED_INVENTORY_BATCHES, get_warehouse_repository
+from .schemas import (
+    WarehousePurchaseOrderArrivalNotifyRequest,
+    WarehousePurchaseOrderArrivalSyncRequest,
+    WarehousePurchaseOrderInventorySyncRequest,
+)
+from .state import RECEIVED_INVENTORY_BALANCES, WAREHOUSE_INVENTORY_MOVEMENTS, get_warehouse_repository
 
 router = APIRouter()
 PURCHASE_ARRIVAL_NOTIFY_TIMEOUT_SECONDS = 5
@@ -44,7 +48,52 @@ def sync_arrived_purchase_orders(
         "synced_count": len(synced_items),
         "skipped_count": 0,
         "synced_items": synced_items,
-        "next_action": "已将已支付且未同步的采购到仓单写入库存批次表和库存余额表。",
+        "next_action": "已将已支付且未同步的采购到仓单写入库存余额表和库存流水表。",
+    }
+
+
+@router.post("/warehouse/purchase-orders/{purchase_order_id}/sync-inventory")
+def sync_purchase_order_inventory(
+    purchase_order_id: str,
+    payload: WarehousePurchaseOrderInventorySyncRequest,
+) -> dict[str, Any]:
+    processed_at = datetime.now(UTC).isoformat()
+    processed_by = payload.operator_id.strip() or payload.processed_by
+    repository = get_warehouse_repository()
+    if repository:
+        synced_item = repository.sync_purchase_order_inventory(
+            purchase_order_id=purchase_order_id,
+            processed_by=processed_by,
+            processed_at=processed_at,
+        )
+    else:
+        synced_item = sync_purchase_order_inventory_fallback(
+            purchase_order_id=purchase_order_id,
+            processed_by=processed_by,
+            processed_at=processed_at,
+        )
+
+    if not synced_item:
+        return {
+            "ok": False,
+            "status": "skipped",
+            "purchase_order_id": purchase_order_id,
+            "updated_balance_count": 0,
+            "movement_count": 0,
+            "trigger_source": payload.trigger_source,
+            "error": "purchase_order_not_eligible_for_inventory_sync",
+        }
+
+    return {
+        "ok": True,
+        "status": "synced",
+        "purchase_order_id": purchase_order_id,
+        "purchase_order": synced_item,
+        "updated_balance_count": 1,
+        "movement_count": 1,
+        "trigger_source": payload.trigger_source,
+        "processed_by": processed_by,
+        "processed_at": processed_at,
     }
 
 
@@ -151,16 +200,17 @@ def sync_arrived_purchase_orders_fallback(
     limit: int,
     processed_by: str,
     processed_at: str,
+    purchase_order_id: str | None = None,
 ) -> list[dict[str, Any]]:
     orders = list_purchase_orders(
         warehouse_sync_status="arrived_unsynced",
         payment_status="paid",
+        purchase_order_id=purchase_order_id,
     )[:limit]
     synced_items: list[dict[str, Any]] = []
     for order in orders:
         item = item_by_id(str(order["item_id"]))
         production_day = _date_from_iso(str(order.get("arrived_at") or processed_at))
-        batch_no = f"BATCH-{production_day:%Y%m%d}"
         expiry_date = date.fromordinal(
             production_day.toordinal() + int(item.get("shelf_life_days") or 365)
         ).isoformat()
@@ -171,12 +221,11 @@ def sync_arrived_purchase_orders_fallback(
             str(order["warehouse_id"]),
         )
         quantity = int(order["quantity"])
-        upsert_received_inventory_batch(
+        upsert_received_inventory_balance(
             {
                 "warehouse_id": order["warehouse_id"],
                 "location_code": location_code,
                 "item_id": order["item_id"],
-                "batch_no": batch_no,
                 "production_date": production_day.isoformat(),
                 "expiry_date": expiry_date,
                 "quantity_on_hand": quantity,
@@ -188,6 +237,19 @@ def sync_arrived_purchase_orders_fallback(
         order["location_code"] = location_code
         order["warehouse_sync_status"] = "synced"
         order["updated_at"] = processed_at
+        WAREHOUSE_INVENTORY_MOVEMENTS.append(
+            {
+                "movement_id": f"IM-{len(WAREHOUSE_INVENTORY_MOVEMENTS) + 1:06d}",
+                "order_id": order["purchase_order_id"],
+                "movement_type": "purchase_order_received",
+                "item_id": order["item_id"],
+                "warehouse_id": order["warehouse_id"],
+                "location_code": location_code,
+                "quantity_delta": quantity,
+                "created_by": processed_by,
+                "created_at": processed_at,
+            }
+        )
         synced_items.append(
             {
                 "purchase_order_id": order["purchase_order_id"],
@@ -195,7 +257,6 @@ def sync_arrived_purchase_orders_fallback(
                 "warehouse_id": order["warehouse_id"],
                 "warehouse_name": order["warehouse_name"],
                 "location_code": location_code,
-                "batch_no": batch_no,
                 "production_date": production_day.isoformat(),
                 "expiry_date": expiry_date,
                 "quantity": quantity,
@@ -210,6 +271,21 @@ def sync_arrived_purchase_orders_fallback(
     return synced_items
 
 
+def sync_purchase_order_inventory_fallback(
+    *,
+    purchase_order_id: str,
+    processed_by: str,
+    processed_at: str,
+) -> dict[str, Any] | None:
+    synced_items = sync_arrived_purchase_orders_fallback(
+        limit=1,
+        processed_by=processed_by,
+        processed_at=processed_at,
+        purchase_order_id=purchase_order_id,
+    )
+    return synced_items[0] if synced_items else None
+
+
 def item_by_id(item_id: str) -> dict[str, Any]:
     return next(item for item in load_json("items.json") if item["item_id"] == item_id)
 
@@ -218,7 +294,7 @@ def resolve_purchase_order_location(order: dict[str, Any]) -> str:
     existing_locations = sorted(
         {
             row["location_code"]
-            for row in [*load_json("inventory_batches.json"), *RECEIVED_INVENTORY_BATCHES]
+            for row in [*load_json("inventory_location_balances.json"), *RECEIVED_INVENTORY_BALANCES]
             if row["item_id"] == order["item_id"] and row["warehouse_id"] == order["warehouse_id"]
         }
     )
@@ -234,15 +310,14 @@ def resolve_purchase_order_location(order: dict[str, Any]) -> str:
     )
 
 
-def upsert_received_inventory_batch(batch: dict[str, Any]) -> None:
+def upsert_received_inventory_balance(batch: dict[str, Any]) -> None:
     existing = next(
         (
             item
-            for item in RECEIVED_INVENTORY_BATCHES
+            for item in RECEIVED_INVENTORY_BALANCES
             if item["warehouse_id"] == batch["warehouse_id"]
             and item["location_code"] == batch["location_code"]
             and item["item_id"] == batch["item_id"]
-            and item["batch_no"] == batch["batch_no"]
         ),
         None,
     )
@@ -251,4 +326,4 @@ def upsert_received_inventory_batch(batch: dict[str, Any]) -> None:
         existing["reorder_threshold"] = batch["reorder_threshold"]
         existing["storage_status"] = "available"
         return
-    RECEIVED_INVENTORY_BATCHES.append(batch)
+    RECEIVED_INVENTORY_BALANCES.append(batch)
