@@ -328,12 +328,12 @@ def purchase_order_fixture(**overrides: Any) -> dict[str, Any]:
     """Build a minimal purchase order row for warehouse/procurement route tests.
 
     The mock API keeps procurement fallback data in memory, so tests can append
-    explicit rows without going through the full replenishment approval flow
+    explicit rows without going through the full purchase order approval flow
     when the behavior under test only depends on purchase order status fields.
     """
     order = {
         "purchase_order_id": "PO-CODEX-ARRIVAL-1",
-        "request_id": "REQ-CODEX-ARRIVAL-1",
+        "approval_status": "approved",
         "supplier_id": "sup_vinda",
         "supplier_name": "Vinda Supplier",
         "item_id": "item_vinda_tissue",
@@ -1529,51 +1529,31 @@ def test_procurement_mock_recommends_replenishment_for_low_batch_stock():
     assert body["system"] == "mock-procurement"
 
 
-def test_create_and_list_replenishment_requests_from_warehouse_signal():
-    create_response = client.post(
-        "/procurement/replenishment-requests",
-        json={
-            "source": "warehouse",
-            "warehouse_id": "wh_sz_1",
-            "location_code": "A1",
-            "item_id": "item_vinda_tissue",
-            "reason": "available_quantity_below_reorder_threshold",
-            "created_by": "warehouse:user-001",
-        },
-    )
+def test_legacy_replenishment_request_routes_are_removed():
+    """Ensure procurement demand no longer exposes the standalone request API."""
 
-    assert create_response.status_code == 200
-    created = create_response.json()
-    assert created["ok"] is True
-    assert created["request"]["request_id"].startswith("REQ-")
-    assert created["request"]["status"] == "未审批"
-    assert created["request"]["source"] == "warehouse"
-    assert created["request"]["warehouse_id"] == "wh_sz_1"
-    assert created["request"]["location_code"] == "A1"
-    assert created["request"]["item_id"] == "item_vinda_tissue"
-    assert created["request"]["current_quantity"] == 136
-    assert created["request"]["reorder_threshold"] == 100
-    assert created["request"]["suggested_quantity"] == 100
-    assert created["request"]["item_name"] == "维达纸巾"
+    payload = {
+        "source": "warehouse",
+        "warehouse_id": "wh_sz_1",
+        "location_code": "A1",
+        "item_id": "item_vinda_tissue",
+        "reason": "available_quantity_below_reorder_threshold",
+        "created_by": "warehouse:user-001",
+    }
 
-    list_response = client.get("/procurement/replenishment-requests?status=未审批")
-
-    assert list_response.status_code == 200
-    listed = list_response.json()
-    assert listed["ok"] is True
-    assert any(
-        item["request_id"] == created["request"]["request_id"]
-        and item["status"] == "未审批"
-        for item in listed["items"]
-    )
+    assert client.post("/procurement/replenishment-requests", json=payload).status_code == 404
+    assert client.get("/procurement/replenishment-requests?status=pending").status_code == 404
+    assert client.get("/procurement/replenishment-requests/table-schema").status_code == 404
 
 
-def create_replenishment_request_for_test(
+def create_purchase_order_for_test(
     item_id: str = "item_vinda_tissue",
     location_code: str = "A1",
 ) -> dict:
+    """Create a pending purchase order through the current procurement demand API."""
+
     response = client.post(
-        "/procurement/replenishment-requests",
+        "/procurement/purchase-orders",
         json={
             "source": "warehouse",
             "warehouse_id": "wh_sz_1",
@@ -1584,166 +1564,194 @@ def create_replenishment_request_for_test(
         },
     )
     assert response.status_code == 200
-    return response.json()["request"]
+    return response.json()["purchase_order"]
 
 
-def test_approve_replenishment_request_creates_purchase_order():
-    request = create_replenishment_request_for_test()
+def test_create_and_list_purchase_orders_from_warehouse_signal():
+    order = create_purchase_order_for_test()
+
+    assert order["purchase_order_id"].startswith("PO-")
+    assert order["approval_status"] == "pending"
+    assert order["source"] == "warehouse"
+    assert order["warehouse_id"] == "wh_sz_1"
+    assert order["location_code"] == "A1"
+    assert order["item_id"] == "item_vinda_tissue"
+    assert "current_quantity" not in order
+    assert "reorder_threshold" not in order
+    assert "suggested_quantity" not in order
+    assert order["supplier_id"] == "supplier_paper_sz"
+    assert order["supplier_name"] == "深圳纸品供应商"
+    assert order["quantity"] == 100
+    assert order["payment_status"] == "unpaid"
+    assert order["warehouse_sync_status"] == "pending_arrival"
+    assert "request_id" not in order
+
+    list_response = client.get("/procurement/purchase-orders?approval_status=pending")
+
+    assert list_response.status_code == 200
+    listed = list_response.json()
+    assert listed["ok"] is True
+    assert any(
+        item["purchase_order_id"] == order["purchase_order_id"]
+        and item["approval_status"] == "pending"
+        for item in listed["items"]
+    )
+
+
+def test_approve_purchase_order_updates_approval_status():
+    order = create_purchase_order_for_test()
     expected_arrival_date = (
-        datetime.fromisoformat(request["created_at"]).date() + timedelta(days=3)
+        datetime.fromisoformat(order["created_at"]).date() + timedelta(days=3)
     ).isoformat()
 
     response = client.post(
-        f"/procurement/replenishment-requests/{request['request_id']}/approve",
+        f"/procurement/purchase-orders/{order['purchase_order_id']}/approve",
         json={"created_by": "procurement:user-001"},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["request"]["request_id"] == request["request_id"]
-    assert body["request"]["status"] == "已审批"
-    assert body["purchase_order"]["purchase_order_id"].startswith("PO-")
-    assert body["purchase_order"]["request_id"] == request["request_id"]
+    assert body["purchase_order"]["purchase_order_id"] == order["purchase_order_id"]
+    assert body["purchase_order"]["approval_status"] == "approved"
     assert body["purchase_order"]["supplier_id"] == "supplier_paper_sz"
     assert body["purchase_order"]["supplier_name"] == "深圳纸品供应商"
     assert body["purchase_order"]["item_id"] == "item_vinda_tissue"
-    assert body["purchase_order"]["warehouse_id"] == request["warehouse_id"]
-    assert body["purchase_order"]["warehouse_name"] == request["warehouse_name"]
-    assert body["purchase_order"]["location_code"] == request["location_code"]
-    assert body["purchase_order"]["quantity"] == request["suggested_quantity"]
+    assert body["purchase_order"]["warehouse_id"] == order["warehouse_id"]
+    assert body["purchase_order"]["warehouse_name"] == order["warehouse_name"]
+    assert body["purchase_order"]["location_code"] == order["location_code"]
+    assert body["purchase_order"]["quantity"] == order["quantity"]
     assert body["purchase_order"]["unit_price"] == 8
     assert body["purchase_order"]["currency"] == "CNY"
-    assert body["purchase_order"]["estimated_total_price"] == request["suggested_quantity"] * 8
+    assert body["purchase_order"]["estimated_total_price"] == order["quantity"] * 8
     assert body["purchase_order"]["lead_time_days"] == 3
     assert body["purchase_order"]["estimated_arrival_date"] == expected_arrival_date
     assert body["purchase_order"]["payment_status"] == "unpaid"
     assert body["purchase_order"]["warehouse_sync_status"] == "pending_arrival"
+    assert "request_id" not in body["purchase_order"]
 
     orders_response = client.get(
-        f"/procurement/purchase-orders?request_id={request['request_id']}"
+        f"/procurement/purchase-orders?purchase_order_id={order['purchase_order_id']}"
     )
     assert orders_response.status_code == 200
     orders = orders_response.json()
     assert orders["ok"] is True
     assert orders["count"] == 1
     assert orders["items"][0]["purchase_order_id"] == body["purchase_order"]["purchase_order_id"]
+    assert orders["items"][0]["approval_status"] == "approved"
 
 
-def test_approve_replenishment_request_reuses_existing_purchase_order():
-    request = create_replenishment_request_for_test()
+def test_approve_purchase_order_is_idempotent():
+    order = create_purchase_order_for_test()
+    approve_url = f"/procurement/purchase-orders/{order['purchase_order_id']}/approve"
 
-    first = client.post(
-        f"/procurement/replenishment-requests/{request['request_id']}/approve",
-        json={"created_by": "procurement:user-001"},
-    )
-    second = client.post(
-        f"/procurement/replenishment-requests/{request['request_id']}/approve",
-        json={"created_by": "procurement:user-001"},
-    )
+    first = client.post(approve_url, json={"created_by": "procurement:user-001"})
+    second = client.post(approve_url, json={"created_by": "procurement:user-001"})
 
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json()["purchase_order"]["purchase_order_id"] == first.json()["purchase_order"]["purchase_order_id"]
     assert second.json()["purchase_order"]["estimated_arrival_date"] == first.json()["purchase_order"]["estimated_arrival_date"]
     orders = client.get(
-        f"/procurement/purchase-orders?request_id={request['request_id']}"
+        f"/procurement/purchase-orders?purchase_order_id={order['purchase_order_id']}"
     ).json()
     assert orders["count"] == 1
 
 
-def test_reject_replenishment_request_keeps_unapproved_status_without_purchase_order():
-    request = create_replenishment_request_for_test()
+def test_reject_purchase_order_updates_approval_status_without_approving():
+    order = create_purchase_order_for_test()
 
     response = client.post(
-        f"/procurement/replenishment-requests/{request['request_id']}/reject",
+        f"/procurement/purchase-orders/{order['purchase_order_id']}/reject",
         json={"reason": "供应商暂不稳定，先人工复核。", "updated_by": "procurement:user-001"},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["request"]["request_id"] == request["request_id"]
-    assert body["request"]["status"] == "未审批"
-    assert body["request"]["reason"] == "供应商暂不稳定，先人工复核。"
+    assert body["purchase_order"]["purchase_order_id"] == order["purchase_order_id"]
+    assert body["purchase_order"]["approval_status"] == "rejected"
+    assert body["purchase_order"]["reason"] == "供应商暂不稳定，先人工复核。"
 
     orders = client.get(
-        f"/procurement/purchase-orders?request_id={request['request_id']}"
+        f"/procurement/purchase-orders?purchase_order_id={order['purchase_order_id']}"
     ).json()
-    assert orders["count"] == 0
+    assert orders["count"] == 1
+    assert orders["items"][0]["approval_status"] == "rejected"
 
 
-def test_replenishment_request_decision_returns_404_for_unknown_request():
+def test_purchase_order_decision_returns_404_for_unknown_order():
     response = client.post(
-        "/procurement/replenishment-requests/REQ-DOES-NOT-EXIST/approve",
+        "/procurement/purchase-orders/PO-DOES-NOT-EXIST/approve",
         json={"created_by": "procurement:user-001"},
     )
 
     assert response.status_code == 404
 
 
-def test_approve_replenishment_request_requires_default_supplier():
-    request = create_replenishment_request_for_test(
-        item_id="item_office_pen",
-        location_code="B1",
-    )
-
+def test_create_purchase_order_requires_default_supplier():
     response = client.post(
-        f"/procurement/replenishment-requests/{request['request_id']}/approve",
-        json={"created_by": "procurement:user-001"},
+        "/procurement/purchase-orders",
+        json={
+            "source": "warehouse",
+            "warehouse_id": "wh_sz_1",
+            "location_code": "B1",
+            "item_id": "item_office_pen",
+            "reason": "available_quantity_below_reorder_threshold",
+            "created_by": "warehouse:user-001",
+        },
     )
 
     assert response.status_code == 400
     assert response.json()["detail"] == "default supplier not found for item"
 
 
-def test_approve_replenishment_request_batch_processes_pending_requests_and_skips_missing_suppliers():
-    first = create_replenishment_request_for_test(item_id="item_vinda_tissue", location_code="A1")
-    second = create_replenishment_request_for_test(item_id="item_milk_pure", location_code="C1")
-    missing_supplier = create_replenishment_request_for_test(item_id="item_office_pen", location_code="B1")
+def test_approve_purchase_order_batch_processes_pending_orders():
+    first = create_purchase_order_for_test(item_id="item_vinda_tissue", location_code="A1")
+    second = create_purchase_order_for_test(item_id="item_milk_pure", location_code="C1")
+    rejected = create_purchase_order_for_test(item_id="item_vinda_tissue", location_code="A1")
+    client.post(
+        f"/procurement/purchase-orders/{rejected['purchase_order_id']}/reject",
+        json={"reason": "manual hold", "updated_by": "procurement:user-001"},
+    )
 
     response = client.post(
-        "/procurement/replenishment-requests/approve-batch",
+        "/procurement/purchase-orders/approve-batch",
         json={"created_by": "procurement:user-001"},
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["approved_count"] >= 2
-    assert body["skipped_count"] >= 1
-    approved_request_ids = {
-        item["request_id"] for item in body["created_or_reused_orders"]
+    assert body["approved_count"] == 2
+    assert body["skipped_count"] == 0
+    approved_order_ids = {
+        item["purchase_order_id"] for item in body["approved_purchase_orders"]
     }
-    assert {first["request_id"], second["request_id"]}.issubset(approved_request_ids)
-    assert any(
-        error["request_id"] == missing_supplier["request_id"]
-        and error["error"] == "default_supplier_not_found"
-        for error in body["errors"]
-    )
+    assert approved_order_ids == {first["purchase_order_id"], second["purchase_order_id"]}
 
-    refreshed = client.get("/procurement/replenishment-requests").json()["items"]
-    statuses = {item["request_id"]: item["status"] for item in refreshed}
-    assert statuses[first["request_id"]] == "已审批"
-    assert statuses[second["request_id"]] == "已审批"
-    assert statuses[missing_supplier["request_id"]] == "未审批"
+    refreshed = client.get("/procurement/purchase-orders").json()["items"]
+    statuses = {item["purchase_order_id"]: item["approval_status"] for item in refreshed}
+    assert statuses[first["purchase_order_id"]] == "approved"
+    assert statuses[second["purchase_order_id"]] == "approved"
+    assert statuses[rejected["purchase_order_id"]] == "rejected"
 
 
 def test_confirm_purchase_order_arrival_batch_marks_unsynced_without_inventory_sync_job():
-    first_request = create_replenishment_request_for_test(
+    first_order = create_purchase_order_for_test(
         item_id="item_vinda_tissue",
         location_code="A1",
     )
-    second_request = create_replenishment_request_for_test(
+    second_order = create_purchase_order_for_test(
         item_id="item_milk_pure",
         location_code="C1",
     )
     first_order = client.post(
-        f"/procurement/replenishment-requests/{first_request['request_id']}/approve",
+        f"/procurement/purchase-orders/{first_order['purchase_order_id']}/approve",
         json={"created_by": "procurement:user-001"},
     ).json()["purchase_order"]
     second_order = client.post(
-        f"/procurement/replenishment-requests/{second_request['request_id']}/approve",
+        f"/procurement/purchase-orders/{second_order['purchase_order_id']}/approve",
         json={"created_by": "procurement:user-001"},
     ).json()["purchase_order"]
 
@@ -1805,12 +1813,12 @@ def test_confirm_purchase_order_arrival_batch_marks_unsynced_without_inventory_s
 
 
 def test_warehouse_syncs_paid_arrived_purchase_orders_to_inventory_balances():
-    request = create_replenishment_request_for_test(
+    pending_order = create_purchase_order_for_test(
         item_id="item_vinda_tissue",
         location_code="A1",
     )
     order = client.post(
-        f"/procurement/replenishment-requests/{request['request_id']}/approve",
+        f"/procurement/purchase-orders/{pending_order['purchase_order_id']}/approve",
         json={"created_by": "procurement:user-001"},
     ).json()["purchase_order"]
     for item in PURCHASE_ORDERS:
@@ -1982,12 +1990,12 @@ def test_warehouse_purchase_arrival_notification_falls_back_to_fulfillment_revie
 
 
 def test_purchase_orders_can_be_filtered_by_arrived_unsynced_status():
-    request = create_replenishment_request_for_test(
+    pending_order = create_purchase_order_for_test(
         item_id="item_vinda_tissue",
         location_code="A1",
     )
     order = client.post(
-        f"/procurement/replenishment-requests/{request['request_id']}/approve",
+        f"/procurement/purchase-orders/{pending_order['purchase_order_id']}/approve",
         json={"created_by": "procurement:user-001"},
     ).json()["purchase_order"]
 
@@ -2007,85 +2015,75 @@ def test_purchase_orders_can_be_filtered_by_arrived_unsynced_status():
 
 
 def test_procurement_table_schema_and_rows_are_feishu_ready():
-    request = create_replenishment_request_for_test()
+    pending_order = create_purchase_order_for_test()
     approve = client.post(
-        f"/procurement/replenishment-requests/{request['request_id']}/approve",
+        f"/procurement/purchase-orders/{pending_order['purchase_order_id']}/approve",
         json={"created_by": "procurement:user-001"},
     ).json()
 
-    request_schema = client.get("/procurement/replenishment-requests/table-schema").json()
+    request_schema_response = client.get("/procurement/replenishment-requests/table-schema")
     order_schema = client.get("/procurement/purchase-orders/table-schema").json()
-    request_rows = client.post(
-        "/procurement/replenishment-requests/table-rows",
-        json={"status": "已审批"},
-    ).json()
     order_rows = client.post(
         "/procurement/purchase-orders/table-rows",
-        json={"request_id": request["request_id"]},
+        json={"purchase_order_id": pending_order["purchase_order_id"]},
     ).json()
 
-    assert request_schema["ok"] is True
-    assert request_schema["schema_id"] == "procurement_replenishment_requests"
-    request_field_names = [field["name"] for field in request_schema["fields"]]
-    assert "Request ID" in request_field_names
-    assert "Category ID" not in request_field_names
-    assert "Item ID" not in request_field_names
+    assert request_schema_response.status_code == 404
     assert order_schema["ok"] is True
     assert order_schema["schema_id"] == "procurement_purchase_orders"
     order_field_names = [field["name"] for field in order_schema["fields"]]
     assert "Purchase Order ID" in order_field_names
+    assert "Approval Status" in order_field_names
+    assert "Request ID" not in order_field_names
     assert "Supplier ID" not in order_field_names
     assert "Item ID" not in order_field_names
     assert "Warehouse ID" in order_field_names
     assert "Location" in order_field_names
+    assert "Reason" in order_field_names
     assert "Payment Status" in order_field_names
     assert "Warehouse Sync Status" in order_field_names
     assert "Estimated Arrival Date" in order_field_names
     assert "Arrived At" in order_field_names
-
-    assert request_rows["ok"] is True
-    request_fields = next(
-        item["fields"]
-        for item in request_rows["items"]
-        if item["request_id"] == request["request_id"]
-    )
-    assert request_fields["Request ID"] == request["request_id"]
-    assert request_fields["Status"] == "已审批"
-    assert request_fields["Item Name"] == "维达纸巾"
-    assert "Category ID" not in request_fields
-    assert "Item ID" not in request_fields
+    assert "Last Synced At" not in order_field_names
+    assert "Sync Status" not in order_field_names
+    assert "Source Version" not in order_field_names
 
     assert order_rows["ok"] is True
     assert order_rows["count"] == 1
     order_fields = order_rows["items"][0]["fields"]
     assert order_fields["Purchase Order ID"] == approve["purchase_order"]["purchase_order_id"]
-    assert order_fields["Request ID"] == request["request_id"]
+    assert order_fields["Approval Status"] == "approved"
+    assert "Request ID" not in order_fields
     assert "Supplier ID" not in order_fields
     assert "Item ID" not in order_fields
-    assert order_fields["Warehouse ID"] == request["warehouse_id"]
-    assert order_fields["Location"] == request["location_code"]
+    assert order_fields["Warehouse ID"] == pending_order["warehouse_id"]
+    assert order_fields["Location"] == pending_order["location_code"]
+    assert order_fields["Reason"] == pending_order["reason"]
     assert order_fields["Payment Status"] == "unpaid"
     assert order_fields["Warehouse Sync Status"] == "pending_arrival"
     assert order_fields["Estimated Arrival Date"] == approve["purchase_order"]["estimated_arrival_date"]
     assert order_fields["Arrived At"] == ""
+    assert "Last Synced At" not in order_fields
+    assert "Sync Status" not in order_fields
+    assert "Source Version" not in order_fields
 
 
-def test_procurement_replenishment_table_rows_support_offset_pagination():
+def test_procurement_purchase_order_table_rows_support_offset_pagination():
     """Protect the shared H1 pagination contract for H3 procurement tables."""
 
     for _index in range(3):
-        create_replenishment_request_for_test(
+        create_purchase_order_for_test(
             item_id="item_vinda_tissue",
             location_code="A1",
         )
 
     first_response = client.post(
-        "/procurement/replenishment-requests/table-rows",
-        json={"status": "未审批", "limit": 2, "offset": 0},
+        "/procurement/purchase-orders/table-rows",
+        json={"approval_status": "pending", "limit": 2, "offset": 0},
     )
     response = client.post(
-        "/procurement/replenishment-requests/table-rows",
-        json={"status": "未审批", "limit": 2, "offset": 2},
+        "/procurement/purchase-orders/table-rows",
+        json={"approval_status": "pending", "limit": 2, "offset": 2},
     )
 
     assert first_response.status_code == 200
@@ -2100,8 +2098,8 @@ def test_procurement_replenishment_table_rows_support_offset_pagination():
         assert body["next_offset"] == 4
     else:
         assert body["next_offset"] is None
-    first_ids = {item["request_id"] for item in first_body["items"]}
-    second_ids = {item["request_id"] for item in body["items"]}
+    first_ids = {item["purchase_order_id"] for item in first_body["items"]}
+    second_ids = {item["purchase_order_id"] for item in body["items"]}
     assert first_ids.isdisjoint(second_ids)
 
 
@@ -2455,20 +2453,30 @@ def test_warehouse_stock_balance_table_schema_uses_select_statuses_and_date_fiel
     assert body["ok"] is True
     assert body["schema_id"] == "warehouse_inventory_balances"
     fields_by_name = {item["name"]: item for item in body["fields"]}
-    assert "Batch No" not in fields_by_name
-    assert "Category ID" not in fields_by_name
-    assert "Item ID" not in fields_by_name
-    assert fields_by_name["Balance ID"]["type"] == "text"
-    assert fields_by_name["Quantity On Hand"]["type"] == "number"
-    assert fields_by_name["Storage Status"]["type"] == "single_select"
-    assert fields_by_name["Risk Level"]["type"] == "single_select"
-    assert fields_by_name["Balance Status"]["type"] == "single_select"
-    assert fields_by_name["Sync Status"]["type"] == "single_select"
-    assert fields_by_name["Created At"]["type"] == "date"
-    assert fields_by_name["Updated At"]["type"] == "date"
+    assert list(fields_by_name) == [
+        "id",
+        "warehouse_id",
+        "location_code",
+        "item_id",
+        "batch_no",
+        "production_date",
+        "expiry_date",
+        "quantity_on_hand",
+        "reorder_threshold",
+        "storage_status",
+        "created_at",
+        "updated_at",
+    ]
+    assert fields_by_name["id"]["source"] == "inventory_location_balances.id"
+    assert fields_by_name["quantity_on_hand"]["type"] == "number"
+    assert fields_by_name["storage_status"]["type"] == "single_select"
+    assert fields_by_name["production_date"]["type"] == "date"
+    assert fields_by_name["expiry_date"]["type"] == "date"
+    assert fields_by_name["created_at"]["type"] == "date"
+    assert fields_by_name["updated_at"]["type"] == "date"
 
 
-def test_warehouse_stock_balance_table_rows_page_by_cursor_without_batch_no():
+def test_warehouse_stock_balance_table_rows_match_inventory_location_balance_columns():
     response = client.post(
         "/warehouse/stock/balances/table-rows",
         json={"warehouse_id": "wh_sz_1", "limit": 2},
@@ -2481,24 +2489,32 @@ def test_warehouse_stock_balance_table_rows_page_by_cursor_without_batch_no():
     assert body["count"] == 2
     assert body["next_cursor"]
     first = body["items"][0]
-    assert first["balance_id"] == first["fields"]["Balance ID"]
+    assert first["balance_id"] == first["fields"]["id"]
     assert first["balance_id"].isdigit() or first["balance_id"].startswith("fallback:")
-    assert "Batch No" not in first["fields"]
-    assert "Category ID" not in first["fields"]
-    assert "Item ID" not in first["fields"]
-    assert first["fields"]["Warehouse"] == "深圳仓"
-    assert first["fields"]["Warehouse ID"] == "wh_sz_1"
-    assert first["fields"]["Quantity On Hand"] >= 0
-    assert first["fields"]["Quantity Available"] == first["fields"]["Quantity On Hand"]
-    assert first["fields"]["Storage Status"] in {"available", "quality_hold"}
-    assert first["fields"]["Risk Level"] in {"low", "medium", "high", "unknown"}
-    assert first["fields"]["Balance Status"] in {"available", "low_stock", "zero_stock", "quality_hold"}
-    assert first["fields"]["Sync Status"] == "synced"
-    assert first["fields"]["Created At"]
-    assert first["fields"]["Updated At"]
+    assert set(first["fields"]) == {
+        "id",
+        "warehouse_id",
+        "location_code",
+        "item_id",
+        "batch_no",
+        "production_date",
+        "expiry_date",
+        "quantity_on_hand",
+        "reorder_threshold",
+        "storage_status",
+        "created_at",
+        "updated_at",
+    }
+    assert first["fields"]["warehouse_id"] == "wh_sz_1"
+    assert first["fields"]["item_id"]
+    assert first["fields"]["batch_no"]
+    assert first["fields"]["quantity_on_hand"] >= 0
+    assert first["fields"]["storage_status"] in {"available", "quality_hold"}
+    assert first["fields"]["created_at"]
+    assert first["fields"]["updated_at"]
 
 
-def test_warehouse_stock_balance_table_rows_are_unique_by_item_warehouse_location():
+def test_warehouse_stock_balance_table_rows_keep_batch_level_balance_rows():
     response = client.post(
         "/warehouse/stock/balances/table-rows",
         json={"limit": 500},
@@ -2511,12 +2527,12 @@ def test_warehouse_stock_balance_table_rows_are_unique_by_item_warehouse_locatio
     vinda = [
         item
         for item in body["items"]
-        if item["fields"]["Item Name"] == "维达纸巾"
+        if item["fields"]["item_id"] == "item_vinda_tissue"
         and item["warehouse_id"] == "wh_sz_1"
         and item["location_code"] == "A1"
     ]
-    assert len(vinda) == 1
-    assert vinda[0]["fields"]["Quantity On Hand"] >= 136
+    assert len(vinda) >= 1
+    assert sum(item["fields"]["quantity_on_hand"] for item in vinda) >= 136
 
 
 def test_aggregate_stock_balance_snapshot_rows_merges_duplicate_balance_keys():

@@ -191,7 +191,6 @@ def sync_arrived_purchase_orders_fallback(
         synced_items.append(
             {
                 "purchase_order_id": order["purchase_order_id"],
-                "request_id": order["request_id"],
                 "item_id": order["item_id"],
                 "warehouse_id": order["warehouse_id"],
                 "warehouse_name": order["warehouse_name"],

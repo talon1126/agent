@@ -42,7 +42,7 @@
         "parameters": {
           "text": "={{ $json.input_text }}",
           "options": {
-            "systemMessage": "你是 Procurement Agent，专门处理采购、补货、供应商、采购单和采购飞书视图问题。当前连接的是 mock-procurement，不是真实采购系统。\n\n可用工具：\n- procurement_sync_replenishment_requests_tool：当用户说同步补货请求、刷新补货申请到飞书、更新补货视图时，把数据库 replenishment_requests 映射到飞书表 Procurement Replenishment Requests。\n- procurement_sync_purchase_orders_tool：当用户说同步采购单、刷新采购单视图、更新采购单到飞书时，把数据库 purchase_orders 映射到飞书表 Procurement Purchase Orders。\n- procurement_approve_replenishment_batch_tool：当用户说批量批准、全部批准、批量生成采购单时，批准全部 未审批 申请，生成或复用采购单，并刷新飞书视图。\n- procurement_confirm_purchase_order_arrival_tool：当用户说 PO-* 编号已到仓库、已到货、到仓确认时，批量确认采购单到仓，warehouse_sync_status 更新为 arrived_unsynced，并刷新采购单表。\n- procurement_replenishment_request_tool：查看由 Warehouse Agent 创建的 未审批 补货申请，返回商品、仓库、库位、当前库存、补货阈值和建议补货量。\n- procurement_approve_replenishment_tool：当用户批准、同意采购、要求生成采购单，且提供 REQ-* 补货申请编号时，批准申请并生成或复用采购单。\n- procurement_reject_replenishment_tool：当用户驳回、拒绝、暂不采购，且提供 REQ-* 补货申请编号时，驳回补货申请并记录原因。\n- procurement_mock_tool：根据 item_id 和库存信号返回 mock 采购建议。涉及补货、采购建议、供应商、采购单或交期时可以调用。\n\n处理规则：\n1. 用户说“同步补货请求”“刷新补货申请到飞书”“更新补货视图”时，调用 procurement_sync_replenishment_requests_tool；不要要求用户先查看待处理补货申请。\n2. 用户说“同步采购单”“刷新采购单视图”“更新采购单到飞书”时，调用 procurement_sync_purchase_orders_tool。\n3. 用户说“批量批准”“全部批准”“批量生成采购单”时，调用 procurement_approve_replenishment_batch_tool；该工具成功后会刷新飞书视图。\n4. 如果用户说 PO-* 编号已到仓库、已到货、到仓确认，且可提取一个或多个 PO-*，调用 procurement_confirm_purchase_order_arrival_tool；成功回复必须包含处理数量、到仓采购单、商品、仓库、库位、数量、支付状态、仓库同步状态、采购单表同步结果，并提示 Warehouse 下一步检查 warehouse_sync_status=arrived_unsynced 的采购单后同步库存批次。\n5. 如果用户说批准、同意采购、生成采购单或创建采购单，必须先确认消息中有 REQ-*；有编号时调用 procurement_approve_replenishment_tool。\n6. 如果用户说驳回、拒绝或暂不采购，必须先确认消息中有 REQ-*；有编号时调用 procurement_reject_replenishment_tool。\n7. 如果批准或驳回意图缺少 request_id，不要调用工具，要求用户提供补货申请编号，例如 REQ-1001。\n8. 如果用户提供了 item_ 开头的商品 ID，可以调用 procurement_mock_tool 生成采购建议。\n9. 查看清单回复必须包含 request_id、状态、商品、仓库、库位、当前库存、建议补货量和下一步。\n10. 批准成功回复必须包含 request_id、新状态 已审批、purchase_order_id、供应商、商品、仓库、库位、建议采购量、单价、预计总价、交期、预计到达时间、支付状态、仓库同步状态和下一步。\n11. 批量批准成功回复必须包含处理数量、生成/复用采购单数量、跳过数量、飞书补货请求表链接、飞书采购单表链接、异常明细和下一步。\n12. 到仓确认成功回复必须包含 warehouse_sync_status=arrived_unsynced、PO 编号、商品、仓库、库位、到仓数量、支付状态、采购单表同步结果，并明确通知 Warehouse：后续检查未同步采购单后同步库存批次。\n13. 驳回成功回复必须包含 request_id、新状态、商品、仓库、库位、拒绝原因和下一步。",
+            "systemMessage": "你是 Procurement Agent，专门处理采购、供应商、采购单审批、采购到仓确认和采购飞书视图问题。当前连接的是 mock-procurement，不是真实采购系统。\n\n可用工具：\n- procurement_purchase_order_query_tool：查看 purchase_orders 中的采购单，可按 approval_status、payment_status、warehouse_sync_status 或 PO-* 编号过滤。\n- procurement_approve_purchase_order_tool：当用户批准、同意采购或要求采购，且提供 PO-* 采购单编号时，将采购单 approval_status 更新为 approved。\n- procurement_reject_purchase_order_tool：当用户驳回、拒绝或暂不采购，且提供 PO-* 采购单编号时，将采购单 approval_status 更新为 rejected 并记录原因。\n- procurement_sync_purchase_orders_tool：当用户说同步采购单、刷新采购单视图、更新采购单到飞书时，把 purchase_orders 映射到飞书表 Procurement Purchase Orders。\n- procurement_approve_purchase_order_batch_tool：当用户说批量批准、全部批准或批量通过采购单时，批准 approval_status=pending 的采购单，并刷新采购单飞书视图。\n- procurement_confirm_purchase_order_arrival_tool：当用户说 PO-* 编号已到仓库、已到货、到仓确认时，批量确认采购单到仓，warehouse_sync_status 更新为 arrived_unsynced，并刷新采购单表。\n- procurement_mock_tool：根据 item_id 和库存信号返回 mock 采购建议。涉及采购建议、供应商、采购单或交期时可以调用。\n\n处理规则：\n1. 用户说“查看采购单”“待审批采购单”“采购列表”时，调用 procurement_purchase_order_query_tool，默认查询 approval_status=pending。\n2. 用户说“同步采购单”“刷新采购单视图”“更新采购单到飞书”时，调用 procurement_sync_purchase_orders_tool。\n3. 用户说“批量批准”“全部批准”“批量通过采购单”时，调用 procurement_approve_purchase_order_batch_tool；该工具成功后会刷新采购单飞书视图。\n4. 用户说 PO-* 编号已到仓库、已到货、到仓确认，且可提取一个或多个 PO-* 时，调用 procurement_confirm_purchase_order_arrival_tool。\n5. 批准或驳回采购单必须先确认消息中有 PO-*；缺少编号时要求用户提供采购单编号，例如 PO-5001。\n6. 如果用户提供了 item_ 开头的商品 ID，可以调用 procurement_mock_tool 生成采购建议。\n7. 查询回复必须包含 purchase_order_id、approval_status、payment_status、warehouse_sync_status、商品、仓库、库位、数量和下一步。\n8. 批准成功回复必须包含 purchase_order_id、新 approval_status=approved、供应商、商品、仓库、库位、数量、单价、预计总价、交期、预计到达时间、支付状态、仓库同步状态和下一步。\n9. 批量批准成功回复必须包含处理数量、批准数量、跳过数量、采购单表链接、异常明细和下一步。\n10. 到仓确认成功回复必须包含 warehouse_sync_status=arrived_unsynced、PO 编号、商品、仓库、库位、到仓数量、支付状态、采购单表同步结果，并明确通知 Warehouse：后续检查未同步采购单后同步库存批次。\n11. 驳回成功回复必须包含 purchase_order_id、新 approval_status=rejected、拒绝原因和下一步。",
             "maxIterations": 4,
             "returnIntermediateSteps": true
           },
@@ -105,7 +105,7 @@
       },
       {
         "parameters": {
-          "description": "Use this mock procurement API tool for item_id replenishment and purchase request recommendations.",
+          "description": "Use this mock procurement API tool for item_id purchase recommendations.",
           "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractItemId(input) {\n  const text = String(first(input.item_id, input.itemId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\b(?:item|sku)_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const itemId = extractItemId(input);\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/mock',\n    body: { item_id: itemId, query: String(first(input.query, input.text, input.input, query, '')) },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_mock_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
         },
         "id": "procurement-mock-tool-node",
@@ -146,8 +146,8 @@
         ]
       },
       {
-        "id": "procurement-replenishment-request-tool-node",
-        "name": "procurement_replenishment_request_tool",
+        "id": "procurement-purchase-order-query-tool-node",
+        "name": "procurement_purchase_order_query_tool",
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
@@ -155,13 +155,13 @@
           320
         ],
         "parameters": {
-          "description": "Use this tool to list 未审批 replenishment requests created by Warehouse Agent.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const status = String(first(input.status, '未审批')).trim();\n  const result = await helpers.httpRequest({\n    method: 'GET',\n    url: 'http://mock-api:8000/procurement/replenishment-requests',\n    qs: { status },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_replenishment_request_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "description": "Use this tool to list purchase orders by approval, payment, warehouse sync status, or PO id.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try { return JSON.parse(value); } catch (error) { return { query: value }; }\n}\nfunction first(...values) { return values.find((value) => value !== undefined && value !== null && String(value).trim() !== ''); }\ntry {\n  const input = parseMaybeJson(query);\n  const result = await helpers.httpRequest({\n    method: 'GET',\n    url: 'http://mock-api:8000/procurement/purchase-orders',\n    qs: {\n      approval_status: first(input.approval_status, input.approvalStatus, 'pending'),\n      payment_status: first(input.payment_status, input.paymentStatus, null),\n      warehouse_sync_status: first(input.warehouse_sync_status, input.warehouseSyncStatus, null),\n      purchase_order_id: first(input.purchase_order_id, input.purchaseOrderId, input.po_id, input.poId, null)\n    },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({ ok: false, error: 'procurement_purchase_order_query_runtime_error', message: error && error.message ? error.message : String(error) });\n}"
         }
       },
       {
-        "id": "procurement-approve-replenishment-tool-node",
-        "name": "procurement_approve_replenishment_tool",
+        "id": "procurement-approve-purchase-order-tool-node",
+        "name": "procurement_approve_purchase_order_tool",
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
@@ -169,13 +169,13 @@
           320
         ],
         "parameters": {
-          "description": "Use this tool to approve a REQ-* replenishment request and create or reuse a purchase order draft.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractRequestId(input) {\n  const text = String(first(input.request_id, input.requestId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bREQ-[0-9A-Za-z_-]+\\b/i);\n  return match ? match[0].toUpperCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const requestId = extractRequestId(input);\n  if (!requestId) {\n    return JSON.stringify({ ok: false, error: 'missing_request_id', message: '请提供补货申请 request_id，例如 REQ-1001。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/replenishment-requests/' + encodeURIComponent(requestId) + '/approve',\n    body: {\n      created_by: String(first(input.created_by, input.createdBy, 'procurement-agent')).trim()\n    },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_approve_replenishment_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "description": "Use this tool to approve a PO-* purchase order.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try { return JSON.parse(value); } catch (error) { return { query: value }; }\n}\nfunction first(...values) { return values.find((value) => value !== undefined && value !== null && String(value).trim() !== ''); }\nfunction extractPurchaseOrderId(input) {\n  const text = String(first(input.purchase_order_id, input.purchaseOrderId, input.po_id, input.poId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bPO-[0-9A-Za-z_-]+\\b/i);\n  return match ? match[0].toUpperCase() : '';\n}\ntry {\n  const input = parseMaybeJson(query);\n  const purchaseOrderId = extractPurchaseOrderId(input);\n  if (!purchaseOrderId) return JSON.stringify({ ok: false, error: 'missing_purchase_order_id', message: '请提供采购单编号，例如 PO-5001。' });\n  const result = await helpers.httpRequest({ method: 'POST', url: 'http://mock-api:8000/procurement/purchase-orders/' + encodeURIComponent(purchaseOrderId) + '/approve', body: { created_by: String(first(input.created_by, input.createdBy, 'procurement-agent')).trim() }, json: true });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({ ok: false, error: 'procurement_approve_purchase_order_runtime_error', message: error && error.message ? error.message : String(error) });\n}"
         }
       },
       {
-        "id": "procurement-reject-replenishment-tool-node",
-        "name": "procurement_reject_replenishment_tool",
+        "id": "procurement-reject-purchase-order-tool-node",
+        "name": "procurement_reject_purchase_order_tool",
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
@@ -183,22 +183,8 @@
           320
         ],
         "parameters": {
-          "description": "Use this tool to reject a REQ-* replenishment request with a procurement reason.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractRequestId(input) {\n  const text = String(first(input.request_id, input.requestId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bREQ-[0-9A-Za-z_-]+\\b/i);\n  return match ? match[0].toUpperCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const requestId = extractRequestId(input);\n  if (!requestId) {\n    return JSON.stringify({ ok: false, error: 'missing_request_id', message: '请提供补货申请 request_id，例如 REQ-1001。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/replenishment-requests/' + encodeURIComponent(requestId) + '/reject',\n    body: {\n      reason: String(first(input.reason, input.reject_reason, input.rejectReason, 'procurement_rejected_by_agent')).trim(),\n      updated_by: String(first(input.updated_by, input.updatedBy, 'procurement-agent')).trim()\n    },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_reject_replenishment_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
-        }
-      },
-      {
-        "id": "procurement-sync-replenishment-requests-tool-node",
-        "name": "procurement_sync_replenishment_requests_tool",
-        "type": "@n8n/n8n-nodes-langchain.toolCode",
-        "typeVersion": 1.3,
-        "position": [
-          1616,
-          320
-        ],
-        "parameters": {
-          "description": "Use this tool to sync procurement replenishment requests from database to the Feishu procurement request table.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://feishu-adapter:8000/procurement/replenishment-requests-table/sync',\n    body: {\n      status: first(input.status, input.request_status, input.requestStatus, null),\n      request_id: first(input.request_id, input.requestId, null),\n      limit: Number(first(input.limit, 100))\n    },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_sync_replenishment_requests_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "description": "Use this tool to reject a PO-* purchase order with a procurement reason.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try { return JSON.parse(value); } catch (error) { return { query: value }; }\n}\nfunction first(...values) { return values.find((value) => value !== undefined && value !== null && String(value).trim() !== ''); }\nfunction extractPurchaseOrderId(input) {\n  const text = String(first(input.purchase_order_id, input.purchaseOrderId, input.po_id, input.poId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\bPO-[0-9A-Za-z_-]+\\b/i);\n  return match ? match[0].toUpperCase() : '';\n}\ntry {\n  const input = parseMaybeJson(query);\n  const purchaseOrderId = extractPurchaseOrderId(input);\n  if (!purchaseOrderId) return JSON.stringify({ ok: false, error: 'missing_purchase_order_id', message: '请提供采购单编号，例如 PO-5001。' });\n  const result = await helpers.httpRequest({ method: 'POST', url: 'http://mock-api:8000/procurement/purchase-orders/' + encodeURIComponent(purchaseOrderId) + '/reject', body: { reason: String(first(input.reason, input.reject_reason, input.rejectReason, 'procurement_rejected_by_agent')).trim(), updated_by: String(first(input.updated_by, input.updatedBy, 'procurement-agent')).trim() }, json: true });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({ ok: false, error: 'procurement_reject_purchase_order_runtime_error', message: error && error.message ? error.message : String(error) });\n}"
         }
       },
       {
@@ -212,12 +198,12 @@
         ],
         "parameters": {
           "description": "Use this tool to sync purchase orders from database to the Feishu purchase order table.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://feishu-adapter:8000/procurement/purchase-orders-table/sync',\n    body: {\n      request_id: first(input.request_id, input.requestId, null),\n      purchase_order_id: first(input.purchase_order_id, input.purchaseOrderId, input.po_id, input.poId, null),\n      warehouse_sync_status: first(input.warehouse_sync_status, input.warehouseSyncStatus, null),\n      limit: Number(first(input.limit, 100))\n    },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_sync_purchase_orders_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://feishu-adapter:8000/procurement/purchase-orders-table/sync',\n    body: {\n      purchase_order_id: first(input.purchase_order_id, input.purchaseOrderId, input.po_id, input.poId, null),\n      approval_status: first(input.approval_status, input.approvalStatus, null),\n      payment_status: first(input.payment_status, input.paymentStatus, null),\n      warehouse_sync_status: first(input.warehouse_sync_status, input.warehouseSyncStatus, null),\n      limit: Number(first(input.limit, 100))\n    },\n    json: true\n  });\n  return JSON.stringify(result);\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_sync_purchase_orders_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
         }
       },
       {
-        "id": "procurement-approve-replenishment-batch-tool-node",
-        "name": "procurement_approve_replenishment_batch_tool",
+        "id": "procurement-approve-purchase-order-batch-tool-node",
+        "name": "procurement_approve_purchase_order_batch_tool",
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
@@ -225,8 +211,8 @@
           320
         ],
         "parameters": {
-          "description": "Use this tool to batch approve all pending procurement replenishment requests, create or reuse purchase orders, and refresh Feishu procurement views.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const approval = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/replenishment-requests/approve-batch',\n    body: {\n      created_by: String(first(input.created_by, input.createdBy, 'procurement-agent')).trim(),\n      status: String(first(input.status, '未审批')).trim()\n    },\n    json: true\n  });\n  const replenishmentSync = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://feishu-adapter:8000/procurement/replenishment-requests-table/sync',\n    body: { limit: 500 },\n    json: true\n  });\n  const orderSync = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://feishu-adapter:8000/procurement/purchase-orders-table/sync',\n    body: { limit: 500 },\n    json: true\n  });\n  return JSON.stringify({\n    ok: approval.ok === true && replenishmentSync.ok === true && orderSync.ok === true,\n    approval,\n    replenishment_request_table_sync: replenishmentSync,\n    purchase_order_table_sync: orderSync,\n    processed_count: approval.processed_count,\n    approved_count: approval.approved_count,\n    skipped_count: approval.skipped_count,\n    created_or_reused_orders: approval.created_or_reused_orders || [],\n    errors: approval.errors || [],\n    replenishment_request_table_url: replenishmentSync.table_url || '',\n    purchase_order_table_url: orderSync.table_url || ''\n  });\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'procurement_approve_replenishment_batch_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "description": "Use this tool to batch approve pending purchase orders and refresh the Feishu purchase order view.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try { return JSON.parse(value); } catch (error) { return { query: value }; }\n}\nfunction first(...values) { return values.find((value) => value !== undefined && value !== null && String(value).trim() !== ''); }\ntry {\n  const input = parseMaybeJson(query);\n  const approval = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/purchase-orders/approve-batch',\n    body: {\n      created_by: String(first(input.created_by, input.createdBy, 'procurement-agent')).trim(),\n      approval_status: String(first(input.approval_status, input.approvalStatus, 'pending')).trim()\n    },\n    json: true\n  });\n  const orderSync = await helpers.httpRequest({ method: 'POST', url: 'http://feishu-adapter:8000/procurement/purchase-orders-table/sync', body: { limit: 500 }, json: true });\n  return JSON.stringify({ ok: approval.ok === true && orderSync.ok === true, approval, purchase_order_table_sync: orderSync, processed_count: approval.processed_count, approved_count: approval.approved_count, skipped_count: approval.skipped_count, approved_purchase_orders: approval.approved_purchase_orders || [], errors: approval.errors || [], purchase_order_table_url: orderSync.table_url || '' });\n} catch (error) {\n  return JSON.stringify({ ok: false, error: 'procurement_approve_purchase_order_batch_runtime_error', message: error && error.message ? error.message : String(error) });\n}"
         }
       },
       {
@@ -322,61 +308,6 @@
           ]
         ]
       },
-      "procurement_replenishment_request_tool": {
-        "ai_tool": [
-          [
-            {
-              "node": "Procurement Agent",
-              "type": "ai_tool",
-              "index": 0
-            }
-          ]
-        ]
-      },
-      "procurement_approve_replenishment_tool": {
-        "ai_tool": [
-          [
-            {
-              "node": "Procurement Agent",
-              "type": "ai_tool",
-              "index": 0
-            }
-          ]
-        ]
-      },
-      "procurement_reject_replenishment_tool": {
-        "ai_tool": [
-          [
-            {
-              "node": "Procurement Agent",
-              "type": "ai_tool",
-              "index": 0
-            }
-          ]
-        ]
-      },
-      "procurement_sync_replenishment_requests_tool": {
-        "ai_tool": [
-          [
-            {
-              "node": "Procurement Agent",
-              "type": "ai_tool",
-              "index": 0
-            }
-          ]
-        ]
-      },
-      "procurement_approve_replenishment_batch_tool": {
-        "ai_tool": [
-          [
-            {
-              "node": "Procurement Agent",
-              "type": "ai_tool",
-              "index": 0
-            }
-          ]
-        ]
-      },
       "procurement_sync_purchase_orders_tool": {
         "ai_tool": [
           [
@@ -389,6 +320,50 @@
         ]
       },
       "procurement_confirm_purchase_order_arrival_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Procurement Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "procurement_purchase_order_query_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Procurement Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "procurement_approve_purchase_order_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Procurement Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "procurement_reject_purchase_order_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Procurement Agent",
+              "type": "ai_tool",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "procurement_approve_purchase_order_batch_tool": {
         "ai_tool": [
           [
             {

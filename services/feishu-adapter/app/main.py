@@ -118,16 +118,11 @@ class ProcurementTableProvisionRequest(BaseModel):
     table_name: str | None = None
 
 
-class ProcurementReplenishmentRequestTableSyncRequest(BaseModel):
-    status: str | None = None
-    request_id: str | None = None
-    limit: int = 100
-
-
 class ProcurementPurchaseOrderTableSyncRequest(BaseModel):
-    request_id: str | None = None
     purchase_order_id: str | None = None
+    approval_status: str | None = None
     warehouse_sync_status: str | None = None
+    payment_status: str | None = None
     limit: int = 100
 
 
@@ -612,9 +607,6 @@ def create_app(
     inventory_balance_table_id: str | None = None,
     inventory_balance_table_view_id: str | None = None,
     inventory_balance_table_url: str | None = None,
-    procurement_replenishment_request_table_id: str | None = None,
-    procurement_replenishment_request_table_view_id: str | None = None,
-    procurement_replenishment_request_table_url: str | None = None,
     procurement_purchase_order_table_id: str | None = None,
     procurement_purchase_order_table_view_id: str | None = None,
     procurement_purchase_order_table_url: str | None = None,
@@ -759,27 +751,6 @@ def create_app(
         ),
     }
     inventory_table_lock = threading.RLock()
-    procurement_replenishment_request_table_state = {
-        "_state_key": "procurement_replenishment_request_table",
-        "table_id": table_state_value(
-            explicit_value=procurement_replenishment_request_table_id,
-            env_name="FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_ID",
-            state_key="procurement_replenishment_request_table",
-            field_name="table_id",
-        ),
-        "view_id": table_state_value(
-            explicit_value=procurement_replenishment_request_table_view_id,
-            env_name="FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_VIEW_ID",
-            state_key="procurement_replenishment_request_table",
-            field_name="view_id",
-        ),
-        "table_url": table_state_value(
-            explicit_value=procurement_replenishment_request_table_url,
-            env_name="FEISHU_PROCUREMENT_REPLENISHMENT_REQUEST_TABLE_URL",
-            state_key="procurement_replenishment_request_table",
-            field_name="table_url",
-        ),
-    }
     procurement_purchase_order_table_state = {
         "_state_key": "procurement_purchase_order_table",
         "table_id": (
@@ -1753,6 +1724,21 @@ def create_app(
         if payload.get("code") not in {0, 1254606, None}:
             raise RuntimeError(f"Feishu inventory table field update failed: {payload}")
 
+    def delete_inventory_table_field(
+        *,
+        token: str,
+        table_identifier: str,
+        field_id: str,
+    ) -> None:
+        response = client.delete(
+            bitable_field_url(table_identifier, field_id),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") not in {0, 1254606, None}:
+            raise RuntimeError(f"Feishu inventory table field delete failed: {payload}")
+
     def create_inventory_table_fields(
         *,
         token: str,
@@ -1760,7 +1746,41 @@ def create_app(
         field_specs: list[dict[str, Any]],
         existing_fields: dict[str, dict[str, Any]] | None = None,
     ) -> None:
-        existing = existing_fields or {}
+        existing = (
+            existing_fields
+            if existing_fields is not None
+            else fields_by_name_for_table(token=token, table_identifier=table_identifier)
+        )
+        if field_specs:
+            first_field = field_specs[0]
+            first_field_name = str(first_field.get("field_name") or "").strip()
+            primary_field = next(
+                (field for field in existing.values() if field.get("is_primary")),
+                None,
+            )
+            if (
+                primary_field
+                and first_field_name
+                and first_field_name not in existing
+                and int(primary_field.get("type") or 0) == 1
+                and int(first_field.get("type") or 0) == 1
+            ):
+                field_id = str(primary_field.get("field_id") or "")
+                if field_id:
+                    update_inventory_table_field(
+                        token=token,
+                        table_identifier=table_identifier,
+                        field_id=field_id,
+                        field=first_field,
+                    )
+                    existing.pop(str(primary_field.get("field_name") or ""), None)
+                    existing[first_field_name] = {
+                        **primary_field,
+                        **first_field,
+                        "field_id": field_id,
+                        "field_name": first_field_name,
+                        "is_primary": True,
+                    }
         for field in field_specs:
             existing_field = existing.get(str(field["field_name"]))
             if existing_field:
@@ -2212,51 +2232,49 @@ def create_app(
                 "view_name": "库存余额总览",
                 "view_type": "grid",
                 "visible_fields": [
-                    "Balance ID",
-                    "Warehouse",
-                    "Location",
-                    "Item Name",
-                    "Quantity On Hand",
-                    "Storage Status",
-                    "Risk Level",
-                    "Balance Status",
-                    "Updated At",
+                    "id",
+                    "warehouse_id",
+                    "location_code",
+                    "item_id",
+                    "batch_no",
+                    "quantity_on_hand",
+                    "storage_status",
+                    "updated_at",
                 ],
                 "filters": [],
-                "sorts": [{"field": "Warehouse", "order": "asc"}, {"field": "Item Name", "order": "asc"}],
+                "sorts": [{"field": "warehouse_id", "order": "asc"}, {"field": "item_id", "order": "asc"}],
             },
             {
                 "view_name": "低库存余额",
                 "view_type": "grid",
                 "visible_fields": [
-                    "Balance ID",
-                    "Warehouse",
-                    "Location",
-                    "Item Name",
-                    "Quantity On Hand",
-                    "Reorder Threshold",
-                    "Risk Level",
-                    "Balance Status",
-                    "Updated At",
+                    "id",
+                    "warehouse_id",
+                    "location_code",
+                    "item_id",
+                    "batch_no",
+                    "quantity_on_hand",
+                    "reorder_threshold",
+                    "updated_at",
                 ],
-                "filters": [{"field": "Risk Level", "operator": "is", "value": "high"}],
-                "sorts": [{"field": "Quantity On Hand", "order": "asc"}],
+                "filters": [],
+                "sorts": [{"field": "quantity_on_hand", "order": "asc"}],
             },
             {
                 "view_name": "可售库存",
                 "view_type": "grid",
                 "visible_fields": [
-                    "Balance ID",
-                    "Warehouse",
-                    "Location",
-                    "Item Name",
-                    "Quantity On Hand",
-                    "Storage Status",
-                    "Balance Status",
-                    "Updated At",
+                    "id",
+                    "warehouse_id",
+                    "location_code",
+                    "item_id",
+                    "batch_no",
+                    "quantity_on_hand",
+                    "storage_status",
+                    "updated_at",
                 ],
-                "filters": [{"field": "Balance Status", "operator": "is", "value": "available"}],
-                "sorts": [{"field": "Warehouse", "order": "asc"}, {"field": "Item Name", "order": "asc"}],
+                "filters": [{"field": "storage_status", "operator": "is", "value": "available"}],
+                "sorts": [{"field": "warehouse_id", "order": "asc"}, {"field": "item_id", "order": "asc"}],
             },
         ]
         existing_views = {
@@ -2318,8 +2336,30 @@ def create_app(
         state: dict[str, str],
         schema_endpoint: str,
         field_specs: list[dict[str, Any]] | None = None,
+        prune_extra_fields_enabled: bool = False,
     ) -> dict[str, str]:
         field_specs = field_specs if field_specs is not None else procurement_table_field_specs(schema_endpoint)
+        def prune_extra_fields(table_identifier: str) -> None:
+            desired_names = {
+                str(field.get("field_name") or "").strip()
+                for field in field_specs
+                if str(field.get("field_name") or "").strip()
+            }
+            existing_fields = fields_by_name_for_table(
+                token=token,
+                table_identifier=table_identifier,
+            )
+            for field_name, field in existing_fields.items():
+                if field_name in desired_names or field.get("is_primary"):
+                    continue
+                field_id = str(field.get("field_id") or "")
+                if field_id:
+                    delete_inventory_table_field(
+                        token=token,
+                        table_identifier=table_identifier,
+                        field_id=field_id,
+                    )
+
         if state["table_id"]:
             result = {
                 "table_id": state["table_id"],
@@ -2332,6 +2372,8 @@ def create_app(
                     table_identifier=result["table_id"],
                     field_specs=field_specs,
                 )
+                if prune_extra_fields_enabled:
+                    prune_extra_fields(result["table_id"])
                 return result
             except (httpx.HTTPStatusError, RuntimeError) as error:
                 if not is_missing_inventory_table_error(error):
@@ -2344,6 +2386,8 @@ def create_app(
                 table_identifier=existing["table_id"],
                 field_specs=field_specs,
             )
+            if prune_extra_fields_enabled:
+                prune_extra_fields(existing["table_id"])
             remember_procurement_table(state, existing)
             return {**existing, "action": "existing"}
         response = client.post(
@@ -2362,6 +2406,8 @@ def create_app(
                         table_identifier=existing["table_id"],
                         field_specs=field_specs,
                     )
+                    if prune_extra_fields_enabled:
+                        prune_extra_fields(existing["table_id"])
                     remember_procurement_table(state, existing)
                     return {**existing, "action": "existing"}
             raise RuntimeError(f"Feishu procurement table create failed: {payload}")
@@ -2848,10 +2894,10 @@ def create_app(
         return results
 
     def balance_identity_key(balance_id: str) -> tuple[tuple[str, str], ...]:
-        return (("Balance ID", balance_id),)
+        return (("id", balance_id),)
 
     def balance_record_filter_expression(balance_id: str) -> str:
-        return f'CurrentValue.[Balance ID]="{bitable_filter_literal(balance_id)}"'
+        return f'CurrentValue.[id]="{bitable_filter_literal(balance_id)}"'
 
     def balance_record_filter_chunks(balance_ids: list[str]) -> list[tuple[list[str], str]]:
         chunks: list[tuple[list[str], str]] = []
@@ -2921,7 +2967,7 @@ def create_app(
                     continue
                 fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
                 record_id = str(item.get("record_id") or item.get("id") or "")
-                balance_id_value = str(fields.get("Balance ID") or "").strip()
+                balance_id_value = str(fields.get("id") or "").strip()
                 if record_id and balance_id_value:
                     records[balance_identity_key(balance_id_value)] = record_id
         return records
@@ -2935,9 +2981,9 @@ def create_app(
     ) -> list[dict[str, str]]:
         prepared = []
         for index, fields in enumerate(field_rows):
-            balance_id_value = str(fields.get("Balance ID") or "").strip()
+            balance_id_value = str(fields.get("id") or "").strip()
             if not balance_id_value:
-                raise RuntimeError("inventory balance table row is missing Balance ID")
+                raise RuntimeError("inventory balance table row is missing id")
             prepared.append(
                 {
                     "index": index,
@@ -3565,16 +3611,13 @@ def create_app(
                 fields = row["fields"]
                 synced_items.append(
                     {
-                        "balance_id": fields.get("Balance ID") or row.get("balance_id"),
-                        "item_id": fields.get("Item ID") or row.get("item_id"),
-                        "warehouse_id": fields.get("Warehouse ID") or row.get("warehouse_id"),
-                        "location_code": fields.get("Location") or row.get("location_code"),
-                        "quantity_on_hand": fields.get("Quantity On Hand"),
-                        "risk_level": fields.get("Risk Level"),
-                        "balance_status": fields.get("Balance Status"),
+                        "balance_id": fields.get("id") or row.get("balance_id"),
+                        "item_id": fields.get("item_id") or row.get("item_id"),
+                        "warehouse_id": fields.get("warehouse_id") or row.get("warehouse_id"),
+                        "location_code": fields.get("location_code") or row.get("location_code"),
+                        "quantity_on_hand": fields.get("quantity_on_hand"),
                         "action": upsert_result.get("action"),
                         "record_id": upsert_result.get("record_id"),
-                        "source_version": fields.get("Source Version", ""),
                     }
                 )
 
@@ -4055,6 +4098,7 @@ def create_app(
         state: dict[str, str],
         schema_endpoint: str,
         workflow: str,
+        prune_extra_fields_enabled: bool = False,
     ) -> dict[str, Any]:
         started = perf_counter()
         if not procurement_table_configured():
@@ -4072,6 +4116,7 @@ def create_app(
                 table_name=table_name,
                 state=state,
                 schema_endpoint=schema_endpoint,
+                prune_extra_fields_enabled=prune_extra_fields_enabled,
             )
             latency_ms = (perf_counter() - started) * 1000
             write_inventory_table_run_log(
@@ -4113,6 +4158,7 @@ def create_app(
         rows_endpoint: str,
         identity_field: str,
         workflow: str,
+        prune_extra_fields_enabled: bool = False,
     ) -> dict[str, Any]:
         started = perf_counter()
         if not procurement_table_configured():
@@ -4136,6 +4182,7 @@ def create_app(
                 table_name=table_name,
                 state=state,
                 schema_endpoint=schema_endpoint,
+                prune_extra_fields_enabled=prune_extra_fields_enabled,
             )
             synced_items: list[dict[str, Any]] = []
             for row in rows:
@@ -4154,13 +4201,10 @@ def create_app(
                     "record_id": result["record_id"],
                     "source_version": fields.get("Source Version", ""),
                 }
-                if identity_field == "Request ID":
-                    item["request_id"] = fields.get("Request ID")
-                else:
-                    item["purchase_order_id"] = fields.get("Purchase Order ID")
-                    item["request_id"] = fields.get("Request ID")
-                    item["payment_status"] = fields.get("Payment Status")
-                    item["warehouse_sync_status"] = fields.get("Warehouse Sync Status")
+                item["purchase_order_id"] = fields.get("Purchase Order ID")
+                item["approval_status"] = fields.get("Approval Status")
+                item["payment_status"] = fields.get("Payment Status")
+                item["warehouse_sync_status"] = fields.get("Warehouse Sync Status")
                 synced_items.append(item)
             latency_ms = (perf_counter() - started) * 1000
             write_inventory_table_run_log(
@@ -4621,18 +4665,6 @@ def create_app(
                 "message": message,
             }
 
-    @app.post("/procurement/replenishment-requests-table/provision")
-    def provision_procurement_replenishment_requests_table(
-        request: ProcurementTableProvisionRequest,
-    ) -> dict[str, Any]:
-        return provision_procurement_table(
-            request=request,
-            default_table_name="Procurement Replenishment Requests",
-            state=procurement_replenishment_request_table_state,
-            schema_endpoint="/procurement/replenishment-requests/table-schema",
-            workflow="/procurement/replenishment-requests-table/provision",
-        )
-
     @app.post("/procurement/purchase-orders-table/provision")
     def provision_procurement_purchase_orders_table(
         request: ProcurementTableProvisionRequest,
@@ -4643,24 +4675,7 @@ def create_app(
             state=procurement_purchase_order_table_state,
             schema_endpoint="/procurement/purchase-orders/table-schema",
             workflow="/procurement/purchase-orders-table/provision",
-        )
-
-    @app.post("/procurement/replenishment-requests-table/sync")
-    def sync_procurement_replenishment_requests_table(
-        request: ProcurementReplenishmentRequestTableSyncRequest,
-    ) -> dict[str, Any]:
-        return sync_procurement_table(
-            request_payload={
-                "status": request.status,
-                "request_id": request.request_id,
-                "limit": max(min(int(request.limit or 100), 500), 1),
-            },
-            table_name="Procurement Replenishment Requests",
-            state=procurement_replenishment_request_table_state,
-            schema_endpoint="/procurement/replenishment-requests/table-schema",
-            rows_endpoint="/procurement/replenishment-requests/table-rows",
-            identity_field="Request ID",
-            workflow="/procurement/replenishment-requests-table/sync",
+            prune_extra_fields_enabled=True,
         )
 
     @app.post("/procurement/purchase-orders-table/sync")
@@ -4669,9 +4684,10 @@ def create_app(
     ) -> dict[str, Any]:
         return sync_procurement_table(
             request_payload={
-                "request_id": request.request_id,
                 "purchase_order_id": request.purchase_order_id,
+                "approval_status": request.approval_status,
                 "warehouse_sync_status": request.warehouse_sync_status,
+                "payment_status": request.payment_status,
                 "limit": max(min(int(request.limit or 100), 500), 1),
             },
             table_name="Procurement Purchase Orders",
@@ -4680,6 +4696,7 @@ def create_app(
             rows_endpoint="/procurement/purchase-orders/table-rows",
             identity_field="Purchase Order ID",
             workflow="/procurement/purchase-orders-table/sync",
+            prune_extra_fields_enabled=True,
         )
 
     @app.post("/orders/fulfillment-table/sync")

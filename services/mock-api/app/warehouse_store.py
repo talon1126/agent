@@ -127,28 +127,6 @@ inventory_location_balances = Table(
     Column("updated_at", String, nullable=False),
 )
 
-replenishment_requests = Table(
-    "replenishment_requests",
-    metadata,
-    Column("request_id", String, primary_key=True),
-    Column("source", String, nullable=False),
-    Column("status", String, nullable=False, index=True),
-    Column("warehouse_id", String, nullable=False, index=True),
-    Column("warehouse_name", String, nullable=False),
-    Column("location_code", String, nullable=True, index=True),
-    Column("item_id", String, nullable=False, index=True),
-    Column("item_name", String, nullable=False),
-    Column("category_id", String, nullable=False, index=True),
-    Column("category_name", String, nullable=False),
-    Column("current_quantity", Integer, nullable=False),
-    Column("reorder_threshold", Integer, nullable=False),
-    Column("suggested_quantity", Integer, nullable=False),
-    Column("reason", String, nullable=False),
-    Column("created_by", String, nullable=False),
-    Column("created_at", String, nullable=False),
-    Column("updated_at", String, nullable=False),
-)
-
 warehouse_inventory_sync_jobs = Table(
     "warehouse_inventory_sync_jobs",
     metadata,
@@ -352,10 +330,14 @@ purchase_orders = Table(
     "purchase_orders",
     metadata,
     Column("purchase_order_id", String, primary_key=True),
-    Column("request_id", String, nullable=False, index=True),
+    Column("approval_status", String, nullable=False, index=True, default="pending"),
+    Column("source", String, nullable=False, default="warehouse"),
     Column("supplier_id", String, nullable=False, index=True),
     Column("supplier_name", String, nullable=False),
     Column("item_id", String, nullable=False, index=True),
+    Column("item_name", String, nullable=False, default=""),
+    Column("category_id", String, nullable=False, index=True, default=""),
+    Column("category_name", String, nullable=False, default=""),
     Column("warehouse_id", String, nullable=False, index=True),
     Column("warehouse_name", String, nullable=False),
     Column("location_code", String, nullable=True, index=True),
@@ -368,9 +350,11 @@ purchase_orders = Table(
     Column("payment_status", String, nullable=False, index=True),
     Column("warehouse_sync_status", String, nullable=False, index=True),
     Column("arrived_at", String, nullable=False, default=""),
+    Column("reason", String, nullable=False, default=""),
     Column("created_by", String, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
+    Column("updated_by", String, nullable=False, default=""),
 )
 
 # Backward-compatible Python symbol for older imports. The physical table is
@@ -385,7 +369,6 @@ WAREHOUSE_TABLE_COMMENTS = {
     "item_reviews": "商品评论表，保存用户对商品的星级评分、标题和正文。",
     "inventory_batches": "批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。",
     "inventory_location_balances": "批次级库位库存余额表，保存员工确认发仓扣减和退回后的当前可售库存。",
-    "replenishment_requests": "补货申请表，保存仓储发现低库存后交给采购审核的结构化需求。",
     "delivery_providers": "物流供应商表，保存顺丰、京东、圆通等承运商基础信息供订单和 Delivery Agent 使用。",
     "users": "TalonMart 用户表，保存购物车 v1 使用的测试用户资料。",
     "delivery_addresses": "TalonMart 配送地址表，保存购物车结算创建订单时使用的用户收货地址。",
@@ -395,7 +378,7 @@ WAREHOUSE_TABLE_COMMENTS = {
     "item_rank_events": "商品排行榜事件事实表，记录浏览、加购、购买、收藏、评论等可聚合行为。",
     "category_rank_snapshots": "分类排行榜快照表，保存各分类下的商品排名、分数和生成时间。",
     "procurement_suppliers": "采购供应商表，保存 mock 供应商、交期、价格和可靠性。",
-    "purchase_orders": "采购单表，保存采购审核补货申请后生成的采购单、支付状态和仓库同步状态。",
+    "purchase_orders": "采购单表，保存低库存采购需求、审批状态、供应商、支付状态和仓库同步状态。",
     "warehouse_inventory_sync_jobs": "仓储库存同步任务表，保存采购到仓后需要 Warehouse Agent 同步飞书库存视图的待处理任务。",
     "orders": "订单主表，保存下单、发仓确认、付款、发货、到货、退款和退货状态，并保留物流供应商与快递员联系方式供 Delivery Agent 查询。",
     "order_items": "订单明细表，保存待发仓确认商品和确认后扣减命中的仓库、库位、批次和数量。",
@@ -473,25 +456,6 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "created_at": "余额行创建时间。",
         "updated_at": "余额行更新时间。",
     },
-    "replenishment_requests": {
-        "request_id": "补货申请编号，例如 REQ-1001。",
-        "source": "申请来源，例如 warehouse。",
-        "status": "申请状态，只允许未审批或已审批。",
-        "warehouse_id": "触发补货申请的仓库编号。",
-        "warehouse_name": "触发补货申请的仓库名称。",
-        "location_code": "触发补货申请的具体库位，可为空。",
-        "item_id": "需要补货的商品编号。",
-        "item_name": "需要补货的商品名称。",
-        "category_id": "商品分类编号。",
-        "category_name": "商品分类名称。",
-        "current_quantity": "当前可用库存数量。",
-        "reorder_threshold": "补货预警阈值。",
-        "suggested_quantity": "系统建议补货数量。",
-        "reason": "生成补货申请的业务原因。",
-        "created_by": "创建申请的用户或系统身份。",
-        "created_at": "申请创建时间。",
-        "updated_at": "申请更新时间。",
-    },
     "procurement_suppliers": {
         "supplier_id": "供应商编号。",
         "supplier_name": "供应商展示名称。",
@@ -503,14 +467,18 @@ WAREHOUSE_COLUMN_COMMENTS = {
     },
     "purchase_orders": {
         "purchase_order_id": "采购单编号，例如 PO-5001。",
-        "request_id": "关联的补货申请编号。",
+        "approval_status": "采购审批状态，例如 pending、approved 或 rejected。",
+        "source": "采购需求来源，例如 warehouse。",
         "supplier_id": "采购单选用的供应商编号。",
         "supplier_name": "采购单选用的供应商名称。",
         "item_id": "采购商品编号。",
+        "item_name": "采购商品名称。",
+        "category_id": "采购商品分类编号。",
+        "category_name": "采购商品分类名称。",
         "warehouse_id": "采购商品预计入库仓库编号。",
         "warehouse_name": "采购商品预计入库仓库名称。",
         "location_code": "采购商品预计入库库位。",
-        "quantity": "建议采购数量。",
+        "quantity": "采购数量。",
         "unit_price": "采购单价，按 currency 表示。",
         "currency": "价格币种，例如 CNY。",
         "estimated_total_price": "预计采购总价。",
@@ -519,9 +487,11 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "payment_status": "支付状态，例如 unpaid、paid。",
         "warehouse_sync_status": "仓库同步状态，例如 pending_arrival、arrived_unsynced、synced。",
         "arrived_at": "采购单实际确认到仓时间。",
+        "reason": "创建或驳回采购单的业务原因。",
         "created_by": "创建采购单的用户或系统身份。",
         "created_at": "采购单创建时间。",
         "updated_at": "采购单更新时间。",
+        "updated_by": "最近更新采购单的用户或系统身份。",
     },
     "warehouse_inventory_sync_jobs": {
         "job_id": "库存同步任务编号，例如 WSJ-POD-5001。",
@@ -681,7 +651,6 @@ def init_warehouse_schema(engine: Engine) -> None:
             item_reviews,
             inventory_batches,
             inventory_location_balances,
-            replenishment_requests,
             procurement_suppliers,
             users,
             delivery_addresses,
@@ -711,6 +680,11 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
         for column in inspector.get_columns(purchase_orders.name)
     }
     missing_column_sql = {
+        "approval_status": "ALTER TABLE purchase_orders ADD COLUMN approval_status VARCHAR NOT NULL DEFAULT 'pending'",
+        "source": "ALTER TABLE purchase_orders ADD COLUMN source VARCHAR NOT NULL DEFAULT 'warehouse'",
+        "item_name": "ALTER TABLE purchase_orders ADD COLUMN item_name VARCHAR NOT NULL DEFAULT ''",
+        "category_id": "ALTER TABLE purchase_orders ADD COLUMN category_id VARCHAR NOT NULL DEFAULT ''",
+        "category_name": "ALTER TABLE purchase_orders ADD COLUMN category_name VARCHAR NOT NULL DEFAULT ''",
         "estimated_arrival_date": "ALTER TABLE purchase_orders ADD COLUMN estimated_arrival_date VARCHAR NOT NULL DEFAULT ''",
         "warehouse_id": "ALTER TABLE purchase_orders ADD COLUMN warehouse_id VARCHAR NOT NULL DEFAULT ''",
         "warehouse_name": "ALTER TABLE purchase_orders ADD COLUMN warehouse_name VARCHAR NOT NULL DEFAULT ''",
@@ -718,11 +692,20 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
         "payment_status": "ALTER TABLE purchase_orders ADD COLUMN payment_status VARCHAR NOT NULL DEFAULT 'unpaid'",
         "warehouse_sync_status": "ALTER TABLE purchase_orders ADD COLUMN warehouse_sync_status VARCHAR NOT NULL DEFAULT 'pending_arrival'",
         "arrived_at": "ALTER TABLE purchase_orders ADD COLUMN arrived_at VARCHAR NOT NULL DEFAULT ''",
+        "reason": "ALTER TABLE purchase_orders ADD COLUMN reason VARCHAR NOT NULL DEFAULT ''",
+        "updated_by": "ALTER TABLE purchase_orders ADD COLUMN updated_by VARCHAR NOT NULL DEFAULT ''",
     }
     with engine.begin() as connection:
         for column_name, statement in missing_column_sql.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
+        for column_name in ("current_quantity", "reorder_threshold", "suggested_quantity"):
+            if column_name in existing_columns:
+                connection.execute(text(f"ALTER TABLE purchase_orders DROP COLUMN {column_name}"))
+        if "request_id" in existing_columns:
+            connection.execute(text("ALTER TABLE purchase_orders DROP COLUMN request_id"))
+        if inspector.has_table("replenishment_requests"):
+            connection.execute(text("DROP TABLE replenishment_requests"))
         if inspector.has_table(orders.name):
             order_columns = {column["name"] for column in inspector.get_columns(orders.name)}
             order_missing_column_sql = {
@@ -782,21 +765,6 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
                     "UPDATE items "
                     "SET search_text = trim(item_id || ' ' || item_name || ' ' || brand || ' ' || spec) "
                     "WHERE search_text = ''"
-                )
-            )
-        if inspector.has_table(replenishment_requests.name):
-            connection.execute(
-                text(
-                    "UPDATE replenishment_requests "
-                    "SET status = '未审批' "
-                    "WHERE status IN ('pending_procurement_review', 'rejected')"
-                )
-            )
-            connection.execute(
-                text(
-                    "UPDATE replenishment_requests "
-                    "SET status = '已审批' "
-                    "WHERE status IN ('purchase_order_created', 'purchase_order_draft_created')"
                 )
             )
 
@@ -2092,22 +2060,15 @@ class WarehouseRepository:
                 inventory_location_balances.c.warehouse_id,
                 inventory_location_balances.c.location_code,
                 inventory_location_balances.c.item_id,
+                inventory_location_balances.c.batch_no,
+                inventory_location_balances.c.production_date,
+                inventory_location_balances.c.expiry_date,
                 inventory_location_balances.c.quantity_on_hand,
                 inventory_location_balances.c.reorder_threshold,
                 inventory_location_balances.c.storage_status,
                 inventory_location_balances.c.created_at,
                 inventory_location_balances.c.updated_at,
-                warehouses.c.warehouse_name,
-                categories.c.category_id,
-                categories.c.category_name,
-                items.c.item_name,
-                items.c.brand,
-                items.c.spec,
-                items.c.unit,
             )
-            .join(warehouses, warehouses.c.warehouse_id == inventory_location_balances.c.warehouse_id)
-            .join(items, items.c.item_id == inventory_location_balances.c.item_id)
-            .join(categories, categories.c.category_id == items.c.category_id)
         )
         if item_id:
             statement = statement.where(inventory_location_balances.c.item_id == item_id)
@@ -2119,75 +2080,8 @@ class WarehouseRepository:
             inventory_location_balances.c.warehouse_id,
             inventory_location_balances.c.location_code,
             inventory_location_balances.c.item_id,
+            inventory_location_balances.c.batch_no,
         )
-        with self.engine.connect() as connection:
-            rows = connection.execute(statement).mappings().all()
-        return [dict(row) for row in rows]
-
-    def count_replenishment_requests(self) -> int:
-        with self.engine.connect() as connection:
-            return int(connection.execute(select(func.count()).select_from(replenishment_requests)).scalar_one())
-
-    def create_replenishment_request(self, payload: dict[str, Any]) -> dict[str, Any]:
-        with self.engine.begin() as connection:
-            connection.execute(replenishment_requests.insert().values(**payload))
-            row = (
-                connection.execute(
-                    select(replenishment_requests).where(
-                        replenishment_requests.c.request_id == payload["request_id"]
-                    )
-                )
-                .mappings()
-                .one()
-            )
-        return dict(row)
-
-    def get_replenishment_request(self, request_id: str) -> dict[str, Any] | None:
-        with self.engine.connect() as connection:
-            row = (
-                connection.execute(
-                    select(replenishment_requests).where(
-                        replenishment_requests.c.request_id == request_id
-                    )
-                )
-                .mappings()
-                .one_or_none()
-            )
-        return dict(row) if row else None
-
-    def update_replenishment_request(
-        self,
-        request_id: str,
-        *,
-        status: str,
-        updated_at: str,
-        reason: str | None = None,
-    ) -> dict[str, Any] | None:
-        values: dict[str, Any] = {"status": status, "updated_at": updated_at}
-        if reason is not None:
-            values["reason"] = reason
-        with self.engine.begin() as connection:
-            connection.execute(
-                replenishment_requests.update()
-                .where(replenishment_requests.c.request_id == request_id)
-                .values(**values)
-            )
-            row = (
-                connection.execute(
-                    select(replenishment_requests).where(
-                        replenishment_requests.c.request_id == request_id
-                    )
-                )
-                .mappings()
-                .one_or_none()
-            )
-        return dict(row) if row else None
-
-    def list_replenishment_requests(self, *, status: str | None = None) -> list[dict[str, Any]]:
-        statement = select(replenishment_requests)
-        if status:
-            statement = statement.where(replenishment_requests.c.status == status)
-        statement = statement.order_by(replenishment_requests.c.created_at, replenishment_requests.c.request_id)
         with self.engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
         return [dict(row) for row in rows]
@@ -2248,7 +2142,17 @@ class WarehouseRepository:
 
     def create_purchase_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         payload = {**payload}
+        payload.setdefault("approval_status", "pending")
+        payload.setdefault("source", "warehouse")
+        payload.setdefault("item_name", "")
+        payload.setdefault("category_id", "")
+        payload.setdefault("category_name", "")
+        payload.pop("current_quantity", None)
+        payload.pop("reorder_threshold", None)
+        payload.pop("suggested_quantity", None)
         payload.setdefault("arrived_at", "")
+        payload.setdefault("reason", "")
+        payload.setdefault("updated_by", "")
         with self.engine.begin() as connection:
             connection.execute(purchase_orders.insert().values(**payload))
             row = (
@@ -2266,9 +2170,12 @@ class WarehouseRepository:
         if "po_draft_id" in payload and "purchase_order_id" not in payload:
             payload = {**payload, "purchase_order_id": payload["po_draft_id"]}
             payload.pop("po_draft_id", None)
+        payload.pop("request_id", None)
         payload.setdefault("warehouse_id", "")
         payload.setdefault("warehouse_name", "")
         payload.setdefault("location_code", "")
+        payload.setdefault("approval_status", "pending")
+        payload.setdefault("source", "warehouse")
         payload.setdefault("payment_status", "unpaid")
         payload.setdefault("warehouse_sync_status", payload.pop("status", "pending_arrival"))
         payload.setdefault("arrived_at", "")
@@ -2318,6 +2225,39 @@ class WarehouseRepository:
             )
         return dict(row) if row else None
 
+    def update_purchase_order_approval_status(
+        self,
+        purchase_order_id: str,
+        *,
+        approval_status: str,
+        updated_by: str,
+        updated_at: str,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        values: dict[str, Any] = {
+            "approval_status": approval_status,
+            "updated_by": updated_by,
+            "updated_at": updated_at,
+        }
+        if reason is not None:
+            values["reason"] = reason
+        with self.engine.begin() as connection:
+            connection.execute(
+                purchase_orders.update()
+                .where(purchase_orders.c.purchase_order_id == purchase_order_id)
+                .values(**values)
+            )
+            row = (
+                connection.execute(
+                    select(purchase_orders).where(
+                        purchase_orders.c.purchase_order_id == purchase_order_id
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return dict(row) if row else None
+
     def update_purchase_order_draft_status(
         self,
         po_draft_id: str,
@@ -2334,14 +2274,14 @@ class WarehouseRepository:
     def list_purchase_orders(
         self,
         *,
-        request_id: str | None = None,
+        approval_status: str | None = None,
         warehouse_sync_status: str | None = None,
         purchase_order_id: str | None = None,
         payment_status: str | None = None,
     ) -> list[dict[str, Any]]:
         statement = select(purchase_orders)
-        if request_id:
-            statement = statement.where(purchase_orders.c.request_id == request_id)
+        if approval_status:
+            statement = statement.where(purchase_orders.c.approval_status == approval_status)
         if warehouse_sync_status:
             statement = statement.where(purchase_orders.c.warehouse_sync_status == warehouse_sync_status)
         if purchase_order_id:
@@ -2353,8 +2293,8 @@ class WarehouseRepository:
             rows = connection.execute(statement).mappings().all()
         return [dict(row) for row in rows]
 
-    def list_purchase_order_drafts(self, *, request_id: str | None = None) -> list[dict[str, Any]]:
-        return self.list_purchase_orders(request_id=request_id)
+    def list_purchase_order_drafts(self) -> list[dict[str, Any]]:
+        return self.list_purchase_orders()
 
     def sync_arrived_purchase_orders(
         self,
@@ -2456,7 +2396,6 @@ class WarehouseRepository:
                 synced_items.append(
                     {
                         "purchase_order_id": order["purchase_order_id"],
-                        "request_id": order["request_id"],
                         "item_id": order["item_id"],
                         "warehouse_id": order["warehouse_id"],
                         "warehouse_name": order["warehouse_name"],

@@ -18,15 +18,14 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_table_sync_tool",
             "warehouse_table_schema_tool",
             "warehouse_view_create_tool",
-            "warehouse_replenishment_request_tool",
+            "warehouse_purchase_order_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
             "procurement_mock_tool",
-            "procurement_replenishment_request_tool",
-            "procurement_approve_replenishment_tool",
-            "procurement_reject_replenishment_tool",
-            "procurement_sync_replenishment_requests_tool",
+            "procurement_purchase_order_query_tool",
+            "procurement_approve_purchase_order_tool",
+            "procurement_reject_purchase_order_tool",
             "procurement_sync_purchase_orders_tool",
-            "procurement_approve_replenishment_batch_tool",
+            "procurement_approve_purchase_order_batch_tool",
             "procurement_confirm_purchase_order_arrival_tool",
             "operations_mock_tool",
             "delivery_status_tool",
@@ -49,7 +48,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_table_sync_tool",
             "warehouse_table_schema_tool",
             "warehouse_view_create_tool",
-            "warehouse_replenishment_request_tool",
+            "warehouse_purchase_order_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
             "warehouse_inventory_sync_jobs_tool",
             "warehouse_order_tool",
@@ -58,12 +57,11 @@ DEPARTMENT_WORKFLOWS = {
             "order_status_tool",
             "policy_search_tool",
             "procurement_mock_tool",
-            "procurement_replenishment_request_tool",
-            "procurement_approve_replenishment_tool",
-            "procurement_reject_replenishment_tool",
-            "procurement_sync_replenishment_requests_tool",
+            "procurement_purchase_order_query_tool",
+            "procurement_approve_purchase_order_tool",
+            "procurement_reject_purchase_order_tool",
             "procurement_sync_purchase_orders_tool",
-            "procurement_approve_replenishment_batch_tool",
+            "procurement_approve_purchase_order_batch_tool",
             "procurement_confirm_purchase_order_arrival_tool",
             "operations_mock_tool",
             "delivery_status_tool",
@@ -80,12 +78,11 @@ DEPARTMENT_WORKFLOWS = {
         "memory": "Procurement Postgres Chat Memory",
         "tools": {
             "procurement_mock_tool",
-            "procurement_replenishment_request_tool",
-            "procurement_approve_replenishment_tool",
-            "procurement_reject_replenishment_tool",
-            "procurement_sync_replenishment_requests_tool",
+            "procurement_purchase_order_query_tool",
+            "procurement_approve_purchase_order_tool",
+            "procurement_reject_purchase_order_tool",
             "procurement_sync_purchase_orders_tool",
-            "procurement_approve_replenishment_batch_tool",
+            "procurement_approve_purchase_order_batch_tool",
             "procurement_confirm_purchase_order_arrival_tool",
         },
         "forbidden_tools": {
@@ -98,7 +95,7 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_table_sync_tool",
             "warehouse_table_schema_tool",
             "warehouse_view_create_tool",
-            "warehouse_replenishment_request_tool",
+            "warehouse_purchase_order_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
             "warehouse_inventory_sync_jobs_tool",
             "warehouse_order_tool",
@@ -126,16 +123,15 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_table_sync_tool",
             "warehouse_table_schema_tool",
             "warehouse_view_create_tool",
-            "warehouse_replenishment_request_tool",
+            "warehouse_purchase_order_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
             "warehouse_inventory_sync_jobs_tool",
             "procurement_mock_tool",
-            "procurement_replenishment_request_tool",
-            "procurement_approve_replenishment_tool",
-            "procurement_reject_replenishment_tool",
-            "procurement_sync_replenishment_requests_tool",
+            "procurement_purchase_order_query_tool",
+            "procurement_approve_purchase_order_tool",
+            "procurement_reject_purchase_order_tool",
             "procurement_sync_purchase_orders_tool",
-            "procurement_approve_replenishment_batch_tool",
+            "procurement_approve_purchase_order_batch_tool",
             "procurement_confirm_purchase_order_arrival_tool",
             "delivery_status_tool",
             "delivery_exception_tool",
@@ -164,16 +160,15 @@ DEPARTMENT_WORKFLOWS = {
             "warehouse_inventory_table_sync_tool",
             "warehouse_table_schema_tool",
             "warehouse_view_create_tool",
-            "warehouse_replenishment_request_tool",
+            "warehouse_purchase_order_request_tool",
             "warehouse_purchase_order_arrival_sync_tool",
             "warehouse_inventory_sync_jobs_tool",
             "procurement_mock_tool",
-            "procurement_replenishment_request_tool",
-            "procurement_approve_replenishment_tool",
-            "procurement_reject_replenishment_tool",
-            "procurement_sync_replenishment_requests_tool",
+            "procurement_purchase_order_query_tool",
+            "procurement_approve_purchase_order_tool",
+            "procurement_reject_purchase_order_tool",
             "procurement_sync_purchase_orders_tool",
-            "procurement_approve_replenishment_batch_tool",
+            "procurement_approve_purchase_order_batch_tool",
             "procurement_confirm_purchase_order_arrival_tool",
             "operations_mock_tool",
             "echo_task_tool",
@@ -217,19 +212,8 @@ def test_warehouse_inventory_balances_refresh_workflow_runs_every_10_minutes() -
     assert '"limit": 500' in sync_request["parameters"]["jsonBody"]
 
 
-def test_procurement_replenishment_requests_sync_workflow_runs_every_10_minutes() -> None:
-    workflow = load_workflow("procurement-replenishment-requests-sync.json")
-    schedule = node_by_name(workflow, "Every 10 Minutes")
-    sync_request = node_by_name(workflow, "Sync Procurement Replenishment Requests Table")
-
-    assert workflow["name"] == "Procurement Replenishment Requests Sync"
-    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
-    intervals = schedule["parameters"]["rule"]["interval"]
-    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
-    assert sync_request["parameters"]["url"].endswith(
-        "/procurement/replenishment-requests-table/sync"
-    )
-    assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
+def test_legacy_procurement_replenishment_requests_sync_workflow_is_removed() -> None:
+    assert not (WORKFLOW_DIR / "procurement-replenishment-requests-sync.json").exists()
 
 
 def test_procurement_purchase_orders_sync_workflow_runs_every_10_minutes() -> None:
@@ -388,7 +372,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "warehouse_inventory_table_sync_tool" in system_message
             assert "warehouse_table_schema_tool" in system_message
             assert "warehouse_view_create_tool" in system_message
-            assert "warehouse_replenishment_request_tool" in system_message
+            assert "warehouse_purchase_order_request_tool" in system_message
             assert "warehouse_purchase_order_arrival_sync_tool" in system_message
             assert "warehouse_inventory_sync_jobs_tool" in system_message
             assert "purchase_orders" in system_message
@@ -545,7 +529,7 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             exception_tool = node_by_name(workflow, "warehouse_exception_tool")
             fulfillment_tool = node_by_name(workflow, "warehouse_fulfillment_tool")
             table_sync_tool = node_by_name(workflow, "warehouse_inventory_table_sync_tool")
-            replenishment_tool = node_by_name(workflow, "warehouse_replenishment_request_tool")
+            purchase_order_request_tool = node_by_name(workflow, "warehouse_purchase_order_request_tool")
             purchase_order_sync_tool = node_by_name(workflow, "warehouse_purchase_order_arrival_sync_tool")
             sync_jobs_tool = node_by_name(workflow, "warehouse_inventory_sync_jobs_tool")
             order_tool = node_by_name(workflow, "warehouse_order_tool")
@@ -560,8 +544,8 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "body: { item_id: itemId" in exception_tool["parameters"]["jsCode"]
             assert "body: { item_id: itemId" in fulfillment_tool["parameters"]["jsCode"]
             assert "body: { item_id: itemId" in table_sync_tool["parameters"]["jsCode"]
-            assert "/procurement/replenishment-requests" in replenishment_tool["parameters"]["jsCode"]
-            assert "未审批" in replenishment_tool["parameters"]["jsCode"]
+            assert "/procurement/purchase-orders" in purchase_order_request_tool["parameters"]["jsCode"]
+            assert "purchase_order" in purchase_order_request_tool["parameters"]["jsCode"]
             assert "/warehouse/purchase-orders/sync-arrivals" in purchase_order_sync_tool["parameters"]["jsCode"]
             assert "mock-warehouse-purchase-order-arrival-sync" in purchase_order_sync_tool["parameters"]["jsCode"]
             assert "/warehouse/inventory-sync-jobs" in sync_jobs_tool["parameters"]["jsCode"]
@@ -586,46 +570,42 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
 
         if expected["agent"] == "Procurement Agent":
             system_message = agent["parameters"]["options"]["systemMessage"]
-            assert "procurement_replenishment_request_tool" in system_message
-            assert "procurement_approve_replenishment_tool" in system_message
-            assert "procurement_reject_replenishment_tool" in system_message
-            assert "procurement_sync_replenishment_requests_tool" in system_message
+            assert "procurement_purchase_order_query_tool" in system_message
+            assert "procurement_approve_purchase_order_tool" in system_message
+            assert "procurement_reject_purchase_order_tool" in system_message
             assert "procurement_sync_purchase_orders_tool" in system_message
-            assert "procurement_approve_replenishment_batch_tool" in system_message
+            assert "procurement_approve_purchase_order_batch_tool" in system_message
             assert "procurement_confirm_purchase_order_arrival_tool" in system_message
-            assert "未审批" in system_message
-            assert "已审批" in system_message
+            assert "approval_status" in system_message
+            assert "pending" in system_message
+            assert "approved" in system_message
+            assert "rejected" in system_message
             assert "arrived_unsynced" in system_message
-            assert "同步补货请求" in system_message
             assert "批量批准" in system_message
             assert "已到仓库" in system_message
             assert "PO-" in system_message
             assert "通知 Warehouse" in system_message
-            assert "刷新飞书视图" in system_message
+            assert "刷新采购单飞书视图" in system_message
             assert "批准" in system_message
             assert "驳回" in system_message
-            assert "REQ-" in system_message
             assert "采购单表" in system_message
             mock_tool = node_by_name(workflow, "procurement_mock_tool")
-            list_tool = node_by_name(workflow, "procurement_replenishment_request_tool")
-            approve_tool = node_by_name(workflow, "procurement_approve_replenishment_tool")
-            reject_tool = node_by_name(workflow, "procurement_reject_replenishment_tool")
-            sync_requests_tool = node_by_name(workflow, "procurement_sync_replenishment_requests_tool")
+            list_tool = node_by_name(workflow, "procurement_purchase_order_query_tool")
+            approve_tool = node_by_name(workflow, "procurement_approve_purchase_order_tool")
+            reject_tool = node_by_name(workflow, "procurement_reject_purchase_order_tool")
             sync_orders_tool = node_by_name(workflow, "procurement_sync_purchase_orders_tool")
-            batch_tool = node_by_name(workflow, "procurement_approve_replenishment_batch_tool")
+            batch_tool = node_by_name(workflow, "procurement_approve_purchase_order_batch_tool")
             arrival_tool = node_by_name(workflow, "procurement_confirm_purchase_order_arrival_tool")
             assert "extractItemId" in mock_tool["parameters"]["jsCode"]
             assert "item_id: itemId" in mock_tool["parameters"]["jsCode"]
             assert "extractSku" not in mock_tool["parameters"]["jsCode"]
-            assert "/procurement/replenishment-requests" in list_tool["parameters"]["jsCode"]
-            assert "未审批" in list_tool["parameters"]["jsCode"]
+            assert "/procurement/purchase-orders" in list_tool["parameters"]["jsCode"]
+            assert "approval_status" in list_tool["parameters"]["jsCode"]
             assert "/approve" in approve_tool["parameters"]["jsCode"]
             assert "/reject" in reject_tool["parameters"]["jsCode"]
-            assert "/procurement/replenishment-requests-table/sync" in sync_requests_tool["parameters"]["jsCode"]
             assert "/procurement/purchase-orders-table/sync" in sync_orders_tool["parameters"]["jsCode"]
             assert "purchase_order_drafts" not in sync_orders_tool["parameters"]["jsCode"]
             assert "/approve-batch" in batch_tool["parameters"]["jsCode"]
-            assert "/procurement/replenishment-requests-table/sync" in batch_tool["parameters"]["jsCode"]
             assert "/procurement/purchase-orders-table/sync" in batch_tool["parameters"]["jsCode"]
             assert "purchase_order_drafts" not in batch_tool["parameters"]["jsCode"]
             assert "/procurement/purchase-orders/confirm-arrival-batch" in arrival_tool["parameters"]["jsCode"]
@@ -634,8 +614,8 @@ def test_department_workflows_have_own_webhook_agent_memory_and_tools() -> None:
             assert "extractPurchaseOrderIds" in arrival_tool["parameters"]["jsCode"]
             assert "\x08" not in arrival_tool["parameters"]["jsCode"]
             assert r"\bPO-[0-9A-Za-z_-]+\b" in arrival_tool["parameters"]["jsCode"]
-            assert "extractRequestId" in approve_tool["parameters"]["jsCode"]
-            assert "extractRequestId" in reject_tool["parameters"]["jsCode"]
+            assert "extractPurchaseOrderId" in approve_tool["parameters"]["jsCode"]
+            assert "extractPurchaseOrderId" in reject_tool["parameters"]["jsCode"]
 
         if expected["agent"] == "Delivery Agent":
             system_message = agent["parameters"]["options"]["systemMessage"]

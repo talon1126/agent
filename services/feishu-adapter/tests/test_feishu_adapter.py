@@ -54,31 +54,6 @@ def batch_inventory_table_rows_response_for(batch_no: str, item_id: str = "item_
     return payload
 
 
-def procurement_replenishment_table_rows_response() -> dict:
-    return {
-        "ok": True,
-        "schema_id": "procurement_replenishment_requests",
-        "count": 1,
-        "items": [
-            {
-                "request_id": "REQ-1001",
-                "fields": {
-                    "Request ID": "REQ-1001",
-                    "Status": "未审批",
-                    "Warehouse": "深圳仓",
-                    "Warehouse ID": "wh_sz_1",
-                    "Location": "A1",
-                    "Item Name": "维达纸巾",
-                    "Suggested Quantity": 104,
-                    "Last Synced At": "2026-05-26T00:00:00+00:00",
-                    "Sync Status": "synced",
-                    "Source Version": "mock-api:REQ-1001",
-                },
-            }
-        ],
-    }
-
-
 def procurement_purchase_order_table_rows_response() -> dict:
     return {
         "ok": True,
@@ -87,10 +62,9 @@ def procurement_purchase_order_table_rows_response() -> dict:
         "items": [
             {
                 "purchase_order_id": "PO-5001",
-                "request_id": "REQ-1001",
                 "fields": {
                     "Purchase Order ID": "PO-5001",
-                    "Request ID": "REQ-1001",
+                    "Approval Status": "pending",
                     "Payment Status": "unpaid",
                     "Warehouse Sync Status": "pending_arrival",
                     "Supplier Name": "深圳纸品供应商",
@@ -102,9 +76,7 @@ def procurement_purchase_order_table_rows_response() -> dict:
                     "Estimated Total Price": 832,
                     "Lead Time Days": 3,
                     "Estimated Arrival Date": "2026-05-29",
-                    "Last Synced At": "2026-05-26T00:00:00+00:00",
-                    "Sync Status": "synced",
-                    "Source Version": "mock-api:PO-5001",
+                    "Reason": "available_quantity_below_reorder_threshold",
                 },
             }
         ],
@@ -749,16 +721,10 @@ def test_procurement_table_sync_returns_not_configured_without_table_settings() 
     )
     client = TestClient(app)
 
-    request_response = client.post("/procurement/replenishment-requests-table/sync", json={})
     order_response = client.post("/procurement/purchase-orders-table/sync", json={})
 
-    assert request_response.status_code == 200
-    assert request_response.json() == {
-        "ok": False,
-        "configured": False,
-        "error": "missing_feishu_procurement_table_config",
-        "message": "Feishu procurement table sync is not configured.",
-    }
+    assert client.post("/procurement/replenishment-requests-table/sync", json={}).status_code == 404
+    assert client.post("/procurement/replenishment-requests-table/provision", json={}).status_code == 404
     assert order_response.status_code == 200
     assert order_response.json() == {
         "ok": False,
@@ -1134,6 +1100,7 @@ def test_inventory_table_provision_creates_inventory_table_with_fixed_schema() -
         request
         for request in requests
         if str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_inventory/fields"
+        and request.method == "POST"
     ]
     assert len(field_requests) == len(INVENTORY_TABLE_FIELD_SPECS)
     field_names = [json.loads(request.content)["field_name"] for request in field_requests]
@@ -1246,72 +1213,22 @@ def test_inventory_table_provision_uses_backend_schema_when_available() -> None:
     ]
 
 
-def test_procurement_replenishment_table_provision_creates_table_from_backend_schema() -> None:
-    requests: list[httpx.Request] = []
+def test_legacy_procurement_replenishment_table_endpoints_are_removed() -> None:
+    """Protect the H3 contract that procurement has only one Feishu read model.
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        url = str(request.url)
-        if url == "http://mock-api.local/procurement/replenishment-requests/table-schema":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "schema_id": "procurement_replenishment_requests",
-                    "fields": [
-                        {"name": "Request ID", "type": "text"},
-                        {
-                            "name": "Status",
-                            "type": "single_select",
-                            "options": [{"name": "未审批", "color": 24}],
-                        },
-                        {"name": "Suggested Quantity", "type": "number"},
-                    ],
-                },
-            )
-        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
-            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
-            return httpx.Response(
-                200,
-                json={"code": 0, "data": {"table_id": "tbl_replenishment", "default_view_id": "vew_replenishment"}},
-            )
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_replenishment/fields":
-            return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_created"}}})
-        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
+    The standalone replenishment request table was merged into purchase orders,
+    so its old provision and sync endpoints must stay unavailable.
+    """
 
     app = create_app(
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-        feishu_api_base_url="https://open.feishu.cn",
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(500))),
         inventory_table_app_id="cli_table",
         inventory_table_app_secret="secret_table",
-        inventory_table_app_token="app_token",
-        mock_api_url="http://mock-api.local",
     )
     client = TestClient(app)
 
-    response = client.post("/procurement/replenishment-requests-table/provision", json={})
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["action"] == "created"
-    assert body["table_id"] == "tbl_replenishment"
-    assert body["table_name"] == "Procurement Replenishment Requests"
-    field_requests = [
-        json.loads(request.content)
-        for request in requests
-        if request.method == "POST" and str(request.url).endswith("/tables/tbl_replenishment/fields")
-    ]
-    assert field_requests == [
-        {"field_name": "Request ID", "type": 1},
-        {
-            "field_name": "Status",
-            "type": 3,
-            "property": {"options": [{"name": "未审批", "color": 24}]},
-        },
-        {"field_name": "Suggested Quantity", "type": 2},
-    ]
+    assert client.post("/procurement/replenishment-requests-table/provision", json={}).status_code == 404
+    assert client.post("/procurement/replenishment-requests-table/sync", json={}).status_code == 404
 
 
 def test_procurement_purchase_order_table_provision_reuses_configured_table() -> None:
@@ -1334,7 +1251,26 @@ def test_procurement_purchase_order_table_provision_reuses_configured_table() ->
         if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
         if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/fields":
-            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {"field_id": "fld_po", "field_name": "Purchase Order ID", "type": 1},
+                            {"field_id": "fld_reason", "field_name": "Reason", "type": 1},
+                            {"field_id": "fld_sync_at", "field_name": "Last Synced At", "type": 1},
+                            {"field_id": "fld_sync_status", "field_name": "Sync Status", "type": 3},
+                            {"field_id": "fld_source", "field_name": "Source Version", "type": 1},
+                        ]
+                    },
+                },
+            )
+        if (
+            request.method == "DELETE"
+            and url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/fields/")
+        ):
+            return httpx.Response(200, json={"code": 0})
         return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
 
     app = create_app(
@@ -1984,7 +1920,7 @@ def test_inventory_balance_sync_uses_configured_table_id_before_renamed_table_lo
                             "item_id": "item_vinda_tissue",
                             "warehouse_id": "wh_sz_1",
                             "location_code": "A1",
-                            "fields": {"Balance ID": "330", "Item Name": "维达纸巾"},
+                            "fields": {"id": "330", "item_id": "item_vinda_tissue"},
                         }
                     ],
                 },
@@ -2093,118 +2029,6 @@ def test_inventory_table_sync_updates_existing_snapshot_record() -> None:
     assert requests[-1].method == "PUT"
 
 
-def test_procurement_replenishment_request_table_sync_upserts_by_request_id() -> None:
-    requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        url = str(request.url)
-        if url == "http://mock-api.local/procurement/replenishment-requests/table-schema":
-            return httpx.Response(
-                200,
-                json={"ok": True, "fields": [{"name": "Request ID", "type": "text"}]},
-            )
-        if url == "http://mock-api.local/procurement/replenishment-requests/table-rows":
-            return httpx.Response(200, json=procurement_replenishment_table_rows_response())
-        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
-            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req/fields":
-            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
-        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req/records?"):
-            return httpx.Response(200, json={"code": 0, "data": {"items": [{"record_id": "rec_req"}]}})
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req/records/rec_req":
-            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_req"}}})
-        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
-
-    app = create_app(
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-        inventory_table_app_id="cli_table",
-        inventory_table_app_secret="secret_table",
-        inventory_table_app_token="app_token",
-        procurement_replenishment_request_table_id="tbl_req",
-        mock_api_url="http://mock-api.local",
-    )
-    client = TestClient(app)
-
-    response = client.post("/procurement/replenishment-requests-table/sync", json={"status": "未审批"})
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["synced_count"] == 1
-    assert body["items"] == [
-        {
-            "request_id": "REQ-1001",
-            "status": "未审批",
-            "action": "updated",
-            "record_id": "rec_req",
-            "source_version": "mock-api:REQ-1001",
-        }
-    ]
-    lookup_request = next(
-        request for request in requests if request.method == "GET" and "/records?" in str(request.url)
-    )
-    assert 'CurrentValue.[Request ID]="REQ-1001"' in str(lookup_request.url.params["filter"])
-    update_fields = json.loads(requests[-1].content)["fields"]
-    assert "Category ID" not in update_fields
-    assert "Item ID" not in update_fields
-    assert requests[-1].method == "PUT"
-
-
-def test_procurement_replenishment_request_table_sync_recreates_deleted_configured_table() -> None:
-    requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        url = str(request.url)
-        if url == "http://mock-api.local/procurement/replenishment-requests/table-schema":
-            return httpx.Response(
-                200,
-                json={"ok": True, "fields": [{"name": "Request ID", "type": "text"}]},
-            )
-        if url == "http://mock-api.local/procurement/replenishment-requests/table-rows":
-            return httpx.Response(200, json=procurement_replenishment_table_rows_response())
-        if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
-            return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_deleted/fields":
-            return httpx.Response(200, json={"code": 1254041, "msg": "table not found"})
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables":
-            if request.method == "GET":
-                return httpx.Response(200, json={"code": 0, "data": {"items": []}})
-            return httpx.Response(
-                200,
-                json={"code": 0, "data": {"table_id": "tbl_req_new", "default_view_id": "vew_req_new"}},
-            )
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req_new/fields":
-            return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "fld_request_id"}}})
-        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req_new/records?"):
-            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req_new/records":
-            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_req_new"}}})
-        return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
-
-    app = create_app(
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-        inventory_table_app_id="cli_table",
-        inventory_table_app_secret="secret_table",
-        inventory_table_app_token="app_token",
-        procurement_replenishment_request_table_id="tbl_deleted",
-        mock_api_url="http://mock-api.local",
-    )
-    client = TestClient(app)
-
-    response = client.post("/procurement/replenishment-requests-table/sync", json={"status": "pending"})
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["table_id"] == "tbl_req_new"
-    assert body["synced_count"] == 1
-    assert body["items"][0]["action"] == "created"
-    assert any(request.method == "POST" and str(request.url).endswith("/tables") for request in requests)
-    assert not any("/tables/tbl_deleted/records" in str(request.url) for request in requests)
-
-
 def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() -> None:
     requests: list[httpx.Request] = []
 
@@ -2214,14 +2038,39 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
         if url == "http://mock-api.local/procurement/purchase-orders/table-schema":
             return httpx.Response(
                 200,
-                json={"ok": True, "fields": [{"name": "Purchase Order ID", "type": "text"}]},
+                json={
+                    "ok": True,
+                    "fields": [
+                        {"name": "Purchase Order ID", "type": "text"},
+                        {"name": "Reason", "type": "text"},
+                    ],
+                },
             )
         if url == "http://mock-api.local/procurement/purchase-orders/table-rows":
             return httpx.Response(200, json=procurement_purchase_order_table_rows_response())
         if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
         if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/fields":
-            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {"field_id": "fld_po", "field_name": "Purchase Order ID", "type": 1},
+                            {"field_id": "fld_reason", "field_name": "Reason", "type": 1},
+                            {"field_id": "fld_sync_at", "field_name": "Last Synced At", "type": 1},
+                            {"field_id": "fld_sync_status", "field_name": "Sync Status", "type": 3},
+                            {"field_id": "fld_source", "field_name": "Source Version", "type": 1},
+                        ]
+                    },
+                },
+            )
+        if (
+            request.method == "DELETE"
+            and url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/fields/")
+        ):
+            return httpx.Response(200, json={"code": 0})
         if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/records?"):
             return httpx.Response(200, json={"code": 0, "data": {"items": []}})
         if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/records":
@@ -2238,7 +2087,7 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
     )
     client = TestClient(app)
 
-    response = client.post("/procurement/purchase-orders-table/sync", json={"request_id": "REQ-1001"})
+    response = client.post("/procurement/purchase-orders-table/sync", json={"approval_status": "pending"})
 
     assert response.status_code == 200
     body = response.json()
@@ -2247,13 +2096,13 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
     assert body["items"] == [
         {
             "purchase_order_id": "PO-5001",
-            "request_id": "REQ-1001",
             "status": "pending_arrival",
+            "approval_status": "pending",
             "payment_status": "unpaid",
             "warehouse_sync_status": "pending_arrival",
             "action": "created",
             "record_id": "rec_po",
-            "source_version": "mock-api:PO-5001",
+            "source_version": "",
         }
     ]
     lookup_request = next(
@@ -2265,8 +2114,20 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
     )
     create_fields = json.loads(create_request.content)["fields"]
     assert create_fields["Estimated Arrival Date"] == "2026-05-29"
+    assert create_fields["Approval Status"] == "pending"
+    assert create_fields["Reason"] == "available_quantity_below_reorder_threshold"
+    assert "Request ID" not in create_fields
     assert "Supplier ID" not in create_fields
     assert "Item ID" not in create_fields
+    assert "Last Synced At" not in create_fields
+    assert "Sync Status" not in create_fields
+    assert "Source Version" not in create_fields
+    deleted_field_ids = [
+        str(request.url).rsplit("/", 1)[-1]
+        for request in requests
+        if request.method == "DELETE" and "/tables/tbl_po/fields/" in str(request.url)
+    ]
+    assert deleted_field_ids == ["fld_sync_at", "fld_sync_status", "fld_source"]
 
 
 def test_procurement_table_sync_fetches_all_offset_pages() -> None:
@@ -2275,21 +2136,20 @@ def test_procurement_table_sync_fetches_all_offset_pages() -> None:
     requests: list[httpx.Request] = []
     source_rows = []
     for index in range(1, 4):
-        row = procurement_replenishment_table_rows_response()["items"][0]
-        row["request_id"] = f"REQ-PAGE-{index}"
+        row = procurement_purchase_order_table_rows_response()["items"][0]
+        row["purchase_order_id"] = f"PO-PAGE-{index}"
         row["fields"] = {
             **row["fields"],
-            "Request ID": f"REQ-PAGE-{index}",
-            "Source Version": f"mock-api:REQ-PAGE-{index}",
+            "Purchase Order ID": f"PO-PAGE-{index}",
         }
         source_rows.append(row)
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         url = str(request.url)
-        if url == "http://mock-api.local/procurement/replenishment-requests/table-schema":
-            return httpx.Response(200, json={"ok": True, "fields": [{"name": "Request ID", "type": "text"}]})
-        if url == "http://mock-api.local/procurement/replenishment-requests/table-rows":
+        if url == "http://mock-api.local/procurement/purchase-orders/table-schema":
+            return httpx.Response(200, json={"ok": True, "fields": [{"name": "Purchase Order ID", "type": "text"}]})
+        if url == "http://mock-api.local/procurement/purchase-orders/table-rows":
             payload = json.loads(request.content)
             offset = int(payload.get("offset") or 0)
             limit = int(payload.get("limit") or 2)
@@ -2299,7 +2159,7 @@ def test_procurement_table_sync_fetches_all_offset_pages() -> None:
                 200,
                 json={
                     "ok": True,
-                    "schema_id": "procurement_replenishment_requests",
+                    "schema_id": "procurement_purchase_orders",
                     "count": len(page),
                     "has_more": next_offset is not None,
                     "next_offset": next_offset,
@@ -2308,13 +2168,32 @@ def test_procurement_table_sync_fetches_all_offset_pages() -> None:
             )
         if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req/fields":
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/fields":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {"field_id": "fld_po", "field_name": "Purchase Order ID", "type": 1},
+                            {"field_id": "fld_reason", "field_name": "Reason", "type": 1},
+                            {"field_id": "fld_sync_at", "field_name": "Last Synced At", "type": 1},
+                            {"field_id": "fld_sync_status", "field_name": "Sync Status", "type": 3},
+                            {"field_id": "fld_source", "field_name": "Source Version", "type": 1},
+                        ]
+                    },
+                },
+            )
+        if (
+            request.method == "DELETE"
+            and url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/fields/")
+        ):
+            return httpx.Response(200, json={"code": 0})
+        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/records?"):
             return httpx.Response(200, json={"code": 0, "data": {"items": []}})
-        if url.startswith("https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req/records?"):
-            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
-        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_req/records":
-            request_id = json.loads(request.content)["fields"]["Request ID"]
-            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": f"rec_{request_id}"}}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_po/records":
+            purchase_order_id = json.loads(request.content)["fields"]["Purchase Order ID"]
+            return httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": f"rec_{purchase_order_id}"}}})
         return httpx.Response(404, json={"error": f"unexpected url {request.url}"})
 
     app = create_app(
@@ -2322,12 +2201,12 @@ def test_procurement_table_sync_fetches_all_offset_pages() -> None:
         inventory_table_app_id="cli_table",
         inventory_table_app_secret="secret_table",
         inventory_table_app_token="app_token",
-        procurement_replenishment_request_table_id="tbl_req",
+        procurement_purchase_order_table_id="tbl_po",
         mock_api_url="http://mock-api.local",
     )
     client = TestClient(app)
 
-    response = client.post("/procurement/replenishment-requests-table/sync", json={"limit": 2})
+    response = client.post("/procurement/purchase-orders-table/sync", json={"approval_status": "pending", "limit": 2})
 
     assert response.status_code == 200
     body = response.json()
@@ -2337,11 +2216,25 @@ def test_procurement_table_sync_fetches_all_offset_pages() -> None:
     row_payloads = [
         json.loads(request.content)
         for request in requests
-        if str(request.url) == "http://mock-api.local/procurement/replenishment-requests/table-rows"
+        if str(request.url) == "http://mock-api.local/procurement/purchase-orders/table-rows"
     ]
     assert row_payloads == [
-        {"status": None, "request_id": None, "limit": 2, "offset": 0},
-        {"status": None, "request_id": None, "limit": 2, "offset": 2},
+        {
+            "purchase_order_id": None,
+            "approval_status": "pending",
+            "warehouse_sync_status": None,
+            "payment_status": None,
+            "limit": 2,
+            "offset": 0,
+        },
+        {
+            "purchase_order_id": None,
+            "approval_status": "pending",
+            "warehouse_sync_status": None,
+            "payment_status": None,
+            "limit": 2,
+            "offset": 2,
+        },
     ]
 
 
@@ -3971,51 +3864,25 @@ def balance_table_schema_response() -> dict:
         "ok": True,
         "schema_id": "warehouse_inventory_balances",
         "fields": [
-            {"name": "Balance ID", "type": "text"},
-            {"name": "Warehouse", "type": "text"},
-            {"name": "Warehouse ID", "type": "text"},
-            {"name": "Location", "type": "text"},
-            {"name": "Item Name", "type": "text"},
-            {"name": "Quantity On Hand", "type": "number"},
-            {"name": "Quantity Available", "type": "number"},
-            {"name": "Reorder Threshold", "type": "number"},
+            {"name": "id", "type": "text"},
+            {"name": "warehouse_id", "type": "text"},
+            {"name": "location_code", "type": "text"},
+            {"name": "item_id", "type": "text"},
+            {"name": "batch_no", "type": "text"},
+            {"name": "production_date", "type": "date"},
+            {"name": "expiry_date", "type": "date"},
+            {"name": "quantity_on_hand", "type": "number"},
+            {"name": "reorder_threshold", "type": "number"},
             {
-                "name": "Storage Status",
+                "name": "storage_status",
                 "type": "single_select",
                 "options": [
                     {"name": "available", "color": 28},
                     {"name": "quality_hold", "color": 17},
                 ],
             },
-            {
-                "name": "Risk Level",
-                "type": "single_select",
-                "options": [
-                    {"name": "low", "color": 28},
-                    {"name": "medium", "color": 24},
-                    {"name": "high", "color": 17},
-                    {"name": "unknown", "color": 0},
-                ],
-            },
-            {
-                "name": "Balance Status",
-                "type": "single_select",
-                "options": [
-                    {"name": "available", "color": 28},
-                    {"name": "low_stock", "color": 24},
-                    {"name": "zero_stock", "color": 17},
-                    {"name": "quality_hold", "color": 17},
-                ],
-            },
-            {"name": "Created At", "type": "date"},
-            {"name": "Updated At", "type": "date"},
-            {"name": "Last Synced At", "type": "date"},
-            {
-                "name": "Sync Status",
-                "type": "single_select",
-                "options": [{"name": "synced", "color": 28}],
-            },
-            {"name": "Source Version", "type": "text"},
+            {"name": "created_at", "type": "date"},
+            {"name": "updated_at", "type": "date"},
         ],
     }
 
@@ -4030,22 +3897,18 @@ def balance_table_rows_response(*, next_cursor: str = "") -> dict:
             {
                 "balance_id": "7",
                 "fields": {
-                    "Balance ID": "7",
-                    "Warehouse": "深圳仓",
-                    "Warehouse ID": "wh_sz_1",
-                    "Location": "A1",
-                    "Item Name": "维达纸巾",
-                    "Quantity On Hand": 136,
-                    "Quantity Available": 136,
-                    "Reorder Threshold": 160,
-                    "Storage Status": "available",
-                    "Risk Level": "high",
-                    "Balance Status": "low_stock",
-                    "Created At": "2026-05-24T00:00:00+00:00",
-                    "Updated At": "2026-05-29T10:00:00+00:00",
-                    "Last Synced At": "2026-05-29T10:05:00+00:00",
-                    "Sync Status": "synced",
-                    "Source Version": "mock-api:balance:7:2026-05-29T10:00:00+00:00",
+                    "id": "7",
+                    "warehouse_id": "wh_sz_1",
+                    "location_code": "A1",
+                    "item_id": "item_vinda_tissue",
+                    "batch_no": "BATCH-20260501",
+                    "production_date": "2026-05-01",
+                    "expiry_date": "2028-05-01",
+                    "quantity_on_hand": 136,
+                    "reorder_threshold": 160,
+                    "storage_status": "available",
+                    "created_at": "2026-05-24T00:00:00+00:00",
+                    "updated_at": "2026-05-29T10:00:00+00:00",
                 },
             }
         ],
@@ -4126,10 +3989,10 @@ def test_inventory_balances_table_sync_provisions_pages_and_writes_date_fields_a
         for request in requests
         if request.method == "POST" and str(request.url).endswith("/tables/tbl_balances/fields")
     ]
-    assert any(payload["field_name"] == "Storage Status" and payload["type"] == 3 for payload in field_create_payloads)
-    assert any(payload["field_name"] == "Created At" and payload["type"] == 5 for payload in field_create_payloads)
-    assert any(payload["field_name"] == "Updated At" and payload["type"] == 5 for payload in field_create_payloads)
-    balance_field_id = next(field["field_id"] for field in created_fields if field["field_name"] == "Balance ID")
+    assert any(payload["field_name"] == "storage_status" and payload["type"] == 3 for payload in field_create_payloads)
+    assert any(payload["field_name"] == "created_at" and payload["type"] == 5 for payload in field_create_payloads)
+    assert any(payload["field_name"] == "updated_at" and payload["type"] == 5 for payload in field_create_payloads)
+    balance_field_id = next(field["field_id"] for field in created_fields if field["field_name"] == "id")
     view_patch_payloads = [
         json.loads(request.content)
         for request in requests
@@ -4143,14 +4006,16 @@ def test_inventory_balances_table_sync_provisions_pages_and_writes_date_fields_a
         request for request in requests if str(request.url).endswith("/tables/tbl_balances/records/batch_create")
     )
     fields = json.loads(batch_create.content)["records"][0]["fields"]
-    assert fields["Balance ID"] == "7"
-    assert "Item ID" not in fields
-    assert isinstance(fields["Created At"], int)
-    assert isinstance(fields["Updated At"], int)
-    assert isinstance(fields["Last Synced At"], int)
-    assert fields["Storage Status"] == "available"
-    assert fields["Risk Level"] == "high"
-    assert fields["Balance Status"] == "low_stock"
+    assert fields["id"] == "7"
+    assert fields["item_id"] == "item_vinda_tissue"
+    assert fields["batch_no"] == "BATCH-20260501"
+    assert isinstance(fields["production_date"], int)
+    assert isinstance(fields["expiry_date"], int)
+    assert isinstance(fields["created_at"], int)
+    assert isinstance(fields["updated_at"], int)
+    assert fields["storage_status"] == "available"
+    assert "Risk Level" not in fields
+    assert "Last Synced At" not in fields
 
 
 def test_inventory_balances_table_sync_persists_created_table_id_for_renamed_tables(

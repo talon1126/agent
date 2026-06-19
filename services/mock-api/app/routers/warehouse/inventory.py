@@ -175,104 +175,78 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
 
 WAREHOUSE_STOCK_BALANCE_TABLE_SCHEMA = [
     {
-        "name": "Balance ID",
+        "name": "id",
         "source": "inventory_location_balances.id",
         "type": "text",
-        "comment": "库存余额行唯一标识；数据库模式使用 inventory_location_balances.id。",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["id"],
     },
-    {"name": "Warehouse", "source": "warehouses.name", "type": "text", "comment": "仓库展示名称，例如深圳仓、香港仓。"},
     {
-        "name": "Warehouse ID",
-        "source": "warehouses.warehouse_id",
+        "name": "warehouse_id",
+        "source": "inventory_location_balances.warehouse_id",
         "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouses"]["warehouse_id"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["warehouse_id"],
     },
     {
-        "name": "Location",
+        "name": "location_code",
         "source": "inventory_location_balances.location_code",
         "type": "text",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["location_code"],
     },
     {
-        "name": "Category",
-        "source": "categories.category_name",
+        "name": "item_id",
+        "source": "inventory_location_balances.item_id",
         "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_name"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["item_id"],
     },
-    {"name": "Item Name", "source": "items.item_name", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["item_name"]},
-    {"name": "Brand", "source": "items.brand", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["brand"]},
-    {"name": "Spec", "source": "items.spec", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["spec"]},
-    {"name": "Unit", "source": "items.unit", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["unit"]},
     {
-        "name": "Quantity On Hand",
+        "name": "batch_no",
+        "source": "inventory_location_balances.batch_no",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["batch_no"],
+    },
+    {
+        "name": "production_date",
+        "source": "inventory_location_balances.production_date",
+        "type": "date",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["production_date"],
+    },
+    {
+        "name": "expiry_date",
+        "source": "inventory_location_balances.expiry_date",
+        "type": "date",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["expiry_date"],
+    },
+    {
+        "name": "quantity_on_hand",
         "source": "inventory_location_balances.quantity_on_hand",
         "type": "number",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["quantity_on_hand"],
     },
     {
-        "name": "Quantity Available",
-        "source": "inventory_location_balances.quantity_on_hand",
-        "type": "number",
-        "comment": "当前可用库存余额；当前模型中等于 Quantity On Hand。",
-    },
-    {
-        "name": "Reorder Threshold",
+        "name": "reorder_threshold",
         "source": "inventory_location_balances.reorder_threshold",
         "type": "number",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["reorder_threshold"],
     },
     {
-        "name": "Storage Status",
+        "name": "storage_status",
         "source": "inventory_location_balances.storage_status",
         "type": "single_select",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["storage_status"],
         "options": [{"name": "available", "color": 28}, {"name": "quality_hold", "color": 17}],
     },
     {
-        "name": "Risk Level",
-        "source": "computed.risk_level",
-        "type": "single_select",
-        "comment": "根据库存余额、补货阈值和存储状态计算出的余额风险。",
-        "options": [
-            {"name": "low", "color": 28},
-            {"name": "medium", "color": 24},
-            {"name": "high", "color": 17},
-            {"name": "unknown", "color": 0},
-        ],
-    },
-    {
-        "name": "Balance Status",
-        "source": "computed.balance_status",
-        "type": "single_select",
-        "comment": "库存余额状态，zero_stock 表示余额为 0，low_stock 表示低于补货阈值。",
-        "options": [
-            {"name": "available", "color": 28},
-            {"name": "low_stock", "color": 24},
-            {"name": "zero_stock", "color": 17},
-            {"name": "quality_hold", "color": 17},
-        ],
-    },
-    {
-        "name": "Created At",
+        "name": "created_at",
         "source": "inventory_location_balances.created_at",
         "type": "date",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["created_at"],
     },
     {
-        "name": "Updated At",
+        "name": "updated_at",
         "source": "inventory_location_balances.updated_at",
         "type": "date",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["updated_at"],
     },
-    {"name": "Last Synced At", "source": "sync.last_synced_at", "type": "date", "comment": "同步到飞书多维表格的时间。"},
-    {
-        "name": "Sync Status",
-        "source": "sync.status",
-        "type": "single_select",
-        "comment": "该行数据的同步状态。",
-        "options": [{"name": "synced", "color": 28}, {"name": "pending", "color": 24}, {"name": "failed", "color": 17}],
-    },
-    {"name": "Source Version", "source": "computed.source_version", "type": "text", "comment": "用于追踪该库存余额行来源的版本标识。"},
 ]
 
 
@@ -507,7 +481,7 @@ def batch_inventory_table_fields(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def balance_key(row: dict[str, Any]) -> str:
-    return f"{row['item_id']}:{row['warehouse_id']}:{row['location_code']}"
+    return f"{row['item_id']}:{row['warehouse_id']}:{row['location_code']}:{row.get('batch_no') or ''}"
 
 
 def balance_id(row: dict[str, Any]) -> str:
@@ -547,36 +521,27 @@ def load_stock_balance_rows(
 ) -> list[dict[str, Any]]:
     repository = get_warehouse_repository()
     if repository:
-        return aggregate_stock_balance_snapshot_rows(
-            repository.list_inventory_balance_snapshots(
-                item_id=item_id,
-                warehouse_id=warehouse_id,
-                location_code=location_code,
-            )
+        return repository.list_inventory_balance_snapshots(
+            item_id=item_id,
+            warehouse_id=warehouse_id,
+            location_code=location_code,
         )
 
-    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for row in load_batch_inventory_rows(
-        item_id=item_id,
-        warehouse_id=warehouse_id,
-        location_code=location_code,
-    ):
-        key = (str(row["item_id"]), str(row["warehouse_id"]), str(row["location_code"]))
-        existing = grouped.get(key)
-        if existing:
-            existing["quantity_on_hand"] = int(existing["quantity_on_hand"]) + int(row["quantity_on_hand"])
-            existing["reorder_threshold"] = max(int(existing["reorder_threshold"]), int(row["reorder_threshold"]))
-            if row.get("storage_status") == "quality_hold":
-                existing["storage_status"] = "quality_hold"
-            continue
-        grouped[key] = {
+    rows = [
+        {
             **row,
             "created_at": "2026-05-24T00:00:00+00:00",
             "updated_at": "2026-05-24T00:00:00+00:00",
         }
+        for row in load_batch_inventory_rows(
+            item_id=item_id,
+            warehouse_id=warehouse_id,
+            location_code=location_code,
+        )
+    ]
     return sorted(
-        grouped.values(),
-        key=lambda row: (row["warehouse_id"], row["location_code"], row["item_id"]),
+        rows,
+        key=lambda row: (row["warehouse_id"], row["location_code"], row["item_id"], row["batch_no"]),
     )
 
 
@@ -616,28 +581,19 @@ def aggregate_stock_balance_snapshot_rows(rows: list[dict[str, Any]]) -> list[di
 
 def stock_balance_table_fields(row: dict[str, Any]) -> dict[str, Any]:
     row_balance_id = balance_id(row)
-    quantity = int(row["quantity_on_hand"])
     return {
-        "Balance ID": row_balance_id,
-        "Warehouse": row["warehouse_name"],
-        "Warehouse ID": row["warehouse_id"],
-        "Location": row["location_code"],
-        "Category": row["category_name"],
-        "Item Name": row["item_name"],
-        "Brand": row["brand"],
-        "Spec": row["spec"],
-        "Unit": row["unit"],
-        "Quantity On Hand": quantity,
-        "Quantity Available": quantity,
-        "Reorder Threshold": int(row["reorder_threshold"]),
-        "Storage Status": row["storage_status"],
-        "Risk Level": balance_risk_level(row),
-        "Balance Status": balance_status(row),
-        "Created At": row["created_at"],
-        "Updated At": row["updated_at"],
-        "Last Synced At": datetime.now(UTC).isoformat(),
-        "Sync Status": "synced",
-        "Source Version": f"mock-api:balance:{row_balance_id}:{row['updated_at']}",
+        "id": row_balance_id,
+        "warehouse_id": row["warehouse_id"],
+        "location_code": row["location_code"],
+        "item_id": row["item_id"],
+        "batch_no": row["batch_no"],
+        "production_date": row["production_date"],
+        "expiry_date": row["expiry_date"],
+        "quantity_on_hand": int(row["quantity_on_hand"]),
+        "reorder_threshold": int(row["reorder_threshold"]),
+        "storage_status": row["storage_status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
     }
 
 

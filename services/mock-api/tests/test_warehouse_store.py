@@ -30,7 +30,6 @@ from app.warehouse_store import (
     orders,
     procurement_suppliers,
     purchase_orders,
-    replenishment_requests,
     seed_warehouse_fixtures,
     storage_locations,
     users,
@@ -45,7 +44,6 @@ WAREHOUSE_TABLES = [
     categories,
     items,
     inventory_batches,
-    replenishment_requests,
     delivery_providers,
     users,
     delivery_addresses,
@@ -78,7 +76,6 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         category_count = connection.execute(text("select count(*) from categories")).scalar_one()
         item_count = connection.execute(text("select count(*) from items")).scalar_one()
         batch_count = connection.execute(text("select count(*) from inventory_batches")).scalar_one()
-        replenishment_count = connection.execute(text("select count(*) from replenishment_requests")).scalar_one()
         delivery_provider_count = connection.execute(text("select count(*) from delivery_providers")).scalar_one()
         supplier_count = connection.execute(text("select count(*) from procurement_suppliers")).scalar_one()
         purchase_order_count = connection.execute(text("select count(*) from purchase_orders")).scalar_one()
@@ -108,7 +105,6 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert category_count == 9
     assert item_count == 20
     assert batch_count == 10
-    assert replenishment_count == 0
     assert delivery_provider_count == 3
     assert supplier_count == 7
     assert purchase_order_count == 0
@@ -528,38 +524,6 @@ def test_inventory_batch_ids_are_autoincrementing_integers(tmp_path: Path) -> No
     assert isinstance(created["batch_id"], int)
 
 
-def test_warehouse_repository_persists_replenishment_requests(tmp_path: Path) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
-    init_warehouse_schema(engine)
-    repository = WarehouseRepository(engine)
-
-    created = repository.create_replenishment_request(
-        {
-            "request_id": "REQ-2001",
-            "source": "warehouse",
-            "status": "未审批",
-            "warehouse_id": "wh_sz_1",
-            "warehouse_name": "深圳仓",
-            "location_code": "A1",
-            "item_id": "item_vinda_tissue",
-            "item_name": "维达纸巾",
-            "category_id": "paper",
-            "category_name": "纸品",
-            "current_quantity": 96,
-            "reorder_threshold": 100,
-            "suggested_quantity": 104,
-            "reason": "available_quantity_below_reorder_threshold",
-            "created_by": "warehouse:user-001",
-            "created_at": "2026-05-24T21:00:00+08:00",
-            "updated_at": "2026-05-24T21:00:00+08:00",
-        }
-    )
-    listed = repository.list_replenishment_requests(status="未审批")
-
-    assert created["request_id"] == "REQ-2001"
-    assert listed == [created]
-
-
 def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
     init_warehouse_schema(engine)
@@ -570,7 +534,8 @@ def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_p
     created = repository.create_purchase_order(
         {
             "purchase_order_id": "PO-5001",
-            "request_id": "REQ-2001",
+            "approval_status": "pending",
+            "source": "warehouse",
             "supplier_id": supplier["supplier_id"],
             "supplier_name": supplier["supplier_name"],
             "item_id": "item_vinda_tissue",
@@ -583,6 +548,7 @@ def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_p
             "estimated_total_price": 832,
             "lead_time_days": supplier["lead_time_days"],
             "estimated_arrival_date": "2026-05-27",
+            "reason": "available_quantity_below_reorder_threshold",
             "payment_status": "unpaid",
             "warehouse_sync_status": "pending_arrival",
             "created_by": "procurement:user-001",
@@ -590,13 +556,33 @@ def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_p
             "updated_at": "2026-05-24T21:00:00+08:00",
         }
     )
-    listed = repository.list_purchase_orders(request_id="REQ-2001")
+    listed = repository.list_purchase_orders(approval_status="pending")
 
     assert supplier["supplier_name"] == "深圳纸品供应商"
     assert created["purchase_order_id"] == "PO-5001"
+    assert created["approval_status"] == "pending"
     assert created["payment_status"] == "unpaid"
     assert created["warehouse_sync_status"] == "pending_arrival"
+    assert "current_quantity" not in created
+    assert "reorder_threshold" not in created
+    assert "suggested_quantity" not in created
+    assert "request_id" not in created
     assert listed == [created]
+
+
+def test_purchase_orders_schema_excludes_derived_inventory_hint_columns(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+
+    with engine.connect() as connection:
+        column_names = {
+            row["name"]
+            for row in connection.execute(text("PRAGMA table_info(purchase_orders)")).mappings()
+        }
+
+    assert "current_quantity" not in column_names
+    assert "reorder_threshold" not in column_names
+    assert "suggested_quantity" not in column_names
 
 
 def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_balances(tmp_path: Path) -> None:
@@ -608,7 +594,8 @@ def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_ba
     repository.create_purchase_order(
         {
             "purchase_order_id": "PO-6001",
-            "request_id": "REQ-3001",
+            "approval_status": "approved",
+            "source": "warehouse",
             "supplier_id": supplier["supplier_id"],
             "supplier_name": supplier["supplier_name"],
             "item_id": "item_vinda_tissue",
@@ -621,6 +608,7 @@ def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_ba
             "estimated_total_price": 832,
             "lead_time_days": supplier["lead_time_days"],
             "estimated_arrival_date": "2026-05-29",
+            "reason": "available_quantity_below_reorder_threshold",
             "payment_status": "paid",
             "warehouse_sync_status": "arrived_unsynced",
             "arrived_at": "2026-05-29T10:00:00+00:00",

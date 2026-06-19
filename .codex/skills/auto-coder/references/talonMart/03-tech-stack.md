@@ -106,8 +106,7 @@ n8n Workflow
 | `items` | 商品主数据，保存商品名称、品牌、规格、价格、搜索文本、单位、条码和商品图片地址；商品图片可指向本地演示 URL 或后续 OSS URL，供前端与飞书商品表展示。 |
 | `item_reviews` | 商品评论表，保存用户评分、标题、正文和时间。 |
 | `inventory_batches` | 批次库存事实表，按仓库、库位、商品和批次保存库存数量与保质期。 |
-| `inventory_location_balances` | 库位库存余额表，保存当前可售库存；飞书余额表使用数据库 `id` 作为 `Balance ID`，不展示 `category_id` 或 `item_id`。 |
-| `replenishment_requests` | 补货申请表，保存低库存触发后交给采购审核的结构化需求；飞书补货申请 read model 只展示业务可读字段，不展示 `category_id` 或 `item_id`。 |
+| `inventory_location_balances` | 库位库存余额表，保存当前可售库存；飞书库存余额表字段必须与该表列一一对应，不混入商品、分类、仓库展示名、计算状态或同步元字段。 |
 | `warehouse_inventory_sync_jobs` | 仓储库存同步任务表，保存采购到仓后需要写入库存批次与库存余额的待处理任务。 |
 | `orders` | 订单主表，保存下单、发仓确认、付款、发货、到货、退款、退货和物流状态；状态统一使用英文枚举：`pending_fulfillment_review`、`unpaid`、`pending_shipment`、`shipped`、`arrived`、`refunded`、`returned`、`canceled`。 |
 | `order_items` | 订单明细表，保存订单命中的商品、仓库、库位、批次和数量。 |
@@ -121,7 +120,7 @@ n8n Workflow
 | `item_rank_events` | 商品排行榜事件事实表，记录浏览、加购、购买、收藏、评论等可聚合行为。 |
 | `category_rank_snapshots` | 分类排行榜快照表，保存各 category、rank_type、window_type 下的商品排名、分数和生成时间，Redis 丢失后可重建榜单。 |
 | `procurement_suppliers` | 采购供应商表，保存供应商、商品、交期、采购价和可靠性。 |
-| `purchase_orders` | 采购单表，保存补货申请审核后生成的采购单、支付状态和仓库同步状态；飞书采购单 read model 不展示 `supplier_id` 或 `item_id`。 |
+| `purchase_orders` | 采购单表，承载低库存采购需求、采购审批、供应商、支付状态、仓库同步状态和业务原因；采购单不保存 `request_id`、`current_quantity`、`reorder_threshold` 或 `suggested_quantity`，使用 `approval_status` 表达待审批、已批准和已驳回。飞书采购单 read model 展示 `Reason`，不展示 `Request ID`、`Supplier ID`、`Item ID`、同步元字段或采购计算过程字段。 |
 | `session_state` | Agent 会话状态表，保存飞书/会话维度的短期状态，例如最近订单。 |
 | `user_profile` | 用户画像表，保存用户资料、偏好、摘要和会话沉淀信息。 |
 | `conversation` | AImodel 会话表，保存前端 AI 模式中的会话标题、用户和时间。 |

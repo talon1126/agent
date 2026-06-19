@@ -10,8 +10,8 @@
 | 阶段 | 阶段标题 | 目标 | 状态 |
 | --- | --- | --- | --- |
 | 阶段 A | Project Foundation | 建立本地运行、共享服务、测试入口和基础规范 | [✔] |
-| 阶段 B | Warehouse Workflow | 完成仓储库存、履约、补货和仓储主链路 | [✔] |
-| 阶段 C | Procurement Workflow | 完成补货审批、采购单生成和采购主链路 | [✔] |
+| 阶段 B | Warehouse Workflow | 完成仓储库存、履约、采购需求和仓储主链路 | [✔] |
+| 阶段 C | Procurement Workflow | 完成采购单审批、采购单查询和采购主链路 | [✔] |
 | 阶段 D | Delivery Workflow | 完成物流查询、异常和 case 闭环 | [✔] |
 | 阶段 E | Operations Workflow | 完成跨领域只读摘要和运营建议闭环 | [✔] |
 | 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀、排行榜和前端体验 | [✔] |
@@ -24,8 +24,8 @@
 | 阶段 | 项目当前位置 | 可用功能 | 验证方式 | 下一阶段入口 | 完成日期 |
 | --- | --- | --- | --- | --- | --- |
 | 阶段 A | 基础服务可运行 | Docker Compose、fixtures、Python/Node 测试入口 | `docker compose -p after-sales-implementation config --quiet` | Warehouse Workflow |  |
-| 阶段 B | 仓储主链路可演示 | 库存查询、履约风险、补货申请 | `uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py -q` | Procurement Workflow |  |
-| 阶段 C | 采购主链路可演示 | 补货审批、采购单生成、采购单查询 | `uv run --project services/mock-api pytest services\mock-api\tests\test_procurement_router_structure.py -q` | Delivery Workflow |  |
+| 阶段 B | 仓储主链路可演示 | 库存查询、履约风险、待审批采购单创建 | `uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py -q` | Procurement Workflow |  |
+| 阶段 C | 采购主链路可演示 | 采购单审批、采购单驳回、采购单查询 | `uv run --project services/mock-api pytest services\mock-api\tests\test_procurement_router_structure.py -q` | Delivery Workflow |  |
 | 阶段 D | 物流主链路可演示 | 物流状态、异常查询、case 创建 | `uv run --project services/mock-api pytest services\mock-api\tests\test_delivery_router_structure.py -q` | Operations Workflow |  |
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
 | 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
@@ -52,7 +52,7 @@
 | B1 | 建立仓储数据模型和 repository | [✔] |  | 批次、库位、库存余额 |
 | B2 | 实现库存查询与异常查询 API | [✔] |  | warehouse inventory |
 | B3 | 实现履约风险和订单确认后库存扣减 | [✔] |  | FEFO、整单同仓、员工确认扣减 |
-| B4 | 实现补货申请创建 | [✔] |  | replenishment_requests |
+| B4 | 实现待审批采购单创建 | [✔] |  | purchase_orders.approval_status |
 | B5 | 实现 Warehouse n8n Workflow | [✔] |  | warehouse-workflow.json |
 | B6 | 实现仓储测试与回归门禁 | [✔] |  | warehouse tests |
 
@@ -60,9 +60,9 @@
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| C1 | 建立采购数据模型和状态规则 | [✔] |  | replenishment_requests、purchase_orders |
-| C2 | 实现补货申请查询、批准和驳回 | [✔] |  | requests.py |
-| C3 | 实现批量批准和采购单复用 | [✔] |  | service.py |
+| C1 | 建立采购单数据模型和状态规则 | [✔] |  | purchase_orders、approval_status |
+| C2 | 实现采购单查询、批准和驳回 | [✔] |  | purchase_orders.py |
+| C3 | 实现采购单批量审批 | [✔] |  | service.py |
 | C4 | 实现 Procurement n8n Workflow | [✔] |  | procurement-workflow.json |
 | C5 | 实现采购测试与回归门禁 | [✔] |  | procurement router tests |
 
@@ -119,7 +119,7 @@
 | --- | --- | --- | --- | --- |
 | H1 | 建立 feishu-adapter 基础能力 | [✔] | 2026-06-18 | 长连接、多机器人、事件解析、n8n 转发、回复、run log、table_id-first 表定位、table_id 持久记忆、分页同步和图片上传基础能力 |
 | H2 | 实现仓储飞书表和余额表同步 | [✔] |  | Warehouse Inventory Snapshots / Balances |
-| H3 | 实现采购到仓库存同步和采购飞书表同步 | [✔] |  | arrived_unsynced -> synced、Replenishment Requests、Purchase Orders |
+| H3 | 实现采购到仓库存同步和采购单飞书表同步 | [✔] |  | arrived_unsynced -> synced、Purchase Orders |
 | H4 | 实现订单发仓确认通知 | [✔] | 2026-06-17 | 支付后发仓确认、候选发仓、物流选择、员工确认后扣减 |
 | H5 | 实现采购到货入库确认通知 | [✔] | 2026-06-17 | 今日到货采购单、飞书通知、员工入库确认 |
 | H6 | 设计飞书应用信息架构和首页草图 | [✔] | 2026-06-17 | 运营驾驶舱 + 业务操作台 |
@@ -340,23 +340,26 @@
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py -q`
 
-##### B4：实现补货申请创建
+##### B4：实现待审批采购单创建
 
-目标：当库存低于阈值时创建补货申请，供采购 Workflow 审批。
+目标：当库存低于阈值时直接创建待审批采购单，供 Procurement Workflow 审批。
 
 修改文件：
 
-- `services/mock-api/app/routers/procurement/requests.py`
+- `services/mock-api/app/routers/procurement/purchase_orders.py`
+- `services/mock-api/app/routers/procurement/service.py`
 - `services/mock-api/app/routers/procurement/state.py`
 
 实现类/函数：
 
-- `create_replenishment_request()`：创建补货申请。
-- `list_replenishment_requests()`：查询补货申请。
+- `create_purchase_order_request()`：根据低库存采购需求创建待审批采购单。
+- `list_purchase_orders()`：查询采购单和审批状态。
 
 验收标准：
 
-- 补货申请包含 item、warehouse、quantity、reason 和状态。
+- 低库存采购需求直接落入 `purchase_orders`。
+- 采购单包含商品、仓库、库位、数量、原因和 `approval_status`。
+- 采购单不依赖 `replenishment_requests` 或 `request_id`。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_procurement_router_structure.py -q`
 
@@ -371,7 +374,7 @@
 实现类/函数：
 
 - Warehouse webhook：接收飞书转发消息。
-- Warehouse tool nodes：调用库存、履约和补货工具。
+- Warehouse tool nodes：调用库存、履约和采购需求工具。
 
 验收标准：
 
@@ -402,9 +405,9 @@
 
 #### 阶段 C：Procurement Workflow
 
-##### C1：建立采购数据模型和状态规则
+##### C1：建立采购单数据模型和状态规则
 
-目标：定义补货申请、采购单和到仓状态。
+目标：定义采购单、审批状态、支付状态和到仓状态。
 
 修改文件：
 
@@ -413,38 +416,48 @@
 
 实现类/函数：
 
-- `ReplenishmentRequest`：补货申请结构。
-- `PurchaseOrder`：采购单结构。
+- `PurchaseOrder`：采购单结构，承载采购需求、审批结果、供应商、支付和到仓同步状态。
+- `approval_status`：采购审批状态，表达待审批、已批准和已驳回。
+- `payment_status`：采购付款状态，表达未支付和已支付。
+- `warehouse_sync_status`：仓库同步状态，表达待到货、到仓未同步和已同步。
 
 验收标准：
 
-- 状态字段能表达待审批、已审批、未支付、已支付、到仓未同步和已同步。
+- `purchase_orders` 是采购需求和采购执行的唯一事实表。
+- `purchase_orders` 不包含 `request_id` 字段。
+- `approval_status` 能表达待审批、已批准和已驳回。
+- `payment_status` 能表达未支付和已支付。
+- `warehouse_sync_status` 能表达待到货、到仓未同步和已同步。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_procurement_router_structure.py -q`
 
-##### C2：实现补货申请查询、批准和驳回
+##### C2：实现采购单查询、批准和驳回
 
-目标：支持采购人员 review 补货申请。
+目标：支持采购人员 review 采购单并直接更新采购单审批状态。
 
 修改文件：
 
-- `services/mock-api/app/routers/procurement/requests.py`
+- `services/mock-api/app/routers/procurement/purchase_orders.py`
+- `services/mock-api/app/routers/procurement/service.py`
 
 实现类/函数：
 
-- `approve_replenishment_request()`：批准补货申请。
-- `reject_replenishment_request()`：记录驳回原因。
+- `approve_purchase_order()`：批准采购单并更新 `approval_status`。
+- `reject_purchase_order()`：驳回采购单并记录原因。
+- `list_purchase_orders()`：按审批、支付和到仓状态查询采购单。
 
 验收标准：
 
-- 批准生成采购动作，驳回保留原因且不生成采购单。
-- 飞书输入 `@procurement 批准 REQ-1001 生成采购单` 后，应返回采购单编号和申请状态。
+- 批准采购单后保留同一 `purchase_order_id` 并更新审批状态。
+- 驳回采购单后保留原因，不进入后续支付或到仓同步链路。
+- 系统不提供单独的采购申请查询接口。
+- 飞书输入 `@procurement 批准 PO-5001` 后，应返回采购单编号和审批状态。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py -q`
 
-##### C3：实现批量批准和采购单复用
+##### C3：实现采购单批量审批
 
-目标：批量处理待审批申请，避免重复创建采购单。
+目标：批量处理待审批采购单，避免重复审批和状态错乱。
 
 修改文件：
 
@@ -452,19 +465,20 @@
 
 实现类/函数：
 
-- `approve_replenishment_requests_batch()`：批量批准申请。
-- `get_or_create_purchase_order()`：按业务键复用采购单。
+- `approve_purchase_orders_batch()`：批量批准待审批采购单。
+- `select_pending_purchase_orders()`：筛选符合条件的待审批采购单。
 
 验收标准：
 
-- 重复批准不会生成重复 PO。
-- 飞书输入 `@procurement 批量批准生成采购单` 后，应返回处理数量、已复用采购单和新增采购单。
+- 重复批准不会创建或复制采购单。
+- 已批准或已驳回采购单不会被批量任务错误覆盖。
+- 飞书输入 `@procurement 批量批准采购单` 后，应返回处理数量、成功数量和跳过数量。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_api.py -q`
 
 ##### C4：实现 Procurement n8n Workflow
 
-目标：编排采购审批、采购单生成和采购单查询工具。
+目标：编排采购单审批、采购单查询和采购状态跟踪工具。
 
 修改文件：
 
@@ -473,12 +487,12 @@
 实现类/函数：
 
 - Procurement webhook：接收采购消息。
-- Procurement tool nodes：调用审批和采购单查询工具。
+- Procurement tool nodes：调用采购单审批、采购单查询和到货确认工具。
 
 验收标准：
 
 - workflow 文件包含入口、Agent 和采购工具节点。
-- 飞书输入 `@procurement 查询 PO-5001` 后，Procurement Workflow 应返回采购单当前状态和关联补货申请。
+- 飞书输入 `@procurement 查询 PO-5001` 后，Procurement Workflow 应返回采购单审批、支付和到仓同步状态。
 
 测试方法：`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
@@ -1210,19 +1224,19 @@
 验收标准：
 
 - 接口返回 table_id、table_url、synced_count 和错误摘要。
-- 库存余额表展示 `Balance ID`、Warehouse、Location、Item Name、数量、状态和更新时间。
-- 库存余额表不展示 `Category ID` 或 `Item ID`。
+- 库存余额表严格映射数据库 `inventory_location_balances`：`id`、`warehouse_id`、`location_code`、`item_id`、`batch_no`、`production_date`、`expiry_date`、`quantity_on_hand`、`reorder_threshold`、`storage_status`、`created_at`、`updated_at`。
+- 库存余额表不展示 `Warehouse`、`Category`、`Item Name`、`Brand`、`Risk Level`、`Balance Status`、`Last Synced At`、`Sync Status`、`Source Version` 等非本表字段。
 - 库存批次快照表展示 Warehouse、Location、Category、Item Name、Brand、Spec、Unit、Batch No、数量、风险、同步状态和来源版本，不展示 `Category ID` 或 `Item ID`。
 - 库存批次快照表优先使用 `Source Version` 作为同步幂等身份键，避免同名商品在同一仓库和批次下误更新。
-- `Balance ID` 来源于数据库 `inventory_location_balances.id`；无数据库 fallback 时使用稳定可读的 `fallback:{item_id}:{warehouse_id}:{location}`。
+- `id` 来源于数据库 `inventory_location_balances.id`；无数据库 fallback 时使用稳定可读的 `fallback:{item_id}:{warehouse_id}:{location_code}:{batch_no}`。
 - 定时任务调用 `/warehouse/inventory-balances-table/sync` 刷新飞书余额表。
 - 库存快照和库存余额同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
 
 测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
-##### H3：实现采购到仓库存同步和采购飞书表同步
+##### H3：实现采购到仓库存同步和采购单飞书表同步
 
-目标：将已到仓未同步采购单写入库存批次和库位余额，并将补货申请、采购单 read model 同步到飞书多维表格，供采购页面和运营驾驶舱使用。
+目标：将已到仓未同步采购单写入库存批次和库位余额，并将采购单 read model 同步到飞书多维表格，供采购页面和运营驾驶舱使用。
 
 修改文件：
 
@@ -1230,7 +1244,6 @@
 - `services/mock-api/app/routers/warehouse/sync_jobs.py`
 - `services/feishu-adapter/app/main.py`
 - `services/mock-api/app/routers/procurement/service.py`
-- `n8n/workflows/procurement-replenishment-requests-sync.json`
 - `n8n/workflows/procurement-purchase-orders-sync.json`
 - `tests/test_department_workflows.py`
 
@@ -1238,11 +1251,8 @@
 
 - `sync_arrived_purchase_orders()`：扫描并同步到仓采购单。
 - `mark_purchase_order_synced()`：更新采购单仓储同步状态。
-- `provision_procurement_replenishment_requests_table()`：创建补货申请表。
-- `sync_procurement_replenishment_requests_table()`：同步补货申请。
 - `provision_procurement_purchase_orders_table()`：创建采购单表。
 - `sync_procurement_purchase_orders_table()`：同步采购单。
-- `Procurement Replenishment Requests Sync`：定时同步补货申请表。
 - `Procurement Purchase Orders Sync`：定时同步采购单表。
 
 验收标准：
@@ -1250,10 +1260,13 @@
 - 同步后库存事实增加，采购单状态从 `arrived_unsynced` 进入 `synced`。
 - 飞书输入 `@warehouse 同步采购到仓库存` 后，Warehouse Workflow 应扫描已到仓未同步采购单并返回同步数量。
 - 表同步结果包含写入数量和表链接。
-- 补货申请飞书表不展示 `Category ID` 或 `Item ID`。
-- 采购单飞书表不展示 `Supplier ID` 或 `Item ID`。
-- 补货申请和采购单都有独立 n8n 定时同步任务，并调用对应 `/procurement/*-table/sync` 端点。
-- 补货申请和采购单同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
+- 采购单飞书表展示 `Approval Status`，用于区分待审批、已批准和已驳回采购单。
+- 采购单飞书表展示 `Reason`。
+- 采购单飞书表不展示 `Request ID`、`Supplier ID`、`Item ID`、`Last Synced At`、`Sync Status`、`Source Version`、`current_quantity`、`reorder_threshold` 或 `suggested_quantity`。
+- `purchase_orders` 数据库表不保存 `current_quantity`、`reorder_threshold` 或 `suggested_quantity`。
+- 飞书端不存在独立的 `Procurement Replenishment Requests` 表。
+- 采购单有独立 n8n 定时同步任务，并调用 `/procurement/purchase-orders-table/sync` 端点。
+- 采购单同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
 
 测试方法：`uv run --project services/mock-api pytest services\mock-api\tests\test_warehouse_store.py -q`；`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`
 
@@ -1373,18 +1386,18 @@
 
 实现类/函数：
 
-- 首页指标区：展示今日订单、待发仓确认、低库存 SKU、今日到货和待补货申请 5 个指标卡。
+- 首页指标区：展示今日订单、待发仓确认、低库存 SKU、今日到货和待审批采购单 5 个指标卡。
 - 首页分析区：展示订单状态分布、库存风险和热门商品 3 个分析组件；真实图表能力不足时使用绑定真实表的列表、统计视图或明确占位。
-- 首页待办区：展示待发仓确认列表、今日到货采购单和低库存补货建议 3 个业务待办组件。
+- 首页待办区：展示待发仓确认列表、今日到货采购单和待审批采购单 3 个业务待办组件。
 - 首页操作区：展示同步库存余额、同步采购单、发送今日到货通知和刷新排行榜 4 个快捷入口；无法绑定实际按钮动作时使用明确文本入口说明。
 
 验收标准：
 
 - 应用左侧存在“运营驾驶舱”页面。
 - 首页组件按 H6 草图展示，视觉结构包含指标区、分析区、待办区和操作区。
-- 指标区至少出现今日订单、待发仓确认、低库存 SKU、今日到货和待补货申请 5 个业务指标标题。
+- 指标区至少出现今日订单、待发仓确认、低库存 SKU、今日到货和待审批采购单 5 个业务指标标题。
 - 分析区至少出现订单状态分布、库存风险和热门商品 3 个业务组件标题。
-- 待办区至少出现待发仓确认列表、今日到货采购单和低库存补货建议 3 个业务组件标题。
+- 待办区至少出现待发仓确认列表、今日到货采购单和待审批采购单 3 个业务组件标题。
 - 操作区至少出现同步库存余额、同步采购单、发送今日到货通知和刷新排行榜 4 个快捷入口标题。
 - 已有飞书表能绑定的组件使用真实数据；缺失数据源组件显示明确占位或空状态。
 - Chrome 验证页面可预览，组件标题、数据源和布局与规范一致。
@@ -1531,7 +1544,7 @@
 
 - 订单履约中心：使用顶部状态摘要、主订单列表和筛选入口展示待付款、待发仓确认、待出库和已发货订单。
 - 库存管理中心：使用库存状态摘要、库存余额列表、低库存视图和仓库/库位筛选支撑库存处理。
-- 采购管理中心：使用采购待办摘要、补货申请列表、采购单列表和今日到货入口支撑采购处理。
+- 采购管理中心：使用采购待办摘要、采购单列表、审批状态筛选和今日到货入口支撑采购处理。
 - 商品运营中心：使用商品运营摘要、商品运营列表、Flash Deals/排行榜字段和筛选入口支撑商品运营。
 - `Product Operations Table Sync`：每 10 分钟调用 `/products/operations-table/sync` 刷新商品运营飞书表。
 
@@ -1539,7 +1552,7 @@
 
 - 应用左侧存在订单履约、库存管理、采购管理和商品运营页面。
 - 每个页面至少包含一个业务摘要区、一个真实数据列表和一个业务筛选入口。
-- 订单履约中心绑定 `Order Fulfillment`，库存管理中心绑定 `Warehouse Inventory Balances`，采购管理中心绑定 `Procurement Replenishment Requests` 或 `Procurement Purchase Orders`，商品运营中心绑定 `Product Operations`。
+- 订单履约中心绑定 `Order Fulfillment`，库存管理中心绑定 `Warehouse Inventory Balances`，采购管理中心绑定 `Procurement Purchase Orders`，商品运营中心绑定 `Product Operations`。
 - 页面命名、组件标题和字段展示与 TalonMart 业务术语一致。
 - 页面布局避免只堆一个空表，应呈现“顶部看状态、下方处理列表”的业务操作台结构。
 - 所有页面组件只能绑定真实飞书表或明确的空状态，不展示误导性假数据。

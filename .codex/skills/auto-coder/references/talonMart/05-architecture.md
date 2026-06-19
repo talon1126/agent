@@ -188,7 +188,6 @@ agent/                                                      # 项目根目录
 │   │   │       │   ├── schemas.py                          # 采购数据模型
 │   │   │       │   ├── state.py                            # 采购内存状态
 │   │   │       │   ├── service.py                          # 采购业务服务
-│   │   │       │   ├── requests.py                         # 补货申请路由
 │   │   │       │   ├── purchase_orders.py                  # 采购单路由
 │   │   │       │   └── mock.py                             # 采购建议 mock
 │   │   │       └── delivery/                               # 物流路由包
@@ -235,7 +234,6 @@ agent/                                                      # 项目根目录
 │       ├── warehouse-order-timeout-release.json            # 订单超时释放
 │       ├── warehouse-purchase-arrival-notify.json          # 采购到货入库通知
 │       ├── procurement-workflow.json                       # 采购工作流
-│       ├── procurement-replenishment-requests-sync.json    # 补货申请表定时同步
 │       ├── procurement-purchase-orders-sync.json           # 采购单表定时同步
 │       ├── order-fulfillment-table-sync.json               # 订单履约表定时同步
 │       ├── order-items-table-sync.json                     # 订单明细表定时同步
@@ -304,15 +302,15 @@ agent/                                                      # 项目根目录
 | 业务 API | `services/mock-api/app/main.py` | mock-api 入口 | 路由注册、health、政策搜索、run log |
 | 业务 API | `services/mock-api/app/warehouse_store.py` | 仓储 repository | PostgreSQL 优先、fixtures fallback、库存事实 |
 | 业务 API | `services/mock-api/app/routers/category_rankings.py` | 分类排行榜路由 | PostgreSQL 事实/快照、Redis ZSET 缓存、Top 商品返回 |
-| 业务 API | `services/mock-api/app/routers/warehouse/router.py` | Warehouse 路由聚合 | 库存、订单、补货申请 |
-| 业务 API | `services/mock-api/app/routers/procurement/router.py` | Procurement 路由聚合 | 补货申请、采购单查询 |
+| 业务 API | `services/mock-api/app/routers/warehouse/router.py` | Warehouse 路由聚合 | 库存、订单、采购需求创建 |
+| 业务 API | `services/mock-api/app/routers/procurement/router.py` | Procurement 路由聚合 | 采购单审批、采购单查询 |
 | 业务 API | `services/mock-api/app/routers/delivery/router.py` | Delivery 路由聚合 | 物流状态、异常、case |
 | 飞书 | `services/feishu-adapter/app/main.py` | 飞书服务入口 | 多机器人、事件转发、表格同步 |
 | 飞书 | `services/feishu-adapter/app/feishu_events.py` | 事件归一化 | 消息类型、mention、payload 转换 |
 | 飞书 | `services/feishu-adapter/app/intent_router.py` | 仓储 fast path | 明确同步/视图意图识别 |
 | 飞书 | `services/feishu-adapter/app/view_template_builder.py` | 视图模板 | 受控模板、字段映射、视图计划 |
 | 飞书应用 | 飞书多维表格应用页面配置 | 企业管理后台页面 | 运营驾驶舱、业务操作台、组件绑定和人工验收 |
-| Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约和补货工具 |
+| Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约和采购需求工具 |
 | Workflow | `n8n/workflows/warehouse-purchase-arrival-notify.json` | 采购到货入库通知 | 定时扫描今日到货采购单并触发飞书群通知 |
 | Workflow | `n8n/workflows/order-fulfillment-table-sync.json` | 订单履约表同步 | 每 10 分钟刷新 Order Fulfillment 飞书 read model |
 | Workflow | `n8n/workflows/order-items-table-sync.json` | 订单明细表同步 | 每 10 分钟刷新 Order Items 飞书 read model |
@@ -346,7 +344,7 @@ mock-api warehouse router
 warehouse_store / PostgreSQL
     |
     v
-库存、履约风险、补货申请
+库存、履约风险、采购需求创建
 ```
 
 #### 5.4.2 Procurement 业务流程
@@ -361,10 +359,10 @@ n8n procurement-workflow
 mock-api procurement router
     |
     v
-replenishment_requests / purchase_orders
+purchase_orders
     |
     v
-补货申请审批结果 / 采购单查询结果
+采购单审批结果 / 采购单查询结果
 ```
 
 #### 5.4.3 Delivery 业务流程

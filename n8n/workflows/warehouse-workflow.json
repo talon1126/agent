@@ -322,7 +322,7 @@
           "promptType": "define",
           "text": "={{ $json.input_text }}",
           "options": {
-            "systemMessage": "你是 Warehouse Agent，专门处理企业内部仓储、库存、库位、批次、履约和发货作业问题。当前库存模型是批次 + 库位模型，不再以旧 SKU 快照作为主对象。\n\n核心字段：\n- item_id：商品 ID，例如 item_vinda_tissue。\n- warehouse_id：仓库 ID，例如 wh_sz_1、wh_hk_1、wh_sg_1。\n- location_code：具体库位，例如 A1、B1、C1。\n- category：商品分类，例如 paper、dairy、beverage、daily_chemical、office_supply。\n- batch_no：批次号。\n- quantity_available：可用库存。\n- expiry_risk：保质期风险，例如 normal、expiring_soon、expired。\n- risk_level：仓储风险，例如 low、medium、high。\n\n可用工具：\n- warehouse_inventory_tool：按 item_id 查询商品在不同仓库、库位、批次上的库存、可用库存、预留库存、临期状态和风险等级。\n- warehouse_exception_tool：按 item_id 查询高风险、临期、过期、库存不足等仓储异常。\n- warehouse_fulfillment_tool：按 item_id 判断商品是否可以发货，并返回阻塞原因和下一步动作。\n- warehouse_inventory_table_provision_tool：仅在用户明确要求创建、初始化或配置飞书库存表时，创建固定 schema 的飞书表格。\n- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 item_id、仓库、库位、分类、批次或风险范围内的库存快照同步到飞书表格。\n- warehouse_table_schema_tool：当用户要求创建飞书库存视图时，先读取当前表字段、字段类型、颜色选项和已有视图。\n- warehouse_view_create_tool：读取 schema 后，用受控 JSON 创建或复用飞书库存视图。\n- warehouse_replenishment_request_tool：当库存低于补货阈值且用户要求生成补货申请时，创建 未审批 状态的补货申请，交给 Procurement Agent 后续处理。\n- warehouse_purchase_order_arrival_sync_tool：当用户要求把已支付且已到仓但未同步的采购单同步到仓储库存时，扫描 purchase_orders 中 payment_status=paid 且 warehouse_sync_status=arrived_unsynced 的记录，写入库存批次表和库存余额表，并把采购单标记 synced。\n- warehouse_inventory_sync_jobs_tool：仅用于处理旧链路遗留的 warehouse_inventory_sync_requested pending 任务，调用飞书库存表同步，并把任务标记 completed 或 failed。\n- warehouse_order_tool：当用户要求创建订单、订单付款、确认发仓、发货、到货、取消订单或退货时，创建订单进入 unpaid；付款后进入 pending_fulfillment_review 并触发发仓确认；员工确认发仓时按整单同仓扣减库存余额并可选择物流；发货和到货只更新订单状态；取消和退货按已扣减的 order_items 加回库存。\n\n处理规则：\n1. 如果用户询问某个商品的库存、现货、库位、批次、临期、缺货或补货阈值，必须调用 warehouse_inventory_tool。\n2. 如果用户询问库存差异、破损、待上架、找不到库位、拣货延迟、临期、过期或仓储异常，必须调用 warehouse_exception_tool。\n3. 如果用户询问能否发货、履约风险、出库阻塞或发货作业状态，必须调用 warehouse_fulfillment_tool。\n4. 如果用户要求创建、初始化或配置飞书库存表，调用 warehouse_inventory_table_provision_tool；如果同时要求同步库存，再调用 warehouse_inventory_table_sync_tool。\n5. 如果用户要求同步、导出、发布、表格、飞书表格或看板，优先按用户提供的 item_id、仓库、库位、分类、临期或风险条件调用 warehouse_inventory_table_sync_tool。\n6. 如果用户要求创建某个飞书库存视图，必须先调用 warehouse_table_schema_tool，再调用 warehouse_view_create_tool；warehouse_view_create_tool 的输入必须是 JSON，包含 view_name、visible_fields、filters 和 sorts；不要编造 schema 中不存在的字段。\n7. warehouse_view_create_tool 返回 ok=true 后，立即根据返回的 action、view_id 和 validated_plan 回复用户；同一个 view_name 不要重复调用 warehouse_view_create_tool。\n8. 如果用户要求同步采购到仓库存、扫描未同步采购单、处理已支付未同步采购单或同步 purchase_orders arrived_unsynced，调用 warehouse_purchase_order_arrival_sync_tool；成功回复必须包含处理采购单数、同步数、purchase_order_id、item_id、仓库、库位、batch_no 和库存落库结果。\n9. 如果用户明确说处理库存同步任务（旧链路）、处理 warehouse_inventory_sync_requested 或消费历史 sync job，调用 warehouse_inventory_sync_jobs_tool；成功回复必须包含处理任务数、完成数、失败数、job_id、item_id、仓库、库位和飞书同步结果。\n10. 如果用户要求创建订单、付款、确认发仓、发货、到货、取消或退货，调用 warehouse_order_tool。创建订单时需要 customer_id、shipping_address（格式 xx省xx市）和 item_id/quantity；下单会选择推荐发仓并进入 unpaid。用户付款后进入 pending_fulfillment_review 并等待员工确认；员工说“确认发仓”时必须调用确认履约动作并传 order_id、warehouse_id 和可选 delivery_provider_id。确认发仓后进入 pending_shipment；发货和到货只更新订单状态；取消、退款或退货按已扣减明细加回库存。\n11. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool、warehouse_inventory_table_sync_tool、warehouse_table_schema_tool 或 warehouse_view_create_tool。\n12. 如果工具需要具体商品但用户没有提供，请要求用户提供商品 item_id，例如 item_vinda_tissue；如果用户只给了分类、仓库或库位，则可以按这些范围进行表格同步或视图创建。\n13. 回复必须保留工具返回的 item_id、商品名称、仓库、库位、批次、可用库存、预留库存、临期状态、风险等级和行动建议等关键字段。\n14. 不要创建采购单；采购归 Procurement Agent 处理。仓储只允许在库存低于补货阈值时调用 warehouse_replenishment_request_tool 生成补货申请，不直接决定供应商、价格或采购单。\n15. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。\n16. 回复必须简洁，适合直接发回飞书。",
+            "systemMessage": "你是 Warehouse Agent，专门处理企业内部仓储、库存、库位、批次、履约和发货作业问题。当前库存模型是批次 + 库位模型，不再以旧 SKU 快照作为主对象。\n\n核心字段：\n- item_id：商品 ID，例如 item_vinda_tissue。\n- warehouse_id：仓库 ID，例如 wh_sz_1、wh_hk_1、wh_sg_1。\n- location_code：具体库位，例如 A1、B1、C1。\n- category：商品分类，例如 paper、dairy、beverage、daily_chemical、office_supply。\n- batch_no：批次号。\n- quantity_available：可用库存。\n- expiry_risk：保质期风险，例如 normal、expiring_soon、expired。\n- risk_level：仓储风险，例如 low、medium、high。\n\n可用工具：\n- warehouse_inventory_tool：按 item_id 查询商品在不同仓库、库位、批次上的库存、可用库存、预留库存、临期状态和风险等级。\n- warehouse_exception_tool：按 item_id 查询高风险、临期、过期、库存不足等仓储异常。\n- warehouse_fulfillment_tool：按 item_id 判断商品是否可以发货，并返回阻塞原因和下一步动作。\n- warehouse_inventory_table_provision_tool：仅在用户明确要求创建、初始化或配置飞书库存表时，创建固定 schema 的飞书表格。\n- warehouse_inventory_table_sync_tool：仅在用户要求同步、导出、发布或展示到飞书表格时，把 item_id、仓库、库位、分类、批次或风险范围内的库存快照同步到飞书表格。\n- warehouse_table_schema_tool：当用户要求创建飞书库存视图时，先读取当前表字段、字段类型、颜色选项和已有视图。\n- warehouse_view_create_tool：读取 schema 后，用受控 JSON 创建或复用飞书库存视图。\n- warehouse_purchase_order_request_tool：当库存低于补货阈值且用户要求生成采购需求时，创建 approval_status=pending 的采购单，交给 Procurement Agent 后续审批。\n- warehouse_purchase_order_arrival_sync_tool：当用户要求把已支付且已到仓但未同步的采购单同步到仓储库存时，扫描 purchase_orders 中 payment_status=paid 且 warehouse_sync_status=arrived_unsynced 的记录，写入库存批次表和库存余额表，并把采购单标记 synced。\n- warehouse_inventory_sync_jobs_tool：仅用于处理旧链路遗留的 warehouse_inventory_sync_requested pending 任务，调用飞书库存表同步，并把任务标记 completed 或 failed。\n- warehouse_order_tool：当用户要求创建订单、订单付款、确认发仓、发货、到货、取消订单或退货时，创建订单进入 unpaid；付款后进入 pending_fulfillment_review 并触发发仓确认；员工确认发仓时按整单同仓扣减库存余额并可选择物流；发货和到货只更新订单状态；取消和退货按已扣减的 order_items 加回库存。\n\n处理规则：\n1. 如果用户询问某个商品的库存、现货、库位、批次、临期、缺货或补货阈值，必须调用 warehouse_inventory_tool。\n2. 如果用户询问库存差异、破损、待上架、找不到库位、拣货延迟、临期、过期或仓储异常，必须调用 warehouse_exception_tool。\n3. 如果用户询问能否发货、履约风险、出库阻塞或发货作业状态，必须调用 warehouse_fulfillment_tool。\n4. 如果用户要求创建、初始化或配置飞书库存表，调用 warehouse_inventory_table_provision_tool；如果同时要求同步库存，再调用 warehouse_inventory_table_sync_tool。\n5. 如果用户要求同步、导出、发布、表格、飞书表格或看板，优先按用户提供的 item_id、仓库、库位、分类、临期或风险条件调用 warehouse_inventory_table_sync_tool。\n6. 如果用户要求创建某个飞书库存视图，必须先调用 warehouse_table_schema_tool，再调用 warehouse_view_create_tool；warehouse_view_create_tool 的输入必须是 JSON，包含 view_name、visible_fields、filters 和 sorts；不要编造 schema 中不存在的字段。\n7. warehouse_view_create_tool 返回 ok=true 后，立即根据返回的 action、view_id 和 validated_plan 回复用户；同一个 view_name 不要重复调用 warehouse_view_create_tool。\n8. 如果用户要求同步采购到仓库存、扫描未同步采购单、处理已支付未同步采购单或同步 purchase_orders arrived_unsynced，调用 warehouse_purchase_order_arrival_sync_tool；成功回复必须包含处理采购单数、同步数、purchase_order_id、item_id、仓库、库位、batch_no 和库存落库结果。\n9. 如果用户明确说处理库存同步任务（旧链路）、处理 warehouse_inventory_sync_requested 或消费历史 sync job，调用 warehouse_inventory_sync_jobs_tool；成功回复必须包含处理任务数、完成数、失败数、job_id、item_id、仓库、库位和飞书同步结果。\n10. 如果用户要求创建订单、付款、确认发仓、发货、到货、取消或退货，调用 warehouse_order_tool。创建订单时需要 customer_id、shipping_address（格式 xx省xx市）和 item_id/quantity；下单会选择推荐发仓并进入 unpaid。用户付款后进入 pending_fulfillment_review 并等待员工确认；员工说“确认发仓”时必须调用确认履约动作并传 order_id、warehouse_id 和可选 delivery_provider_id。确认发仓后进入 pending_shipment；发货和到货只更新订单状态；取消、退款或退货按已扣减明细加回库存。\n11. 如果用户只是查询库存或履约风险，不要调用 warehouse_inventory_table_provision_tool、warehouse_inventory_table_sync_tool、warehouse_table_schema_tool 或 warehouse_view_create_tool。\n12. 如果工具需要具体商品但用户没有提供，请要求用户提供商品 item_id，例如 item_vinda_tissue；如果用户只给了分类、仓库或库位，则可以按这些范围进行表格同步或视图创建。\n13. 回复必须保留工具返回的 item_id、商品名称、仓库、库位、批次、可用库存、预留库存、临期状态、风险等级和行动建议等关键字段。\n14. 仓储只在库存低于补货阈值且用户明确要求时调用 warehouse_purchase_order_request_tool 创建 approval_status=pending 的采购单；供应商、价格由后端规则选择，后续审批归 Procurement Agent。\n15. 不要编造仓库或库存数据；工具不可用时说明需要人工确认。\n16. 回复必须简洁，适合直接发回飞书。",
             "maxIterations": 6,
             "returnIntermediateSteps": true
           }
@@ -509,8 +509,8 @@
         ]
       },
       {
-        "id": "warehouse-replenishment-request-tool-node",
-        "name": "warehouse_replenishment_request_tool",
+        "id": "warehouse-purchase-order-request-tool-node",
+        "name": "warehouse_purchase_order_request_tool",
         "type": "@n8n/n8n-nodes-langchain.toolCode",
         "typeVersion": 1.3,
         "position": [
@@ -518,8 +518,8 @@
           1248
         ],
         "parameters": {
-          "description": "Use this tool when warehouse has confirmed low stock and the user asks to create a replenishment request for procurement review.",
-          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractItemId(input) {\n  const text = String(first(input.item_id, input.itemId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\b(?:item|sku)_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const itemId = extractItemId(input);\n  if (!itemId) {\n    return JSON.stringify({ ok: false, error: 'missing_item_id', message: '请提供商品 item_id，例如 item_vinda_tissue。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/replenishment-requests',\n    body: {\n      source: 'warehouse',\n      warehouse_id: String(first(input.warehouse_id, input.warehouseId, 'wh_sz_1')).trim(),\n      location_code: String(first(input.location_code, input.locationCode, '')).trim() || null,\n      item_id: itemId,\n      reason: String(first(input.reason, 'available_quantity_below_reorder_threshold')).trim(),\n      created_by: String(first(input.created_by, input.createdBy, 'warehouse-agent')).trim()\n    },\n    json: true\n  });\n\n  return JSON.stringify({\n    ok: Boolean(result.ok),\n    status: result.request && result.request.status ? result.request.status : '未审批',\n    ...result\n  });\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'warehouse_replenishment_request_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
+          "description": "Use this tool when warehouse has confirmed low stock and the user asks to create a pending purchase order for procurement approval.",
+          "jsCode": "function parseMaybeJson(value) {\n  if (typeof value !== 'string') return value || {};\n  try {\n    return JSON.parse(value);\n  } catch (error) {\n    return { query: value };\n  }\n}\n\nfunction first(...values) {\n  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');\n}\n\nfunction extractItemId(input) {\n  const text = String(first(input.item_id, input.itemId, input.input, input.query, input.text, '')).trim();\n  const match = text.match(/\\b(?:item|sku)_[0-9A-Za-z_]+\\b/i);\n  return match ? match[0].toLowerCase() : '';\n}\n\ntry {\n  const input = parseMaybeJson(query);\n  const itemId = extractItemId(input);\n  if (!itemId) {\n    return JSON.stringify({ ok: false, error: 'missing_item_id', message: '请提供商品 item_id，例如 item_vinda_tissue。' });\n  }\n\n  const result = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://mock-api:8000/procurement/purchase-orders',\n    body: {\n      source: 'warehouse',\n      warehouse_id: String(first(input.warehouse_id, input.warehouseId, 'wh_sz_1')).trim(),\n      location_code: String(first(input.location_code, input.locationCode, '')).trim() || null,\n      item_id: itemId,\n      reason: String(first(input.reason, 'available_quantity_below_reorder_threshold')).trim(),\n      created_by: String(first(input.created_by, input.createdBy, 'warehouse-agent')).trim()\n    },\n    json: true\n  });\n\n  return JSON.stringify({\n    ok: Boolean(result.ok),\n    approval_status: result.purchase_order && result.purchase_order.approval_status ? result.purchase_order.approval_status : 'pending',\n    purchase_order: result.purchase_order || {},\n    ...result\n  });\n} catch (error) {\n  return JSON.stringify({\n    ok: false,\n    error: 'warehouse_purchase_order_request_runtime_error',\n    message: error && error.message ? error.message : String(error)\n  });\n}"
         }
       },
       {
@@ -942,17 +942,6 @@
           ]
         ]
       },
-      "warehouse_replenishment_request_tool": {
-        "ai_tool": [
-          [
-            {
-              "node": "Warehouse Agent",
-              "type": "ai_tool",
-              "index": 0
-            }
-          ]
-        ]
-      },
       "warehouse_inventory_sync_jobs_tool": {
         "ai_tool": [
           [
@@ -1021,6 +1010,17 @@
             {
               "node": "Respond to Webhook",
               "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "warehouse_purchase_order_request_tool": {
+        "ai_tool": [
+          [
+            {
+              "node": "Warehouse Agent",
+              "type": "ai_tool",
               "index": 0
             }
           ]
