@@ -77,7 +77,6 @@ def procurement_purchase_order_table_rows_response() -> dict:
                     "Lead Time Days": 3,
                     "Estimated Arrival Date": "2026-05-29",
                     "Reason": "available_quantity_below_reorder_threshold",
-                    "Sync Inventory": "同步库存",
                 },
             }
         ],
@@ -2044,7 +2043,7 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
                     "fields": [
                         {"name": "Purchase Order ID", "type": "text"},
                         {"name": "Reason", "type": "text"},
-                        {"name": "Sync Inventory", "type": "text"},
+                        {"name": "Sync Inventory", "type": "button"},
                     ],
                 },
             )
@@ -2120,7 +2119,11 @@ def test_procurement_purchase_order_table_sync_upserts_by_purchase_order_id() ->
     assert create_fields["Estimated Arrival Date"] == "2026-05-29"
     assert create_fields["Approval Status"] == "pending"
     assert create_fields["Reason"] == "available_quantity_below_reorder_threshold"
-    assert create_fields["Sync Inventory"] == "同步库存"
+    assert "Sync Inventory" not in create_fields
+    assert not any(
+        request.method == "PUT" and str(request.url).endswith("/fields/fld_sync_inventory")
+        for request in requests
+    )
     assert "Request ID" not in create_fields
     assert "Supplier ID" not in create_fields
     assert "Item ID" not in create_fields

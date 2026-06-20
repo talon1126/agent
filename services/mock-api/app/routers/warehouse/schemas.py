@@ -83,6 +83,7 @@ class WarehousePurchaseOrderArrivalSyncRequest(BaseModel):
 
 
 class WarehousePurchaseOrderInventorySyncRequest(BaseModel):
+    purchase_order_id: str = ""
     processed_by: str = "feishu-automation"
     trigger_source: str = "feishu_bitable_button"
     operator_id: str = ""

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
@@ -16,10 +17,12 @@ from .schemas import (
     WarehousePurchaseOrderArrivalSyncRequest,
     WarehousePurchaseOrderInventorySyncRequest,
 )
-from .state import RECEIVED_INVENTORY_BALANCES, WAREHOUSE_INVENTORY_MOVEMENTS, get_warehouse_repository
+from .state import RECEIVED_INVENTORY_BALANCES, get_warehouse_repository
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 PURCHASE_ARRIVAL_NOTIFY_TIMEOUT_SECONDS = 5
+PURCHASE_ORDER_TABLE_SYNC_TIMEOUT_SECONDS = 5
 
 
 @router.post("/warehouse/purchase-orders/sync-arrivals")
@@ -48,7 +51,7 @@ def sync_arrived_purchase_orders(
         "synced_count": len(synced_items),
         "skipped_count": 0,
         "synced_items": synced_items,
-        "next_action": "已将已支付且未同步的采购到仓单写入库存余额表和库存流水表。",
+        "next_action": "已将已支付且未同步的采购到仓单写入库存余额表。",
     }
 
 
@@ -57,46 +60,127 @@ def sync_purchase_order_inventory(
     purchase_order_id: str,
     payload: WarehousePurchaseOrderInventorySyncRequest,
 ) -> dict[str, Any]:
+    resolved_purchase_order_id = resolve_purchase_order_id(
+        path_purchase_order_id=purchase_order_id,
+        payload_purchase_order_id=payload.purchase_order_id,
+    )
     processed_at = datetime.now(UTC).isoformat()
     processed_by = payload.operator_id.strip() or payload.processed_by
     repository = get_warehouse_repository()
     if repository:
         synced_item = repository.sync_purchase_order_inventory(
-            purchase_order_id=purchase_order_id,
+            purchase_order_id=resolved_purchase_order_id,
             processed_by=processed_by,
             processed_at=processed_at,
         )
     else:
         synced_item = sync_purchase_order_inventory_fallback(
-            purchase_order_id=purchase_order_id,
+            purchase_order_id=resolved_purchase_order_id,
             processed_by=processed_by,
             processed_at=processed_at,
         )
 
     if not synced_item:
+        logger.warning(
+            "purchase order inventory sync skipped path_purchase_order_id=%s "
+            "payload_purchase_order_id=%s resolved_purchase_order_id=%s trigger_source=%s",
+            purchase_order_id,
+            payload.purchase_order_id,
+            resolved_purchase_order_id,
+            payload.trigger_source,
+        )
         return {
             "ok": False,
             "status": "skipped",
-            "purchase_order_id": purchase_order_id,
+            "purchase_order_id": resolved_purchase_order_id,
+            "path_purchase_order_id": purchase_order_id,
+            "payload_purchase_order_id": payload.purchase_order_id,
             "updated_balance_count": 0,
             "movement_count": 0,
             "trigger_source": payload.trigger_source,
             "error": "purchase_order_not_eligible_for_inventory_sync",
         }
 
+    table_sync = post_purchase_order_table_sync(purchase_order_id=resolved_purchase_order_id)
+    balance_table_sync = post_inventory_balance_table_sync(synced_item=synced_item)
+
     return {
         "ok": True,
         "status": "synced",
-        "purchase_order_id": purchase_order_id,
+        "purchase_order_id": resolved_purchase_order_id,
         "purchase_order": synced_item,
         "updated_balance_count": 1,
-        "movement_count": 1,
+        "movement_count": 0,
         "trigger_source": payload.trigger_source,
         "processed_by": processed_by,
         "processed_at": processed_at,
+        "table_sync": table_sync,
+        "balance_table_sync": balance_table_sync,
     }
 
+def resolve_purchase_order_id(*, path_purchase_order_id: str, payload_purchase_order_id: str) -> str:
+    """Resolve the purchase order ID from a Feishu button callback.
 
+    Feishu bitable buttons may send a literal template placeholder in the URL
+    when the field token is not configured correctly. Accepting the ID from the
+    JSON body gives the automation a stable fallback while preserving the normal
+    path-parameter contract for direct API callers.
+    """
+    body_value = payload_purchase_order_id.strip()
+    path_value = path_purchase_order_id.strip()
+    if body_value and (not path_value or "{{" in path_value or "}}" in path_value):
+        return body_value
+    return path_value
+
+
+def post_inventory_balance_table_sync(*, synced_item: dict[str, Any]) -> dict[str, Any]:
+    """Refresh the Feishu inventory balance row affected by a purchase order sync."""
+    sync_url = os.getenv("FEISHU_WAREHOUSE_INVENTORY_BALANCE_SYNC_URL", "").strip()
+    if not sync_url:
+        return {"configured": False, "status": "skipped"}
+    payload = {
+        "item_id": str(synced_item.get("item_id") or "").strip(),
+        "warehouse_id": str(synced_item.get("warehouse_id") or "").strip(),
+        "limit": 500,
+    }
+    request = urllib.request.Request(
+        sync_url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=PURCHASE_ORDER_TABLE_SYNC_TIMEOUT_SECONDS) as response:
+            raw_body = response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        return {"configured": True, "status": "failed", "error": str(error), "request": payload}
+    try:
+        body = json.loads(raw_body) if raw_body else {}
+    except json.JSONDecodeError:
+        body = {"raw": raw_body}
+    return {"configured": True, "status": "sent", "request": payload, "response": body}
+
+def post_purchase_order_table_sync(*, purchase_order_id: str) -> dict[str, Any]:
+    sync_url = os.getenv("FEISHU_PROCUREMENT_PURCHASE_ORDER_SYNC_URL", "").strip()
+    if not sync_url:
+        return {"configured": False, "status": "skipped"}
+    payload = {"purchase_order_id": purchase_order_id, "limit": 1}
+    request = urllib.request.Request(
+        sync_url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=PURCHASE_ORDER_TABLE_SYNC_TIMEOUT_SECONDS) as response:
+            raw_body = response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        return {"configured": True, "status": "failed", "error": str(error)}
+    try:
+        body = json.loads(raw_body) if raw_body else {}
+    except json.JSONDecodeError:
+        body = {"raw": raw_body}
+    return {"configured": True, "status": "sent", "response": body}
 @router.post("/warehouse/purchase-orders/today-arrivals")
 def list_today_purchase_order_arrivals(
     payload: WarehousePurchaseOrderArrivalNotifyRequest,
@@ -237,19 +321,6 @@ def sync_arrived_purchase_orders_fallback(
         order["location_code"] = location_code
         order["warehouse_sync_status"] = "synced"
         order["updated_at"] = processed_at
-        WAREHOUSE_INVENTORY_MOVEMENTS.append(
-            {
-                "movement_id": f"IM-{len(WAREHOUSE_INVENTORY_MOVEMENTS) + 1:06d}",
-                "order_id": order["purchase_order_id"],
-                "movement_type": "purchase_order_received",
-                "item_id": order["item_id"],
-                "warehouse_id": order["warehouse_id"],
-                "location_code": location_code,
-                "quantity_delta": quantity,
-                "created_by": processed_by,
-                "created_at": processed_at,
-            }
-        )
         synced_items.append(
             {
                 "purchase_order_id": order["purchase_order_id"],

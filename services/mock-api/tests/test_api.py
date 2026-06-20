@@ -24,6 +24,7 @@ from app.routers import flash_sales as flash_sales_router
 from app.routers import product_details as product_details_router
 from app.routers import product_reviews as product_reviews_router
 from app.routers.warehouse import orders as warehouse_orders_router
+from app.routers.warehouse import purchase_orders as warehouse_purchase_orders_router
 from app.routers.warehouse.inventory import aggregate_stock_balance_snapshot_rows
 from app.store import FIXTURE_DIR
 from app.warehouse_store import (
@@ -1842,6 +1843,7 @@ def test_warehouse_syncs_paid_arrived_purchase_orders_to_inventory_balances():
     assert "batch_no" not in synced
     assert synced["location_code"] == "A1"
     assert synced["warehouse_sync_status"] == "synced"
+    assert body["next_action"] == "已将已支付且未同步的采购到仓单写入库存余额表。"
 
 
     balances = client.get(
@@ -1856,15 +1858,43 @@ def test_warehouse_syncs_paid_arrived_purchase_orders_to_inventory_balances():
         params={"purchase_order_id": order["purchase_order_id"]},
     ).json()["items"][0]
     assert refreshed["warehouse_sync_status"] == "synced"
-    movement = next(
-        item for item in WAREHOUSE_INVENTORY_MOVEMENTS if item["order_id"] == order["purchase_order_id"]
+    assert not any(
+        item["order_id"] == order["purchase_order_id"] for item in WAREHOUSE_INVENTORY_MOVEMENTS
     )
-    assert movement["movement_type"] == "purchase_order_received"
-    assert movement["quantity_delta"] == order["quantity"]
-    assert movement["location_code"] == "A1"
 
+def test_purchase_order_sync_inventory_endpoint_updates_one_order_without_movement(monkeypatch):
+    table_sync_requests = []
 
-def test_purchase_order_sync_inventory_endpoint_updates_one_order_and_records_movement():
+    class FakeTableSyncResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps({"ok": True, "synced_count": 1}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        table_sync_requests.append(
+            {
+                "url": request.full_url,
+                "method": request.get_method(),
+                "body": json.loads(request.data.decode("utf-8")),
+                "timeout": timeout,
+            }
+        )
+        return FakeTableSyncResponse()
+
+    monkeypatch.setenv(
+        "FEISHU_PROCUREMENT_PURCHASE_ORDER_SYNC_URL",
+        "http://feishu-adapter/procurement/purchase-orders-table/sync",
+    )
+    monkeypatch.setenv(
+        "FEISHU_WAREHOUSE_INVENTORY_BALANCE_SYNC_URL",
+        "http://feishu-adapter/warehouse/inventory-balances-table/sync",
+    )
+    monkeypatch.setattr(warehouse_purchase_orders_router.urllib.request, "urlopen", fake_urlopen)
     pending_order = create_purchase_order_for_test(
         item_id="item_vinda_tissue",
         location_code="A1",
@@ -1895,13 +1925,99 @@ def test_purchase_order_sync_inventory_endpoint_updates_one_order_and_records_mo
     assert body["updated_balance_count"] == 1
     assert body["purchase_order"]["purchase_order_id"] == order["purchase_order_id"]
     assert body["purchase_order"]["warehouse_sync_status"] == "synced"
-    assert body["movement_count"] == 1
-    movement = next(
-        item for item in WAREHOUSE_INVENTORY_MOVEMENTS if item["order_id"] == order["purchase_order_id"]
+    assert body["movement_count"] == 0
+    assert body["table_sync"]["status"] == "sent"
+    assert body["balance_table_sync"]["status"] == "sent"
+    assert table_sync_requests == [
+        {
+            "url": "http://feishu-adapter/procurement/purchase-orders-table/sync",
+            "method": "POST",
+            "body": {"purchase_order_id": order["purchase_order_id"], "limit": 1},
+            "timeout": 5,
+        },
+        {
+            "url": "http://feishu-adapter/warehouse/inventory-balances-table/sync",
+            "method": "POST",
+            "body": {
+                "item_id": order["item_id"],
+                "warehouse_id": order["warehouse_id"],
+                "limit": 500,
+            },
+            "timeout": 5,
+        },
+    ]
+    assert not any(
+        item["order_id"] == order["purchase_order_id"] for item in WAREHOUSE_INVENTORY_MOVEMENTS
     )
-    assert movement["movement_type"] == "purchase_order_received"
-    assert movement["quantity_delta"] == order["quantity"]
-    assert movement["created_by"] == "feishu:user-001"
+
+
+def test_purchase_order_sync_inventory_endpoint_accepts_feishu_body_purchase_order_id(monkeypatch):
+    table_sync_requests = []
+
+    class FakeTableSyncResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps({"ok": True, "synced_count": 1}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        table_sync_requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeTableSyncResponse()
+
+    monkeypatch.setenv(
+        "FEISHU_PROCUREMENT_PURCHASE_ORDER_SYNC_URL",
+        "http://feishu-adapter/procurement/purchase-orders-table/sync",
+    )
+    monkeypatch.setenv(
+        "FEISHU_WAREHOUSE_INVENTORY_BALANCE_SYNC_URL",
+        "http://feishu-adapter/warehouse/inventory-balances-table/sync",
+    )
+    monkeypatch.setattr(warehouse_purchase_orders_router.urllib.request, "urlopen", fake_urlopen)
+    pending_order = create_purchase_order_for_test(
+        item_id="item_vinda_tissue",
+        location_code="A1",
+    )
+    order = client.post(
+        f"/procurement/purchase-orders/{pending_order['purchase_order_id']}/approve",
+        json={"created_by": "procurement:user-001"},
+    ).json()["purchase_order"]
+    for item in PURCHASE_ORDERS:
+        if item["purchase_order_id"] == order["purchase_order_id"]:
+            item["payment_status"] = "paid"
+            item["location_code"] = "B1"
+
+    client.post(
+        "/procurement/purchase-orders/confirm-arrival-batch",
+        json={"purchase_order_ids": [order["purchase_order_id"]], "received_by": "warehouse:user-001"},
+    )
+
+    response = client.post(
+        "/warehouse/purchase-orders/%7B%7BPurchase%20Order%20ID%7D%7D/sync-inventory",
+        json={
+            "purchase_order_id": order["purchase_order_id"],
+            "processed_by": "feishu:user-001",
+            "trigger_source": "feishu_bitable_button",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["status"] == "synced"
+    assert body["purchase_order"]["purchase_order_id"] == order["purchase_order_id"]
+    assert body["purchase_order"]["warehouse_sync_status"] == "synced"
+    assert table_sync_requests == [
+        {"purchase_order_id": order["purchase_order_id"], "limit": 1},
+        {
+            "item_id": order["item_id"],
+            "warehouse_id": order["warehouse_id"],
+            "limit": 500,
+        },
+    ]
 
 
 def test_warehouse_lists_today_paid_purchase_order_arrivals_only():
@@ -2071,6 +2187,8 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
     assert "Warehouse ID" in order_field_names
     assert "Location" in order_field_names
     assert "Reason" in order_field_names
+    sync_inventory_field = next(field for field in order_schema["fields"] if field["name"] == "Sync Inventory")
+    assert sync_inventory_field["type"] == "button"
     assert "Payment Status" in order_field_names
     assert "Warehouse Sync Status" in order_field_names
     assert "Estimated Arrival Date" in order_field_names
@@ -2090,6 +2208,7 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
     assert order_fields["Warehouse ID"] == pending_order["warehouse_id"]
     assert order_fields["Location"] == pending_order["location_code"]
     assert order_fields["Reason"] == pending_order["reason"]
+    assert "Sync Inventory" not in order_fields
     assert order_fields["Payment Status"] == "unpaid"
     assert order_fields["Warehouse Sync Status"] == "pending_arrival"
     assert order_fields["Estimated Arrival Date"] == approve["purchase_order"]["estimated_arrival_date"]

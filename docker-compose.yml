@@ -66,6 +66,8 @@ services:
       FEISHU_FULFILLMENT_REVIEW_CHAT_ID: ${FEISHU_FULFILLMENT_REVIEW_CHAT_ID:-}
       FEISHU_PURCHASE_ARRIVAL_NOTIFY_URL: ${FEISHU_PURCHASE_ARRIVAL_NOTIFY_URL:-http://feishu-adapter:8000/warehouse/purchase-arrival-review/send}
       FEISHU_PURCHASE_ARRIVAL_NOTIFY_CHAT_ID: ${FEISHU_PURCHASE_ARRIVAL_NOTIFY_CHAT_ID:-}
+      FEISHU_PROCUREMENT_PURCHASE_ORDER_SYNC_URL: ${FEISHU_PROCUREMENT_PURCHASE_ORDER_SYNC_URL:-http://feishu-adapter:8000/procurement/purchase-orders-table/sync}
+      FEISHU_WAREHOUSE_INVENTORY_BALANCE_SYNC_URL: ${FEISHU_WAREHOUSE_INVENTORY_BALANCE_SYNC_URL:-http://feishu-adapter:8000/warehouse/inventory-balances-table/sync}
     volumes:
       - ./fixtures:/app/fixtures:ro
     ports:

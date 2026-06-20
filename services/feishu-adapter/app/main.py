@@ -1370,6 +1370,7 @@ def create_app(
             "datetime": 5,
             "image": 17,
             "attachment": 17,
+            "button": 3001,
         }
         field_name = str(field.get("name") or field.get("field_name") or "").strip()
         field_type = str(field.get("type") or "text").strip()
@@ -1650,6 +1651,7 @@ def create_app(
             2: "number",
             3: "single_select",
             5: "date",
+            3001: "button",
         }.get(type_value, f"type_{type_value}")
 
     def inventory_field_options(field: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1817,7 +1819,13 @@ def create_app(
                         "is_primary": True,
                     }
         for field in field_specs:
+            field_type = int(field.get("type") or 0)
             existing_field = existing.get(str(field["field_name"]))
+            if field_type == 3001:
+                # Feishu's field OpenAPI cannot create or update button fields.
+                # Keep any manually configured Sync Inventory field intact and
+                # skip cell writes elsewhere so table automation owns the button.
+                continue
             if existing_field:
                 field_id = str(existing_field.get("field_id") or "")
                 if field_id and not inventory_field_compatible(field, existing_field):
@@ -2703,6 +2711,9 @@ def create_app(
         normalized = dict(fields)
         for field_name, value in fields.items():
             field = table_fields.get(field_name)
+            if isinstance(field, dict) and field.get("type") == 3001:
+                normalized.pop(field_name, None)
+                continue
             if isinstance(field, dict) and field.get("type") == 3:
                 normalized[field_name] = single_select_record_value(field, value)
             if isinstance(field, dict) and field.get("type") == 5:
