@@ -4246,11 +4246,13 @@ def create_app(
                 app_secret=table_app_secret,
                 api_base_url=api_base_url,
             )
+            field_specs = procurement_table_field_specs(schema_endpoint)
             table_result = ensure_procurement_table(
                 token=token,
                 table_name=table_name,
                 state=state,
                 schema_endpoint=schema_endpoint,
+                field_specs=field_specs,
                 prune_extra_fields_enabled=prune_extra_fields_enabled,
             )
             synced_items: list[dict[str, Any]] = []
@@ -4263,6 +4265,7 @@ def create_app(
                     table_identifier=table_result["table_id"],
                     identity_field=identity_field,
                     fields=fields,
+                    field_specs=field_specs,
                 )
                 item: dict[str, Any] = {
                     "status": fields.get("Status") or fields.get("Warehouse Sync Status"),

@@ -4039,6 +4039,15 @@ def test_inventory_movements_table_sync_upserts_by_movement_id() -> None:
     assert body["table_id"] == "tbl_movement"
     assert body["synced_count"] == 1
     assert body["items"][0]["movement_id"] == "IM-202605291001000000-1"
+    create_request = next(
+        request
+        for request in requests
+        if request.method == "POST"
+        and str(request.url)
+        == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_movement/records"
+    )
+    create_fields = json.loads(create_request.content)["fields"]
+    assert isinstance(create_fields["created_at"], int)
     assert requests[-1].method == "POST"
 
 
