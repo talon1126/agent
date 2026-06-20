@@ -2236,24 +2236,6 @@ class WarehouseRepository:
                         updated_at=processed_at,
                     )
                 )
-                connection.execute(
-                    inventory_movements.insert(),
-                    self._inventory_movement_values(
-                        [
-                            {
-                                "order_id": order["purchase_order_id"],
-                                "item_id": order["item_id"],
-                                "warehouse_id": order["warehouse_id"],
-                                "location_code": location_code,
-                                "quantity": quantity,
-                            }
-                        ],
-                        movement_type="purchase_order_received",
-                        created_by=processed_by,
-                        created_at=processed_at,
-                        direction=1,
-                    ),
-                )
                 synced_items.append(
                     {
                         "purchase_order_id": order["purchase_order_id"],

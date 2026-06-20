@@ -180,7 +180,7 @@ def confirm_purchase_order_arrival_batch(
         "skipped_count": len(errors),
         "confirmed_items": confirmed_items,
         "errors": errors,
-        "next_action": "Warehouse 后续查询 warehouse_sync_status=arrived_unsynced 的采购单并同步到库存余额和库存流水。",
+        "next_action": "Warehouse 后续查询 warehouse_sync_status=arrived_unsynced 的采购单并同步到库存余额。",
     }
 
 

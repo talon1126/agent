@@ -1230,7 +1230,7 @@
 - `id` 来源于数据库 `inventory_location_balances.id`；无数据库 fallback 时使用稳定可读的 `fallback:{item_id}:{warehouse_id}:{location_code}`。
 - 定时任务调用 `/warehouse/inventory-balances-table/sync` 刷新飞书余额表。
 - 库存余额同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
-- 库存流水表严格映射数据库 `inventory_movements`，展示库存变更的业务来源、商品、仓库、库位、数量变化、原因、关联订单或采购单和创建时间。
+- 库存流水表严格映射数据库 `inventory_movements`，展示员工确认发仓、退款、退货等库存变更的业务来源、商品、仓库、库位、数量变化、原因、关联订单和创建时间。
 - 定时任务调用 `/warehouse/inventory-movements-table/sync` 刷新飞书库存流水表。
 - 库存流水同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
 
@@ -1263,11 +1263,14 @@
 验收标准：
 
 - 同步后库存事实增加，采购单状态从 `arrived_unsynced` 进入 `synced`。
-- 采购单飞书表提供“同步库存”按钮，仅对 `warehouse_sync_status=arrived_unsynced` 的采购单可执行。
+- 采购单飞书表提供 `Sync Inventory` 原生按钮字段，不得用普通 text 字段伪装按钮；按钮仅对 `warehouse_sync_status=arrived_unsynced` 的采购单作为业务操作入口。
+- 当前飞书字段 OpenAPI 不支持创建或更新 `type=3001` 按钮字段；adapter 不得尝试通过字段 OpenAPI 创建按钮，也不得删除名为 `Sync Inventory` 的人工配置字段。按钮字段由飞书 UI 和自动化配置负责维护，记录同步时必须跳过按钮单元格写入。
 - 用户点击采购单行内“同步库存”按钮后，飞书多维表格原生自动化流程应发送 `POST /warehouse/purchase-orders/{purchase_order_id}/sync-inventory` 到后端，由后端完成库存余额写入或更新。
-- 飞书原生自动化流程只负责传递采购单 ID、触发后端接口和回写执行结果，不借助 n8n，不在飞书侧计算库存数量。
-- 自动化流程请求体应包含采购单 ID、触发来源和操作者标识，后端响应应包含同步状态、更新库存行数和错误摘要。
-- 后端库存同步成功后，应写入 `inventory_movements`，并将采购单状态从 `arrived_unsynced` 更新为 `synced`。
+- 飞书原生自动化流程只负责传递采购单 ID、触发后端接口和回写执行结果，不借助 n8n，不在飞书侧计算库存数量。采购单记录同步时不写入按钮单元格值，按钮列由表字段配置和飞书自动化负责展示与触发。
+- 自动化流程请求体应包含采购单 ID、触发来源和操作者标识，后端响应应包含同步状态、更新库存余额行数和错误摘要。
+- 后端库存同步成功后，只更新或写入 `inventory_location_balances`，并将采购单状态从 `arrived_unsynced` 更新为 `synced`；采购到仓同步不写入 `inventory_movements`。
+- 按钮触发的单据库存同步成功后，mock-api 必须调用飞书采购单表同步端点刷新当前采购单行，使飞书表中的 Warehouse Sync Status 及时变为 synced。
+- 按钮触发的单据库存同步成功后，mock-api 必须调用飞书库存余额表同步端点，按当前采购单的 `warehouse_id + item_id` 刷新对应库存余额行。
 - 采购到仓同步直接根据 `purchase_orders.warehouse_sync_status` 控制幂等，不依赖单独同步任务表。
 - 表同步结果包含写入数量和表链接。
 - 采购单飞书表展示 `Approval Status`，用于区分待审批、已批准和已驳回采购单。

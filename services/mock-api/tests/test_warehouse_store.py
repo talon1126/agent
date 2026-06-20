@@ -622,9 +622,7 @@ def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_ba
     assert {item["location_code"] for item in balances} == {"A1"}
     assert sum(item["quantity_on_hand"] for item in balances) == 240
     movements = repository.list_inventory_movements(order_id="PO-6001")
-    assert [item["movement_type"] for item in movements] == ["purchase_order_received"]
-    assert [item["quantity_delta"] for item in movements] == [104]
-    assert movements[0]["created_by"] == "warehouse-agent"
+    assert movements == []
 
 
 def test_warehouse_repository_does_not_create_legacy_inventory_sync_jobs_table(tmp_path: Path) -> None:

@@ -51,6 +51,10 @@ uv run --project services/mock-api ruff check services\mock-api
 
 依赖升级必须显式执行 uv 依赖管理命令并提交相关锁文件。普通测试任务不得隐式升级依赖。
 
+### 7.4.1 Docker 容器重建规则
+
+当任务修改的代码、配置、workflow 或依赖会影响正在运行的 Docker 服务时，任务验证阶段必须自动重建并重启对应服务，不能只停留在本地测试。常见映射：`services/mock-api/**` 对应 `mock-api`，`services/feishu-adapter/**` 对应 `feishu-adapter`，`services/ai-service/**` 对应 `ai-service`，`n8n/workflows/**` 需要导入到 n8n 并确认 workflow 列表。重建命令使用 `docker compose -p after-sales-implementation up -d --build <service>`；涉及多个服务时一次性列出服务名。任务总结必须说明是否执行了容器重建、导入或跳过原因。
+
 ### 7.5 TDD 与任务闭环
 
 每个实现任务必须包含测试方法。修复 bug 时先补能复现问题的测试或最小验证，再修改实现并重新运行目标测试。任务结束前必须做代码审查式自检，列出发现的问题和修复方式；没有问题时明确说明未发现可执行问题。

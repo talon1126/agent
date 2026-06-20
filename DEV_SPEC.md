@@ -174,7 +174,7 @@ n8n Workflow
 | `categories` | 商品分类表，保存商品分类名称和默认存储要求。 |
 | `items` | 商品主数据，保存商品名称、品牌、规格、价格、搜索文本、单位、条码和商品图片地址；商品图片可指向本地演示 URL 或后续 OSS URL，供前端与飞书商品表展示。 |
 | `item_reviews` | 商品评论表，保存用户评分、标题、正文和时间。 |
-| `inventory_location_balances` | 库位库存余额表，保存当前可售库存；采购单作为入库来源，库存流水记录库存流动，库存查询和风险判断均以该表为准。飞书库存余额表字段必须与该表列一一对应，不混入商品、分类、仓库展示名、计算状态或同步元字段。 |
+| `inventory_location_balances` | 库位库存余额表，保存当前可售库存；采购单到仓同步只更新该表和采购单仓储同步状态，库存查询和风险判断均以该表为准。飞书库存余额表字段必须与该表列一一对应，不混入商品、分类、仓库展示名、计算状态或同步元字段。 |
 | `orders` | 订单主表，保存下单、发仓确认、付款、发货、到货、退款、退货和物流状态；状态统一使用英文枚举：`pending_fulfillment_review`、`unpaid`、`pending_shipment`、`shipped`、`arrived`、`refunded`、`returned`、`canceled`。 |
 | `order_items` | 订单明细表，保存订单命中的商品、仓库、库位和数量。 |
 | `inventory_movements` | 库存流水表，记录员工确认发仓、退款和退货对库存余额的影响。 |
@@ -1909,7 +1909,7 @@ mock-api / PostgreSQL 业务事实
 - `id` 来源于数据库 `inventory_location_balances.id`；无数据库 fallback 时使用稳定可读的 `fallback:{item_id}:{warehouse_id}:{location_code}`。
 - 定时任务调用 `/warehouse/inventory-balances-table/sync` 刷新飞书余额表。
 - 库存余额同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
-- 库存流水表严格映射数据库 `inventory_movements`，展示库存变更的业务来源、商品、仓库、库位、数量变化、原因、关联订单或采购单和创建时间。
+- 库存流水表严格映射数据库 `inventory_movements`，展示员工确认发仓、退款、退货等库存变更的业务来源、商品、仓库、库位、数量变化、原因、关联订单和创建时间。
 - 定时任务调用 `/warehouse/inventory-movements-table/sync` 刷新飞书库存流水表。
 - 库存流水同步复用 H1 分页能力，源端超过单页数量时不得丢失记录。
 
@@ -1942,11 +1942,14 @@ mock-api / PostgreSQL 业务事实
 验收标准：
 
 - 同步后库存事实增加，采购单状态从 `arrived_unsynced` 进入 `synced`。
-- 采购单飞书表提供“同步库存”按钮，仅对 `warehouse_sync_status=arrived_unsynced` 的采购单可执行。
+- 采购单飞书表提供 `Sync Inventory` 原生按钮字段，不得用普通 text 字段伪装按钮；按钮仅对 `warehouse_sync_status=arrived_unsynced` 的采购单作为业务操作入口。
+- 当前飞书字段 OpenAPI 不支持创建或更新 `type=3001` 按钮字段；adapter 不得尝试通过字段 OpenAPI 创建按钮，也不得删除名为 `Sync Inventory` 的人工配置字段。按钮字段由飞书 UI 和自动化配置负责维护，记录同步时必须跳过按钮单元格写入。
 - 用户点击采购单行内“同步库存”按钮后，飞书多维表格原生自动化流程应发送 `POST /warehouse/purchase-orders/{purchase_order_id}/sync-inventory` 到后端，由后端完成库存余额写入或更新。
-- 飞书原生自动化流程只负责传递采购单 ID、触发后端接口和回写执行结果，不借助 n8n，不在飞书侧计算库存数量。
-- 自动化流程请求体应包含采购单 ID、触发来源和操作者标识，后端响应应包含同步状态、更新库存行数和错误摘要。
-- 后端库存同步成功后，应写入 `inventory_movements`，并将采购单状态从 `arrived_unsynced` 更新为 `synced`。
+- 飞书原生自动化流程只负责传递采购单 ID、触发后端接口和回写执行结果，不借助 n8n，不在飞书侧计算库存数量。采购单记录同步时不写入按钮单元格值，按钮列由表字段配置和飞书自动化负责展示与触发。
+- 自动化流程请求体应包含采购单 ID、触发来源和操作者标识，后端响应应包含同步状态、更新库存余额行数和错误摘要。
+- 后端库存同步成功后，只更新或写入 `inventory_location_balances`，并将采购单状态从 `arrived_unsynced` 更新为 `synced`；采购到仓同步不写入 `inventory_movements`。
+- 按钮触发的单据库存同步成功后，mock-api 必须调用飞书采购单表同步端点刷新当前采购单行，使飞书表中的 Warehouse Sync Status 及时变为 synced。
+- 按钮触发的单据库存同步成功后，mock-api 必须调用飞书库存余额表同步端点，按当前采购单的 `warehouse_id + item_id` 刷新对应库存余额行。
 - 采购到仓同步直接根据 `purchase_orders.warehouse_sync_status` 控制幂等，不依赖单独同步任务表。
 - 表同步结果包含写入数量和表链接。
 - 采购单飞书表展示 `Approval Status`，用于区分待审批、已批准和已驳回采购单。
@@ -2490,6 +2493,10 @@ uv run --project services/mock-api ruff check services\mock-api
 ```
 
 依赖升级必须显式执行 uv 依赖管理命令并提交相关锁文件。普通测试任务不得隐式升级依赖。
+
+### 7.4.1 Docker 容器重建规则
+
+当任务修改的代码、配置、workflow 或依赖会影响正在运行的 Docker 服务时，任务验证阶段必须自动重建并重启对应服务，不能只停留在本地测试。常见映射：`services/mock-api/**` 对应 `mock-api`，`services/feishu-adapter/**` 对应 `feishu-adapter`，`services/ai-service/**` 对应 `ai-service`，`n8n/workflows/**` 需要导入到 n8n 并确认 workflow 列表。重建命令使用 `docker compose -p after-sales-implementation up -d --build <service>`；涉及多个服务时一次性列出服务名。任务总结必须说明是否执行了容器重建、导入或跳过原因。
 
 ### 7.5 TDD 与任务闭环
 

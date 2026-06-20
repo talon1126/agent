@@ -265,7 +265,6 @@ WAREHOUSE_INVENTORY_MOVEMENT_TABLE_SCHEMA = [
             {"name": "order_refunded", "color": 24},
             {"name": "order_returned", "color": 28},
             {"name": "order_timeout_released", "color": 20},
-            {"name": "purchase_order_received", "color": 21},
         ],
     },
     {

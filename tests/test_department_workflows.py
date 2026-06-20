@@ -226,6 +226,38 @@ def test_procurement_purchase_orders_sync_workflow_runs_every_10_minutes() -> No
     )
     assert '"limit": 100' in sync_request["parameters"]["jsonBody"]
 
+def test_warehouse_inventory_movements_refresh_workflow_runs_every_10_minutes() -> None:
+    workflow = load_workflow("warehouse-inventory-movements-refresh.json")
+    schedule = node_by_name(workflow, "Every 10 Minutes")
+    sync_request = node_by_name(workflow, "Sync Warehouse Inventory Movements Table")
+
+    assert workflow["name"] == "Warehouse Inventory Movements Refresh"
+    assert schedule["type"] == "n8n-nodes-base.scheduleTrigger"
+    intervals = schedule["parameters"]["rule"]["interval"]
+    assert intervals == [{"field": "minutes", "minutesInterval": 10}]
+    assert sync_request["parameters"]["url"].endswith(
+        "/warehouse/inventory-movements-table/sync"
+    )
+    assert '"limit": 500' in sync_request["parameters"]["jsonBody"]
+
+def test_purchase_arrival_workflows_only_describe_inventory_balance_sync() -> None:
+    warehouse_workflow = load_workflow("warehouse-workflow.json")
+    procurement_workflow_text = json.dumps(load_workflow("procurement-workflow.json"), ensure_ascii=False)
+    purchase_arrival_reply = node_by_name(
+        warehouse_workflow,
+        "Format Purchase Order Arrival Sync Reply",
+    )["parameters"]["jsCode"]
+    purchase_arrival_agent_prompt = node_by_name(
+        warehouse_workflow,
+        "Warehouse Agent",
+    )["parameters"]["options"]["systemMessage"]
+    combined_text = f"{purchase_arrival_reply}\n{purchase_arrival_agent_prompt}\n{procurement_workflow_text}"
+
+    assert "库存余额和库存流水" not in combined_text
+    assert "inventory balances and inventory movements" not in combined_text
+    assert "写入库存余额表和库存流水表" not in combined_text
+    assert "未知批次" not in purchase_arrival_reply
+
 
 def test_order_fulfillment_table_sync_workflow_runs_every_10_minutes() -> None:
     workflow = load_workflow("order-fulfillment-table-sync.json")
