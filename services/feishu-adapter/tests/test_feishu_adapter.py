@@ -93,20 +93,27 @@ def order_fulfillment_table_rows_response() -> dict:
             {
                 "order_id": "ORD-CODEX-9001",
                 "fields": {
-                    "Order ID": "ORD-CODEX-9001",
-                    "Status": "pending_fulfillment_review",
-                    "Customer": "cus_100",
-                    "Warehouse": "深圳仓",
-                    "Delivery Provider": "顺丰",
-                    "Tracking No": "SFORDCODEX9001",
-                    "Shipping City": "深圳市",
-                    "Item Summary": "item_vinda_tissue x 2",
-                    "Total Quantity": 2,
-                    "Candidate Warehouses": "深圳仓(available)",
-                    "Created At": "2026-06-17T10:00:00+08:00",
-                    "Paid At": "2026-06-17T10:05:00+08:00",
-                    "Updated At": "2026-06-17T10:05:00+08:00",
-                    "Source Version": "mock-api:ORD-CODEX-9001",
+                    "order_id": "ORD-CODEX-9001",
+                    "customer_id": "cus_100",
+                    "status": "pending_fulfillment_review",
+                    "delivery_provider_id": "sf",
+                    "delivery_provider_name": "顺丰",
+                    "courier_phone": "13800000001",
+                    "tracking_no": "SFORDCODEX9001",
+                    "shipping_address": "广东省深圳市南山区",
+                    "shipping_province": "广东省",
+                    "shipping_city": "深圳市",
+                    "selected_warehouse_id": "wh_sz_1",
+                    "selected_warehouse_name": "深圳仓",
+                    "created_at": "2026-06-17T10:00:00+08:00",
+                    "updated_at": "2026-06-17T10:05:00+08:00",
+                    "paid_at": "2026-06-17T10:05:00+08:00",
+                    "shipped_at": "",
+                    "arrived_at": "",
+                    "cancelled_at": "",
+                    "returned_at": "",
+                    "expires_at": "2026-06-17T10:30:00+08:00",
+                    "release_reason": "",
                 },
             }
         ],
@@ -2250,7 +2257,7 @@ def test_order_fulfillment_table_sync_upserts_by_order_id() -> None:
     """Verify H8 sync writes Order Fulfillment rows into a real Feishu table.
 
     The endpoint should pull the read model from mock-api, validate/create
-    fields from backend schema, and upsert records by the business Order ID so
+    fields from backend schema, and upsert records by the business order_id so
     repeated scheduled syncs update the same Feishu row.
     """
 
@@ -2265,8 +2272,8 @@ def test_order_fulfillment_table_sync_upserts_by_order_id() -> None:
                 json={
                     "ok": True,
                     "fields": [
-                        {"name": "Order ID", "type": "text"},
-                        {"name": "Created At", "type": "datetime"},
+                        {"name": "order_id", "type": "text"},
+                        {"name": "created_at", "type": "datetime"},
                     ],
                 },
             )
@@ -2275,7 +2282,22 @@ def test_order_fulfillment_table_sync_upserts_by_order_id() -> None:
         if url == "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal":
             return httpx.Response(200, json={"code": 0, "tenant_access_token": "tenant-token"})
         if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_order_fulfillment/fields":
-            return httpx.Response(200, json={"code": 0, "data": {"items": []}})
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": {
+                            "items": [
+                                {"field_id": "fld_old_id", "field_name": "id", "type": 2},
+                                {"field_id": "fld_ship", "field_name": "发货", "type": 3001},
+                            ]
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"code": 0, "data": {"field": {"field_id": "created_field"}}})
+        if url == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_order_fulfillment/fields/fld_old_id":
+            return httpx.Response(200, json={"code": 0})
         if url.startswith(
             "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables/tbl_order_fulfillment/records?"
         ):
@@ -2308,29 +2330,42 @@ def test_order_fulfillment_table_sync_upserts_by_order_id() -> None:
             "status": "pending_fulfillment_review",
             "action": "created",
             "record_id": "rec_order",
-            "source_version": "mock-api:ORD-CODEX-9001",
         }
     ]
     lookup_request = next(
         request for request in requests if request.method == "GET" and "/records?" in str(request.url)
     )
-    assert 'CurrentValue.[Order ID]="ORD-CODEX-9001"' in str(lookup_request.url.params["filter"])
+    assert 'CurrentValue.[order_id]="ORD-CODEX-9001"' in str(lookup_request.url.params["filter"])
     create_request = next(
         request for request in requests if request.method == "POST" and str(request.url).endswith("/records")
     )
     create_fields = json.loads(create_request.content)["fields"]
-    assert create_fields["Order ID"] == "ORD-CODEX-9001"
-    assert isinstance(create_fields["Created At"], int)
+    assert create_fields["order_id"] == "ORD-CODEX-9001"
+    assert isinstance(create_fields["created_at"], int)
+    assert "id" not in create_fields
+    assert "created_by" not in create_fields
+    assert "Order ID" not in create_fields
     assert "Order Item ID" not in create_fields
+    assert "Item Summary" not in create_fields
     field_requests = [
         json.loads(request.content)
         for request in requests
         if request.method == "POST" and str(request.url).endswith("/tables/tbl_order_fulfillment/fields")
     ]
     assert field_requests == [
-        {"field_name": "Order ID", "type": 1},
-        {"field_name": "Created At", "type": 5},
+        {"field_name": "order_id", "type": 1},
+        {"field_name": "created_at", "type": 5},
     ]
+    delete_requests = [
+        request
+        for request in requests
+        if request.method == "DELETE" and str(request.url).endswith("/fields/fld_old_id")
+    ]
+    assert len(delete_requests) == 1
+    assert not any(
+        request.method == "DELETE" and str(request.url).endswith("/fields/fld_ship")
+        for request in requests
+    )
     assert not any(
         request.method == "GET"
         and str(request.url) == "https://open.feishu.cn/open-apis/bitable/v1/apps/app_token/tables"

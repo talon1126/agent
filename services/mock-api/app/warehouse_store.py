@@ -126,7 +126,6 @@ orders = Table(
     Column("shipping_city", String, nullable=False, default=""),
     Column("selected_warehouse_id", String, nullable=False, default=""),
     Column("selected_warehouse_name", String, nullable=False, default=""),
-    Column("created_by", String, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
     Column("paid_at", String, nullable=False, default=""),
@@ -447,7 +446,6 @@ WAREHOUSE_COLUMN_COMMENTS = {
         "shipping_city": "从收货地址解析出的城市。",
         "selected_warehouse_id": "整单同仓发货时选中的仓库编号。",
         "selected_warehouse_name": "整单同仓发货时选中的仓库名称。",
-        "created_by": "创建订单的用户或系统身份。",
         "created_at": "订单创建时间。",
         "updated_at": "订单更新时间。",
         "paid_at": "付款时间。",
@@ -655,6 +653,8 @@ def ensure_warehouse_schema_columns(engine: Engine) -> None:
                 connection.execute(text("ALTER TABLE orders DROP COLUMN released_at"))
             if "requested_items_json" in order_columns:
                 connection.execute(text("ALTER TABLE orders DROP COLUMN requested_items_json"))
+            if "created_by" in order_columns:
+                connection.execute(text("ALTER TABLE orders DROP COLUMN created_by"))
             connection.execute(text("UPDATE orders SET status = 'unpaid' WHERE status IN ('created', '未付款')"))
             connection.execute(text("UPDATE orders SET status = 'pending_shipment' WHERE status IN ('paid', '待发货')"))
             connection.execute(text("UPDATE orders SET status = 'shipped' WHERE status = '已发货'"))
@@ -2349,6 +2349,7 @@ class WarehouseRepository:
         item_requests = [dict(item) for item in payload["items"]]
         values = {**payload}
         values.pop("items", None)
+        values.pop("created_by", None)
         updated_at = str(values["created_at"])
         with self.engine.begin() as connection:
             connection.execute(orders.insert().values(**values))
@@ -2405,6 +2406,36 @@ class WarehouseRepository:
             )
         return self.get_order(order_id) or details
 
+    def _select_order_fulfillment_warehouse_id(self, order_id: str, explicit_warehouse_id: str) -> str:
+        """Choose the warehouse used by fulfillment confirmation.
+
+        Args:
+            order_id: Business order identifier used to inspect fulfillment
+                candidates.
+            explicit_warehouse_id: Warehouse chosen by a user or automation.
+
+        Returns:
+            The explicit warehouse when provided; otherwise the fulfillable
+            warehouse with the highest total available inventory. Ties are
+            resolved by warehouse id for deterministic tests and retries.
+        """
+
+        normalized_warehouse_id = explicit_warehouse_id.strip()
+        if normalized_warehouse_id:
+            return normalized_warehouse_id
+        candidates = [
+            item
+            for item in self.list_order_fulfillment_candidates(order_id).get("candidates", [])
+            if item.get("can_fulfill")
+        ]
+        if not candidates:
+            raise ValueError(json.dumps({"error": "no_active_warehouse_can_fulfill_order"}, ensure_ascii=False))
+        selected = max(
+            candidates,
+            key=lambda item: (int(item.get("total_available") or 0), str(item.get("warehouse_id") or "")),
+        )
+        return str(selected["warehouse_id"])
+
     def confirm_order_fulfillment(
         self,
         order_id: str,
@@ -2420,14 +2451,16 @@ class WarehouseRepository:
         if not details:
             raise ValueError("order_not_found")
         order = details["order"]
-        if order["status"] == ORDER_STATUS_PENDING_SHIPMENT:
+        if order["status"] in {ORDER_STATUS_PENDING_SHIPMENT, ORDER_STATUS_SHIPPED}:
             return details
         if order["status"] != ORDER_STATUS_PENDING_FULFILLMENT_REVIEW:
             raise ValueError(f"order_cannot_confirm_fulfillment_from_{order['status']}")
+
+        selected_warehouse_id = self._select_order_fulfillment_warehouse_id(order_id, warehouse_id)
         requested_items = [
             {
                 "item_id": item["item_id"],
-                "warehouse_id": warehouse_id or item["warehouse_id"] or order["selected_warehouse_id"],
+                "warehouse_id": selected_warehouse_id,
                 "location_code": item.get("location_code") or "",
                 "quantity": int(item["quantity"]),
             }
@@ -2436,7 +2469,6 @@ class WarehouseRepository:
         ]
         if not requested_items:
             raise ValueError("order_has_no_pending_fulfillment_items")
-        selected_warehouse_id = str(warehouse_id or requested_items[0]["warehouse_id"] or order["selected_warehouse_id"])
         selected_warehouse_name = self._warehouse_name(selected_warehouse_id)
         delivery_provider = self._delivery_provider(delivery_provider_id or str(order.get("delivery_provider_id") or "sf"))
         selected_tracking_no = tracking_no.strip() or str(order.get("tracking_no") or "")
@@ -2477,7 +2509,7 @@ class WarehouseRepository:
                 orders.update()
                 .where(orders.c.order_id == order_id)
                 .values(
-                    status=ORDER_STATUS_PENDING_SHIPMENT,
+                    status=ORDER_STATUS_SHIPPED,
                     delivery_provider_id=delivery_provider["provider_id"],
                     delivery_provider_name=delivery_provider["name"],
                     courier_phone=courier_phone.strip() or str(order.get("courier_phone") or ""),
@@ -2485,6 +2517,7 @@ class WarehouseRepository:
                     selected_warehouse_id=selected_warehouse_id,
                     selected_warehouse_name=selected_warehouse_name,
                     updated_at=updated_at,
+                    shipped_at=updated_at,
                 )
             )
         return self.get_order(order_id) or details
@@ -2552,7 +2585,7 @@ class WarehouseRepository:
                     {
                         "order_id": order["order_id"],
                         "customer_id": order["customer_id"],
-                        "status": ORDER_STATUS_PENDING_SHIPMENT,
+                        "status": ORDER_STATUS_SHIPPED,
                         "item_id": row["item_id"],
                         "warehouse_id": row["warehouse_id"],
                         "location_code": row["location_code"],

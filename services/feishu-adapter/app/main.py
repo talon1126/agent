@@ -4613,6 +4613,7 @@ def create_app(
         failure_error: str,
         item_builder: Any,
         field_transformer: Any | None = None,
+        stale_field_names: set[str] | None = None,
         response_extras: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Sync a mock-api business read model into a Feishu bitable table.
@@ -4636,6 +4637,10 @@ def create_app(
             field_transformer: Optional callable that can adapt source fields
                 before Feishu upsert. Items uses this to convert raw image URLs
                 into Feishu `file_token` attachments.
+            stale_field_names: Optional Feishu field names that should be
+                removed from an existing table after the backend schema stops
+                emitting them. Button fields are never pruned through this path
+                so manually maintained Feishu actions remain intact.
             response_extras: Optional extra keys appended to successful sync
                 responses, such as non-blocking image upload summaries.
 
@@ -4671,6 +4676,19 @@ def create_app(
                 schema_endpoint=schema_endpoint,
                 field_specs=field_specs,
             )
+            if stale_field_names:
+                existing_fields = fields_by_name_for_table(token=token, table_identifier=table_result["table_id"])
+                for field_name in stale_field_names:
+                    field = existing_fields.get(field_name)
+                    if not field or field.get("is_primary") or int(field.get("type") or 0) == 3001:
+                        continue
+                    field_id = str(field.get("field_id") or "")
+                    if field_id:
+                        delete_inventory_table_field(
+                            token=token,
+                            table_identifier=table_result["table_id"],
+                            field_id=field_id,
+                        )
             current_table_fields = (
                 fields_by_name_for_table(token=token, table_identifier=table_result["table_id"])
                 if field_transformer is not None
@@ -4785,17 +4803,17 @@ def create_app(
             state=order_fulfillment_table_state,
             schema_endpoint="/warehouse/orders/fulfillment/table-schema",
             rows_endpoint="/warehouse/orders/fulfillment/table-rows",
-            identity_field="Order ID",
+            identity_field="order_id",
             workflow="/orders/fulfillment-table/sync",
             not_configured_error="missing_feishu_order_fulfillment_table_config",
             not_configured_message="Feishu order fulfillment table sync is not configured.",
             failure_error="feishu_order_fulfillment_table_sync_failed",
+            stale_field_names={"id"},
             item_builder=lambda row, fields, result: {
-                "order_id": fields.get("Order ID") or row.get("order_id"),
-                "status": fields.get("Status"),
+                "order_id": fields.get("order_id") or row.get("order_id"),
+                "status": fields.get("status"),
                 "action": result["action"],
                 "record_id": result["record_id"],
-                "source_version": fields.get("Source Version", ""),
             },
         )
 

@@ -597,9 +597,35 @@ def test_order_fulfillment_table_schema_and_rows_expose_business_fields():
     assert schema["ok"] is True
     assert schema["schema_id"] == "order_fulfillment"
     field_names = [field["name"] for field in schema["fields"]]
-    assert field_names[:4] == ["Order ID", "Status", "Customer", "Warehouse"]
+    assert field_names == [
+        "order_id",
+        "customer_id",
+        "status",
+        "delivery_provider_id",
+        "delivery_provider_name",
+        "courier_phone",
+        "tracking_no",
+        "shipping_address",
+        "shipping_province",
+        "shipping_city",
+        "selected_warehouse_id",
+        "selected_warehouse_name",
+        "created_at",
+        "updated_at",
+        "paid_at",
+        "shipped_at",
+        "arrived_at",
+        "cancelled_at",
+        "returned_at",
+        "expires_at",
+        "release_reason",
+    ]
+    assert "id" not in field_names
+    assert "created_by" not in field_names
     assert "Order Item ID" not in field_names
-
+    assert "Item Summary" not in field_names
+    assert "Total Quantity" not in field_names
+    assert "Candidate Warehouses" not in field_names
     assert rows_response.status_code == 200
     body = rows_response.json()
     assert body["ok"] is True
@@ -607,11 +633,13 @@ def test_order_fulfillment_table_schema_and_rows_expose_business_fields():
     assert body["count"] == 1
     row = body["items"][0]
     assert row["order_id"] == "ORD-CODEX-TABLE-1"
-    assert row["fields"]["Order ID"] == "ORD-CODEX-TABLE-1"
-    assert row["fields"]["Status"] == "pending_fulfillment_review"
-    assert row["fields"]["Item Summary"] == "item_vinda_tissue x 2"
+    assert row["fields"]["order_id"] == "ORD-CODEX-TABLE-1"
+    assert row["fields"]["status"] == "pending_fulfillment_review"
+    assert row["fields"]["customer_id"] == "cus_100"
+    assert row["fields"]["selected_warehouse_id"] == "wh_sz_1"
     assert "id" not in row["fields"]
-
+    assert "created_by" not in row["fields"]
+    assert "Item Summary" not in row["fields"]
 
 def test_order_items_table_schema_and_rows_expose_line_fields():
     """Protect the H8 Order Items read model used by Feishu detail tables."""
@@ -2314,9 +2342,9 @@ def test_warehouse_order_uses_english_statuses_and_delivery_provider_fields():
         "/warehouse/orders/ORD-DELIVERY-1001/fulfillment/confirm",
         json={"warehouse_id": "wh_sz_1", "delivery_provider_id": "yto", "updated_by": "warehouse-agent"},
     ).json()
-    assert confirmed["order"]["status"] == "pending_shipment"
+    assert confirmed["order"]["status"] == "shipped"
     assert confirmed["order"]["delivery_provider_id"] == "yto"
-    assert confirmed["items"][0]["status"] == "pending_shipment"
+    assert confirmed["items"][0]["status"] == "shipped"
 
     shipped = client.post(
         "/warehouse/orders/ORD-DELIVERY-1001/ship",
@@ -2841,7 +2869,7 @@ def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_
     )
     assert confirmed_response.status_code == 200
     confirmed = confirmed_response.json()
-    assert confirmed["order"]["status"] == "pending_shipment"
+    assert confirmed["order"]["status"] == "shipped"
     assert confirmed["order"]["delivery_provider_id"] == "jd"
     assert confirmed["order"]["delivery_provider_name"] == "京东"
     vinda_lines = [line for line in confirmed["items"] if line["item_id"] == "item_vinda_tissue"]
@@ -2859,7 +2887,7 @@ def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_
     assert inventory["total_quantity_on_hand"] == 116
     assert sum(int(batch["quantity_on_hand"]) for batch in inventory["batches"]) == 116
 
-    assert all(line["status"] == "pending_shipment" for line in confirmed["items"])
+    assert all(line["status"] == "shipped" for line in confirmed["items"])
     movements = [item for item in WAREHOUSE_INVENTORY_MOVEMENTS if item["order_id"] == "ORD-CODEX-9001"]
     assert any(
         item["item_id"] == "item_vinda_tissue"
@@ -2867,6 +2895,116 @@ def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_
         and item["quantity_delta"] == -20
         for item in movements
     )
+
+
+def test_warehouse_order_fulfillment_confirm_auto_selects_highest_stock_warehouse_and_syncs_tables(monkeypatch):
+    table_sync_requests: list[dict[str, Any]] = []
+
+    class FakeTableSyncResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps({"ok": True, "synced_count": 1}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        table_sync_requests.append(
+            {
+                "url": request.full_url,
+                "method": request.get_method(),
+                "body": json.loads(request.data.decode("utf-8")),
+                "timeout": timeout,
+            }
+        )
+        return FakeTableSyncResponse()
+
+    monkeypatch.setenv(
+        "FEISHU_ORDER_FULFILLMENT_TABLE_SYNC_URL",
+        "http://feishu-adapter/orders/fulfillment-table/sync",
+    )
+    monkeypatch.setenv(
+        "FEISHU_WAREHOUSE_INVENTORY_MOVEMENT_SYNC_URL",
+        "http://feishu-adapter/warehouse/inventory-movements-table/sync",
+    )
+    monkeypatch.setattr(warehouse_orders_router.urllib.request, "urlopen", fake_urlopen)
+
+    created_response = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-AUTO-WH",
+            "customer_id": "cus_100",
+            "shipping_address": "香港",
+            "items": [{"item_id": "item_milk_pure", "warehouse_id": "wh_hk_1", "quantity": 10}],
+        },
+    )
+    assert created_response.status_code == 200
+    assert created_response.json()["order"]["selected_warehouse_id"] == "wh_hk_1"
+
+    client.post("/warehouse/orders/ORD-CODEX-AUTO-WH/pay", json={"updated_by": "customer"})
+    confirmed_response = client.post(
+        "/warehouse/orders/ORD-CODEX-AUTO-WH/fulfillment/confirm",
+        json={"delivery_provider_id": "jd", "tracking_no": "JD-AUTO-1", "updated_by": "warehouse-agent"},
+    )
+
+    assert confirmed_response.status_code == 200
+    confirmed = confirmed_response.json()
+    assert confirmed["order"]["status"] == "shipped"
+    assert confirmed["order"]["selected_warehouse_id"] == "wh_sz_1"
+    assert confirmed["order"]["selected_warehouse_name"] == "深圳仓"
+    assert confirmed["order"]["delivery_provider_id"] == "jd"
+    assert confirmed["order"]["tracking_no"] == "JD-AUTO-1"
+    assert confirmed["order"]["shipped_at"]
+    assert [line["status"] for line in confirmed["items"]] == ["shipped"]
+    assert confirmed["table_sync"]["order_fulfillment"]["status"] == "sent"
+    assert confirmed["table_sync"]["inventory_movements"]["status"] == "sent"
+    assert table_sync_requests == [
+        {
+            "url": "http://feishu-adapter/orders/fulfillment-table/sync",
+            "method": "POST",
+            "body": {"order_id": "ORD-CODEX-AUTO-WH", "limit": 1},
+            "timeout": 5,
+        },
+        {
+            "url": "http://feishu-adapter/warehouse/inventory-movements-table/sync",
+            "method": "POST",
+            "body": {"order_id": "ORD-CODEX-AUTO-WH", "limit": 500},
+            "timeout": 5,
+        },
+    ]
+
+
+def test_warehouse_order_fulfillment_confirm_uses_body_order_id_when_path_is_template_placeholder():
+    create_response = client.post(
+        "/warehouse/orders",
+        json={
+            "order_id": "ORD-CODEX-FEISHU-BODY-ID",
+            "customer_id": "cus_100",
+            "shipping_address": "广东省深圳市",
+            "items": [{"item_id": "item_vinda_tissue", "quantity": 1}],
+            "delivery_provider_id": "sf",
+        },
+    )
+    assert create_response.status_code == 200
+    paid_response = client.post("/warehouse/orders/ORD-CODEX-FEISHU-BODY-ID/pay", json={"updated_by": "customer"})
+    assert paid_response.status_code == 200
+
+    confirmed_response = client.post(
+        "/warehouse/orders/%7B%7Border_id%7D%7D/fulfillment/confirm",
+        json={
+            "order_id": "ORD-CODEX-FEISHU-BODY-ID",
+            "warehouse_id": "",
+            "delivery_provider_id": "sf",
+            "updated_by": "feishu-order-ship-button",
+        },
+    )
+
+    assert confirmed_response.status_code == 200
+    confirmed = confirmed_response.json()
+    assert confirmed["order"]["order_id"] == "ORD-CODEX-FEISHU-BODY-ID"
+    assert confirmed["order"]["status"] == "shipped"
 
 
 def test_warehouse_order_tool_normalizes_lowercase_order_id_for_fulfillment_confirmation():
@@ -2899,7 +3037,7 @@ def test_warehouse_order_tool_normalizes_lowercase_order_id_for_fulfillment_conf
     assert confirmed_response.status_code == 200
     confirmed = confirmed_response.json()
     assert confirmed["order"]["order_id"] == "ORD-CODEX-LOWERCASE"
-    assert confirmed["order"]["status"] == "pending_shipment"
+    assert confirmed["order"]["status"] == "shipped"
     assert confirmed["order"]["delivery_provider_id"] == "jd"
 
 
@@ -2936,7 +3074,7 @@ def test_warehouse_order_tool_merges_nested_json_input_for_fulfillment_confirmat
     assert confirmed_response.status_code == 200
     confirmed = confirmed_response.json()
     assert confirmed["order"]["order_id"] == "ORD-CODEX-NESTED"
-    assert confirmed["order"]["status"] == "pending_shipment"
+    assert confirmed["order"]["status"] == "shipped"
     assert confirmed["order"]["delivery_provider_id"] == "jd"
     assert confirmed["order"]["delivery_provider_name"] == "京东"
 

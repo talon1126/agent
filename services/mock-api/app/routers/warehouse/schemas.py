@@ -64,7 +64,8 @@ class WarehouseOrderStatusUpdateRequest(BaseModel):
 
 
 class WarehouseOrderFulfillmentConfirmRequest(BaseModel):
-    warehouse_id: str
+    order_id: str = ""
+    warehouse_id: str = ""
     delivery_provider_id: str | None = None
     courier_phone: str = ""
     tracking_no: str = ""

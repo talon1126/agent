@@ -676,6 +676,7 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
     assert created["order"]["id"] == 1
     assert created["order"]["status"] == "unpaid"
     assert created["order"]["delivery_provider_name"] == "顺丰"
+    assert "created_by" not in created["order"]
     assert "released_at" not in created["order"]
     assert "requested_items" not in created["order"]
     assert [item["status"] for item in created["items"]] == ["unpaid"]
@@ -704,16 +705,16 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
         updated_at="2026-05-28T10:00:30+00:00",
     )
 
-    assert confirmed["order"]["status"] == "pending_shipment"
+    assert confirmed["order"]["status"] == "shipped"
     assert confirmed["order"]["delivery_provider_id"] == "jd"
     assert confirmed["order"]["delivery_provider_name"] == "京东"
-    assert [item["status"] for item in confirmed["items"]] == ["pending_shipment"]
+    assert [item["status"] for item in confirmed["items"]] == ["shipped"]
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 116
 
     assert "batch_no" not in confirmed["items"][0]
     assert [item["quantity"] for item in confirmed["items"]] == [20]
-    assert all(item["status"] == "pending_shipment" for item in confirmed["items"])
+    assert all(item["status"] == "shipped" for item in confirmed["items"])
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 116
 
@@ -731,6 +732,65 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
     assert [item["movement_type"] for item in movements] == ["order_fulfillment_confirmed", "order_returned"]
     assert [item["quantity_delta"] for item in movements] == [-20, 20]
     assert "batch_no" not in movements[0]
+
+
+def test_warehouse_repository_confirm_fulfillment_auto_selects_highest_stock_warehouse(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    repository.create_order(
+        {
+            "order_id": "ORD-CODEX-DB-AUTO-WH",
+            "customer_id": "cus_100",
+            "status": "unpaid",
+            "delivery_provider_id": "sf",
+            "delivery_provider_name": "顺丰",
+            "courier_phone": "",
+            "tracking_no": "",
+            "shipping_address": "香港",
+            "shipping_province": "",
+            "shipping_city": "香港",
+            "selected_warehouse_id": "wh_hk_1",
+            "selected_warehouse_name": "香港仓",
+            "release_reason": "",
+            "items": [
+                {"item_id": "item_milk_pure", "warehouse_id": "wh_hk_1", "quantity": 10}
+            ],
+            "created_at": "2026-05-28T10:00:00+00:00",
+            "updated_at": "2026-05-28T10:00:00+00:00",
+            "paid_at": "",
+            "shipped_at": "",
+            "arrived_at": "",
+            "cancelled_at": "",
+            "returned_at": "",
+            "expires_at": "",
+        }
+    )
+    repository.pay_order(
+        "ORD-CODEX-DB-AUTO-WH",
+        updated_by="customer",
+        updated_at="2026-05-28T10:00:20+00:00",
+    )
+
+    confirmed = repository.confirm_order_fulfillment(
+        "ORD-CODEX-DB-AUTO-WH",
+        warehouse_id="",
+        delivery_provider_id="jd",
+        tracking_no="JD-DB-AUTO-1",
+        updated_by="warehouse-agent",
+        updated_at="2026-05-28T10:00:30+00:00",
+    )
+
+    assert confirmed["order"]["status"] == "shipped"
+    assert confirmed["order"]["selected_warehouse_id"] == "wh_sz_1"
+    assert confirmed["order"]["selected_warehouse_name"] == "深圳仓"
+    assert confirmed["order"]["shipped_at"] == "2026-05-28T10:00:30+00:00"
+    assert [item["status"] for item in confirmed["items"]] == ["shipped"]
+    assert [item["warehouse_id"] for item in confirmed["items"]] == ["wh_sz_1"]
+    balances = repository.list_location_balances(item_id="item_milk_pure", warehouse_id="wh_sz_1")
+    assert sum(item["quantity_on_hand"] for item in balances) == 130
 
 
 def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path) -> None:

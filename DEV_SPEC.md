@@ -807,7 +807,7 @@ mock-api / PostgreSQL 业务事实
 | H9 | 实现商品飞书表同步 | [✔] | 2026-06-18 | Items read model、商品图片 URL 转飞书真实图片 |
 | H10 | 实现秒杀活动和秒杀结果飞书表同步 | [✔] | 2026-06-18 | Flash Sales / Flash Sale Claims read model |
 | H11 | 搭建飞书应用业务操作页 | [✔] | 2026-06-18 | 订单、库存、采购、商品运营页面 |
-| H12 | 实现飞书应用联调与验收门禁 | [ ] |  | Chrome 验证、表格数据校验、关键按钮动作验证 |
+| H12 | 实现飞书应用联调与验收门禁 | [ ] |  | Chrome 验证、表格数据校验、页面联调验证 |
 | H13 | 实现飞书表全量对账策略 | [ ] |  | 源端删除、失效标记、table_id 审计 |
 
 #### 阶段 I：Quality And Delivery
@@ -2119,7 +2119,7 @@ mock-api / PostgreSQL 业务事实
 - `get_order_fulfillment_table_rows()`：返回待付款、待发仓确认、待出库和已发货订单 read model。
 - `get_order_items_table_schema()`：返回订单明细飞书表字段契约。
 - `get_order_items_table_rows()`：返回订单、商品、仓库、库位、数量和状态组成的订单明细 read model。
-- `sync_order_fulfillment_table()`：创建或复用 `Order Fulfillment` 飞书表并按 `Order ID` upsert 订单履约记录。
+- `sync_order_fulfillment_table()`：创建或复用 `Order Fulfillment` 飞书表并按 `order_id` upsert 订单总览记录。
 - `sync_order_items_table()`：创建或复用 `Order Items` 飞书表并按 `Order Item ID` upsert 订单明细记录。
 - `Order Fulfillment Table Sync`：每 10 分钟调用 `/orders/fulfillment-table/sync` 刷新订单履约飞书表。
 - `Order Items Table Sync`：每 10 分钟调用 `/orders/items-table/sync` 刷新订单明细飞书表。
@@ -2132,7 +2132,11 @@ mock-api / PostgreSQL 业务事实
 - 两个同步端点在配置完整时能够使用 table_id-first 策略补齐字段并 upsert 记录。
 - 返回结果包含 table_id、table_name、table_url、synced_count 和 items。
 - 返回结果包含 page_count，用于确认订单履约和订单明细同步读取了多少页源数据。
-- 字段使用 TalonMart 业务可读名称，不暴露内部数据库主键以外的实现细节。
+- 订单总览以 `order_id` 作为业务单号展示和同步标识，不展示 PostgreSQL 自增 `id`；其余字段与 `orders` 表业务字段保持一致，不展示聚合摘要字段。
+- 订单总览不展示 `id` 或 `created_by`。
+- 订单总览中的“发货”和“退货”按钮由业务人员在飞书页面中人工创建；订单同步流程只能补齐订单字段和更新记录，不能删除这两个按钮字段。
+- `/warehouse/orders/{order_id}/fulfillment/confirm` 作为订单总览“发货”按钮目标接口：未传 `warehouse_id` 时自动选择可满足整单且总库存最多的仓库；确认后填写 `delivery_provider_id`、`delivery_provider_name`、`tracking_no`、`selected_warehouse_id` 和 `selected_warehouse_name`，同步扣减库存余额，写入库存流水，将订单和明细更新为 `shipped`，并刷新订单总览与库存流水飞书表。
+- “退货”按钮的目标后端动作：更新订单 `status`，写入退货库存流水，并刷新订单总览与库存流水飞书表。
 - 订单明细表可以展示 `Order Item ID` 作为业务行标识，但不展示数据库自增 `id`。
 - 订单履约表有独立 n8n 定时同步任务，并调用 `/orders/fulfillment-table/sync` 端点。
 - 订单明细表有独立 n8n 定时同步任务，并调用 `/orders/items-table/sync` 端点。
@@ -2273,7 +2277,6 @@ mock-api / PostgreSQL 业务事实
 
 - 首页和业务操作页都能打开预览。
 - 库存、采购、订单发仓和采购到货相关同步接口通过测试。
-- 关键按钮动作有明确目标：同步接口、机器人指令或后续手动操作说明。
 - 任务结束摘要包含飞书页面验证结果、未接入的数据源和后续补齐任务。
 
 测试方法：`uv run --project services/feishu-adapter pytest services\feishu-adapter\tests\test_feishu_adapter.py -q`；`uv run --project services/mock-api pytest tests\test_department_workflows.py -q`；Chrome 人工验收飞书应用页面。

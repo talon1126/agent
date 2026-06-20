@@ -38,6 +38,7 @@ from .state import (
 
 router = APIRouter()
 FULFILLMENT_REVIEW_NOTIFY_TIMEOUT_SECONDS = 5
+ORDER_TABLE_SYNC_TIMEOUT_SECONDS = 5
 
 ORDER_STATUS_PENDING_FULFILLMENT_REVIEW = "pending_fulfillment_review"
 ORDER_STATUS_UNPAID = "unpaid"
@@ -49,9 +50,10 @@ ORDER_STATUS_RETURNED = "returned"
 ORDER_STATUS_CANCELED = "canceled"
 
 ORDER_FULFILLMENT_TABLE_SCHEMA = [
-    {"name": "Order ID", "type": "text"},
+    {"name": "order_id", "type": "text"},
+    {"name": "customer_id", "type": "text"},
     {
-        "name": "Status",
+        "name": "status",
         "type": "single_select",
         "options": [
             {"name": ORDER_STATUS_UNPAID, "color": 24},
@@ -64,18 +66,24 @@ ORDER_FULFILLMENT_TABLE_SCHEMA = [
             {"name": ORDER_STATUS_CANCELED, "color": 20},
         ],
     },
-    {"name": "Customer", "type": "text"},
-    {"name": "Warehouse", "type": "text"},
-    {"name": "Delivery Provider", "type": "text"},
-    {"name": "Tracking No", "type": "text"},
-    {"name": "Shipping City", "type": "text"},
-    {"name": "Item Summary", "type": "text"},
-    {"name": "Total Quantity", "type": "number"},
-    {"name": "Candidate Warehouses", "type": "text"},
-    {"name": "Created At", "type": "datetime"},
-    {"name": "Paid At", "type": "datetime"},
-    {"name": "Updated At", "type": "datetime"},
-    {"name": "Source Version", "type": "text"},
+    {"name": "delivery_provider_id", "type": "text"},
+    {"name": "delivery_provider_name", "type": "text"},
+    {"name": "courier_phone", "type": "text"},
+    {"name": "tracking_no", "type": "text"},
+    {"name": "shipping_address", "type": "text"},
+    {"name": "shipping_province", "type": "text"},
+    {"name": "shipping_city", "type": "text"},
+    {"name": "selected_warehouse_id", "type": "text"},
+    {"name": "selected_warehouse_name", "type": "text"},
+    {"name": "created_at", "type": "datetime"},
+    {"name": "updated_at", "type": "datetime"},
+    {"name": "paid_at", "type": "datetime"},
+    {"name": "shipped_at", "type": "datetime"},
+    {"name": "arrived_at", "type": "datetime"},
+    {"name": "cancelled_at", "type": "datetime"},
+    {"name": "returned_at", "type": "datetime"},
+    {"name": "expires_at", "type": "datetime"},
+    {"name": "release_reason", "type": "text"},
 ]
 
 ORDER_ITEMS_TABLE_SCHEMA = [
@@ -310,6 +318,44 @@ def list_fulfillment_candidates_for_items(
     }
 
 
+def select_highest_stock_fulfillment_warehouse_id(
+    items: list[dict[str, Any]],
+    *,
+    explicit_warehouse_id: str,
+    preferred_warehouse_id: str = "",
+) -> str:
+    """Resolve the warehouse used by fulfillment confirmation.
+
+    Args:
+        items: Pending order lines used to compute whether a warehouse can
+            fulfill the entire order.
+        explicit_warehouse_id: Warehouse chosen by a Feishu button payload or a
+            direct API caller. When present, it preserves the old explicit
+            confirmation behavior.
+        preferred_warehouse_id: Existing selected warehouse from order creation.
+
+    Returns:
+        The explicit warehouse id, or the fulfillable warehouse with the highest
+        available inventory when the caller leaves the field blank.
+    """
+
+    normalized_warehouse_id = explicit_warehouse_id.strip()
+    if normalized_warehouse_id:
+        return normalized_warehouse_id
+    review = list_fulfillment_candidates_for_items(
+        items,
+        preferred_warehouse_id=preferred_warehouse_id,
+    )
+    candidates = [item for item in review.get("candidates", []) if item.get("can_fulfill")]
+    if not candidates:
+        raise HTTPException(status_code=409, detail={"error": "no_active_warehouse_can_fulfill_order"})
+    selected = max(
+        candidates,
+        key=lambda item: (int(item.get("total_available") or 0), str(item.get("warehouse_id") or "")),
+    )
+    return str(selected["warehouse_id"])
+
+
 def choose_single_warehouse(items: list[dict[str, Any]], shipping_city: str) -> dict[str, Any]:
     explicit_ids = {str(item.get("warehouse_id") or "").strip() for item in items if str(item.get("warehouse_id") or "").strip()}
     warehouses = active_warehouses()
@@ -434,6 +480,87 @@ def send_fulfillment_review_notification(
     return {"configured": True, "status": "sent", "response": body}
 
 
+def post_feishu_table_sync(sync_url_env: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Call a Feishu table sync endpoint after order facts change.
+
+    Args:
+        sync_url_env: Environment variable that contains the target
+            feishu-adapter sync endpoint URL.
+        payload: JSON body sent to the sync endpoint.
+
+    Returns:
+        A structured sync result. Business changes remain successful when the
+        table refresh is not configured or temporarily fails; the response makes
+        that integration status visible to button callers.
+    """
+
+    sync_url = os.getenv(sync_url_env, "").strip()
+    if not sync_url:
+        return {"configured": False, "status": "skipped"}
+    request = urllib.request.Request(
+        sync_url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=ORDER_TABLE_SYNC_TIMEOUT_SECONDS) as response:
+            raw_body = response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        return {"configured": True, "status": "failed", "error": str(error), "request": payload}
+    try:
+        body = json.loads(raw_body) if raw_body else {}
+    except json.JSONDecodeError:
+        body = {"raw": raw_body}
+    return {"configured": True, "status": "sent", "request": payload, "response": body}
+
+
+def refresh_order_fulfillment_tables(order_id: str) -> dict[str, Any]:
+    """Refresh Feishu read models affected by fulfillment confirmation.
+
+    Args:
+        order_id: Business order identifier whose order and movement rows need
+            to be visible in Feishu immediately after the button action.
+
+    Returns:
+        Per-table sync results for the Order Fulfillment and Inventory Movement
+        read models.
+    """
+
+    return {
+        "order_fulfillment": post_feishu_table_sync(
+            "FEISHU_ORDER_FULFILLMENT_TABLE_SYNC_URL",
+            {"order_id": order_id, "limit": 1},
+        ),
+        "inventory_movements": post_feishu_table_sync(
+            "FEISHU_WAREHOUSE_INVENTORY_MOVEMENT_SYNC_URL",
+            {"order_id": order_id, "limit": 500},
+        ),
+    }
+
+
+def resolve_order_id_from_path_or_body(path_order_id: str, body_order_id: str = "") -> str:
+    """Resolve the order id sent by Feishu bitable button automation.
+
+    Args:
+        path_order_id: The path parameter captured from the endpoint URL.
+        body_order_id: Optional JSON body fallback populated from the same
+            Feishu row field when the URL keeps a literal template placeholder.
+
+    Returns:
+        The concrete business order id used by repository and fallback stores.
+        Path values remain authoritative when they look concrete, preserving the
+        existing direct API contract. Body fallback is used only for empty or
+        unresolved template path values such as `{{order_id}}`.
+    """
+
+    normalized_path = path_order_id.strip()
+    normalized_body = body_order_id.strip()
+    if normalized_body and (not normalized_path or "{{" in normalized_path or "}}" in normalized_path):
+        return normalized_body
+    return normalized_path
+
+
 def get_warehouse_order_or_404(order_id: str) -> dict[str, Any]:
     order = next((item for item in WAREHOUSE_ORDERS if item["order_id"] == order_id), None)
     if not order:
@@ -503,35 +630,43 @@ def candidate_warehouses_for_table(order: dict[str, Any], items: list[dict[str, 
 
 
 def order_fulfillment_table_fields(order: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
-    """Convert one order and its lines into Feishu table fields.
+    """Convert one order header row into Feishu table fields.
 
     Args:
         order: Order header row from PostgreSQL or fallback fixtures.
-        items: Order item rows attached to the order.
+        items: Attached order item rows. The argument is accepted so callers can
+            keep using the same read-model assembly shape as the order-items
+            endpoint, but this header table intentionally mirrors only the
+            `orders` table columns.
 
     Returns:
-        Field dictionary matching `ORDER_FULFILLMENT_TABLE_SCHEMA`. Only
-        employee-facing business values are emitted; internal order item row ids
-        are intentionally omitted from this read model.
+        Field dictionary matching `ORDER_FULFILLMENT_TABLE_SCHEMA`. The keys use
+        the exact order-column names so Feishu Order Fulfillment can be audited
+        one-to-one against PostgreSQL `orders` without derived summary fields.
     """
 
-    item_summary, total_quantity = summarize_order_items_for_table(items)
-    updated_at = str(order.get("updated_at") or "")
     return {
-        "Order ID": order["order_id"],
-        "Status": order["status"],
-        "Customer": order.get("customer_id") or "",
-        "Warehouse": order.get("selected_warehouse_name") or warehouse_name_by_id(str(order.get("selected_warehouse_id") or "")),
-        "Delivery Provider": order.get("delivery_provider_name") or "",
-        "Tracking No": order.get("tracking_no") or "",
-        "Shipping City": order.get("shipping_city") or "",
-        "Item Summary": item_summary,
-        "Total Quantity": total_quantity,
-        "Candidate Warehouses": candidate_warehouses_for_table(order, items),
-        "Created At": order.get("created_at") or "",
-        "Paid At": order.get("paid_at") or "",
-        "Updated At": updated_at,
-        "Source Version": f"mock-api:{order['order_id']}:{updated_at}",
+        "order_id": order.get("order_id") or "",
+        "customer_id": order.get("customer_id") or "",
+        "status": order.get("status") or "",
+        "delivery_provider_id": order.get("delivery_provider_id") or "",
+        "delivery_provider_name": order.get("delivery_provider_name") or "",
+        "courier_phone": order.get("courier_phone") or "",
+        "tracking_no": order.get("tracking_no") or "",
+        "shipping_address": order.get("shipping_address") or "",
+        "shipping_province": order.get("shipping_province") or "",
+        "shipping_city": order.get("shipping_city") or "",
+        "selected_warehouse_id": order.get("selected_warehouse_id") or "",
+        "selected_warehouse_name": order.get("selected_warehouse_name") or "",
+        "created_at": order.get("created_at") or "",
+        "updated_at": order.get("updated_at") or "",
+        "paid_at": order.get("paid_at") or "",
+        "shipped_at": order.get("shipped_at") or "",
+        "arrived_at": order.get("arrived_at") or "",
+        "cancelled_at": order.get("cancelled_at") or "",
+        "returned_at": order.get("returned_at") or "",
+        "expires_at": order.get("expires_at") or "",
+        "release_reason": order.get("release_reason") or "",
     }
 
 
@@ -768,7 +903,6 @@ def create_warehouse_order(payload: WarehouseOrderCreate) -> dict[str, Any]:
         "selected_warehouse_id": selected_warehouse["warehouse_id"],
         "selected_warehouse_name": selected_warehouse["warehouse_name"],
         "items": requested_items,
-        "created_by": payload.created_by,
         "created_at": now,
         "updated_at": now,
         "paid_at": "",
@@ -825,7 +959,7 @@ def confirm_fallback_order_fulfillment(
     updated_at: str,
 ) -> dict[str, Any]:
     order = get_warehouse_order_or_404(order_id)
-    if order["status"] == ORDER_STATUS_PENDING_SHIPMENT:
+    if order["status"] in {ORDER_STATUS_PENDING_SHIPMENT, ORDER_STATUS_SHIPPED}:
         return warehouse_order_response(order, fallback_order_items(order_id))
     if order["status"] != ORDER_STATUS_PENDING_FULFILLMENT_REVIEW:
         raise HTTPException(status_code=409, detail=f"order_cannot_confirm_fulfillment_from_{order['status']}")
@@ -834,7 +968,11 @@ def confirm_fallback_order_fulfillment(
     if not requested_items:
         raise HTTPException(status_code=409, detail="order_has_no_pending_fulfillment_items")
 
-    selected_warehouse_id = warehouse_id.strip() or str(order.get("selected_warehouse_id") or "")
+    selected_warehouse_id = select_highest_stock_fulfillment_warehouse_id(
+        requested_items,
+        explicit_warehouse_id=warehouse_id,
+        preferred_warehouse_id=str(order.get("selected_warehouse_id") or ""),
+    )
     allocated_items: list[dict[str, Any]] = []
     for requested in requested_items:
         request = {
@@ -852,7 +990,7 @@ def confirm_fallback_order_fulfillment(
                     "id": len(WAREHOUSE_ORDER_ITEMS) + len(allocated_items) + 1,
                     "order_id": order_id,
                     "customer_id": order["customer_id"],
-                    "status": ORDER_STATUS_PENDING_SHIPMENT,
+                    "status": ORDER_STATUS_SHIPPED,
                     "item_id": row["item_id"],
                     "warehouse_id": row["warehouse_id"],
                     "location_code": row["location_code"],
@@ -877,7 +1015,7 @@ def confirm_fallback_order_fulfillment(
     selected_tracking_no = tracking_no.strip() or str(order.get("tracking_no") or "")
     if not selected_tracking_no:
         selected_tracking_no = f"{delivery_provider['tracking_prefix']}{order_id.replace('-', '')}"
-    order["status"] = ORDER_STATUS_PENDING_SHIPMENT
+    order["status"] = ORDER_STATUS_SHIPPED
     order["delivery_provider_id"] = delivery_provider["provider_id"]
     order["delivery_provider_name"] = delivery_provider["name"]
     order["courier_phone"] = courier_phone.strip() or str(order.get("courier_phone") or "")
@@ -885,6 +1023,7 @@ def confirm_fallback_order_fulfillment(
     order["selected_warehouse_id"] = selected_warehouse_id
     order["selected_warehouse_name"] = warehouse_name_by_id(selected_warehouse_id)
     order["updated_at"] = updated_at
+    order["shipped_at"] = updated_at
     return warehouse_order_response(order, fallback_order_items(order_id))
 
 
@@ -926,27 +1065,26 @@ def confirm_order_fulfillment(
     order_id: str,
     payload: WarehouseOrderFulfillmentConfirmRequest,
 ) -> dict[str, Any]:
+    resolved_order_id = resolve_order_id_from_path_or_body(order_id, payload.order_id)
     repository = get_warehouse_repository()
     now = datetime.now(UTC).isoformat()
     if repository:
         try:
-            return {
-                "ok": True,
-                **repository.confirm_order_fulfillment(
-                    order_id,
-                    warehouse_id=payload.warehouse_id,
-                    delivery_provider_id=payload.delivery_provider_id,
-                    courier_phone=payload.courier_phone,
-                    tracking_no=payload.tracking_no,
-                    updated_by=payload.updated_by,
-                    updated_at=now,
-                ),
-            }
+            result = repository.confirm_order_fulfillment(
+                resolved_order_id,
+                warehouse_id=payload.warehouse_id,
+                delivery_provider_id=payload.delivery_provider_id,
+                courier_phone=payload.courier_phone,
+                tracking_no=payload.tracking_no,
+                updated_by=payload.updated_by,
+                updated_at=now,
+            )
+            return {"ok": True, **result, "table_sync": refresh_order_fulfillment_tables(resolved_order_id)}
         except ValueError as error:
             raise order_http_error(error) from error
 
-    return confirm_fallback_order_fulfillment(
-        order_id,
+    result = confirm_fallback_order_fulfillment(
+        resolved_order_id,
         warehouse_id=payload.warehouse_id,
         delivery_provider_id=payload.delivery_provider_id,
         courier_phone=payload.courier_phone,
@@ -954,6 +1092,8 @@ def confirm_order_fulfillment(
         updated_by=payload.updated_by,
         updated_at=now,
     )
+    result["table_sync"] = refresh_order_fulfillment_tables(resolved_order_id)
+    return result
 
 
 @router.post("/warehouse/orders/{order_id}/pay")
