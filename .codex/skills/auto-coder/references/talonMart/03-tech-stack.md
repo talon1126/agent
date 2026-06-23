@@ -66,6 +66,8 @@ AImodel Agent
 - `request_source` 必须区分 `aimodel`、`mcp`、`query_cli`，便于后续 trace 分析。
 - 前端输出必须过滤原始 tool result、chunk id、trace id 等内部细节。
 - 商品事实优先调用 `mock-api`，RAG 只提供知识上下文。
+- 联网搜索只作为外部公开网页信息补充工具，必须通过 Tavily 受控 API 调用，不允许 Agent 直接访问任意内部 HTTP API。
+- Tavily 工具必须读取 `TAVILY_API_KEY` 和可选 `TAVILY_SEARCH_URL` / `TAVILY_MAX_RESULTS` 配置；未配置 key 时工具应优雅返回不可用结果，不影响商品工具和 RAG 工具。
 
 ### 3.5 Workflow 调用链
 

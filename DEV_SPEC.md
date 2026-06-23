@@ -135,6 +135,8 @@ AImodel Agent
 - `request_source` 必须区分 `aimodel`、`mcp`、`query_cli`，便于后续 trace 分析。
 - 前端输出必须过滤原始 tool result、chunk id、trace id 等内部细节。
 - 商品事实优先调用 `mock-api`，RAG 只提供知识上下文。
+- 联网搜索只作为外部公开网页信息补充工具，必须通过 Tavily 受控 API 调用，不允许 Agent 直接访问任意内部 HTTP API。
+- Tavily 工具必须读取 `TAVILY_API_KEY` 和可选 `TAVILY_SEARCH_URL` / `TAVILY_MAX_RESULTS` 配置；未配置 key 时工具应优雅返回不可用结果，不影响商品工具和 RAG 工具。
 
 ### 3.5 Workflow 调用链
 
@@ -525,7 +527,7 @@ agent/                                                      # 项目根目录
 | AI 服务 | `services/ai-service/app/main.py` | FastAPI 入口 | 路由注册、启动初始化、shutdown 释放资源 |
 | AI 服务 | `services/ai-service/app/routers/AImodel/router.py` | AImodel HTTP 路由 | chat、conversation、message、memory |
 | AI 服务 | `services/ai-service/app/routers/AImodel/service.py` | Agent 编排 | LangChain message、工具调用、流式响应 |
-| AI 服务 | `services/ai-service/app/routers/AImodel/tools.py` | 工具适配 | 商品 API、RAG MCP client、长连接复用 |
+| AI 服务 | `services/ai-service/app/routers/AImodel/tools.py` | 工具适配 | 商品 API、RAG MCP client、Tavily 联网搜索、长连接复用 |
 | AI 服务 | `services/ai-service/app/routers/AImodel/memory.py` | 会话记忆 | conversation、message、user_memory、message_query_trace |
 | 业务 API | `services/mock-api/app/main.py` | mock-api 入口 | 路由注册、health、政策搜索、run log |
 | 业务 API | `services/mock-api/app/warehouse_store.py` | 仓储 repository | PostgreSQL 优先、fixtures fallback、库存事实 |
@@ -694,7 +696,7 @@ mock-api / PostgreSQL 业务事实
 | 阶段 D | Delivery Workflow | 完成物流查询、异常和 case 闭环 | [✔] |
 | 阶段 E | Operations Workflow | 完成跨领域只读摘要和运营建议闭环 | [✔] |
 | 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀、排行榜和前端体验 | [✔] |
-| 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆和 RAG MCP 集成 | [✔] |
+| 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆、受控联网搜索和 RAG MCP 集成 | [✔] |
 | 阶段 H | 飞书应用与协作后台 | 完成 feishu-adapter、多维表格 read model、主动通知和飞书应用搭建 | [~] |
 | 阶段 I | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
 
@@ -708,7 +710,7 @@ mock-api / PostgreSQL 业务事实
 | 阶段 D | 物流主链路可演示 | 物流状态、异常查询、case 创建 | `uv run --project services/mock-api pytest services\mock-api\tests\test_delivery_router_structure.py -q` | Operations Workflow |  |
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
 | 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
-| 阶段 G | AImodel 可用 | 流式聊天、工具调用、会话记忆、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 |  |
+| 阶段 G | AImodel 持续增强 | 流式聊天、工具调用、会话记忆、受控联网搜索、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 | 2026-06-23 |
 | 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、业务操作页、订单明细、商品、秒杀 read model 分页同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
 | 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
 
@@ -790,7 +792,8 @@ mock-api / PostgreSQL 业务事实
 | G5 | 实现 LangChain Agent 编排 | [✔] |  | service.py |
 | G6 | 实现 SSE 流式响应和输出清洗 | [✔] |  | hide tool result |
 | G7 | 实现 message_query_trace 关联 | [✔] |  | trace id mapping |
-| G8 | 实现 AImodel 测试与回归门禁 | [✔] |  | ai-service tests |
+| G8 | 实现 Tavily 联网搜索工具 | [✔] | 2026-06-23 | web search tool、TAVILY_API_KEY |
+| G9 | 实现 AImodel 测试与回归门禁 | [✔] |  | ai-service tests |
 
 #### 阶段 H：飞书应用与协作后台
 
@@ -832,10 +835,10 @@ mock-api / PostgreSQL 业务事实
 | 阶段 D | 6 | 6 | 100% |
 | 阶段 E | 5 | 5 | 100% |
 | 阶段 F | 8 | 8 | 100% |
-| 阶段 G | 8 | 8 | 100% |
+| 阶段 G | 9 | 9 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| **总计** | **63** | **57** | **90%** |
+| **总计** | **64** | **58** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -1805,9 +1808,40 @@ mock-api / PostgreSQL 业务事实
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
 
-##### G8：实现 AImodel 测试与回归门禁
+##### G8：实现 Tavily 联网搜索工具
 
-目标：覆盖 AImodel 核心工具、记忆和流式输出。
+目标：为 AImodel 增加受控联网搜索能力，用于查询商品库和 RAG 知识库之外的公开网页信息；该工具只作为外部信息补充，不替代 `mock-api` 商品事实、订单事实或 RAG 引用上下文。
+
+修改文件：
+
+- `services/ai-service/pyproject.toml`
+- `.env.example`
+- `docker-compose.yml`
+- `services/ai-service/app/routers/AImodel/tools.py`
+- `services/ai-service/app/routers/AImodel/service.py`
+- `services/ai-service/tests/test_aimodel_agent.py`
+- `services/ai-service/tests/test_aimodel_rag_tool.py`
+
+实现类/函数：
+
+- `TavilySearchClient`：封装 Tavily Search API 调用，读取环境变量配置并处理超时、空结果和错误响应。
+- `search_web_with_tavily()`：AImodel 工具适配函数，返回标准化联网搜索结果。
+- `build_web_search_tool()`：构造 LangChain 工具，并把工具结果写入本轮 `tool_results`。
+- `AIMODEL_WEB_SEARCH_ENABLED` / `TAVILY_API_KEY`：控制联网搜索工具是否启用和是否具备凭证。
+
+验收标准：
+
+- 未配置 `TAVILY_API_KEY` 时，联网搜索工具返回明确的 unavailable 结果，AImodel 仍可使用商品工具和 RAG 工具。
+- 已配置 `TAVILY_API_KEY` 时，AImodel 可通过 Tavily 查询公开网页信息。
+- Tavily 工具不得调用内网地址、`mock-api`、`ai-service`、RAG 内部 API 或任意用户传入 URL，只能通过 Tavily 官方搜索 API 获取结果。
+- 商品价格、库存、优惠、可购买链接仍必须来自 `mock-api` 商品工具，不能由 Tavily 搜索结果覆盖。
+- SSE 输出清洗仍隐藏工具参数、原始字段名、内部错误堆栈和调试信息。
+
+测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`；`uv run --project services/ai-service ruff check services\ai-service\app\routers\AImodel\tools.py services\ai-service\app\routers\AImodel\service.py services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py`
+
+##### G9：实现 AImodel 测试与回归门禁
+
+目标：覆盖 AImodel 核心工具、记忆和流式输出，包含商品工具、RAG MCP 工具和 Tavily 联网搜索工具的回归边界。
 
 修改文件：
 
@@ -1819,14 +1853,14 @@ mock-api / PostgreSQL 业务事实
 
 - `test_aimodel_agent.py`：验证 Agent 行为。
 - `test_aimodel_memory.py`：验证会话和记忆。
-- `test_aimodel_rag_tool.py`：验证 RAG MCP 工具边界。
+- `test_aimodel_rag_tool.py`：验证 RAG MCP 与联网搜索工具边界。
 
 验收标准：
 
 - 目标测试稳定通过。
+- 未配置联网搜索 key 时测试仍可离线执行，不访问 Tavily 真实服务。
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
-
 #### 阶段 H：飞书应用与协作后台
 
 ##### H1：建立 feishu-adapter 基础能力

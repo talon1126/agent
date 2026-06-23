@@ -39,6 +39,10 @@ services:
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       DASHSCOPE_BASE_URL: ${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       AIMODEL_MODEL: ${AIMODEL_MODEL:-deepseek-v4-flash}
+      AIMODEL_WEB_SEARCH_ENABLED: ${AIMODEL_WEB_SEARCH_ENABLED:-true}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      TAVILY_SEARCH_URL: ${TAVILY_SEARCH_URL:-https://api.tavily.com/search}
+      TAVILY_MAX_RESULTS: ${TAVILY_MAX_RESULTS:-5}
       RAG_PROJECT_DIR: /app/rag
       RAG_MCP_COMMAND: python
       FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:5173}

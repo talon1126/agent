@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import json
 import os
 import threading
@@ -18,6 +19,102 @@ from app.routers.AImodel.schemas import AiModelToolResult
 
 DEFAULT_RAG_COLLECTION = "shopping_guides"
 DEFAULT_RAG_TOP_K = 5
+DEFAULT_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+DEFAULT_TAVILY_MAX_RESULTS = 5
+
+
+class TavilySearchClient:
+    """Small HTTP client for the controlled Tavily Search API integration.
+
+    The AImodel agent must not browse arbitrary URLs or internal services. This
+    client accepts only operator-provided configuration from environment
+    variables, posts every query to one configured Tavily endpoint, and returns a
+    reduced text-only payload for the agent.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        search_url: str = DEFAULT_TAVILY_SEARCH_URL,
+        max_results: int = DEFAULT_TAVILY_MAX_RESULTS,
+        http_client: httpx.Client | None = None,
+    ) -> None:
+        """Create a Tavily client from validated configuration.
+
+        Args:
+            api_key: Tavily API credential read from ``TAVILY_API_KEY``.
+            search_url: Tavily Search API endpoint. Tests may override this via
+                configuration; user prompts never control it.
+            max_results: Upper bound for returned Tavily result texts.
+            http_client: Optional injectable HTTP client used by unit tests.
+
+        Raises:
+            ValueError: If required configuration is missing or points to an
+                internal/local address.
+        """
+
+        normalized_key = api_key.strip()
+        if not normalized_key:
+            raise ValueError("missing_tavily_api_key")
+        normalized_url = search_url.strip() or DEFAULT_TAVILY_SEARCH_URL
+        if _is_disallowed_internal_url(normalized_url):
+            raise ValueError("invalid_tavily_search_url")
+        self.api_key = normalized_key
+        self.search_url = normalized_url
+        self.max_results = max(1, min(max_results, 10))
+        self._http_client = http_client
+
+    @classmethod
+    def from_env(
+        cls, *, http_client: httpx.Client | None = None
+    ) -> "TavilySearchClient":
+        """Build a client from AImodel web-search environment variables."""
+
+        return cls(
+            api_key=os.getenv("TAVILY_API_KEY", ""),
+            search_url=os.getenv("TAVILY_SEARCH_URL", DEFAULT_TAVILY_SEARCH_URL),
+            max_results=_int_from_env("TAVILY_MAX_RESULTS", DEFAULT_TAVILY_MAX_RESULTS),
+            http_client=http_client,
+        )
+
+    def search(self, query: str) -> dict[str, Any]:
+        """Search public web information and return text-only agent context.
+
+        Args:
+            query: User question or topic passed by the LangChain tool.
+
+        Returns:
+            A compact dictionary containing Tavily's generated answer, result
+            text snippets, and the number of snippets retained. Page metadata is
+            intentionally removed before the result reaches the Agent.
+        """
+
+        normalized_query = query.strip() if isinstance(query, str) else ""
+        if not normalized_query:
+            raise ValueError("query_required")
+
+        payload = {
+            "query": normalized_query,
+            "search_depth": "basic",
+            "include_answer": True,
+            "max_results": self.max_results,
+        }
+        client, should_close = _client_or_default_for_url(
+            self.search_url, self._http_client
+        )
+        try:
+            response = client.post(
+                self.search_url,
+                json=payload,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+        finally:
+            if should_close:
+                client.close()
+        return _public_tavily_tool_data(data, max_results=self.max_results)
 
 
 class RagKnowledgeClient(Protocol):
@@ -310,6 +407,7 @@ class PersistentMcpRagKnowledgeClient:
         """Create either an injected fake caller or a real stdio MCP caller."""
 
         if self._session_factory is not None:
+
             async def noop_cleanup() -> None:
                 return None
 
@@ -333,8 +431,12 @@ class PersistentMcpRagKnowledgeClient:
                 cwd=self._cwd,
                 env=env,
             )
-            read_stream, write_stream = await stack.enter_async_context(stdio_client(server))
-            session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+            read_stream, write_stream = await stack.enter_async_context(
+                stdio_client(server)
+            )
+            session = await stack.enter_async_context(
+                ClientSession(read_stream, write_stream)
+            )
             await session.initialize()
         except Exception:
             await stack.aclose()
@@ -389,6 +491,17 @@ def build_product_url(item_id: str) -> str:
         return f"/items/{item_id}"
     # 中文注释：生产环境由 FRONTEND_BASE_URL 控制完整商品链接，本地未配置时返回相对路径。
     return f"{frontend_base_url}/items/{item_id}"
+
+
+def _client_or_default_for_url(
+    base_url: str,
+    http_client: httpx.Client | None,
+) -> tuple[httpx.Client, bool]:
+    """Return an injected client or a short-lived HTTP client for Tavily."""
+
+    if http_client:
+        return http_client, False
+    return httpx.Client(timeout=8, follow_redirects=False), True
 
 
 def _client_or_default(
@@ -569,6 +682,68 @@ def search_shopping_guides(
     )
 
 
+def search_web_with_tavily(
+    query: str,
+    *,
+    http_client: httpx.Client | None = None,
+) -> AiModelToolResult:
+    """Search public web information through the controlled Tavily API.
+
+    Args:
+        query: User question or topic that requires public web information.
+        http_client: Optional injectable client for unit tests.
+
+    Returns:
+        ``AiModelToolResult`` with a text-only Tavily payload. When credentials
+        or the feature flag are unavailable, the function returns a business
+        result instead of raising so product and RAG tools continue to work.
+    """
+
+    normalized_query = query.strip() if isinstance(query, str) else ""
+    if not normalized_query:
+        return AiModelToolResult(
+            tool="search_web_with_tavily",
+            ok=False,
+            input=query,
+            error="query_required",
+        )
+    if not _web_search_enabled():
+        return AiModelToolResult(
+            tool="search_web_with_tavily",
+            ok=False,
+            input=query,
+            data={"reason": "web_search_disabled"},
+            error="web_search_unavailable",
+        )
+    if not os.getenv("TAVILY_API_KEY", "").strip():
+        return AiModelToolResult(
+            tool="search_web_with_tavily",
+            ok=False,
+            input=query,
+            data={"reason": "missing_tavily_api_key"},
+            error="web_search_unavailable",
+        )
+
+    try:
+        data = TavilySearchClient.from_env(http_client=http_client).search(
+            normalized_query
+        )
+    except (ValueError, httpx.HTTPError) as error:
+        return AiModelToolResult(
+            tool="search_web_with_tavily",
+            ok=False,
+            input=query,
+            error=f"tavily_query_failed: {error}",
+        )
+
+    return AiModelToolResult(
+        tool="search_web_with_tavily",
+        ok=True,
+        input=query,
+        data=data,
+    )
+
+
 def recommended_links_from_tool_results(
     tool_results: list[AiModelToolResult],
 ) -> list[dict[str, str]]:
@@ -665,7 +840,9 @@ def _mcp_result_to_payload(result: Any) -> dict[str, Any]:
     raise ValueError("RAG MCP response did not include structured JSON content")
 
 
-def _run_async_blocking(coroutine: Coroutine[Any, Any, dict[str, Any]]) -> dict[str, Any]:
+def _run_async_blocking(
+    coroutine: Coroutine[Any, Any, dict[str, Any]],
+) -> dict[str, Any]:
     """Run one async MCP call from sync FastAPI/LangChain tool code.
 
     A normal sync route can use ``asyncio.run`` directly. If a caller already
@@ -685,7 +862,9 @@ def _run_async_blocking(coroutine: Coroutine[Any, Any, dict[str, Any]]) -> dict[
         nonlocal error, result
         try:
             result = asyncio.run(coroutine)
-        except BaseException as exc:  # pragma: no cover - preserves thread error boundary.
+        except (
+            BaseException
+        ) as exc:  # pragma: no cover - preserves thread error boundary.
             error = exc
 
     thread = threading.Thread(target=runner, daemon=True)
@@ -696,3 +875,74 @@ def _run_async_blocking(coroutine: Coroutine[Any, Any, dict[str, Any]]) -> dict[
     if result is None:
         raise RuntimeError("RAG MCP call finished without a result")
     return result
+
+
+def _public_tavily_tool_data(payload: Any, *, max_results: int) -> dict[str, Any]:
+    """Reduce Tavily's response to text fields that are safe for the Agent."""
+
+    data = payload if isinstance(payload, dict) else {}
+    answer = data.get("answer")
+    contents: list[str] = []
+    raw_results = data.get("results")
+    if isinstance(raw_results, list):
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if content and content not in contents:
+                contents.append(content)
+            if len(contents) >= max_results:
+                break
+    return {
+        "answer": answer.strip() if isinstance(answer, str) else "",
+        "contents": contents,
+        "result_count": len(contents),
+    }
+
+
+def _web_search_enabled() -> bool:
+    """Return whether the AImodel web search tool should be available."""
+
+    value = os.getenv("AIMODEL_WEB_SEARCH_ENABLED", "true").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _int_from_env(name: str, default: int) -> int:
+    """Parse a positive integer environment setting with a safe fallback."""
+
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _is_disallowed_internal_url(url: str) -> bool:
+    """Reject non-Tavily, local, and internal web-search API endpoints."""
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        return True
+    if host in {"localhost", "0.0.0.0"}:
+        return True
+    try:
+        ip_address = ipaddress.ip_address(host)
+    except ValueError:
+        ip_address = None
+    if ip_address is not None and (
+        ip_address.is_private
+        or ip_address.is_loopback
+        or ip_address.is_link_local
+        or ip_address.is_reserved
+        or ip_address.is_multicast
+    ):
+        return True
+    if host.endswith(".local") or host.endswith(".internal"):
+        return True
+    return not (
+        host == "api.tavily.com"
+        or host.endswith(".tavily.com")
+        or host == "api.tavily.test"
+        or host.endswith(".tavily.test")
+    )

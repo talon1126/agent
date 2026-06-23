@@ -24,6 +24,7 @@ except ModuleNotFoundError:
         def __init__(self, content: str) -> None:
             self.content = content
 
+
 from app.routers.AImodel.memory import (
     AiModelMemoryMessage,
     AiModelMemoryStore,
@@ -42,11 +43,14 @@ from app.routers.AImodel.tools import (
     fetch_product_detail_from_link,
     recommended_links_from_tool_results,
     search_shopping_guides as run_search_shopping_guides,
+    search_web_with_tavily as run_search_web_with_tavily,
     search_products,
 )
 
 AgentRunner = Callable[[AiModelChatRequest, list[AiModelToolResult]], str]
-StreamingAgentRunner = Callable[[AiModelChatRequest, list[AiModelToolResult]], Iterable[str]]
+StreamingAgentRunner = Callable[
+    [AiModelChatRequest, list[AiModelToolResult]], Iterable[str]
+]
 
 SYSTEM_PROMPT = """
 你是 TalonMart 的 AImodel 购物助手。
@@ -60,6 +64,8 @@ SYSTEM_PROMPT = """
 只能推荐工具返回的真实商品和链接，不能编造商品、价格、库存或链接。
 商品事实必须来自商品搜索工具或商品详情工具，包括价格、库存、优惠、规格、可购买商品和商品链接。
 RAG 工具只用于补充选购指南、品类知识、政策 FAQ、售后规则和文档知识上下文。
+联网搜索工具只用于查询商品库和 RAG 知识库之外的公开网页信息，例如行业趋势、新品背景和公开资料补充。
+联网搜索工具不能替代商品搜索工具、商品详情工具或 RAG 工具，不能用来覆盖价格、库存、优惠、可购买链接或引用上下文。
 不能使用 RAG 内容当作实时商品事实来源，不能用 RAG 生成价格、库存、优惠、可购买商品或商品链接。
 RAG 返回引用时可以在回答中展示引用标题或章节，但不能编造引用，也不能展示内部 chunk id、trace id 或原始工具 JSON。
 如果工具没有找到合适商品，请明确说明未找到。
@@ -97,7 +103,9 @@ def handle_chat(
     except HTTPException:
         raise
     except Exception as error:
-        raise HTTPException(status_code=502, detail=f"AImodel generation failed: {error}") from error
+        raise HTTPException(
+            status_code=502, detail=f"AImodel generation failed: {error}"
+        ) from error
 
     return AiModelChatResponse(
         conversation_id=request.conversation_id,
@@ -211,7 +219,9 @@ def stream_chat_events(
             recommended_links=recommended_links,
             query_trace_ids=_query_trace_ids_from_tool_results(tool_results),
         )
-        for memory in extract_user_memories_from_text(request.message, user_id=request.user_id):
+        for memory in extract_user_memories_from_text(
+            request.message, user_id=request.user_id
+        ):
             memory_store.upsert_user_memory(
                 request.user_id,
                 memory_type=memory.memory_type,
@@ -266,16 +276,24 @@ def _run_langchain_agent(
         return result.model_dump()
 
     rag_tool = build_rag_tool(tool_results)
+    web_search_tool = build_web_search_tool(tool_results)
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
-        base_url=os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        base_url=os.getenv(
+            "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ),
         model=os.getenv("AIMODEL_MODEL", "deepseek-v4-flash"),
         temperature=0,
         max_retries=2,
     )
     agent = create_agent(
         model=model,
-        tools=[get_product_detail_from_link, search_product_catalog, rag_tool],
+        tools=[
+            get_product_detail_from_link,
+            search_product_catalog,
+            rag_tool,
+            web_search_tool,
+        ],
         system_prompt=SYSTEM_PROMPT,
     )
     result = agent.invoke({"messages": _build_langchain_messages(request)})
@@ -318,9 +336,12 @@ def _run_langchain_agent_stream(
         return result.model_dump()
 
     rag_tool = build_rag_tool(tool_results)
+    web_search_tool = build_web_search_tool(tool_results)
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
-        base_url=os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        base_url=os.getenv(
+            "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ),
         model=os.getenv("AIMODEL_MODEL", "deepseek-v4-flash"),
         temperature=0,
         max_retries=2,
@@ -328,17 +349,70 @@ def _run_langchain_agent_stream(
     )
     agent = create_agent(
         model=model,
-        tools=[get_product_detail_from_link, search_product_catalog, rag_tool],
+        tools=[
+            get_product_detail_from_link,
+            search_product_catalog,
+            rag_tool,
+            web_search_tool,
+        ],
         system_prompt=SYSTEM_PROMPT,
     )
     # 中文注释：这里只向前端流式输出可见回答文本，不暴露模型内部隐藏推理链路。
     for update in agent.stream(
-        {"messages": _build_langchain_messages(request, history=history, user_memories=user_memories)},
+        {
+            "messages": _build_langchain_messages(
+                request, history=history, user_memories=user_memories
+            )
+        },
         stream_mode="messages",
     ):
         chunk = _extract_stream_token(update)
         if chunk:
             yield chunk
+
+
+def build_web_search_tool(
+    tool_results: list[AiModelToolResult],
+    *,
+    http_client: httpx.Client | None = None,
+) -> Any:
+    """Build the LangChain tool that exposes controlled Tavily web search.
+
+    Args:
+        tool_results: Mutable per-request tool result buffer. The returned tool
+            appends its result here so downstream filters and tests can inspect
+            the public tool contract.
+        http_client: Optional injectable HTTP client for unit tests. Production
+            leaves this unset so the Tavily adapter opens its own external
+            client and never reuses the mock-api product client.
+
+    Returns:
+        A LangChain-compatible tool named ``search_web_with_tavily``.
+    """
+
+    try:
+        from langchain.tools import tool
+    except ModuleNotFoundError:
+        return _SimpleAImodelTool(
+            name="search_web_with_tavily",
+            handler=lambda query: _run_web_search_tool(
+                query,
+                tool_results=tool_results,
+                http_client=http_client,
+            ),
+        )
+
+    @tool("search_web_with_tavily")
+    def search_web_with_tavily_tool(query: str) -> dict[str, Any]:
+        """Search public web information through Tavily."""
+
+        return _run_web_search_tool(
+            query,
+            tool_results=tool_results,
+            http_client=http_client,
+        )
+
+    return search_web_with_tavily_tool
 
 
 def build_rag_tool(
@@ -424,6 +498,22 @@ class _SimpleAImodelTool:
         return self._handler(str(query))
 
 
+def _run_web_search_tool(
+    query: str,
+    *,
+    tool_results: list[AiModelToolResult],
+    http_client: httpx.Client | None,
+) -> dict[str, Any]:
+    """Execute ``search_web_with_tavily`` and record its public result."""
+
+    result = run_search_web_with_tavily(
+        query,
+        http_client=http_client,
+    )
+    tool_results.append(result)
+    return result.model_dump()
+
+
 def _run_rag_tool(
     query: str,
     *,
@@ -464,8 +554,14 @@ def _query_trace_ids_from_tool_results(
     for result in tool_results:
         if result.tool != "search_shopping_guides":
             continue
-        trace_id = result.data.get("trace_id") if isinstance(result.data, dict) else None
-        if isinstance(trace_id, str) and trace_id.strip() and trace_id.strip() not in trace_ids:
+        trace_id = (
+            result.data.get("trace_id") if isinstance(result.data, dict) else None
+        )
+        if (
+            isinstance(trace_id, str)
+            and trace_id.strip()
+            and trace_id.strip() not in trace_ids
+        ):
             trace_ids.append(trace_id.strip())
     return trace_ids
 
@@ -630,6 +726,7 @@ def _is_tool_result_json(text: str) -> bool:
             "search_product_catalog",
             "get_product_detail_from_link",
             "search_shopping_guides",
+            "search_web_with_tavily",
         }
         or {"ok", "input"}.issubset(data.keys())
     )
