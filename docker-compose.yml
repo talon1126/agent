@@ -54,7 +54,7 @@ services:
     volumes:
       - ./fixtures:/app/fixtures:ro
     ports:
-      - "8001:8000"
+      - "${AI_SERVICE_HOST_PORT:-18001}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,7 +77,7 @@ services:
     volumes:
       - ./fixtures:/app/fixtures:ro
     ports:
-      - "8002:8000"
+      - "${MOCK_API_HOST_PORT:-18002}:8000"
     depends_on:
       postgres:
         condition: service_healthy
