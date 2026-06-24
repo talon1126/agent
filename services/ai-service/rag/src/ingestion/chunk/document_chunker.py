@@ -124,8 +124,8 @@ def _locate_parts(document: Document, parts: list[str]) -> list[_LocatedPart]:
                 "Splitter returned an invalid text segment",
                 context={"document_id": document.id, "chunk_index": chunk_index},
             )
-        start_offset = document.text.find(part, search_start)
-        if start_offset < 0:
+        located_range = _locate_part_range(document.text, part, search_start)
+        if located_range is None:
             raise IngestionError(
                 "Unable to locate splitter segment in source document",
                 context={
@@ -134,7 +134,7 @@ def _locate_parts(document: Document, parts: list[str]) -> list[_LocatedPart]:
                     "search_start": search_start,
                 },
             )
-        end_offset = start_offset + len(part)
+        start_offset, end_offset = located_range
         located.append(
             _LocatedPart(
                 text=part,
@@ -147,6 +147,85 @@ def _locate_parts(document: Document, parts: list[str]) -> list[_LocatedPart]:
         search_start = start_offset + 1
     return located
 
+
+def _locate_part_range(
+    document_text: str,
+    part: str,
+    search_start: int,
+) -> tuple[int, int] | None:
+    """Locate exact or context-prefixed splitter output in source text.
+
+    Markdown section splitting may repeat heading context or table headers in
+    overflow chunks so each retrievable text segment is understandable alone.
+    Those contextual strings are not always contiguous source substrings. This
+    helper first preserves the exact-match path used by ordinary splitters, then
+    falls back to locating the first and last source-owned content lines inside
+    the contextual chunk.
+    """
+
+    start_offset = document_text.find(part, search_start)
+    if start_offset >= 0:
+        return start_offset, start_offset + len(part)
+
+    content_lines = _source_owned_lines(part)
+    if not content_lines:
+        return None
+
+    first_start = -1
+    first_line = ""
+    for line in content_lines:
+        first_start = document_text.find(line, search_start)
+        if first_start >= 0:
+            first_line = line
+            break
+    if first_start < 0:
+        return None
+
+    end_offset = first_start + len(first_line)
+    cursor = first_start + 1
+    for line in content_lines[1:]:
+        candidate = document_text.find(line, cursor)
+        if candidate >= 0:
+            end_offset = candidate + len(line)
+            cursor = candidate + 1
+    return first_start, end_offset
+
+
+def _source_owned_lines(part: str) -> list[str]:
+    """Return lines likely to exist in the source document body.
+
+    Synthetic heading context and repeated Markdown table headers are useful for
+    retrieval but poor anchors for source offset detection. Data rows, prose,
+    list items, and image placeholders are better anchors because they originate
+    from the source section itself.
+    """
+
+    lines: list[str] = []
+    previous_table_header_index: int | None = None
+    for raw_line in part.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            previous_table_header_index = None
+            continue
+        if _looks_like_table_separator(line):
+            if previous_table_header_index is not None:
+                lines.pop(previous_table_header_index)
+                previous_table_header_index = None
+            continue
+        lines.append(line)
+        previous_table_header_index = len(lines) - 1 if "|" in line else None
+    return lines
+
+
+def _looks_like_table_separator(line: str) -> bool:
+    """Return whether a line is a Markdown table separator row."""
+
+    if "|" not in line:
+        return False
+    cells = [cell.strip() for cell in line.strip("|").split("|")]
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
 
 def _merge_image_only_parts(
     document_text: str,

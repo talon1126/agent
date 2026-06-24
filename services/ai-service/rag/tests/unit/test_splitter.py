@@ -34,6 +34,7 @@ build_chunk_id = chunk_id_module.build_chunk_id
 DocumentChunker = chunker_module.DocumentChunker
 SplitterStep = splitter_step_module.SplitterStep
 FakeSplitter = splitter_module.FakeSplitter
+SplitterFactory = splitter_module.SplitterFactory
 
 
 def test_splitter_layer_returns_plain_text_segments_only() -> None:
@@ -213,8 +214,8 @@ def test_document_chunker_attaches_active_heading_path_to_each_chunk() -> None:
     """Require section metadata and IDs to follow the active Markdown heading.
 
     Loader metadata contains the ordered heading hierarchy for the complete
-    document. DocumentChunker must select the last heading preceding each
-    source range instead of copying one document-wide path to every chunk.
+    document. DocumentChunker must select the active H2-plus section preceding
+    each source range instead of copying one document-wide path to every chunk.
     """
 
     document_text = (
@@ -264,14 +265,89 @@ def test_document_chunker_attaches_active_heading_path_to_each_chunk() -> None:
 
     chunks = chunker.chunk(document)
 
-    assert [chunk.metadata["section_path"] for chunk in chunks] == [
-        ["Headphones"],
-        ["Headphones", "Gaming"],
-        ["Headphones", "Commuting"],
+    assert [chunk.metadata.get("section_path") for chunk in chunks] == [
+        None,
+        ["Gaming"],
+        ["Commuting"],
     ]
     assert len({chunk.id for chunk in chunks}) == 3
-    assert chunks[1].source_ref["section_path"] == ["Headphones", "Gaming"]
+    assert "section_path" not in chunks[0].source_ref
+    assert chunks[1].source_ref["section_path"] == ["Gaming"]
 
+
+def test_document_chunker_section_path_starts_at_h2_without_section_object() -> None:
+    """Require chunk section metadata to contain only an H2-plus path.
+
+    Loader heading metadata keeps the full Markdown path, including the document
+    H1 title. Chunk metadata should treat that H1 as document context rather
+    than section context, so only H2/H3/H4 titles are retained in
+    ``section_path``. The adapter must not introduce a duplicate nested
+    ``section`` object or individual h2/h3/h4 fields.
+    """
+
+    document_text = (
+        "# Phone Guide\n"
+        "Document introduction.\n"
+        "## Brand Database\n"
+        "Database overview.\n"
+        "### Apple\n"
+        "Apple buying details.\n"
+        "#### Camera\n"
+        "Camera-specific advice."
+    )
+    document = Document(
+        id="doc-section-path",
+        text=document_text,
+        metadata={
+            "source_path": "shopping_guides/phones.md",
+            "headings": [
+                {
+                    "level": 1,
+                    "title": "Phone Guide",
+                    "path": ["Phone Guide"],
+                    "text_offset": document_text.index("# Phone Guide"),
+                },
+                {
+                    "level": 2,
+                    "title": "Brand Database",
+                    "path": ["Phone Guide", "Brand Database"],
+                    "text_offset": document_text.index("## Brand Database"),
+                },
+                {
+                    "level": 3,
+                    "title": "Apple",
+                    "path": ["Phone Guide", "Brand Database", "Apple"],
+                    "text_offset": document_text.index("### Apple"),
+                },
+                {
+                    "level": 4,
+                    "title": "Camera",
+                    "path": ["Phone Guide", "Brand Database", "Apple", "Camera"],
+                    "text_offset": document_text.index("#### Camera"),
+                },
+            ],
+        },
+    )
+    chunks = DocumentChunker(
+        splitter=FakeSplitter(
+            chunks=[
+                "Document introduction.",
+                "Database overview.",
+                "Apple buying details.",
+                "Camera-specific advice.",
+            ]
+        )
+    ).chunk(document)
+
+    assert chunks[0].metadata.get("section_path") is None
+    assert chunks[1].metadata["section_path"] == ["Brand Database"]
+    assert chunks[2].metadata["section_path"] == ["Brand Database", "Apple"]
+    assert chunks[3].metadata["section_path"] == ["Brand Database", "Apple", "Camera"]
+    for chunk in chunks:
+        assert "section" not in chunk.metadata
+        assert "h2" not in chunk.metadata
+        assert "h3" not in chunk.metadata
+        assert "h4" not in chunk.metadata
 
 def test_document_chunker_deep_copies_document_metadata() -> None:
     """Require each chunk to own independent retained metadata structures.
@@ -369,3 +445,278 @@ def test_document_chunker_locates_overlapping_splitter_segments() -> None:
         (3, 9),
         (7, 10),
     ]
+
+
+def test_markdown_section_splitter_keeps_short_section_with_following_sibling() -> None:
+    """Require Markdown section splitting to avoid title-only chunks."""
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=260,
+        chunk_overlap=40,
+        min_section_chars=80,
+    )
+    text = (
+        "# Phone Guide\n\n"
+        "## Brands\n\n"
+        "### Apple\n\n"
+        "Short note.\n\n"
+        "### Samsung\n\n"
+        "Samsung has strong screens, update policy, camera hardware, and Android "
+        "ecosystem support for premium buyers.\n\n"
+        "### Xiaomi\n\n"
+        "Xiaomi focuses on charging, hardware value, camera partnership, and smart "
+        "home integration."
+    )
+
+    parts = splitter.split(text)
+
+    assert all(part.strip() != "### Apple" for part in parts)
+    assert any("Short note." in part and "Samsung has strong screens" in part for part in parts)
+    assert all(len(part) <= 260 for part in parts)
+
+
+def test_markdown_section_splitter_splits_long_table_with_repeated_header() -> None:
+    """Require long Markdown tables to split by rows while keeping headers."""
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=360,
+        chunk_overlap=0,
+        min_section_chars=40,
+    )
+    rows = "\n".join(
+        f"| Model {index} | Flagship phone with detailed specs {index} | OLED display |"
+        for index in range(1, 10)
+    )
+    text = (
+        "# Phone Guide\n\n"
+        "## Brand Database\n\n"
+        "### Samsung\n\n"
+        "Samsung section introduction keeps brand context.\n\n"
+        "| Model | Positioning | Display |\n"
+        "| --- | --- | --- |\n"
+        f"{rows}\n\n"
+        "Samsung buying advice after the table."
+    )
+
+    parts = splitter.split(text)
+    table_parts = [part for part in parts if "| Model " in part]
+
+    assert len(table_parts) >= 2
+    for part in table_parts:
+        assert "| Model | Positioning | Display |" in part
+        assert "| --- | --- | --- |" in part
+        assert len(part) <= 360
+
+
+def test_markdown_section_splitter_splits_long_sections_without_heading_text() -> None:
+    """Require section overflow chunks to keep body text free of headings."""
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=220,
+        chunk_overlap=30,
+        min_section_chars=40,
+    )
+    paragraph = (
+        "Apple buyers should compare storage, camera features, video workflow, "
+        "battery life, and ecosystem lock-in before choosing a model. "
+    )
+    text = "# Phone Guide\n\n## Brands\n\n### Apple\n\n" + paragraph * 7
+
+    parts = splitter.split(text)
+
+    assert len(parts) > 1
+    assert all("### Apple" not in part for part in parts)
+    assert all(len(part) <= 220 for part in parts)
+
+
+def test_markdown_section_splitter_registered_in_factory() -> None:
+    """Require the Markdown splitter to be selectable by configuration name."""
+
+    splitter = SplitterFactory.create(
+        provider="markdown_section",
+        chunk_size=220,
+        chunk_overlap=20,
+        min_section_chars=40,
+    )
+
+    assert splitter.__class__.__name__ == "MarkdownSectionSplitter"
+
+
+def test_markdown_section_splitter_merges_table_tail_with_buying_advice() -> None:
+    """Require short table-tail chunks to merge with following advice blocks."""
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=520,
+        chunk_overlap=0,
+        min_section_chars=40,
+    )
+    text = (
+        "# Phone Guide\n\n"
+        "## Brands\n\n"
+        "### Apple\n\n"
+        "Apple overview.\n\n"
+        "| Model | Positioning | Display |\n"
+        "| --- | --- | --- |\n"
+        "| iPhone 17 Pro Max | Large flagship | OLED |\n"
+        "| iPhone 17 Pro | Flagship | OLED |\n"
+        "| iPhone 16e | Entry iPhone | OLED |\n\n"
+        "Buying advice:\n\n"
+        "- Choose Pro Max for battery and video.\n"
+        "- Choose 16e for lower budget."
+    )
+
+    parts = splitter.split(text)
+
+    assert len(parts) == 1
+    assert "| iPhone 16e | Entry iPhone | OLED |" in parts[0]
+    assert "Buying advice:" in parts[0]
+
+
+def test_markdown_section_splitter_pairs_final_table_rows_with_buying_advice() -> None:
+    """Require long tables to keep final rows and advice in the same chunk."""
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=760,
+        chunk_overlap=0,
+        min_section_chars=40,
+    )
+    text = (
+        "# Phone Guide\n\n"
+        "## Brands\n\n"
+        "### Apple\n\n"
+        "Apple overview for buyers who compare video, battery, storage, and ecosystem.\n\n"
+        "| Model | Positioning | Display | Storage | Audience |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| iPhone 17 Pro Max | Large flagship with the strongest battery and "
+        "video workflow | OLED ProMotion | 256GB/512GB/1TB/2TB | "
+        "Creators and heavy users |\n"
+        "| iPhone 17 Pro | Compact flagship with Pro camera features | "
+        "OLED ProMotion | 256GB/512GB/1TB | Users who want flagship power |\n"
+        "| iPhone 17 | Mainstream iPhone with balanced camera and battery | "
+        "OLED high refresh | 128GB/256GB/512GB | Most iOS buyers |\n"
+        "| iPhone Air | Thin model that prioritizes hand feel over maximum battery | "
+        "OLED | 256GB/512GB/1TB | Light phone buyers |\n"
+        "| iPhone 16e | Entry iPhone for lower budgets | OLED | "
+        "128GB/256GB/512GB | Budget-sensitive iOS buyers |\n\n"
+        "Buying advice:\n\n"
+        "- Choose Pro Max for battery and video.\n"
+        "- Choose 16e when budget matters."
+    )
+
+    parts = splitter.split(text)
+
+    advice_parts = [part for part in parts if "Buying advice:" in part]
+    assert len(advice_parts) == 1
+    assert "| Model | Positioning | Display | Storage | Audience |" in advice_parts[0]
+    assert "| iPhone 16e | Entry iPhone for lower budgets" in advice_parts[0]
+    assert "- Choose 16e when budget matters." in advice_parts[0]
+    assert all(not part.lstrip().startswith("#") for part in parts)
+
+
+def test_markdown_section_splitter_does_not_repeat_intro_after_table_split() -> None:
+    """Require only the first split table chunk to keep the intro paragraph.
+
+    The first table fragment may carry the paragraph that introduces the table,
+    but later table fragments should contain only the repeated table header,
+    data rows, and optional advice tail. Repeating the intro in every table
+    fragment increases embedding noise and caused duplicated context in the
+    exported shopping guide chunks.
+    """
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=650,
+        chunk_overlap=0,
+        min_section_chars=40,
+    )
+    intro = (
+        "Apple overview explains that iPhone buyers should compare video, "
+        "battery, storage, ecosystem, warranty, and long-term updates before "
+        "selecting a model."
+    )
+    text = (
+        "# Phone Guide\n\n"
+        "## Brands\n\n"
+        "### Apple\n\n"
+        f"{intro}\n\n"
+        "| Model | Positioning | Main benefit | Audience |\n"
+        "| --- | --- | --- | --- |\n"
+        "| iPhone 17 Pro Max | Large flagship | Best battery and video workflow | "
+        "Heavy creators |\n"
+        "| iPhone 17 Pro | Compact flagship | Pro camera in smaller size | Flagship users |\n"
+        "| iPhone 17 | Balanced mainstream model | Camera and battery balance | Most buyers |\n"
+        "| iPhone Air | Thin design model | Lighter hand feel | Thin phone buyers |\n"
+        "| iPhone 16e | Entry iPhone | Lower iOS entry cost | Budget buyers |\n\n"
+        "Buying advice:\n\n"
+        "- Choose Pro Max for battery and video.\n"
+        "- Choose 16e when budget is the main constraint.\n"
+        "- Avoid low storage for heavy photo and video users."
+    )
+
+    parts = splitter.split(text)
+    table_parts = [part for part in parts if "| Model | Positioning |" in part]
+
+    assert len(table_parts) >= 2
+    assert sum(intro in part for part in table_parts) == 1
+    assert "Buying advice:" in table_parts[-1]
+    assert intro not in table_parts[-1]
+
+
+def test_markdown_section_splitter_removes_heading_lines_from_all_chunks() -> None:
+    """Require every chunk body to omit Markdown ATX heading lines."""
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=420,
+        chunk_overlap=0,
+        min_section_chars=120,
+    )
+    text = (
+        "# Phone Guide\n\n"
+        "Intro paragraph before the first target section.\n\n"
+        "## Buying Basics\n\n"
+        "Basics paragraph that should remain without its heading.\n\n"
+        "### Apple\n\n"
+        "Short note.\n\n"
+        "### Samsung\n\n"
+        "Samsung paragraph that merges with the short Apple section."
+    )
+
+    parts = splitter.split(text)
+
+    assert parts
+    assert not any(
+        line.lstrip().startswith("#")
+        for part in parts
+        for line in part.splitlines()
+    )
+    assert any("Basics paragraph" in part for part in parts)
+    assert any("Short note." in part and "Samsung paragraph" in part for part in parts)
+
+
+def test_markdown_section_splitter_does_not_inject_heading_context_in_chunks() -> None:
+    """Require heading context to live in metadata rather than chunk text."""
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=260,
+        chunk_overlap=0,
+        min_section_chars=40,
+    )
+    text = (
+        "# Phone Guide\n\n"
+        "## Brands\n\n"
+        "### Apple\n\n"
+        "Apple buyers should compare storage, camera, battery, and ecosystem. " * 6
+    )
+
+    parts = splitter.split(text)
+
+    assert len(parts) > 1
+    assert all(not part.lstrip().startswith("#") for part in parts)
+    assert all("### Apple" not in part for part in parts)

@@ -8,12 +8,14 @@ interface and LangChain text-splitter wrapper in B8.
 
 from src.libs.splitter.base_splitter import BaseSplitter
 from src.libs.splitter.fake_splitter import FakeSplitter
+from src.libs.splitter.markdown_section_splitter import MarkdownSectionSplitter
 from src.libs.splitter.recursive_character_splitter import RecursiveCharacterSplitter
 from src.libs.splitter.splitter_factory import SplitterFactory
 
 __all__ = (
     "BaseSplitter",
     "FakeSplitter",
+    "MarkdownSectionSplitter",
     "RecursiveCharacterSplitter",
     "SplitterFactory",
 )

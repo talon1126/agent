@@ -14,6 +14,7 @@ from src.core.config import RagSettings
 from src.core.errors import ConfigurationError
 from src.libs.splitter.base_splitter import BaseSplitter
 from src.libs.splitter.fake_splitter import FakeSplitter
+from src.libs.splitter.markdown_section_splitter import MarkdownSectionSplitter
 from src.libs.splitter.recursive_character_splitter import RecursiveCharacterSplitter
 
 
@@ -28,8 +29,9 @@ class SplitterFactory:
         """Register project-owned splitter implementations once per process.
 
         Side Effects:
-            Populates the splitter registry with the deterministic fake splitter
-            and the recursive character splitter. The method is idempotent so
+            Populates the splitter registry with the deterministic fake splitter,
+            the recursive character splitter, and the Markdown section splitter.
+            The method is idempotent so
             ``create()`` and ``list_providers()`` can safely call it.
         """
 
@@ -37,6 +39,7 @@ class SplitterFactory:
             return
         cls.register("fake", FakeSplitter)
         cls.register("recursive_character", RecursiveCharacterSplitter)
+        cls.register("markdown_section", MarkdownSectionSplitter)
         cls._builtins_registered = True
 
     @classmethod

@@ -133,7 +133,7 @@ def test_default_component_selection_matches_the_spec() -> None:
 
     The assertions pin only architecture decisions already approved in
     ``DEV_SPEC.md``: DeepSeek chat, Qwen vision, DashScope embeddings, pgvector,
-    recursive splitting, and RRF fallback. A failure indicates unreviewed
+    Markdown section-aware splitting, and RRF fallback. A failure indicates unreviewed
     provider drift rather than a model-runtime error.
     """
     settings = load_settings_document()
@@ -147,7 +147,7 @@ def test_default_component_selection_matches_the_spec() -> None:
     )
     assert settings["embedding"]["providers"]["dashscope"]["dimensions"] == 1536
     assert settings["vector_store"]["provider"] == "pgvector"
-    assert settings["splitter"]["default"] == "recursive_character"
+    assert settings["splitter"]["default"] == "markdown_section"
     assert settings["rerank"]["fallback"] == "rrf"
     assert settings["ingestion"]["document_summary"]["llm_provider"] == "deepseek"
     assert settings["evaluation"]["llm_provider"] == "deepseek"

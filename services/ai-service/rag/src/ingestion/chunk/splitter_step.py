@@ -160,7 +160,13 @@ def _active_heading_path(
     *,
     start_offset: int,
 ) -> list[str]:
-    """Select the last valid heading whose source offset precedes the chunk."""
+    """Select the active H2-plus section path for a chunk offset.
+
+    Loader heading metadata keeps the full Markdown path so document-level H1
+    titles remain available to dashboards and source browsers. Chunk metadata
+    uses ``section_path`` only for retrievable section structure, so the H1
+    document title is dropped and content before the first H2 has no section.
+    """
 
     if not isinstance(headings, list):
         return []
@@ -173,11 +179,36 @@ def _active_heading_path(
         heading_offset = heading.get("text_offset")
         if not isinstance(heading_offset, int) or heading_offset < 0:
             continue
-        path = _normalize_path(heading.get("path"))
+        path = _section_path_from_heading(heading)
         if heading_offset <= start_offset and heading_offset >= active_offset and path:
             active_path = path
             active_offset = heading_offset
     return active_path
+
+
+def _section_path_from_heading(heading: Mapping[str, Any]) -> list[str]:
+    """Return a normalized section path that starts at Markdown H2.
+
+    Args:
+        heading: One loader-produced heading metadata object. The object may
+            contain a full ``path`` that starts at H1 and a numeric ``level``.
+
+    Returns:
+        Ordered section titles excluding the document-level H1 title. Invalid
+        or H1-only headings return an empty list so chunks before H2 do not get
+        misleading section metadata.
+    """
+
+    path = _normalize_path(heading.get("path"))
+    level = heading.get("level")
+    if not path:
+        return []
+    if not isinstance(level, int):
+        return path[1:] if len(path) > 1 else []
+    if level <= 1:
+        return []
+    component_count = min(level - 1, len(path))
+    return path[-component_count:]
 
 
 def _normalize_path(value: Any) -> list[str]:

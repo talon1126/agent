@@ -72,18 +72,26 @@ vector_store:
 
 # The splitter remains a pure text-to-text-list component.
 splitter:
-  default: recursive_character
+  default: markdown_section
   providers:
     recursive_character:
       chunk_size: 900
       chunk_overlap: 150
       separators:
-        - "\n## "
-        - "\n### "
         - "\n\n"
         - "\n"
-        - "。"
+        - ". "
+        - "! "
+        - "? "
+        - "; "
+        - ", "
         - " "
+        - ""
+    markdown_section:
+      chunk_size: 900
+      chunk_overlap: 150
+      min_section_chars: 180
+      section_level: 3
 
 # Transform steps run serially inside the ingestion pipeline and keep prompts outside business code.
 transform:
