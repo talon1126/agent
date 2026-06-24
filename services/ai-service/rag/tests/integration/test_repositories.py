@@ -430,7 +430,9 @@ def test_core_schema_enables_pgvector_and_preserves_domain_fields() -> None:
         assert re.search(field_contract, chunks, re.IGNORECASE)
 
     assert "source_ref" not in chunks
+    assert "heading_path" not in chunks
     assert "DROP COLUMN IF EXISTS source_ref" in sql
+    assert "DROP COLUMN IF EXISTS heading_path" in sql
     for migrated_key in ("document_id", "source_path", "collection", "section_path"):
         assert f"'{migrated_key}'" in sql
 

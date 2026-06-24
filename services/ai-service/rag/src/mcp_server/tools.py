@@ -624,27 +624,28 @@ class PostgresMetadataReader:
             document_id: Stable document ID whose chunks provide heading paths.
 
         Returns:
-            Ordered public section objects. Empty heading paths are skipped
+            Ordered public section objects. Empty section paths are skipped
             because they do not represent user-visible document structure.
 
         Notes:
-            The outline aggregates by ``heading_path`` instead of returning raw
-            chunks, keeping MCP output compact and preventing full chunk text
-            from leaking through the metadata tool.
+            The outline aggregates by ``metadata.section_path`` instead of
+            returning raw chunks, keeping MCP output compact and preventing
+            full chunk text from leaking through the metadata tool.
         """
 
         rows = self._read(
             operation="mcp_document_section_outline",
             query="""
             SELECT
-                heading_path,
+                metadata->'section_path' AS section_path,
                 COUNT(*) AS chunk_count,
                 MIN(chunk_index) AS first_chunk_index
             FROM rag_chunks
             WHERE document_id = %s
-              AND jsonb_array_length(heading_path) > 0
-            GROUP BY heading_path
-            ORDER BY first_chunk_index ASC, heading_path ASC
+              AND jsonb_typeof(metadata->'section_path') = 'array'
+              AND jsonb_array_length(metadata->'section_path') > 0
+            GROUP BY metadata->'section_path'
+            ORDER BY first_chunk_index ASC, section_path ASC
             """,
             params=(document_id,),
             many=True,

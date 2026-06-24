@@ -21,7 +21,7 @@ from src.core.errors import McpError
 from src.core.response import KnowledgeHubResponse, ResponseImage
 from src.core.types import Citation
 from src.mcp_server.server import create_mcp_server, parse_args, run_stdio_server
-from src.mcp_server.tools import MetadataTool, QueryKnowledgeHubTool
+from src.mcp_server.tools import MetadataTool, PostgresMetadataReader, QueryKnowledgeHubTool
 
 SETTINGS_PATH = "services/ai-service/rag/config/settings.example.yaml"
 FORBIDDEN_MCP_OUTPUT_KEYS = {
@@ -731,6 +731,26 @@ async def test_mcp_business_errors_use_stable_public_envelope() -> None:
         code="document_not_found",
         message_contains="document summary was not found",
     )
+
+@pytest.mark.unit
+def test_metadata_reader_section_outline_uses_metadata_section_path() -> None:
+    """Require MCP section outlines to avoid deprecated chunk heading columns."""
+
+    captured: dict[str, Any] = {}
+    reader = PostgresMetadataReader(pool=object())  # type: ignore[arg-type]
+
+    def fake_read(**kwargs: Any) -> list[tuple[list[str], int, int]]:
+        captured.update(kwargs)
+        return [(["Audio", "Wireless"], 2, 0)]
+
+    reader._read = fake_read  # type: ignore[method-assign]
+
+    assert reader._section_outline("doc-a") == [
+        {"path": ["Audio", "Wireless"], "chunk_count": 2}
+    ]
+    query = captured["query"]
+    assert "heading_path" not in query
+    assert "metadata->'section_path'" in query
 
 @pytest.mark.unit
 @pytest.mark.asyncio

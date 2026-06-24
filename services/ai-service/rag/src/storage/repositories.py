@@ -753,9 +753,6 @@ class ChunkRepository:
             )
 
         for chunk in persisted:
-            heading_path = chunk.metadata.get(
-                "section_path", chunk.metadata.get("heading_path", [])
-            )
             connection.execute(
                 """
                 INSERT INTO rag_chunks (
@@ -767,10 +764,9 @@ class ChunkRepository:
                     content_hash,
                     start_offset,
                     end_offset,
-                    heading_path,
                     metadata
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     chunk.id,
@@ -781,7 +777,6 @@ class ChunkRepository:
                     sha256(chunk.text.encode("utf-8")).hexdigest(),
                     chunk.start_offset,
                     chunk.end_offset,
-                    Jsonb(heading_path),
                     Jsonb(chunk.metadata),
                 ),
             )

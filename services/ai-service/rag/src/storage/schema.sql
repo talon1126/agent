@@ -117,7 +117,6 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     content_hash TEXT NOT NULL,
     start_offset INTEGER NOT NULL,
     end_offset INTEGER NOT NULL,
-    heading_path JSONB NOT NULL DEFAULT '[]'::jsonb,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding vector(1536),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -135,8 +134,6 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
         CHECK (content_hash ~ '^[0-9a-fA-F]{64}$'),
     CONSTRAINT chk_rag_chunks_offsets
         CHECK (start_offset >= 0 AND end_offset > start_offset),
-    CONSTRAINT chk_rag_chunks_heading_path_array
-        CHECK (jsonb_typeof(heading_path) = 'array'),
     CONSTRAINT chk_rag_chunks_metadata_object
         CHECK (jsonb_typeof(metadata) = 'object')
 );
@@ -178,7 +175,8 @@ BEGIN
 END $$;
 
 ALTER TABLE IF EXISTS rag_chunks
-    DROP COLUMN IF EXISTS source_ref;
+    DROP COLUMN IF EXISTS source_ref,
+    DROP COLUMN IF EXISTS heading_path;
 
 -- Accelerate collection browsing, document-level deduplication, stable chunk
 -- ordering, and chunk-level differential embedding checks.
