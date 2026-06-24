@@ -212,17 +212,15 @@ def _chunk(
             "document_status": "published",
             "lifecycle_status": "success",
             "permissions": ["public"],
+            "document_id": document_id,
+            "source_path": f"fixtures/{document_id}.md",
+            "title": f"Retrieval fixture {document_id}",
+            "section_path": [doc_type],
             **({"image_refs": image_refs} if image_refs else {}),
         },
         chunk_index=chunk_index,
         start_offset=chunk_index * 100,
         end_offset=chunk_index * 100 + len(text),
-        source_ref={
-            "document_id": document_id,
-            "source_path": f"fixtures/{document_id}.md",
-            "title": f"Retrieval fixture {document_id}",
-            "section_path": [doc_type],
-        },
     )
 
 
@@ -260,7 +258,7 @@ def _persist_fixture(
         chunk_id=f"chunk-{uuid4().hex}",
         document_id=document_id,
         collection_id=collection_id,
-        text="办公场景可以选择安静的解压玩具，并比较材质和耐用性。",
+        text="无线耳机推荐还应关注办公场景降噪，并比较材质和耐用性。",
         chunk_index=1,
         doc_type="comparison",
         image_refs=["image-headphones"],
@@ -413,7 +411,7 @@ def _delete_collections(pool: PostgresPool, collection_ids: list[str]) -> None:
 
 
 def _delete_stale_d14_collections(pool: PostgresPool) -> None:
-    """Remove only D14-prefixed leftovers from interrupted local test runs."""
+    """Remove Retrieval and Dashboard fixture leftovers from interrupted local test runs."""
 
     with pool.transaction() as connection:
         connection.execute(
@@ -421,6 +419,7 @@ def _delete_stale_d14_collections(pool: PostgresPool) -> None:
             DELETE FROM rag_collections
             WHERE id LIKE 'd14-retrieval-%'
                OR id LIKE 'd14-filtered-%'
+               OR id LIKE 'f12-dashboard-%'
             """
         )
 
@@ -479,7 +478,8 @@ def test_query_pipeline_hybrid() -> None:
             result.chunk_id for result in execution.dense_results
         }
         assert [result.chunk_id for result in execution.sparse_results] == [
-            fixture.primary_chunk.id
+            fixture.primary_chunk.id,
+            fixture.rerank_chunk.id,
         ]
         assert fixture.filtered_chunk.id in {
             result.chunk_id for result in execution.fused_results
@@ -705,10 +705,12 @@ def test_query_pipeline_falls_back_to_sparse_when_dense_provider_fails() -> None
 
         assert execution.dense_results == ()
         assert [result.chunk_id for result in execution.sparse_results] == [
-            fixture.primary_chunk.id
+            fixture.primary_chunk.id,
+            fixture.rerank_chunk.id,
         ]
         assert [result.chunk_id for result in execution.final_results] == [
-            fixture.primary_chunk.id
+            fixture.primary_chunk.id,
+            fixture.rerank_chunk.id,
         ]
         assert execution.rerank_applied is False
         assert execution.fallback_used is True
@@ -734,7 +736,7 @@ def test_query_pipeline_falls_back_to_sparse_when_dense_provider_fails() -> None
         assert isinstance(fallback_counts, dict)
         assert fallback_summary["fallback_used"] is True
         assert fallback_counts["dense"] == 0
-        assert fallback_counts["sparse"] == 1
+        assert fallback_counts["sparse"] == 2
     finally:
         if schema_ready:
             _delete_collections(pool, [collection_id, other_collection_id])

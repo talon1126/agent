@@ -109,6 +109,7 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
     assert chunks[0].metadata == {
         "collection": "shopping_guides",
         "document_id": "doc-shopping-guide",
+        "source_path": "shopping_guides/headphones.md",
         "doc_type": "shopping_guide",
         "topic": "Headphones",
         "chunk_index": 0,
@@ -119,20 +120,13 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
     assert "image_refs" not in chunks[1].metadata
     assert chunks[2].metadata["image_refs"] == ["image-2"]
     for chunk in chunks:
+        assert not hasattr(chunk, "source_ref")
         assert "images" not in chunk.metadata
         assert "headings" not in chunk.metadata
-        assert "source_path" not in chunk.metadata
         assert "source_type" not in chunk.metadata
         assert "source_hash" not in chunk.metadata
         assert "title" not in chunk.metadata
-    assert chunks[0].source_ref == {
-        "document_id": "doc-shopping-guide",
-        "source_path": "shopping_guides/headphones.md",
-        "section_path": ["Guides", "Headphones"],
-        "collection": "shopping_guides",
-        "start_offset": 0,
-        "end_offset": len("Alpha intro [[image:image-1]] details."),
-    }
+
     assert chunks[1].start_offset == document_text.index("Beta comparison details.")
     assert chunks[2].start_offset == document_text.index("Gamma outro")
     assert chunks[2].end_offset == len(document_text)
@@ -271,8 +265,8 @@ def test_document_chunker_attaches_active_heading_path_to_each_chunk() -> None:
         ["Commuting"],
     ]
     assert len({chunk.id for chunk in chunks}) == 3
-    assert "section_path" not in chunks[0].source_ref
-    assert chunks[1].source_ref["section_path"] == ["Gaming"]
+    assert chunks[0].metadata["source_path"] == "shopping_guides/headphones.md"
+    assert chunks[1].metadata["section_path"] == ["Gaming"]
 
 
 def test_document_chunker_section_path_starts_at_h2_without_section_object() -> None:
@@ -411,7 +405,7 @@ def test_splitter_step_delegates_document_adaptation() -> None:
 
     assert len(chunks) == 1
     assert isinstance(chunks[0], Chunk)
-    assert chunks[0].source_ref["document_id"] == "doc-step"
+    assert chunks[0].metadata["document_id"] == "doc-step"
 
 
 def test_document_chunker_locates_overlapping_splitter_segments() -> None:

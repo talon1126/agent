@@ -2,9 +2,9 @@
 
 ``CitationBuilder`` is the attribution boundary between retrieval and response
 assembly. It reads document identity, source location, title, and section
-metadata already attached during ingestion or hydration. It never derives a
-source from chunk prose and fails explicitly when a candidate cannot be tied to
-a real document path.
+metadata from retrieval metadata attached during ingestion or hydration. It
+never derives a source from chunk prose and fails explicitly when a candidate
+cannot be tied to a real document path.
 """
 
 from __future__ import annotations
@@ -38,11 +38,6 @@ class CitationBuilder:
         Raises:
             ValueError: If ``trace_id`` is blank or a candidate lacks a stable
                 document ID, source path, usable title, or valid section path.
-
-        Notes:
-            ``source_ref`` fields take precedence because they were created for
-            citation fidelity during chunking. Top-level metadata remains
-            supported for Dense results and older persisted chunks.
         """
 
         if not isinstance(trace_id, str) or not trace_id.strip():
@@ -73,25 +68,13 @@ class CitationBuilder:
         """
 
         metadata = dict(candidate.metadata)
-        source_ref_value = metadata.get("source_ref", {})
-        if source_ref_value is None:
-            source_ref: Mapping[str, Any] = {}
-        elif isinstance(source_ref_value, Mapping):
-            source_ref = source_ref_value
-        else:
-            raise ValueError(
-                f"Citation source_ref must be a mapping for chunk "
-                f"'{candidate.chunk_id}'"
-            )
-
         document_id = self._required_string(
-            source_ref.get("document_id", metadata.get("document_id")),
+            metadata.get("document_id"),
             field_name="document_id",
             chunk_id=candidate.chunk_id,
         )
         source_uri = self._required_string(
             self._first_present(
-                source_ref,
                 metadata,
                 keys=("source_uri", "source_path"),
             ),
@@ -99,7 +82,6 @@ class CitationBuilder:
             chunk_id=candidate.chunk_id,
         )
         title_value = self._first_present(
-            source_ref,
             metadata,
             keys=("title",),
         )
@@ -116,9 +98,8 @@ class CitationBuilder:
             )
         )
         section_value = self._first_present(
-            source_ref,
             metadata,
-            keys=("section_path", "heading_path"),
+            keys=("section_path",),
         )
         section_path = self._normalize_section_path(
             section_value,
@@ -137,27 +118,24 @@ class CitationBuilder:
 
     @staticmethod
     def _first_present(
-        primary: Mapping[str, Any],
-        fallback: Mapping[str, Any],
+        metadata: Mapping[str, Any],
         *,
         keys: tuple[str, ...],
     ) -> Any:
-        """Return the first non-null value using source_ref precedence.
+        """Return the first non-null value from top-level metadata aliases.
 
         Args:
-            primary: Preferred source reference mapping.
-            fallback: Top-level retrieval metadata.
+            metadata: Retrieval metadata carrying persisted chunk source fields.
             keys: Ordered aliases accepted for one citation field.
 
         Returns:
-            First non-null value, or ``None`` when no mapping contains one.
+            First non-null value, or ``None`` when metadata has no alias.
         """
 
-        for mapping in (primary, fallback):
-            for key in keys:
-                value = mapping.get(key)
-                if value is not None:
-                    return value
+        for key in keys:
+            value = metadata.get(key)
+            if value is not None:
+                return value
         return None
 
     @staticmethod

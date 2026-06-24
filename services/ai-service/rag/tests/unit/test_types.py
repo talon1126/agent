@@ -146,35 +146,44 @@ def test_document_rejects_blank_canonical_text() -> None:
         Document(id="doc-1", text=" \n ", metadata={})
 
 
-def test_chunk_enforces_offsets_and_optional_source_reference() -> None:
-    """Verify chunks expose stable source ranges and optional citation context.
+def test_chunk_enforces_offsets_and_metadata_source_fields() -> None:
+    """Verify chunks expose source ranges and metadata-owned citations.
 
-    ``start_offset`` is inclusive and ``end_offset`` is exclusive. The source
-    reference remains an extensible mapping because its exact citation fields
-    depend on loader output, while omission is valid for synthetic content.
+    ``start_offset`` is inclusive and ``end_offset`` is exclusive. Source path,
+    document identity, collection, and section path live in ``metadata`` so the
+    database stores one source contract instead of both metadata and source_ref.
     """
     chunk = Chunk(
         id="chunk-1",
         text="wireless headphones",
-        metadata={"collection": "shopping_guides", "chunk_index": 0},
-        chunk_index=0,
-        start_offset=20,
-        end_offset=39,
-        source_ref={
+        metadata={
+            "collection": "shopping_guides",
             "document_id": "doc-1",
             "source_path": "guides/headphones.md",
             "section_path": ["Audio", "Wireless"],
-            "collection": "shopping_guides",
+            "chunk_index": 0,
         },
+        chunk_index=0,
+        start_offset=20,
+        end_offset=39,
     )
 
     assert chunk.chunk_index == 0
     assert chunk.start_offset == 20
     assert chunk.end_offset == 39
-    assert chunk.source_ref["document_id"] == "doc-1"
+    assert chunk.metadata["document_id"] == "doc-1"
+    assert chunk.metadata["source_path"] == "guides/headphones.md"
 
-    synthetic_chunk = chunk.model_copy(update={"id": "chunk-2", "source_ref": None})
-    assert synthetic_chunk.source_ref is None
+    with pytest.raises(ValidationError, match="source_ref"):
+        Chunk(
+            id="chunk-legacy-source-ref",
+            text="legacy chunk",
+            metadata={"document_id": "doc-1"},
+            chunk_index=0,
+            start_offset=0,
+            end_offset=12,
+            source_ref={"document_id": "doc-1"},
+        )
 
 
 def test_chunk_rejects_inverted_or_negative_ranges() -> None:
@@ -189,7 +198,6 @@ def test_chunk_rejects_inverted_or_negative_ranges() -> None:
         "text": "content",
         "metadata": {},
         "chunk_index": 0,
-        "source_ref": None,
     }
 
     with pytest.raises(ValidationError):
@@ -217,7 +225,6 @@ def test_searchable_types_reject_blank_text() -> None:
             chunk_index=0,
             start_offset=0,
             end_offset=3,
-            source_ref=None,
         )
 
     with pytest.raises(ValidationError, match="text"):

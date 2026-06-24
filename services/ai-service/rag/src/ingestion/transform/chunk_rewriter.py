@@ -181,8 +181,7 @@ def _chunk_id_for_text(chunk: Chunk, text: str) -> str:
 
     source_path = str(
         chunk.metadata.get("source_path")
-        or (chunk.source_ref or {}).get("source_path")
-        or (chunk.source_ref or {}).get("document_id")
+        or chunk.metadata.get("document_id")
         or chunk.id
     )
     return build_chunk_id(

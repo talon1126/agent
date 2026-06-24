@@ -117,7 +117,6 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     content_hash TEXT NOT NULL,
     start_offset INTEGER NOT NULL,
     end_offset INTEGER NOT NULL,
-    source_ref JSONB,
     heading_path JSONB NOT NULL DEFAULT '[]'::jsonb,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding vector(1536),
@@ -136,13 +135,50 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
         CHECK (content_hash ~ '^[0-9a-fA-F]{64}$'),
     CONSTRAINT chk_rag_chunks_offsets
         CHECK (start_offset >= 0 AND end_offset > start_offset),
-    CONSTRAINT chk_rag_chunks_source_ref_object
-        CHECK (source_ref IS NULL OR jsonb_typeof(source_ref) = 'object'),
     CONSTRAINT chk_rag_chunks_heading_path_array
         CHECK (jsonb_typeof(heading_path) = 'array'),
     CONSTRAINT chk_rag_chunks_metadata_object
         CHECK (jsonb_typeof(metadata) = 'object')
 );
+
+-- Keep existing databases aligned with the metadata-owned source contract.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'rag_chunks'
+          AND column_name = 'source_ref'
+    ) THEN
+        UPDATE rag_chunks
+        SET metadata = metadata
+            || CASE
+                WHEN source_ref ? 'document_id' AND NOT metadata ? 'document_id'
+                THEN jsonb_build_object('document_id', source_ref->'document_id')
+                ELSE '{}'::jsonb
+            END
+            || CASE
+                WHEN source_ref ? 'source_path' AND NOT metadata ? 'source_path'
+                THEN jsonb_build_object('source_path', source_ref->'source_path')
+                ELSE '{}'::jsonb
+            END
+            || CASE
+                WHEN source_ref ? 'collection' AND NOT metadata ? 'collection'
+                THEN jsonb_build_object('collection', source_ref->'collection')
+                ELSE '{}'::jsonb
+            END
+            || CASE
+                WHEN source_ref ? 'section_path' AND NOT metadata ? 'section_path'
+                THEN jsonb_build_object('section_path', source_ref->'section_path')
+                ELSE '{}'::jsonb
+            END
+        WHERE source_ref IS NOT NULL
+          AND jsonb_typeof(source_ref) = 'object';
+    END IF;
+END $$;
+
+ALTER TABLE IF EXISTS rag_chunks
+    DROP COLUMN IF EXISTS source_ref;
 
 -- Accelerate collection browsing, document-level deduplication, stable chunk
 -- ordering, and chunk-level differential embedding checks.

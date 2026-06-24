@@ -147,12 +147,6 @@ def test_data_browser_service_lists_documents_chunks_and_images(
             chunk_index=0,
             start_offset=0,
             end_offset=55,
-            source_ref={
-                "document_id": document_id,
-                "source_path": source_path,
-                "title": "Wireless guide",
-                "section_path": ["Audio"],
-            },
         ),
         Chunk(
             id=f"chunk-{uuid4().hex}",
@@ -164,12 +158,6 @@ def test_data_browser_service_lists_documents_chunks_and_images(
             chunk_index=1,
             start_offset=56,
             end_offset=107,
-            source_ref={
-                "document_id": document_id,
-                "source_path": source_path,
-                "title": "Wireless guide",
-                "section_path": ["Audio", "Battery"],
-            },
         ),
     ]
 
@@ -1410,7 +1398,6 @@ def test_data_browser_page_builds_and_renders_document_chunk_details() -> None:
         bm25_term_count=5,
         image_refs=("image-data",),
         metadata={"section_path": ["Audio"]},
-        source_ref={"source_path": "data/raw/wireless.md"},
     )
     image = ImageBrowserRow(
         image_id="image-data",

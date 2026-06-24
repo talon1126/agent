@@ -93,8 +93,8 @@ class FakeVectorStore(BaseVectorStore):
         Returns:
             Filtered results ordered by descending cosine similarity and then
             stable chunk ID for deterministic ties. Each result carries a
-            defensive copy of ``Chunk.source_ref`` inside metadata so the fake
-            matches the production citation contract.
+            defensive copy of chunk metadata so the fake matches the
+            production citation contract.
 
         Raises:
             ValueError: If ``top_k`` is not positive, the query vector is empty,
@@ -114,8 +114,6 @@ class FakeVectorStore(BaseVectorStore):
                 continue
             score = self._cosine_similarity(query_vector, stored_vector)
             metadata = deepcopy(chunk.metadata)
-            if chunk.source_ref is not None:
-                metadata["source_ref"] = deepcopy(chunk.source_ref)
             results.append(
                 RetrievalResult(
                     chunk_id=chunk.id,

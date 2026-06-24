@@ -68,7 +68,6 @@ class ChunkBrowserRow:
     bm25_term_count: int
     image_refs: tuple[str, ...]
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    source_ref: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,8 +335,7 @@ class DataBrowserService:
                 chunk.end_offset,
                 chunk.embedding IS NOT NULL AS dense_indexed,
                 COUNT(DISTINCT bm25.term) AS bm25_term_count,
-                chunk.metadata,
-                chunk.source_ref
+                chunk.metadata
             FROM rag_chunks AS chunk
             LEFT JOIN rag_bm25_terms AS bm25
               ON bm25.chunk_id = chunk.id
@@ -383,7 +381,6 @@ class DataBrowserService:
             bm25_term_count=int(row[9]),
             image_refs=_image_refs(metadata),
             metadata=metadata,
-            source_ref=dict(row[11]) if row[11] is not None else None,
         )
 
 

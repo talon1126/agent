@@ -732,7 +732,6 @@ async def test_mcp_business_errors_use_stable_public_envelope() -> None:
         message_contains="document summary was not found",
     )
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_list_collections_returns_overview_and_closes_pool() -> None:

@@ -753,7 +753,9 @@ class ChunkRepository:
             )
 
         for chunk in persisted:
-            heading_path = chunk.metadata.get("heading_path", [])
+            heading_path = chunk.metadata.get(
+                "section_path", chunk.metadata.get("heading_path", [])
+            )
             connection.execute(
                 """
                 INSERT INTO rag_chunks (
@@ -765,11 +767,10 @@ class ChunkRepository:
                     content_hash,
                     start_offset,
                     end_offset,
-                    source_ref,
                     heading_path,
                     metadata
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     chunk.id,
@@ -780,7 +781,6 @@ class ChunkRepository:
                     sha256(chunk.text.encode("utf-8")).hexdigest(),
                     chunk.start_offset,
                     chunk.end_offset,
-                    Jsonb(chunk.source_ref) if chunk.source_ref is not None else None,
                     Jsonb(heading_path),
                     Jsonb(chunk.metadata),
                 ),
@@ -878,8 +878,7 @@ class ChunkRepository:
                 metadata,
                 chunk_index,
                 start_offset,
-                end_offset,
-                source_ref
+                end_offset
             FROM rag_chunks
             WHERE id = %s
             """,
@@ -912,8 +911,7 @@ class ChunkRepository:
                 metadata,
                 chunk_index,
                 start_offset,
-                end_offset,
-                source_ref
+                end_offset
             FROM rag_chunks
             WHERE document_id = %s
             ORDER BY chunk_index ASC, id ASC
@@ -942,8 +940,7 @@ class ChunkRepository:
             metadata,
             chunk_index,
             start_offset,
-            end_offset,
-            source_ref,
+            end_offset
         ) = row
         return Chunk(
             id=chunk_id,
@@ -952,7 +949,6 @@ class ChunkRepository:
             chunk_index=chunk_index,
             start_offset=start_offset,
             end_offset=end_offset,
-            source_ref=source_ref,
         )
 
 

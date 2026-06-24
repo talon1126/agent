@@ -398,12 +398,6 @@ def _seed_dashboard_fixture(pool: object, tmp_path: Path) -> DashboardFixture:
             chunk_index=0,
             start_offset=0,
             end_offset=61,
-            source_ref={
-                "document_id": document_id,
-                "source_path": source_path,
-                "section_path": ["Wireless Headphones Guide"],
-                "collection": collection_id,
-            },
         ),
         Chunk(
             id=f"chunk-{uuid4().hex}",
@@ -415,12 +409,6 @@ def _seed_dashboard_fixture(pool: object, tmp_path: Path) -> DashboardFixture:
             chunk_index=1,
             start_offset=62,
             end_offset=120,
-            source_ref={
-                "document_id": document_id,
-                "source_path": source_path,
-                "section_path": ["Wireless Headphones Guide", "Commute"],
-                "collection": collection_id,
-            },
         ),
     ]
 

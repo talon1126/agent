@@ -231,7 +231,7 @@ Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform（包含 ImageCap
 | `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + summary + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；`summary` 为顶层字段，由独立摘要步骤生成或更新；只处理去重判断后确认需要摄取的文档 |
 | `DocumentSummarizer` | 为加载后的文档生成顶层 `Document.summary` | 作为 Loader 之后、Splitter 之前的独立步骤；读取 `document_summary_prompt.yaml`；复用统一 LLM provider；已有同版本摘要时保持幂等；摘要只作为全局语义上下文，不写入 `metadata.summary` |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
-| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，根据 heading offset 写入唯一章节结构字段 `section_path`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 保存完整文档图片清单的 `id/path`，`Chunk.metadata` 保存关联图片的 `image_refs` |
+| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、把 `source_path` 写入 chunk metadata，根据 heading offset 写入唯一章节结构字段 `section_path`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 保存完整文档图片清单的 `id/path`，`Chunk.metadata` 保存关联图片的 `image_refs` |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
 | `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后替换 chunk 正文中的图片占位符，使 caption 进入 Dense/BM25 可检索文本；执行详情写入 ingestion trace 的 `transform.sub_stages`，不写入 chunk metadata |
 | `BaseEmbedding` | 将增强后的 chunk 执行双路索引 | 在编码前先计算 `content_hash`，只对数据库中不存在的内容哈希执行新编码；DenseEncoder 调用百炼 `text-embedding-v4` 生成 1536 维语义向量；BM25Indexer 生成词项、词频和倒排索引；BatchProcessor 统一处理批量、限流、重试和失败隔离 |
@@ -277,7 +277,6 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `chunk_index` | `int` | chunk 在当前 Document 中的排序，从 0 开始递增 |
 | `start_offset` | `int` | chunk 在 `Document.text` 中的起始位置 |
 | `end_offset` | `int` | chunk 在 `Document.text` 中的结束位置 |
-| `source_ref` | `dict/null` | 可选来源引用，建议包含 `document_id`、`source_path`、`section_path`、`page`、`collection`，用于引用构造和 trace 回溯 |
 
 `metadata.images[]` 字段：
 
@@ -291,9 +290,8 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 - 字段命名统一使用 `start_offset`，不使用 `start_offest`。
 - Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。
 - `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`。
-- `source_ref` 是可选字段，但首版建议保留，方便 Dashboard 展示引用来源、原文位置和关联图片。
-- `Chunk.metadata` 只保留检索过滤和业务解释需要的字段，例如 `collection`、`document_id`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。章节结构只使用 `section_path: List[str]` 表示，不额外保存 `section`、`h2`、`h3` 或 `h4` 对象。不得保存 `images`、`headings`、`source_path`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等来源、图片详情和 Transform 执行信息。
-- 来源引用保存在独立 `Chunk.source_ref` 字段，Dense/Sparse Retrieval 构造 `RetrievalResult` 时再将其深拷贝到 result metadata，避免持久化职责混淆或丢失文档来源信息。
+- `Chunk.metadata` 是 chunk 来源字段的唯一持久化载体，必须包含 `document_id` 和 `source_path`，并按需包含 `collection`、`doc_type`、`topic`、`chunk_index`、`section_path` 和 `image_refs`。
+- `Chunk.metadata` 只保留检索过滤、引用构造和业务解释需要的字段，例如 `collection`、`document_id`、`source_path`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。章节结构只使用 `section_path: List[str]` 表示，不额外保存 `section`、`h2`、`h3` 或 `h4` 对象。不得保存 `images`、`headings`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等图片详情和 Transform 执行信息。
 
 `RetrievalResult` 字段：
 
@@ -302,7 +300,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `chunk_id` | `str` | 命中的 chunk ID |
 | `text` | `str` | 命中的 chunk 文本 |
 | `score` | `float` | 当前检索路线返回的相关性分数；Dense/BM25 分数量纲不同，只记录，不直接互相比大小 |
-| `metadata` | `dict` | chunk metadata，包含 collection、source_ref、section_path、image_refs、文档状态等过滤和引用信息 |
+| `metadata` | `dict` | chunk metadata，包含 collection、document_id、source_path、section_path、image_refs、文档状态等过滤和引用信息 |
 
 `ProcessedQuery` 是 Query Processor 向 Dense Route、Sparse Route、HybridSearch 和 Trace 传递的统一查询对象：
 
@@ -817,8 +815,6 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     content_hash TEXT NOT NULL,
     start_offset INTEGER NOT NULL,
     end_offset INTEGER NOT NULL,
-    source_ref JSONB,
-    heading_path JSONB NOT NULL DEFAULT '[]'::jsonb,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding vector(1536),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1594,20 +1590,20 @@ services/ai-service/rag/
 | 文件 | 具体职责 | 关键技术点 |
 | --- | --- | --- |
 | `src/core/config.py` | 加载 settings 和 prompt 配置 | Pydantic/YAML 校验、环境变量覆盖、默认值处理 |
-| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`、`RetrievalResult(chunk_id,text,score,metadata)`、`Document.metadata.images[]` 的 `id/path` 契约、`Citation`、`TraceRecord` |
+| `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,metadata,chunk_index,start_offset,end_offset)`、`RetrievalResult(chunk_id,text,score,metadata)`、`Document.metadata.images[]` 的 `id/path` 契约、`Citation`、`TraceRecord` |
 | `src/core/errors.py` | 定义统一异常类型 | 配置错误、Provider 错误、检索错误、摄取错误、MCP 错误 |
 | `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用相同英文/数字 normalize、中文 full-span 与 2/3-gram 分词，避免分析漂移和 ingestion/storage 循环依赖 |
 | `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、意图识别 |
 | `src/core/query_engine/hybrid_engine.py` | 编排混合检索主流程 | `HybridSearch`、Dense/BM25 双路召回、RRF Fusion、候选去重、保留过滤前 fusion 快照、rerank 前 metadata 过滤、单路失败降级 |
 | `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
-| `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，并将 `Chunk.source_ref` 深拷贝到 result metadata 供 CitationBuilder 使用 |
+| `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，直接复用 Chunk.metadata 中的来源字段供 CitationBuilder 使用 |
 | `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
 | `src/core/query_engine/trace_snapshots.py` | 构造 Query Trace 候选快照 | 输出不含正文的轻量候选快照；Dense/Sparse 只记录 chunk IDs，Fusion/Filter/Rerank 记录排序与过滤变化 |
 | `src/core/query_engine/reranker.py` | 编排过滤后候选的精排与降级 | `RerankController` 调用 Cross-Encoder/LLM Reranker；provider 缺失、超时、异常或返回过滤集外候选时 fallback 到调用前保存的过滤后 RRF 顺序；`RerankOutcome` 显式返回最终结果、fallback 状态和原因，禁止从 provider metadata 推断控制流；输出和 fallback 均使用防御性副本并记录低侵入 rerank trace |
 | `src/core/response/response_builder.py` | 构建 RAG 工具公开响应 | `KnowledgeHubResponseBuilder` 先从最终排序 chunk 文本生成编号证据块，再调用可选 `EvidenceContextOptimizer` 生成 Agent-ready final context；优化失败时按配置 fallback 到原始编号证据块；不序列化内部 route/tool metadata |
 | `src/core/response/evidence_context_optimizer.py` | 优化最终上下文 | 读取 `evidence_context_prompt.yaml`，调用统一 `BaseLLM.chat()` 将编号证据压缩、去重和结构化为供 AImodel 直接使用的上下文；禁止生成最终答案或动态商品事实 |
 | `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 Citation、KnowledgeHubResponse、ResponseImage 及其 Builder/Assembler |
-| `src/core/response/citation_builder.py` | 从最终排序结果构建引用来源 | `source_ref` 优先、顶层 metadata 兼容、标题文件名回退、section_path 归一化、trace_id 关联、缺失来源 fail fast、不从 chunk 正文猜测 citation |
+| `src/core/response/citation_builder.py` | 从最终排序结果构建引用来源 | 顶层 metadata 来源字段、标题文件名回退、section_path 归一化、trace_id 关联、缺失来源 fail fast、不从 chunk 正文猜测 citation |
 | `src/core/response/multimodal_assembler.py` | 组装多模态命中内容 | 按最终检索顺序收集、去重 `image_refs`，通过最小 `ImageResolver.find_by_ids()` 接口批量读取图片索引，恢复首次引用顺序，只投影 file_path、caption、尺寸、质量状态和关联 chunk IDs |
 | `src/core/trace/trace_context.py` | 管理单次 trace 上下文 | `trace_id`、基础信息、阶段列表、汇总指标、评估指标；主阶段可携带经过校验和防御性复制的 `sub_stages`，Transform 子阶段可携带受限 snapshots 和 JSON-safe `details`，用于保留 `image_captioner` 等实现的 provider、model、计数与失败原因 |
 | `src/core/trace/trace_controller.py` | 编排 trace 写入 | `record_stage()`、`flush()`、错误和 fallback 记录 |
@@ -1639,8 +1635,8 @@ services/ai-service/rag/
 | `src/libs/embedding/fake_embedding.py` | 测试 embedding 实现 | 单元测试稳定向量，不访问外部 API |
 | `src/libs/vector_store/base_vector_store.py` | 定义 VectorStore 抽象接口 | `upsert(chunks)`、`search(vector, filters, top_k)` |
 | `src/libs/vector_store/vector_store_factory.py` | 创建向量存储实现 | 首版创建 pgvector store，预留扩展 |
-| `src/libs/vector_store/pgvector_store.py` | pgvector 实现 | PostgreSQL vector(1536)、cosine search、metadata filter；Dense search 同时读取独立 `source_ref` 列并注入 RetrievalResult metadata |
-| `src/libs/vector_store/fake_vector_store.py` | 内存 VectorStore 测试实现 | cosine search、metadata filter、ID 顺序恢复，并与 pgvector 保持 source_ref 引用传播契约 |
+| `src/libs/vector_store/pgvector_store.py` | pgvector 实现 | PostgreSQL vector(1536)、cosine search、metadata filter；Dense search 直接读取 metadata 并注入 RetrievalResult |
+| `src/libs/vector_store/fake_vector_store.py` | 内存 VectorStore 测试实现 | cosine search、metadata filter、ID 顺序恢复，并与 pgvector 保持 metadata 来源字段契约 |
 | `src/libs/reranker/base_reranker.py` | 定义 Reranker 抽象接口 | `rerank(query, candidates)` |
 | `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、LLM Rerank、None/fallback |
 | `src/libs/reranker/cross_encoder_reranker.py` | Cross-Encoder 精排实现 | query-document pair 打分、排序 |
@@ -1659,12 +1655,12 @@ services/ai-service/rag/
 | `src/ingestion/document_summarizer.py` | 生成文档级语义摘要 | 读取 `document_summary_prompt.yaml`，调用统一 LLMClient，写入 `Document.summary`，按 prompt version 和文档 hash 保持幂等 |
 | `src/ingestion/pdf_to_markdown.py` | PDF 转 Markdown 辅助逻辑 | MarkItDown、页码、图片抽取、基于图片矩形和相邻文本块生成图片锚点 |
 | `src/ingestion/chunk/splitter_step.py` | 执行 chunk 初始切分 | 调用 `DocumentChunker`，完成 `Document -> List[Chunk]` 业务适配 |
-| `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、保留检索过滤所需 metadata、添加 `chunk_index`、建立 `source_ref`、通过占位符扫描分发 `image_refs`，并把纯图片占位符片段合并到相邻正文 chunk |
+| `src/ingestion/chunk/document_chunker.py` | 业务 chunk 适配器 | 调用 `libs.splitter` 的 `str -> List[str]` 能力，生成 `chunk_id`、保留检索过滤所需 metadata、添加 `chunk_index`、写入来源 metadata、通过占位符扫描分发 `image_refs`，并把纯图片占位符片段合并到相邻正文 chunk |
 | `src/ingestion/chunk/chunk_id.py` | 生成稳定 chunk_id | `hash(source_path + section_path + content_hash)` |
 | `src/ingestion/transform/transformer.py` | 编排 Transform 阶段 | 从 `settings.transform.steps` 读取顺序并串行执行；通过可选 observer 输出每个实现的耗时、输入输出数量、变化/未变化数量、状态、错误和受限 before/after 快照 |
 | `src/ingestion/transform/metadata_enricher.py` | metadata 注入实现 | 标题路径、来源、文档主题、业务 metadata 注入 |
 | `src/ingestion/transform/chunk_rewriter.py` | LLM 改写 chunk | 使用 `Document.summary` 作为全局上下文；将 chunk 拆分为文本节点与图片节点，只改写文本节点，再按原顺序重组图片占位符 |
-| `src/ingestion/transform/semantic_merge_transform.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk，保留 source_ref 和 image_refs |
+| `src/ingestion/transform/semantic_merge_transform.py` | 智能合并 chunk | 合并逻辑相关但被物理切割的 chunk，保留来源 metadata 和 image_refs |
 | `src/ingestion/transform/denoise_transform.py` | 去噪处理 | 删除页眉页脚、重复目录、解析残留，保留图片占位符 |
 | `src/ingestion/transform/image_captioner.py` | 图片 caption 编排 | `vision_llm.enabled` 判断、`image_refs` 条件触发、占位符替换为 `[[image_caption:image_id]] + caption`、trace 执行详情输出 |
 | `src/ingestion/embedding/embedding_step.py` | 编排 Embedding 阶段 | `run_dense()` 提供窄粒度差量编码；`run_batch()` 复用数据库已有 content_hash 向量、对当前批次重复内容只调用一次模型，并为每个有序 chunk 生成完整 Dense 结果，同时编排 BM25Indexer |
@@ -2077,7 +2073,7 @@ RAG 提供可独立运行的离线数据摄取能力。统一 `IngestionPipeline
 
 - 对未变化且已成功摄取的文档执行 SHA256 skipped 快速结束。
 - 从 Markdown/PDF 提取正文、标题层级、图片占位符和图片 metadata。
-- 生成稳定 chunk ID、source_ref、image_refs 和有序 chunk_index。
+- 生成稳定 chunk ID、来源 metadata、image_refs 和有序 chunk_index。
 - 串行执行 metadata enrich、chunk rewrite、semantic merge、denoise 和 image caption。
 - 复用成功文档中相同 content_hash 的 Dense 向量，仅编码未命中或内容变化的 chunk。
 - 将 document、chunk、pgvector、BM25 posting 和 image index 作为完整快照写入。
@@ -2216,7 +2212,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | --- | --- | --- | --- | --- |
 | C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-10 | canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；PyMuPDF 图片矩形绑定邻近文本锚点，MarkItDown 无页标记时仍能将图片插入对应章节附近；真实购物指南 PDF 冒烟验证通过 |
-| C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-10 | 稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、source_ref、image_refs 和 SplitterStep；纯图片占位符片段合并到相邻正文 chunk，确保检索单元包含文本语义 |
+| C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-10 | 稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、来源 metadata、image_refs 和 SplitterStep；纯图片占位符片段合并到相邻正文 chunk，确保检索单元包含文本语义 |
 | C4 | 实现 MarkdownSectionSplitter | [✔] | 2026-06-23 | 按 `###` 构建 Markdown section，章节层级由 `DocumentChunker` 写入 `section_path`；短 section 合并，长 section 内部二次切分，长表格按行分组且每个分片保留表头；表格拆分时只有第一段可携带表格前正文，后续表格分片只保留表头和数据行；表格尾部 chunk 可与后续建议块在 `chunk_size` 内合并；chunk 正文不保留 `#`、`##`、`###` 标题行；41 个配置和 splitter 单元测试通过 |
 | C5 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | BaseTransform、配置驱动 TransformPipeline、metadata enrich、chunk rewrite、semantic merge、denoise、英文 Prompt、噪声 fixture 和幂等测试；ChunkRewriter 仅使用文本节点与 Document.summary 调用 LLM，并按原顺序保留图片占位符；无效文本响应直接失败，纯图片占位符 chunk 跳过文本 rewrite |
 | C6 | 实现 ImageCaptioner | [✔] | 2026-06-11 | `image_captioner` transform step、`BaseVisionLLM`、`DashScopeVisionLLM`、正文 caption 注入和 Dense/BM25 索引；图片 caption/provenance 记录在 `transform.sub_stages` |
@@ -2240,10 +2236,10 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | D7 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D7 单元测试通过 |
 | D8 | 实现 LLM Rerank 适配 | [✔] | 2026-06-11 | LLMReranker、PromptTemplate 加载、BaseLLM 注入和结构化 JSON 排名解析；Prompt 强制只返回 JSON object array，禁止 ID-only array、Markdown fence 和解释文字；真实 DeepSeek 查询验证 rerank 成功且未触发 fallback |
 | D9 | 实现 rerank fallback | [✔] | 2026-06-07 | RerankController、RerankOutcome、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、显式 fallback 状态、低侵入 rerank trace 和 trace sink 失败隔离；28 个 Reranker 单元测试通过 |
-| D10 | 实现引用构造 | [✔] | 2026-06-07 | 共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 source_ref 传播、source_ref 优先和顶层 metadata 兼容、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；11 个 Citation 单元测试、16 个核心类型回归测试、2 个 source_ref 单元测试和 1 个 pgvector 集成测试通过 |
+| D10 | 实现引用构造 | [✔] | 2026-06-07 | 共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 metadata 来源字段传播、顶层 metadata 读取、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；Citation、核心类型、来源 metadata 和 pgvector 回归测试通过 |
 | D11 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号证据块、配置驱动 EvidenceContextOptimizer、优化失败 fallback、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；Response Builder 单元测试和真实 PostgreSQL 图片查询集成测试通过 |
 | D12 | 实现 `query.py` 脚本入口 | [✔] | 2026-06-07 | 配置驱动完整查询链路、PostgreSQL BM25 collection 查询、过滤前 Fusion 快照、RerankOutcome 显式 fallback 状态、安全 verbose 输出、no-rerank 跳过和连接池释放；63 个 Retrieval 单元测试通过 |
-| D13 | 实现 Retrieval 单元测试矩阵 | [✔] | 2026-06-07 | 120 个 Retrieval/Reranker/Response 单元测试，补齐 Fusion 失败、PostgreSQL BM25 边界、QueryRuntime rerank、no-op/duplicate/empty fallback、Citation source_ref 和图片 resolver 脏契约；目标模块覆盖率 91% |
+| D13 | 实现 Retrieval 单元测试矩阵 | [✔] | 2026-06-07 | 120 个 Retrieval/Reranker/Response 单元测试，补齐 Fusion 失败、PostgreSQL BM25 边界、QueryRuntime rerank、no-op/duplicate/empty fallback、Citation 来源 metadata 和图片 resolver 脏契约；目标模块覆盖率 91% |
 | D14 | 实现 Retrieval 集成测试 | [✔] | 2026-06-07 | PostgreSQL/pgvector 集成测试，覆盖 QueryProcessor、DenseRoute、SparseRoute、HybridSearch、metadata filter、RerankController、Response Builder、`query.py` verbose 输出、Dense 失败时 Sparse fallback；2 个 D14 集成测试通过 |
 
 #### 阶段 E：MCP 工具服务
@@ -2404,12 +2400,12 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 实现类/函数：
 
 - `Document(id,text,metadata)`：定义核心数据契约
-- `Chunk(id,text,chunk_index,start_offset,end_offset,source_ref)`：定义核心数据契约
+- `Chunk(id,text,metadata,chunk_index,start_offset,end_offset)`：定义核心数据契约
 - `ImageMetadata`：定义核心数据契约
 - `RetrievalResult`：定义流程返回结果
 - `RagError`：定义 RAG 子系统统一异常基类
 
-验收标准：`Document.metadata.images[]` 只持久化 `id/path`；Loader 内部可以使用页码、物理位置和 offset 完成占位符插入，但不得把这些定位字段写入最终 metadata；`Chunk` 支持 `start_offset`、`end_offset` 和可选 `source_ref`；类型可被 Ingestion、Retrieval、Trace 复用。
+验收标准：`Document.metadata.images[]` 只持久化 `id/path`；Loader 内部可以使用页码、物理位置和 offset 完成占位符插入，但不得把这些定位字段写入最终 metadata；`Chunk` 支持 `metadata`、`start_offset` 和 `end_offset`；来源字段统一写入 chunk metadata，类型可被 Ingestion、Retrieval、Trace 复用。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_types.py -v`
 
@@ -2621,7 +2617,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `SplitterFactory.create()`：根据配置或 provider 创建实现，内部自动确保内置实现完成注册
 - `DocumentChunker.chunk(document) -> List[Chunk]`：定义输入输出契约
 
-验收标准：可创建 fake/markdown/pdf loader 和 splitter；`libs.splitter` 只接收文本并返回 `List[str]`；`DocumentChunker` 契约测试覆盖 `chunk_id`、metadata 继承、`chunk_index`、`source_ref`、图片引用分发，以及 `List[str] -> List[Chunk]` 类型转换。
+验收标准：可创建 fake/markdown/pdf loader 和 splitter；`libs.splitter` 只接收文本并返回 `List[str]`；`DocumentChunker` 契约测试覆盖 `chunk_id`、metadata 继承、`chunk_index`、`source_path`、图片引用分发，以及 `List[str] -> List[Chunk]` 类型转换。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_factories.py services\ai-service\rag\tests\unit\test_splitter.py -v`
 
@@ -2741,13 +2737,13 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 - `DocumentChunker.chunk()`：将 Document 转换为带业务 metadata 的 Chunk 列表
 - `build_chunk_id()`：根据 `source_path + section_path + content_hash` 生成稳定 chunk 标识
-- `build_source_ref()`：建立 chunk 到来源文档的引用
+- `attach_section_path()`：根据标题 offset 将当前标题层级写入 chunk metadata
 - `extract_heading_hierarchy()`：为标题层级 metadata 补充源文本 `text_offset`
 - `attach_section_path()`：根据标题 offset 将当前标题层级写入 chunk metadata
 - `distribute_image_refs()`：扫描 chunk 正文中的 `[[image:image_id]]` 占位符并分发图片引用
 - `_merge_image_only_parts()`：将 splitter 产生的纯图片占位符片段合并到相邻正文 chunk，保留源文本顺序和 offset
 
-验收标准：Loader 的每个 heading metadata 包含 canonical `Document.text` 中的起始 offset；同来源、同章节、同内容生成相同 `chunk_id`，来源、章节或内容变化时 ID 发生变化；每个 chunk 都通过独立 `build_chunk_id()` 规则生成 ID；`Chunk.metadata` 只保留 `collection`、`document_id`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs` 等检索过滤字段，不复制 `images`、`headings`、`source_path`、`source_type`、`source_hash` 或 `title`；`Document.metadata.images[]` 保留完整文档图片清单的 `id/path`；按顺序添加 `chunk_index`；根据文档来源建立 `source_ref`；chunk metadata 根据 heading offset 包含当前 chunk 对应的 H2+ `section_path`，H1 文档标题不进入 `section_path`，并通过占位符扫描按需分发 `image_refs`；没有图片的 chunk 不添加无效 `image_refs`；splitter 产生的纯图片占位符 chunk 必须合并到相邻正文，不能作为缺少文本语义的独立检索单元；完成 `List[str] -> List[Chunk]` 类型转换。
+验收标准：Loader 的每个 heading metadata 包含 canonical `Document.text` 中的起始 offset；同来源、同章节、同内容生成相同 `chunk_id`，来源、章节或内容变化时 ID 发生变化；每个 chunk 都通过独立 `build_chunk_id()` 规则生成 ID；`Chunk.metadata` 只保留 `collection`、`document_id`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs` 等检索过滤字段，不复制 `images`、`headings`、`source_path`、`source_type`、`source_hash` 或 `title`；`Document.metadata.images[]` 保留完整文档图片清单的 `id/path`；按顺序添加 `chunk_index`；将 `source_path` 写入 chunk metadata；chunk metadata 根据 heading offset 包含当前 chunk 对应的 H2+ `section_path`，H1 文档标题不进入 `section_path`，并通过占位符扫描按需分发 `image_refs`；没有图片的 chunk 不添加无效 `image_refs`；splitter 产生的纯图片占位符 chunk 必须合并到相邻正文，不能作为缺少文本语义的独立检索单元；完成 `List[str] -> List[Chunk]` 类型转换。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 
@@ -2764,10 +2760,10 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `MarkdownSectionSplitter.merge_short_sections()`：将低于最小长度的相邻 sibling section 合并，避免生成只有标题或语义过薄的 chunk
 - `MarkdownSectionSplitter.split_long_section()`：当单个 `###` section 超过 `chunk_size` 时，在该 section 内部继续二次切分，并保持分片可定位到原始 heading offset
 - `MarkdownSectionSplitter.split_markdown_table()`：识别 Markdown 表格并按行分组；表格被拆成多个 chunk 时，每个分片都重复表头和分隔行，只有第一段表格可携带表格前正文，后续分片不重复前文
-- `DocumentChunker.chunk()`：根据 splitter 输出的文本片段和原文 offset 生成稳定 `Chunk`，并保留 `section_path`、`source_ref`、offset 和 `image_refs`；`section_path` 是 chunk metadata 中唯一章节结构字段
+- `DocumentChunker.chunk()`：根据 splitter 输出的文本片段和原文 offset 生成稳定 `Chunk`，并保留 `section_path`、`source_path`、offset 和 `image_refs`；`section_path` 是 chunk metadata 中唯一章节结构字段
 - `SplitterFactory.register_builtin_providers()`：注册 `markdown_section` splitter provider，允许通过配置切换 Markdown 分块策略
 
-验收标准：Markdown 文档优先按 `###` 构建 section；每个 section chunk metadata 包含从 `##` 开始的完整 `section_path`，可追溯 H2/H3/H4 层级，且不额外生成 `section`、`h2`、`h3` 或 `h4` metadata 字段；短 section 不得单独形成只有标题或极短正文的 chunk，应与后续同级 section 合并或并入相邻语义块；超过 `chunk_size` 的 `###` section 必须在 section 内部二次切分，后续分片通过 metadata/source_ref 保留当前 H2+ `section_path`，chunk 正文不得保留非代码块内的 `#`、`##`、`###` 标题行；长表格必须按行分组切分，任意表格分片都必须保留原始表头和分隔行；表格被拆成多个 chunk 时，第一段可以携带表格前正文说明，后续表格分片不得重复携带表格前正文，避免重复 embedding 同一段说明；同一 `###` section 内表格尾部 chunk 与后续“选购建议/建议/总结”块合并后不超过 `chunk_size` 时应合并，避免参数尾行和建议形成两个过薄 chunk；图片占位符 `[[image:image_id]]` 不能因 section 合并或表格切分丢失，`image_refs` 仍按最终 chunk 正文分发；`libs.splitter` 仍保持纯文本切分职责，不直接创建业务 `Chunk`；PDF 转 Markdown 后仍可复用该策略，无法识别标题结构时优雅回退到递归字符切分。
+验收标准：Markdown 文档优先按 `###` 构建 section；每个 section chunk metadata 包含从 `##` 开始的完整 `section_path`，可追溯 H2/H3/H4 层级，且不额外生成 `section`、`h2`、`h3` 或 `h4` metadata 字段；短 section 不得单独形成只有标题或极短正文的 chunk，应与后续同级 section 合并或并入相邻语义块；超过 `chunk_size` 的 `###` section 必须在 section 内部二次切分，后续分片通过 metadata 保留当前 H2+ `section_path`，chunk 正文不得保留非代码块内的 `#`、`##`、`###` 标题行；长表格必须按行分组切分，任意表格分片都必须保留原始表头和分隔行；表格被拆成多个 chunk 时，第一段可以携带表格前正文说明，后续表格分片不得重复携带表格前正文，避免重复 embedding 同一段说明；同一 `###` section 内表格尾部 chunk 与后续“选购建议/建议/总结”块合并后不超过 `chunk_size` 时应合并，避免参数尾行和建议形成两个过薄 chunk；图片占位符 `[[image:image_id]]` 不能因 section 合并或表格切分丢失，`image_refs` 仍按最终 chunk 正文分发；`libs.splitter` 仍保持纯文本切分职责，不直接创建业务 `Chunk`；PDF 转 Markdown 后仍可复用该策略，无法识别标题结构时优雅回退到递归字符切分。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 
@@ -3095,15 +3091,15 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 - `Citation`：定义 document_id、chunk_id、title、section_path、source_uri、score、trace_id 的不可变共享契约
 - `CitationBuilder.build()`：按最终候选排序批量构建 citation
-- `CitationBuilder._build_one()`：从单个 `RetrievalResult` 的 source_ref 或顶层 metadata 构建来源
-- `CitationBuilder._first_present()`：按 source_ref 优先级读取已持久化来源字段
+- `CitationBuilder._build_one()`：从单个 `RetrievalResult` 的顶层 metadata 构建来源
+- `CitationBuilder._first_present()`：按稳定别名读取顶层 metadata 来源字段
 - `CitationBuilder._title_from_source_uri()`：仅基于真实 source_uri 文件名生成缺省展示标题
 - `CitationBuilder._normalize_section_path()`：将字符串或有序字符串列表归一化为不可变章节路径
-- `SparseRoute._to_retrieval_results()`：将回表 Chunk 的 source_ref 深拷贝到 Sparse RetrievalResult metadata
-- `FakeVectorStore.search()`：在测试 Dense 结果中传播 source_ref，保持与生产实现一致
-- `PgVectorStore.search()`：读取 PostgreSQL 独立 source_ref 列并注入 Dense RetrievalResult metadata
+- `SparseRoute._to_retrieval_results()`：将回表 Chunk.metadata 深拷贝到 Sparse RetrievalResult metadata
+- `FakeVectorStore.search()`：在测试 Dense 结果中传播 metadata 来源字段，保持与生产实现一致
+- `PgVectorStore.search()`：读取 PostgreSQL metadata 并注入 Dense RetrievalResult metadata
 
-验收标准：输入最终排序后的 `Sequence[RetrievalResult]` 和非空 query trace_id，输出顺序一致的 `List[Citation]`；每条 citation 包含 document_id、chunk_id、来源标题、section_path、source_uri、最终 score 和 trace_id，并可通过 `model_dump(mode="json")` 直接得到 JSON array 形式的 section_path；Dense pgvector/Fake search 和 Sparse 回表都必须把独立 `Chunk.source_ref` 深拷贝到 RetrievalResult metadata，确保真实检索链路不丢失精确来源；来源字段优先读取 `metadata.source_ref`，并兼容旧数据使用的顶层 metadata；标题缺失时只允许从已验证 source_uri 文件名生成展示标题，对 URL 百分号编码执行解码，禁止从 chunk 正文猜测；document_id、title、source_uri 必须是真实非空字符串，缺少来源、脏结构化类型、章节结构非法或 trace_id 为空时 fail fast，避免生成不可验证 citation；构造过程不修改 retrieval metadata；空结果返回空列表。
+验收标准：输入最终排序后的 `Sequence[RetrievalResult]` 和非空 query trace_id，输出顺序一致的 `List[Citation]`；每条 citation 包含 document_id、chunk_id、来源标题、section_path、source_uri、最终 score 和 trace_id，并可通过 `model_dump(mode="json")` 直接得到 JSON array 形式的 section_path；Dense pgvector/Fake search 和 Sparse 回表都必须把 Chunk.metadata 深拷贝到 RetrievalResult metadata，确保真实检索链路不丢失 `document_id`、`source_path` 和 `section_path`；标题缺失时只允许从已验证 source_uri 文件名生成展示标题，对 URL 百分号编码执行解码，禁止从 chunk 正文猜测；document_id、title、source_uri 必须是真实非空字符串，缺少来源、脏结构化类型、章节结构非法或 trace_id 为空时 fail fast，避免生成不可验证 citation；构造过程不修改 retrieval metadata；空结果返回空列表。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
 
@@ -3195,7 +3191,7 @@ payload；支持 `--no-rerank` 直接跳过 RerankController 并保持过滤后 
 Response、query.py 参数解析均覆盖；同时覆盖 Hybrid Fusion 非预期异常边界、
 PostgreSQL BM25 非法 top_k/collection、空 terms 和驱动异常、QueryRuntime 的
 rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、NoOpReranker
-防御性副本、Citation 的 null/非法 source_ref 以及图片 resolver 重复记录；单元测试
+防御性副本、Citation 的缺失/非法来源 metadata 以及图片 resolver 重复记录；单元测试
 不访问真实模型或网络服务，目标 Retrieval/Reranker/Response 模块覆盖率不低于 90%。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit -v`
@@ -3490,7 +3486,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 实现类/函数：
 
 - `build_data_browser_page_model()`：读取文档、chunk、chunk detail 和图片列表，生成数据浏览页面模型
-- `render_data_browser_page()`：渲染文档列表、chunk 列表、chunk 详情、source_ref、image_refs 和图片表格
+- `render_data_browser_page()`：渲染文档列表、chunk 列表、chunk 详情、来源 metadata、image_refs 和图片表格
 - `build_query_trace_page_model()`：读取 Query Trace 历史和选中 trace 详情，生成 Query Trace 页面模型
 - `render_query_trace_page()`：渲染 Query Trace 历史、阶段瀑布图、Dense/Sparse/Fusion/Rerank 候选数量对比、Chunk Frequency Summary、Chunk Flow Matrix、`query_result.contexts`、`top_score` 和 rerank delta；Trace 下拉框使用固定 widget key 持久化选择
 - Dashboard Query Trace 分发：每次 Streamlit 重跑从 `session_state` 读取已选 Query Trace ID，并传入 `build_query_trace_page_model()`

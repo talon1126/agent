@@ -129,7 +129,7 @@ def test_custom_retrieval_metrics_accept_mapping_candidates() -> None:
                 {"chunk_id": "chunk-1", "source": "shopping_guides/other.md#noise"},
                 {
                     "chunk_id": "chunk-2",
-                    "source_ref": "shopping_guides/headphones.md#wireless",
+                    "source_path": "shopping_guides/headphones.md#wireless",
                 },
             ]
         }

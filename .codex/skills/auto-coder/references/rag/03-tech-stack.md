@@ -51,7 +51,7 @@ Dedup -> Loader -> DocumentSummarizer -> Splitter -> Transform（包含 ImageCap
 | `BaseLoader` | 将不同来源的文件转换为统一 `Document(id + text + summary + metadata)` 对象 | 负责文件识别、使用 MarkItDown 完成 PDF -> Markdown、使用 PyMuPDF 提取 PDF 图片、编码处理和基础 metadata 抽取；`summary` 为顶层字段，由独立摘要步骤生成或更新；只处理去重判断后确认需要摄取的文档 |
 | `DocumentSummarizer` | 为加载后的文档生成顶层 `Document.summary` | 作为 Loader 之后、Splitter 之前的独立步骤；读取 `document_summary_prompt.yaml`；复用统一 LLM provider；已有同版本摘要时保持幂等；摘要只作为全局语义上下文，不写入 `metadata.summary` |
 | `BaseSplitter` | 纯文本切分工具 | 职责边界固定为 `str -> List[str]`，不直接接触 `Document`、`Chunk`、metadata、图片引用等业务对象；首版使用 LangChain `RecursiveCharacterTextSplitter` 作为底层 splitter |
-| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、建立 `source_ref`，根据 heading offset 写入唯一章节结构字段 `section_path`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 保存完整文档图片清单的 `id/path`，`Chunk.metadata` 保存关联图片的 `image_refs` |
+| `DocumentChunker` | 将 `Document` 适配为业务 `Chunk` 对象 | 调用 `libs.splitter` 得到 `List[str]` 后，转换为符合 `core.types` 契约的 `List[Chunk]`；负责生成 `chunk_id`、复制检索过滤需要的业务 metadata、添加 `chunk_index`、计算 `start_offset/end_offset`、把 `source_path` 写入 chunk metadata，根据 heading offset 写入唯一章节结构字段 `section_path`，并通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`；`Document.metadata.images[]` 保存完整文档图片清单的 `id/path`，`Chunk.metadata` 保存关联图片的 `image_refs` |
 | `BaseTransform` | 对粗切分 chunk 做语义二次加工和上下文增强 | 利用 LLM 的语义理解能力合并逻辑上密切相关但被物理切割拆开的 chunk；去除页眉页脚、重复目录、无意义噪声和解析残留；注入标题路径、文档主题、相邻摘要、业务 metadata |
 | `ImageCaptioner` | 对带图片引用的 chunk 生成图片 caption | 当 `vision_llm.enabled=true` 且 chunk 存在 `image_refs` 时调用 Vision LLM；生成 caption 后替换 chunk 正文中的图片占位符，使 caption 进入 Dense/BM25 可检索文本；执行详情写入 ingestion trace 的 `transform.sub_stages`，不写入 chunk metadata |
 | `BaseEmbedding` | 将增强后的 chunk 执行双路索引 | 在编码前先计算 `content_hash`，只对数据库中不存在的内容哈希执行新编码；DenseEncoder 调用百炼 `text-embedding-v4` 生成 1536 维语义向量；BM25Indexer 生成词项、词频和倒排索引；BatchProcessor 统一处理批量、限流、重试和失败隔离 |
@@ -97,7 +97,6 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `chunk_index` | `int` | chunk 在当前 Document 中的排序，从 0 开始递增 |
 | `start_offset` | `int` | chunk 在 `Document.text` 中的起始位置 |
 | `end_offset` | `int` | chunk 在 `Document.text` 中的结束位置 |
-| `source_ref` | `dict/null` | 可选来源引用，建议包含 `document_id`、`source_path`、`section_path`、`page`、`collection`，用于引用构造和 trace 回溯 |
 
 `metadata.images[]` 字段：
 
@@ -111,9 +110,8 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 - 字段命名统一使用 `start_offset`，不使用 `start_offest`。
 - Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。
 - `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`。
-- `source_ref` 是可选字段，但首版建议保留，方便 Dashboard 展示引用来源、原文位置和关联图片。
-- `Chunk.metadata` 只保留检索过滤和业务解释需要的字段，例如 `collection`、`document_id`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。章节结构只使用 `section_path: List[str]` 表示，不额外保存 `section`、`h2`、`h3` 或 `h4` 对象。不得保存 `images`、`headings`、`source_path`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等来源、图片详情和 Transform 执行信息。
-- 来源引用保存在独立 `Chunk.source_ref` 字段，Dense/Sparse Retrieval 构造 `RetrievalResult` 时再将其深拷贝到 result metadata，避免持久化职责混淆或丢失文档来源信息。
+- `Chunk.metadata` 是 chunk 来源字段的唯一持久化载体，必须包含 `document_id` 和 `source_path`，并按需包含 `collection`、`doc_type`、`topic`、`chunk_index`、`section_path` 和 `image_refs`。
+- `Chunk.metadata` 只保留检索过滤、引用构造和业务解释需要的字段，例如 `collection`、`document_id`、`source_path`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。章节结构只使用 `section_path: List[str]` 表示，不额外保存 `section`、`h2`、`h3` 或 `h4` 对象。不得保存 `images`、`headings`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等图片详情和 Transform 执行信息。
 
 `RetrievalResult` 字段：
 
@@ -122,7 +120,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `chunk_id` | `str` | 命中的 chunk ID |
 | `text` | `str` | 命中的 chunk 文本 |
 | `score` | `float` | 当前检索路线返回的相关性分数；Dense/BM25 分数量纲不同，只记录，不直接互相比大小 |
-| `metadata` | `dict` | chunk metadata，包含 collection、source_ref、section_path、image_refs、文档状态等过滤和引用信息 |
+| `metadata` | `dict` | chunk metadata，包含 collection、document_id、source_path、section_path、image_refs、文档状态等过滤和引用信息 |
 
 `ProcessedQuery` 是 Query Processor 向 Dense Route、Sparse Route、HybridSearch 和 Trace 传递的统一查询对象：
 
@@ -637,8 +635,6 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     content_hash TEXT NOT NULL,
     start_offset INTEGER NOT NULL,
     end_offset INTEGER NOT NULL,
-    source_ref JSONB,
-    heading_path JSONB NOT NULL DEFAULT '[]'::jsonb,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding vector(1536),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

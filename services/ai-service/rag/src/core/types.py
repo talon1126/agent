@@ -190,8 +190,9 @@ class Chunk(DomainModel):
 
     Offsets refer to the canonical source ``Document.text`` and use a
     start-inclusive, end-exclusive range. Transform stages may enhance
-    ``text`` without changing those source coordinates. ``source_ref`` remains
-    optional and extensible because loaders expose different citation details.
+    ``text`` without changing those source coordinates. Source identity,
+    path, and section details live in ``metadata`` so storage and retrieval
+    share one citation contract.
     """
 
     id: str = Field(min_length=1)
@@ -200,7 +201,6 @@ class Chunk(DomainModel):
     chunk_index: int = Field(ge=0)
     start_offset: int = Field(ge=0)
     end_offset: int = Field(ge=0)
-    source_ref: dict[str, Any] | None = None
 
     @field_validator("id")
     @classmethod

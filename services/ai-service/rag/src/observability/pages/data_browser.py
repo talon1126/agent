@@ -125,7 +125,6 @@ def render_data_browser_page(
                 "chunk_id": model.selected_chunk.chunk_id,
                 "text": model.selected_chunk.text,
                 "metadata": dict(model.selected_chunk.metadata),
-                "source_ref": model.selected_chunk.source_ref,
                 "image_refs": model.selected_chunk.image_refs,
             }
         )

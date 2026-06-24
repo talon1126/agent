@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Mapping
-from copy import deepcopy
 from re import sub
 from time import perf_counter
 from typing import Any
@@ -521,22 +520,20 @@ def _snapshot_key(chunk: Chunk) -> tuple[Any, ...]:
         rewrite step intentionally changes the content-derived chunk ID.
     """
 
-    source_ref = deepcopy(chunk.source_ref or {})
-    document_id = source_ref.get("document_id") or chunk.metadata.get("document_id")
     return (
-        document_id,
-        source_ref.get("start_offset", chunk.start_offset),
-        source_ref.get("end_offset", chunk.end_offset),
+        chunk.metadata.get("document_id"),
+        chunk.start_offset,
+        chunk.end_offset,
         chunk.chunk_index,
-        _hashable_source_value(source_ref.get("section_path")),
+        _hashable_source_value(chunk.metadata.get("section_path")),
     )
 
 
 def _hashable_source_value(value: Any) -> Any:
-    """Normalize source-reference values so they can participate in dict keys.
+    """Normalize source metadata values so they can participate in dict keys.
 
     Args:
-        value: Optional value copied from ``Chunk.source_ref``.
+        value: Optional value copied from chunk metadata.
 
     Returns:
         Tuples for lists and dictionaries, or the original scalar value.

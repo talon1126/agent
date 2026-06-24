@@ -15,7 +15,7 @@ Input contract:
 - Each prediction must contain ``retrieved_sources`` as an ordered list of
   source identifiers or candidate mappings.
 
-Candidate mappings may expose ``source``, ``source_ref``, ``id``, or
+Candidate mappings may expose ``source``, ``source_path``, ``id``, or
 ``chunk_id``. This keeps the metric layer compatible with both human-readable
 source references and lower-level chunk identifiers while still failing fast
 when an item cannot be normalized into a comparable string.
@@ -250,30 +250,14 @@ def _source_identifier(candidate: Any) -> str:
     if not isinstance(candidate, Mapping):
         raise ValueError("retrieved_sources items must be strings or mappings")
 
-    for key in ("source", "source_ref", "id", "chunk_id"):
+    for key in ("source", "source_path", "source_uri", "id", "chunk_id"):
         value = candidate.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-        if key == "source_ref" and isinstance(value, Mapping):
-            normalized = _source_ref_identifier(value)
-            if normalized:
-                return normalized
     raise ValueError(
-        "retrieved_sources mapping items must contain source, source_ref, id, or chunk_id"
+        "retrieved_sources mapping items must contain source, source_path, id, or chunk_id"
     )
 
-
-def _source_ref_identifier(source_ref: Mapping[str, Any]) -> str | None:
-    """Convert a structured source reference into the canonical fixture form."""
-
-    source_path = source_ref.get("source_path") or source_ref.get("source_uri")
-    section_path = source_ref.get("section_path") or source_ref.get("section")
-    if isinstance(source_path, str) and source_path.strip():
-        source = source_path.strip()
-        if isinstance(section_path, str) and section_path.strip():
-            return f"{source}#{section_path.strip()}"
-        return source
-    return None
 
 
 def _reciprocal_rank(expected: set[str], retrieved: Sequence[str]) -> float:

@@ -78,8 +78,7 @@ class DenoiseTransform(BaseTransform):
         metadata = deepcopy(chunk.metadata)
         source_path = str(
             metadata.get("source_path")
-            or (chunk.source_ref or {}).get("source_path")
-            or (chunk.source_ref or {}).get("document_id")
+            or metadata.get("document_id")
             or chunk.id
         )
         return chunk.model_copy(

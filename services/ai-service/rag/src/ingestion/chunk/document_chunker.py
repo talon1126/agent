@@ -3,7 +3,7 @@
 ``DocumentChunker`` is the boundary between low-level text splitting and RAG
 business metadata. It calls a ``BaseSplitter`` implementation to obtain
 ``list[str]`` segments, then adds stable IDs, inherited metadata, source ranges,
-source references, ordering, and image-reference distribution.
+source metadata, ordering, and image-reference distribution.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from src.core.types import Chunk, Document
 from src.ingestion.chunk.chunk_id import build_chunk_id
 from src.ingestion.chunk.splitter_step import (
     attach_section_path,
-    build_source_ref,
     distribute_image_refs,
 )
 from src.libs.splitter import BaseSplitter
@@ -59,7 +58,7 @@ class DocumentChunker:
 
         Returns:
             Ordered validated chunks with stable IDs, inherited metadata,
-            source references, offsets, chunk indexes, and ``image_refs``.
+            source metadata, offsets, chunk indexes, and ``image_refs``.
 
         Raises:
             IngestionError: If the splitter emits non-string, blank, duplicate
@@ -86,13 +85,6 @@ class DocumentChunker:
                 metadata,
                 chunk_text=part.text,
             )
-            source_ref = build_source_ref(
-                document,
-                start_offset=start_offset,
-                end_offset=end_offset,
-                section_path=section_path,
-            )
-
             chunks.append(
                 Chunk(
                     id=build_chunk_id(
@@ -107,7 +99,6 @@ class DocumentChunker:
                     chunk_index=chunk_index,
                     start_offset=start_offset,
                     end_offset=end_offset,
-                    source_ref=source_ref,
                 )
             )
         return chunks
@@ -285,11 +276,12 @@ def _chunk_metadata_from_document(document: Document) -> dict[str, object]:
     Returns:
         A new dictionary containing only fields used for retrieval filtering
         and high-level business explanation. Source details remain in
-        ``Chunk.source_ref`` and document/image tables.
+        Source details remain in first-class document tables and selected
+        chunk metadata fields.
     """
 
     metadata: dict[str, object] = {"document_id": document.id}
-    for key in ("collection", "doc_type", "topic"):
+    for key in ("collection", "source_path", "doc_type", "topic"):
         value = document.metadata.get(key)
         if value is not None:
             metadata[key] = deepcopy(value)

@@ -27,7 +27,7 @@ class MetadataEnricher(BaseTransform):
         Args:
             context_fields: Ordered trace-safe context keys to copy. The default
                 covers filterable business fields. Source path and title stay
-                in ``Chunk.source_ref`` or document storage, not chunk metadata.
+                in document storage or selected source metadata fields, not images.
         """
 
         self._context_fields = tuple(

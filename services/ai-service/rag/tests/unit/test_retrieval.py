@@ -66,11 +66,10 @@ def _chunk(
     return Chunk(
         id=chunk_id,
         text=text,
-        metadata=dict(metadata or {}),
+        metadata={"document_id": "doc-1", **dict(metadata or {})},
         chunk_index=0,
         start_offset=0,
         end_offset=max(len(text), 1),
-        source_ref={"document_id": "doc-1"},
     )
 
 
@@ -523,7 +522,7 @@ def test_sparse_route_queries_bm25_and_hydrates_chunks_in_candidate_order() -> N
     assert results[0].text == "预算有限时关注蓝牙稳定性。"
     assert results[0].metadata == {
         "collection": "shopping_guides",
-        "source_ref": {"document_id": "doc-1"},
+        "document_id": "doc-1",
     }
 
 

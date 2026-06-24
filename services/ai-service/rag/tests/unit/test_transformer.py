@@ -73,6 +73,7 @@ def make_chunk(
     """
 
     merged_metadata: dict[str, object] = {
+        "document_id": "doc-stress-toys",
         "source_path": "shopping_guides/stress-toys.md",
         "section_path": section_path or ["Stress Toys", "Materials"],
         "image_refs": [],
@@ -85,13 +86,6 @@ def make_chunk(
         chunk_index=chunk_index,
         start_offset=start_offset,
         end_offset=start_offset + len(text),
-        source_ref={
-            "document_id": "doc-stress-toys",
-            "source_path": "shopping_guides/stress-toys.md",
-            "section_path": merged_metadata["section_path"],
-            "start_offset": start_offset,
-            "end_offset": start_offset + len(text),
-        },
     )
 
 
@@ -584,7 +578,7 @@ def test_semantic_merge_combines_adjacent_chunks_and_is_idempotent() -> None:
     assert merged[0].metadata["image_refs"] == ["image-1", "image-2"]
     assert merged[0].start_offset == first.start_offset
     assert merged[0].end_offset == second.end_offset
-    assert merged[0].source_ref["end_offset"] == second.end_offset
+    assert merged[0].end_offset == second.end_offset
     assert merged[0].chunk_index == 0
     assert merged[0].metadata["chunk_index"] == 0
     assert repeated == merged

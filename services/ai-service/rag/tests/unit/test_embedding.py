@@ -54,13 +54,13 @@ def make_chunk(
         id=chunk_id,
         text=text,
         metadata={
+            "document_id": "doc-stress-toys",
             "source_path": "shopping_guides/stress-toys.md",
             "section_path": ["Stress Toys", "Materials"],
         },
         chunk_index=0,
         start_offset=0,
         end_offset=len(text),
-        source_ref={"document_id": "doc-stress-toys"},
     )
 
 

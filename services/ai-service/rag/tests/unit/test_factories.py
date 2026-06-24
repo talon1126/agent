@@ -56,6 +56,7 @@ LLMFactory = llm_module.LLMFactory
 LoaderFactory = loader_module.LoaderFactory
 MarkdownLoader = loader_module.MarkdownLoader
 PdfLoader = loader_module.PdfLoader
+MarkdownSectionSplitter = splitter_module.MarkdownSectionSplitter
 RecursiveCharacterSplitter = splitter_module.RecursiveCharacterSplitter
 SplitterFactory = splitter_module.SplitterFactory
 VectorStoreFactory = vector_store_module.VectorStoreFactory
@@ -149,23 +150,26 @@ def test_loader_factory_selects_loader_from_source_suffix(tmp_path: Path) -> Non
     assert loader.load(markdown_path).metadata["source_path"].endswith("selection.md")
 
 
-def test_splitter_factory_creates_fake_and_configured_recursive_splitters() -> None:
+def test_splitter_factory_creates_fake_and_configured_markdown_splitters() -> None:
     """Require SplitterFactory to support test and configured text splitters.
 
     The fake splitter makes unit tests deterministic, while the configured
-    recursive splitter proves the factory can read ``settings.yaml`` without
+    Markdown section splitter proves the factory can read ``settings.yaml`` without
     hardcoding chunk parameters in orchestration code.
     """
 
     settings = load_settings(SETTINGS_PATH, validate_environment=False)
 
     fake_splitter = SplitterFactory.create(provider="fake", chunks=["first", "second"])
-    recursive_splitter = SplitterFactory.create(settings=settings)
+    configured_splitter = SplitterFactory.create(settings=settings)
 
     assert isinstance(fake_splitter, FakeSplitter)
     assert fake_splitter.split("ignored") == ["first", "second"]
-    assert isinstance(recursive_splitter, RecursiveCharacterSplitter)
-    assert all(isinstance(part, str) for part in recursive_splitter.split("alpha beta gamma"))
+    assert isinstance(configured_splitter, MarkdownSectionSplitter)
+    configured_parts = configured_splitter.split(
+        "# Guide\n\n## Audio\n\n### Earbuds\n\nalpha beta gamma"
+    )
+    assert all(isinstance(part, str) for part in configured_parts)
 
 
 def test_factories_raise_configuration_error_for_unknown_providers() -> None:
@@ -302,14 +306,15 @@ def test_vector_store_factory_creates_order_preserving_fake_store() -> None:
     first = Chunk(
         id="chunk-1",
         text="Quiet silicone stress ball.",
-        metadata={"collection": "shopping_guides", "doc_type": "guide"},
-        chunk_index=0,
-        start_offset=0,
-        end_offset=27,
-        source_ref={
+        metadata={
+            "collection": "shopping_guides",
+            "doc_type": "guide",
             "document_id": "doc-stress",
             "source_path": "shopping_guides/stress-balls.md",
         },
+        chunk_index=0,
+        start_offset=0,
+        end_offset=27,
     )
     second = Chunk(
         id="chunk-2",
@@ -334,7 +339,8 @@ def test_vector_store_factory_creates_order_preserving_fake_store() -> None:
     assert isinstance(store, FakeVectorStore)
     assert upserted_ids == ["chunk-1", "chunk-2"]
     assert [result.chunk_id for result in results] == ["chunk-1"]
-    assert results[0].metadata["source_ref"] == first.source_ref
+    assert results[0].metadata["document_id"] == "doc-stress"
+    assert results[0].metadata["source_path"] == "shopping_guides/stress-balls.md"
     assert [chunk.id for chunk in fetched] == ["chunk-2", "chunk-1"]
 
 

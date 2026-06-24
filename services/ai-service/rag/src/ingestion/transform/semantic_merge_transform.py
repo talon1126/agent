@@ -200,14 +200,9 @@ class SemanticMergeTransform(BaseTransform):
             metadata.pop("image_refs")
         del provider, model
 
-        source_ref = deepcopy(left.source_ref) if left.source_ref is not None else None
-        if source_ref is not None:
-            source_ref["end_offset"] = max(left.end_offset, right.end_offset)
-
         source_path = str(
             metadata.get("source_path")
-            or (source_ref or {}).get("source_path")
-            or (source_ref or {}).get("document_id")
+            or metadata.get("document_id")
             or left.id
         )
         return left.model_copy(
@@ -221,7 +216,6 @@ class SemanticMergeTransform(BaseTransform):
                 "metadata": metadata,
                 "start_offset": min(left.start_offset, right.start_offset),
                 "end_offset": max(left.end_offset, right.end_offset),
-                "source_ref": source_ref,
             },
             deep=True,
         )

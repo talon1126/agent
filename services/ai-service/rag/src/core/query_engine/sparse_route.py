@@ -294,8 +294,8 @@ class SparseRoute:
             score_by_chunk_id: BM25 native score lookup keyed by chunk ID.
 
         Returns:
-            Retrieval results with BM25 scores, copied chunk metadata, and the
-            canonical ``source_ref`` needed by citation construction.
+            Retrieval results with BM25 scores and copied metadata containing
+            the citation fields needed by response construction.
         """
 
         results: list[RetrievalResult] = []
@@ -303,8 +303,6 @@ class SparseRoute:
             if chunk.id not in score_by_chunk_id:
                 continue
             metadata = deepcopy(chunk.metadata)
-            if chunk.source_ref is not None:
-                metadata["source_ref"] = deepcopy(chunk.source_ref)
             results.append(
                 RetrievalResult(
                     chunk_id=chunk.id,

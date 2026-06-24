@@ -199,7 +199,7 @@ class ImageCaptioner(BaseTransform):
             update={
                 "id": build_chunk_id(
                     source_path=str(
-                        (chunk.source_ref or {}).get(
+                        chunk.metadata.get(
                             "source_path",
                             chunk.metadata.get("document_id", chunk.id),
                         )

@@ -42,33 +42,28 @@ def _result(
     )
 
 
-def test_citation_builder_uses_source_ref_and_preserves_ranked_order() -> None:
-    """Require citations to follow reranked candidates and source_ref fields."""
+def test_citation_builder_uses_metadata_sources_and_preserves_ranked_order() -> None:
+    """Require citations to follow reranked candidates and metadata fields."""
 
     candidates = [
         _result(
             "chunk-b",
             score=0.91,
             metadata={
-                "title": "Top-level title must not override source_ref",
-                "source_ref": {
-                    "document_id": "doc-headphones",
-                    "source_path": "shopping_guides/headphones.md",
-                    "title": "Wireless Headphones Buying Guide",
-                    "section_path": ["Core Criteria", "Battery Life"],
-                },
+                "document_id": "doc-headphones",
+                "source_path": "shopping_guides/headphones.md",
+                "title": "Wireless Headphones Buying Guide",
+                "section_path": ["Core Criteria", "Battery Life"],
             },
         ),
         _result(
             "chunk-a",
             score=0.76,
             metadata={
-                "source_ref": {
-                    "document_id": "doc-fidget",
-                    "source_uri": "shopping_guides/fidget-toys.pdf",
-                    "title": "Fidget Toy Guide",
-                    "heading_path": ["Quiet Office Options"],
-                },
+                "document_id": "doc-fidget",
+                "source_uri": "shopping_guides/fidget-toys.pdf",
+                "title": "Fidget Toy Guide",
+                "section_path": ["Quiet Office Options"],
             },
         ),
     ]
@@ -91,9 +86,8 @@ def test_citation_builder_uses_source_ref_and_preserves_ranked_order() -> None:
     assert citations[1].section_path == ("Quiet Office Options",)
     assert citations[1].source_uri == "shopping_guides/fidget-toys.pdf"
 
-
 def test_citation_builder_supports_top_level_metadata_and_source_title_fallback() -> None:
-    """Require compatibility with dense results that expose no source_ref."""
+    """Require source-title fallback when metadata has no explicit title."""
 
     candidates = [
         _result(
@@ -120,11 +114,9 @@ def test_citation_builder_does_not_mutate_retrieval_metadata() -> None:
     candidate = _result(
         "chunk-a",
         metadata={
-            "source_ref": {
-                "document_id": "doc-a",
-                "source_path": "shopping_guides/a.md",
-                "section_path": ["A", "B"],
-            }
+            "document_id": "doc-a",
+            "source_path": "shopping_guides/a.md",
+            "section_path": ["A", "B"],
         },
     )
     original_metadata = deepcopy(candidate.metadata)
@@ -134,84 +126,34 @@ def test_citation_builder_does_not_mutate_retrieval_metadata() -> None:
     assert citations[0].section_path == ("A", "B")
     assert candidate.metadata == original_metadata
 
-
-def test_citation_builder_accepts_null_source_ref_with_top_level_fallback() -> None:
-    """Treat a persisted null source_ref as absent compatibility metadata."""
-
-    citation = CitationBuilder().build(
-        [
-            _result(
-                "chunk-a",
-                metadata={
-                    "source_ref": None,
-                    "document_id": "doc-a",
-                    "source_path": "shopping_guides/a.md",
-                },
-            )
-        ],
-        trace_id="query-trace-null-source",
-    )[0]
-
-    assert citation.document_id == "doc-a"
-    assert citation.source_uri == "shopping_guides/a.md"
-
-
-def test_citation_builder_rejects_non_mapping_source_ref() -> None:
-    """Reject malformed nested source metadata before constructing citations."""
-
-    with pytest.raises(ValueError, match="source_ref must be a mapping"):
-        CitationBuilder().build(
-            [
-                _result(
-                    "chunk-a",
-                    metadata={
-                        "source_ref": ["invalid"],
-                        "document_id": "doc-a",
-                        "source_path": "shopping_guides/a.md",
-                    },
-                )
-            ],
-            trace_id="query-trace-invalid-source",
-        )
-
-
 @pytest.mark.parametrize(
     "metadata,expected_message",
     [
         (
-            {"source_ref": {"source_path": "shopping_guides/a.md"}},
+            {"source_path": "shopping_guides/a.md"},
             "document_id",
         ),
         (
-            {"source_ref": {"document_id": "doc-a"}},
+            {"document_id": "doc-a"},
             "source path",
         ),
         (
             {
-                "source_ref": {
-                    "document_id": "doc-a",
-                    "source_path": "shopping_guides/a.md",
-                    "section_path": {"invalid": "mapping"},
-                }
+                "document_id": "doc-a",
+                "source_path": "shopping_guides/a.md",
+                "section_path": {"invalid": "mapping"},
             },
             "section path",
         ),
         (
-            {
-                "source_ref": {
-                    "document_id": "doc-a",
-                    "source_path": {"invalid": "path"},
-                }
-            },
+            {"document_id": "doc-a", "source_path": {"invalid": "path"}},
             "source path",
         ),
         (
             {
-                "source_ref": {
-                    "document_id": "doc-a",
-                    "source_path": "shopping_guides/a.md",
-                    "title": ["invalid", "title"],
-                }
+                "document_id": "doc-a",
+                "source_path": "shopping_guides/a.md",
+                "title": ["invalid", "title"],
             },
             "title",
         ),
@@ -325,11 +267,9 @@ def test_response_builder_formats_context_and_assembles_ranked_images() -> None:
             text="  Battery life and codec support should be compared together.  ",
             score=0.94,
             metadata={
-                "source_ref": {
-                    "document_id": "doc-headphones",
-                    "source_path": "shopping_guides/headphones.md",
-                    "title": "Wireless Headphones Guide",
-                },
+                "document_id": "doc-headphones",
+                "source_path": "shopping_guides/headphones.md",
+                "title": "Wireless Headphones Guide",
                 "image_refs": ["image-codec", "image-battery"],
                 "tool_result": {
                     "tool": "dense_search",
@@ -342,11 +282,9 @@ def test_response_builder_formats_context_and_assembles_ranked_images() -> None:
             text="A charging-case rating should be separated from earbud runtime.",
             score=0.88,
             metadata={
-                "source_ref": {
-                    "document_id": "doc-headphones",
-                    "source_path": "shopping_guides/headphones.md",
-                    "title": "Wireless Headphones Guide",
-                },
+                "document_id": "doc-headphones",
+                "source_path": "shopping_guides/headphones.md",
+                "title": "Wireless Headphones Guide",
                 "image_refs": ["image-battery"],
                 "dense_score": 0.995,
             },

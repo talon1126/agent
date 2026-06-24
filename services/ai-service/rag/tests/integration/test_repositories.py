@@ -405,9 +405,9 @@ def test_core_schema_uses_python_domain_ids_as_primary_keys() -> None:
 def test_core_schema_enables_pgvector_and_preserves_domain_fields() -> None:
     """Require pgvector and fields needed to reconstruct domain objects.
 
-    Storage must retain chunk ordering, source offsets, source references,
-    extensible metadata, content hashes, and the configured 1536-dimensional
-    1536-dimension embedding produced by the selected provider.
+    Storage must retain chunk ordering, source offsets, metadata-owned source
+    fields, content hashes, and the configured 1536-dimensional embedding
+    produced by the selected provider.
     """
 
     sql = _schema_sql()
@@ -424,11 +424,15 @@ def test_core_schema_enables_pgvector_and_preserves_domain_fields() -> None:
         r"\bcontent_hash\s+TEXT\s+NOT\s+NULL\b",
         r"\bstart_offset\s+INTEGER\s+NOT\s+NULL\b",
         r"\bend_offset\s+INTEGER\s+NOT\s+NULL\b",
-        r"\bsource_ref\s+JSONB\b",
         r"\bmetadata\s+JSONB\s+NOT\s+NULL\b",
         r"\bembedding\s+vector\(1536\)",
     ):
         assert re.search(field_contract, chunks, re.IGNORECASE)
+
+    assert "source_ref" not in chunks
+    assert "DROP COLUMN IF EXISTS source_ref" in sql
+    for migrated_key in ("document_id", "source_path", "collection", "section_path"):
+        assert f"'{migrated_key}'" in sql
 
     assert re.search(
         r"CHECK\s*\(\s*start_offset\s*>=\s*0\s+AND\s+"
@@ -812,20 +816,18 @@ def test_document_and_chunk_repositories_round_trip_and_replace_content() -> Non
             Chunk(
                 id=f"chunk-{uuid4().hex}",
                 text="Alpha section.",
-                metadata={"doc_type": "shopping_guide"},
+                metadata={"doc_type": "shopping_guide", "source_path": source_path},
                 chunk_index=0,
                 start_offset=0,
                 end_offset=14,
-                source_ref={"source_path": source_path, "section": "Alpha"},
             ),
             Chunk(
                 id=f"chunk-{uuid4().hex}",
                 text="Beta section.",
-                metadata={"doc_type": "shopping_guide"},
+                metadata={"doc_type": "shopping_guide", "source_path": source_path},
                 chunk_index=1,
                 start_offset=15,
                 end_offset=28,
-                source_ref={"source_path": source_path, "section": "Beta"},
             ),
         ]
         assert (
@@ -931,6 +933,7 @@ def test_image_storage_saves_files_and_queries_upserted_indexes(
 
     collection_id = f"b4-images-{uuid4().hex}"
     document_id = f"doc-{uuid4().hex}"
+    source_path = f"fixtures/{document_id}.md"
     doc_hash = sha256(b"image-document").hexdigest()
     image_id = f"image-{uuid4().hex}"
     image_hash = sha256(b"png-fixture").hexdigest()
@@ -945,10 +948,10 @@ def test_image_storage_saves_files_and_queries_upserted_indexes(
             Document(
                 id=document_id,
                 text="Document containing an image placeholder.",
-                metadata={"doc_type": "shopping_guide"},
+                metadata={"doc_type": "shopping_guide", "source_path": source_path},
             ),
             collection_id=collection_id,
-            source_path=f"fixtures/{document_id}.md",
+            source_path=source_path,
             source_hash=doc_hash,
         )
         storage = ImageStorage(pool, root_dir=tmp_path / "data" / "images")
@@ -1033,6 +1036,7 @@ def test_document_repository_manages_lifecycle_and_deleted_cleanup(
 
     collection_id = f"b6-lifecycle-{uuid4().hex}"
     document_id = f"doc-{uuid4().hex}"
+    source_path = f"fixtures/{document_id}.md"
     source_hash = sha256(b"lifecycle-document").hexdigest()
     image_id = f"image-{uuid4().hex}"
     pool = PostgresPool.from_settings(
@@ -1048,12 +1052,12 @@ def test_document_repository_manages_lifecycle_and_deleted_cleanup(
         document = Document(
             id=document_id,
             text="Lifecycle test document.",
-            metadata={"doc_type": "shopping_guide"},
+            metadata={"doc_type": "shopping_guide", "source_path": source_path},
         )
         documents.upsert(
             document,
             collection_id=collection_id,
-            source_path=f"fixtures/{document_id}.md",
+            source_path=source_path,
             source_hash=source_hash,
         )
         chunks.upsert_many(
@@ -1061,11 +1065,10 @@ def test_document_repository_manages_lifecycle_and_deleted_cleanup(
                 Chunk(
                     id=f"chunk-{uuid4().hex}",
                     text="Lifecycle test document.",
-                    metadata={"doc_type": "shopping_guide"},
+                    metadata={"doc_type": "shopping_guide", "source_path": source_path},
                     chunk_index=0,
                     start_offset=0,
                     end_offset=24,
-                    source_ref={"document_id": document_id},
                 )
             ],
             collection_id=collection_id,
@@ -1453,20 +1456,28 @@ def test_pgvector_store_updates_searches_and_restores_chunk_order() -> None:
             Chunk(
                 id=f"chunk-{uuid4().hex}",
                 text="Stress ball guide.",
-                metadata={"doc_type": "guide", "collection": collection_id},
+                metadata={
+                    "doc_type": "guide",
+                    "collection": collection_id,
+                    "document_id": document_id,
+                    "source_path": source_path,
+                },
                 chunk_index=0,
                 start_offset=0,
                 end_offset=18,
-                source_ref={"document_id": document_id},
             ),
             Chunk(
                 id=f"chunk-{uuid4().hex}",
                 text="Wireless headphone comparison.",
-                metadata={"doc_type": "comparison", "collection": collection_id},
+                metadata={
+                    "doc_type": "comparison",
+                    "collection": collection_id,
+                    "document_id": document_id,
+                    "source_path": source_path,
+                },
                 chunk_index=1,
                 start_offset=19,
                 end_offset=49,
-                source_ref={"document_id": document_id},
             ),
         ]
         ChunkRepository(pool).upsert_many(
@@ -1491,7 +1502,8 @@ def test_pgvector_store_updates_searches_and_restores_chunk_order() -> None:
         assert repeated == upserted
         assert [result.chunk_id for result in results] == [chunks[0].id]
         assert results[0].score == pytest.approx(1.0)
-        assert results[0].metadata["source_ref"] == chunks[0].source_ref
+        assert results[0].metadata["document_id"] == document_id
+        assert results[0].metadata["source_path"] == source_path
         assert [chunk.id for chunk in restored] == [chunks[1].id, chunks[0].id]
     finally:
         with pool.transaction() as connection:

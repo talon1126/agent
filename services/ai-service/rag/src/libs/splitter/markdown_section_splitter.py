@@ -55,7 +55,7 @@ class MarkdownSectionSplitter(BaseSplitter):
 
     Notes:
         Returned chunks omit Markdown heading lines. Section context is carried
-        later by ``DocumentChunker`` through metadata and ``source_ref`` rather
+        later by ``DocumentChunker`` through metadata rather
         than duplicated in chunk text.
     """
 
@@ -509,7 +509,7 @@ def _strip_markdown_headings(text: str) -> str:
 
     Markdown headings are structural metadata for retrieval, not content that
     should be embedded in every chunk. ``DocumentChunker`` later restores the
-    active heading path through chunk metadata and ``source_ref``.
+    active heading path through chunk metadata.
     """
 
     cleaned: list[str] = []

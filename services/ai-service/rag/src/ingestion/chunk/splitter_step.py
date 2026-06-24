@@ -2,7 +2,7 @@
 
 The low-level splitter interface intentionally returns only ``list[str]``.
 This module contains the ingestion-specific operations that attach source
-identity, section hierarchy, and image references before validated ``Chunk``
+identity, section metadata, and image references before validated ``Chunk``
 objects continue to transform and indexing stages.
 """
 
@@ -59,38 +59,6 @@ def attach_section_path(
         metadata.pop("section_path", None)
     return section_path
 
-
-def build_source_ref(
-    document: Document,
-    *,
-    start_offset: int,
-    end_offset: int,
-    section_path: Sequence[str],
-) -> dict[str, Any]:
-    """Build the citation and trace reference stored beside one chunk.
-
-    Args:
-        document: Canonical source document being adapted.
-        start_offset: Start-inclusive source text position.
-        end_offset: End-exclusive source text position.
-        section_path: Active logical heading path selected for this chunk.
-
-    Returns:
-        A JSON-compatible mapping containing stable document identity, source
-        path, source range, and optional collection and section information.
-    """
-
-    source_ref: dict[str, Any] = {
-        "document_id": document.id,
-        "source_path": document.metadata.get("source_path", document.id),
-    }
-    if section_path:
-        source_ref["section_path"] = list(section_path)
-    if collection := document.metadata.get("collection"):
-        source_ref["collection"] = collection
-    source_ref["start_offset"] = start_offset
-    source_ref["end_offset"] = end_offset
-    return source_ref
 
 
 _IMAGE_PLACEHOLDER = re.compile(r"\[\[image:(?P<image_id>[^\]]+)\]\]")

@@ -47,11 +47,10 @@ def make_chunk(
     return Chunk(
         id=chunk_id,
         text=text,
-        metadata={"source_path": "shopping_guides/audio.md"},
+        metadata={"document_id": "doc-audio", "source_path": "shopping_guides/audio.md"},
         chunk_index=chunk_index,
         start_offset=0,
         end_offset=len(text),
-        source_ref={"document_id": "doc-audio"},
     )
 
 

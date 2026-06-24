@@ -215,8 +215,7 @@ class PgVectorStore(BaseVectorStore):
                 id,
                 content,
                 1 - (embedding <=> %s::vector) AS score,
-                metadata,
-                source_ref
+                metadata
             FROM {chunk_table}
             WHERE {where_clause}
             ORDER BY embedding <=> %s::vector, id ASC
@@ -240,10 +239,8 @@ class PgVectorStore(BaseVectorStore):
             ) from error
 
         results: list[RetrievalResult] = []
-        for chunk_id, content, score, metadata, source_ref in rows:
+        for chunk_id, content, score, metadata in rows:
             result_metadata = deepcopy(metadata)
-            if source_ref is not None:
-                result_metadata["source_ref"] = deepcopy(source_ref)
             results.append(
                 RetrievalResult(
                     chunk_id=chunk_id,
@@ -280,8 +277,7 @@ class PgVectorStore(BaseVectorStore):
                 metadata,
                 chunk_index,
                 start_offset,
-                end_offset,
-                source_ref
+                end_offset
             FROM {chunk_table}
             WHERE id = ANY(%s)
             """
@@ -307,7 +303,6 @@ class PgVectorStore(BaseVectorStore):
                 chunk_index=row[3],
                 start_offset=row[4],
                 end_offset=row[5],
-                source_ref=row[6],
             )
             for row in rows
         }

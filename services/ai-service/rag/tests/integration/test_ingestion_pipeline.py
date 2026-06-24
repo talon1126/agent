@@ -123,13 +123,13 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
                 "This paragraph should remain normal chunk content."
             ),
             metadata={
+                "document_id": document_id,
                 "source_path": source_path,
                 "image_refs": [image_id],
             },
             chunk_index=0,
             start_offset=0,
             end_offset=26,
-            source_ref={"document_id": document_id},
         ),
         Chunk(
             id=f"chunk-{uuid4().hex}",
@@ -138,11 +138,14 @@ def test_upsert_step_persists_and_replaces_complete_ingestion_snapshot(
                 f"[[image_caption:{legacy_image_id}]]\n"
                 "Legacy caption from final chunk text."
             ),
-            metadata={"source_path": source_path, "image_refs": [legacy_image_id]},
+            metadata={
+                "document_id": document_id,
+                "source_path": source_path,
+                "image_refs": [legacy_image_id],
+            },
             chunk_index=1,
             start_offset=document_text.index("Office"),
             end_offset=len(document_text),
-            source_ref={"document_id": document_id},
         ),
     ]
     caption_artifacts = {
@@ -355,7 +358,6 @@ def test_upsert_step_rolls_back_database_snapshot_when_vector_write_fails(
         chunk_index=0,
         start_offset=0,
         end_offset=len(document.text),
-        source_ref={"document_id": document_id},
     )
     indexing_result = EmbeddingBatchResult(
         dense_results=[
