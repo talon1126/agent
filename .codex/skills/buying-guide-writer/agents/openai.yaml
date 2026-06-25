@@ -1,0 +1,4 @@
+interface:
+  display_name: "Buying Guide Writer"
+  short_description: "Generate structured product buying guides."
+  default_prompt: "Create a product buying guide for {product}."
