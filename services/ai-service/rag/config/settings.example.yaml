@@ -202,8 +202,13 @@ dashboard:
 # Evaluation supports retrieval and generation quality metrics.
 evaluation:
   golden_set_path: tests/fixtures/golden_set.json
+  answer_source: message
   llm_provider: deepseek
   embedding_provider: dashscope
+  aimodel:
+    chat_url: http://127.0.0.1:8001/AImodel/chat
+    user_id: 1
+    timeout_seconds: 120
   metrics:
     retrieval:
       hit_rate_at_k: true

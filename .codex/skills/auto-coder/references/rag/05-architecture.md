@@ -378,7 +378,7 @@ services/ai-service/rag/
 | `src/cache/captions/` | 缓存图片描述 | image_hash 命中后跳过 Vision LLM |
 | `src/cache/processing/` | 缓存摄取中间状态 | PDF 转换、临时图片、失败恢复 |
 | `src/scripts/run_dashboard.py` | 启动 Dashboard | 加载本地 `.env`、校验 Streamlit app 可导入、构建无 shell 的 `streamlit run` 命令，支持 dry-run 和注入命令执行器，测试不真实打开浏览器 |
-| `src/scripts/run_evaluation.py` | 运行评估任务 | 读取 golden_set.json，输出指标并写库 |
+| `src/scripts/run_evaluation.py` | 运行评估任务 | 读取 golden_set.json，默认使用 AImodel message answer，并支持 RAG context answer 调试模式，输出指标并写库 |
 | `src/scripts/query.py` | 本地查询调试 | 配置驱动组装 QueryProcessor、Dense、持久化 BM25 Sparse、RRF、Filter、可选 Rerank 和 Response Builder；支持安全 verbose 输出、schema 初始化和 PostgreSQL pool 生命周期管理 |
 | `src/scripts/ingest.py` | 本地离线摄取 CLI | 自动发现父目录 `.env` 且不覆盖系统注入变量；递归发现 Markdown/PDF；将运行时相对路径固定解析到 RAG 根目录；读取默认 collection；配置驱动组装完整 Pipeline；转发 force；输出 JSON 结果并管理 PostgreSQL pool 生命周期 |
 

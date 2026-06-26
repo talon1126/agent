@@ -405,12 +405,29 @@ class EvaluationMetricsSettings(ConfigSection):
     )
 
 
+class EvaluationAImodelSettings(ConfigSection):
+    """Describe how evaluation can call the AImodel chat endpoint.
+
+    The RAG evaluation script owns quality measurement, but final-answer
+    evaluation needs a controlled way to ask AImodel for the user-visible
+    assistant message. This section keeps that endpoint configuration out of
+    ``run_evaluation.py`` so local and container deployments can choose their
+    own ai-service address without code changes.
+    """
+
+    chat_url: str = Field(default="http://127.0.0.1:8001/AImodel/chat", min_length=1)
+    user_id: int = Field(default=1, gt=0)
+    timeout_seconds: int = Field(default=120, gt=0)
+
+
 class EvaluationSettings(ConfigSection):
     """Describe the golden dataset and configured quality metrics."""
 
     golden_set_path: str
+    answer_source: str = Field(default="message", pattern="^(message|rag)$")
     llm_provider: str = Field(min_length=1)
     embedding_provider: str = Field(min_length=1)
+    aimodel: EvaluationAImodelSettings = Field(default_factory=EvaluationAImodelSettings)
     metrics: EvaluationMetricsSettings = Field(default_factory=EvaluationMetricsSettings)
 
 

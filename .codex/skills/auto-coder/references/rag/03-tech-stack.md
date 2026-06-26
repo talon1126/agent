@@ -983,6 +983,7 @@ AImodel 侧新增 RAG 工具时，应保持工具边界清晰：
 - SSE 正文不能暴露 RAG 原始工具 JSON。
 - Assistant 最终回答可以展示引用标题，但不展示内部 chunk id。
 - AImodel 最终 assistant message 通过逻辑关联表 `message_query_trace(message_id, query_trace_id)` 关联本轮使用的全部 RAG Query Trace；不使用物理外键，一个回答允许关联多个 trace id。
+- RAG 评估入口允许在受控评估模式下调用 AImodel chat 接口生成最终 assistant message，然后通过 `message_query_trace` 读取 message 作为 Ragas answer；RAG 仍只读 AImodel message 结果，不接管 AImodel 会话业务。
 
 建议工具名：
 

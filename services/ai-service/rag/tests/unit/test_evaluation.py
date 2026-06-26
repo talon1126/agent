@@ -44,16 +44,22 @@ SETTINGS_PATH = RAG_ROOT / "config" / "settings.example.yaml"
 
 @pytest.mark.unit
 def test_golden_set_fixture_exists_and_contains_representative_cases() -> None:
-    """Require the golden set fixture to exist and cover the shopping guide domain."""
+    """Require the golden set fixture to cover all first-party knowledge collections."""
 
     samples = _load_golden_set()
 
-    assert len(samples) >= 3
-    assert {sample["collection"] for sample in samples} == {"shopping_guides"}
+    assert len(samples) >= 8
+    assert {sample["collection"] for sample in samples} == {
+        "shopping_guides",
+        "faq",
+        "policies",
+        "manual",
+    }
     joined_questions = "\n".join(str(sample["question"]) for sample in samples)
-    assert "无线耳机" in joined_questions
-    assert "人体工学键盘" in joined_questions
-    assert "解压玩具" in joined_questions
+    assert "微波炉" in joined_questions
+    assert "发货" in joined_questions
+    assert "物流" in joined_questions
+    assert "客服" in joined_questions
 
 
 @pytest.mark.unit
@@ -67,14 +73,12 @@ def test_golden_set_samples_follow_required_schema() -> None:
         assert sample_id not in sample_ids
         sample_ids.add(sample_id)
 
-        _required_non_empty_string(sample, "collection")
+        collection = _required_non_empty_string(sample, "collection")
         _required_non_empty_string(sample, "question")
         _required_non_empty_string(sample, "golden_answer")
         expected_sources = _required_non_empty_string_list(sample, "expected_sources")
-        expected_keywords = _required_non_empty_string_list(sample, "expected_keywords")
 
-        assert all(source.startswith("shopping_guides/") for source in expected_sources)
-        assert len(expected_keywords) >= 3
+        assert all(source.startswith(f"{collection}/") for source in expected_sources)
         assert len(str(sample["golden_answer"])) >= 30
 
 
@@ -428,6 +432,7 @@ def test_build_prediction_from_query_result_uses_ranked_chunk_text_for_contexts(
         "sample_id": "sample-1",
         "question": "How should I choose headphones?",
         "answer": "Agent-ready final context.",
+        "answer_source": "rag",
         "contexts": ["First ranked text.", "Second ranked text."],
         "retrieved_contexts": ["First ranked text.", "Second ranked text."],
         "query_trace_id": "query-trace-1",
@@ -471,7 +476,6 @@ def test_run_evaluation_cli_passes_configured_ragas_metrics(
                     "question": "如何挑选微波炉？",
                     "golden_answer": "应关注容量、加热方式和售后。",
                     "expected_sources": ["shopping_guides/microwave.md"],
-                    "expected_keywords": ["容量", "加热方式", "售后"],
                 }
             ],
             ensure_ascii=False,
@@ -564,7 +568,14 @@ def test_run_evaluation_cli_passes_configured_ragas_metrics(
     outputs: list[str] = []
 
     exit_code = run_evaluation_module.run_evaluation_cli(
-        ["--collection", "shopping_guides", "--golden-set", str(golden_set_path)],
+        [
+            "--collection",
+            "shopping_guides",
+            "--golden-set",
+            str(golden_set_path),
+            "--answer-source",
+            "rag",
+        ],
         output=outputs.append,
     )
 
@@ -587,6 +598,168 @@ def test_run_evaluation_cli_passes_configured_ragas_metrics(
         "context_recall",
     ]
 
+
+@pytest.mark.unit
+def test_run_evaluation_cli_defaults_to_message_answer_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Require official Ragas runs to evaluate stored AImodel assistant answers."""
+
+    settings = run_evaluation_module.load_settings(
+        SETTINGS_PATH,
+        validate_environment=False,
+    )
+    golden_set_path = _write_single_sample_golden_set(tmp_path)
+    captured: dict[str, Any] = {}
+
+    _patch_evaluation_cli_dependencies(
+        monkeypatch,
+        settings=settings,
+        captured=captured,
+        message_answer=run_evaluation_module.MessageAnswer(
+            message_id=88,
+            conversation_id=99,
+            content="这是 AImodel 最终回答。",
+            query_trace_ids=("query-aimodel-1",),
+        ),
+    )
+    outputs: list[str] = []
+
+    exit_code = run_evaluation_module.run_evaluation_cli(
+        ["--collection", "shopping_guides", "--golden-set", str(golden_set_path)],
+        output=outputs.append,
+    )
+
+    assert exit_code == 0
+    assert captured["aimodel_questions"] == ["如何挑选微波炉？"]
+    assert "execute_kwargs" not in captured
+    assert captured["message_chat_results"] == [
+        {"conversation_id": 99, "answer": "这是 AImodel 最终回答。"}
+    ]
+    assert captured["query_result_trace_ids"] == ["query-aimodel-1"]
+    prediction = captured["evaluation_kwargs"]["predictions"][0]
+    assert prediction["answer"] == "这是 AImodel 最终回答。"
+    assert prediction["answer_source"] == "message"
+    assert prediction["message_id"] == 88
+    assert prediction["conversation_id"] == 99
+    assert prediction["query_trace_id"] == "query-aimodel-1"
+    assert prediction["query_trace_ids"] == ["query-aimodel-1"]
+    snapshot = captured["evaluation_kwargs"]["settings_snapshot"]
+    assert snapshot["answer_source"] == "message"
+
+
+@pytest.mark.unit
+def test_run_evaluation_cli_supports_rag_answer_source_for_context_debugging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Keep an explicit RAG-context mode for diagnosing retrieval context quality."""
+
+    settings = run_evaluation_module.load_settings(
+        SETTINGS_PATH,
+        validate_environment=False,
+    )
+    golden_set_path = _write_single_sample_golden_set(tmp_path)
+    captured: dict[str, Any] = {}
+
+    _patch_evaluation_cli_dependencies(
+        monkeypatch,
+        settings=settings,
+        captured=captured,
+    )
+    outputs: list[str] = []
+
+    exit_code = run_evaluation_module.run_evaluation_cli(
+        [
+            "--collection",
+            "shopping_guides",
+            "--golden-set",
+            str(golden_set_path),
+            "--answer-source",
+            "rag",
+        ],
+        output=outputs.append,
+    )
+
+    assert exit_code == 0
+    assert captured.get("aimodel_questions") is None
+    prediction = captured["evaluation_kwargs"]["predictions"][0]
+    assert prediction["answer"] == "[1] 微波炉应关注容量。"
+    assert prediction["answer_source"] == "rag"
+    assert "message_id" not in prediction
+    assert captured["evaluation_kwargs"]["settings_snapshot"]["answer_source"] == "rag"
+
+
+@pytest.mark.unit
+def test_run_evaluation_cli_fails_when_message_answer_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Avoid silently evaluating query_result.content when message mode is requested."""
+
+    settings = run_evaluation_module.load_settings(
+        SETTINGS_PATH,
+        validate_environment=False,
+    )
+    golden_set_path = _write_single_sample_golden_set(tmp_path)
+    captured: dict[str, Any] = {}
+
+    _patch_evaluation_cli_dependencies(
+        monkeypatch,
+        settings=settings,
+        captured=captured,
+        message_answer=None,
+    )
+    errors: list[str] = []
+
+    exit_code = run_evaluation_module.run_evaluation_cli(
+        ["--collection", "shopping_guides", "--golden-set", str(golden_set_path)],
+        output=lambda value: None,
+        error_output=errors.append,
+    )
+
+    assert exit_code == 1
+    assert "No assistant message found for AImodel conversation_id=99" in errors[0]
+    assert "evaluation_kwargs" not in captured
+
+
+@pytest.mark.unit
+def test_run_evaluation_cli_fails_when_message_trace_link_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Require message-mode evaluation to fail when AImodel did not call RAG."""
+
+    settings = run_evaluation_module.load_settings(
+        SETTINGS_PATH,
+        validate_environment=False,
+    )
+    golden_set_path = _write_single_sample_golden_set(tmp_path)
+    captured: dict[str, Any] = {}
+
+    _patch_evaluation_cli_dependencies(
+        monkeypatch,
+        settings=settings,
+        captured=captured,
+        message_answer=run_evaluation_module.MessageAnswer(
+            message_id=88,
+            conversation_id=99,
+            content="这是 AImodel 最终回答。",
+            query_trace_ids=(),
+        ),
+    )
+    errors: list[str] = []
+
+    exit_code = run_evaluation_module.run_evaluation_cli(
+        ["--collection", "shopping_guides", "--golden-set", str(golden_set_path)],
+        output=lambda value: None,
+        error_output=errors.append,
+    )
+
+    assert exit_code == 1
+    assert "No RAG query traces linked to message_id=88" in errors[0]
+    assert "evaluation_kwargs" not in captured
 @pytest.mark.unit
 def test_evaluation_runner_compares_default_retrieval_strategies() -> None:
     """Compare hybrid, dense-only, sparse-only, and rerank strategies deterministically."""
@@ -804,6 +977,193 @@ def test_evaluation_runner_save_results_validates_persistence_inputs() -> None:
             collection_id="shopping_guides",
             dataset_name="golden_set",
         )
+
+
+
+def _write_single_sample_golden_set(tmp_path: Path) -> Path:
+    """Create one temporary golden-set sample for evaluation CLI unit tests."""
+
+    golden_set_path = tmp_path / "golden_set.json"
+    golden_set_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "sample-1",
+                    "collection": "shopping_guides",
+                    "question": "如何挑选微波炉？",
+                    "golden_answer": "应关注容量、加热方式和售后。",
+                    "expected_sources": ["shopping_guides/microwave.md"],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return golden_set_path
+
+
+def _patch_evaluation_cli_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    settings: Any,
+    captured: dict[str, Any],
+    message_answer: Any = "unused",
+) -> None:
+    """Patch run_evaluation_cli collaborators so unit tests never hit I/O."""
+
+    class FakePool:
+        """Provide the minimal pool lifecycle used by run_evaluation_cli."""
+
+        def open(self) -> None:
+            """Record that the fake pool was opened."""
+
+            captured["pool_opened"] = True
+
+        def close(self) -> None:
+            """Record that the fake pool was closed."""
+
+            captured["pool_closed"] = True
+
+    class FakeRuntime:
+        """Return one deterministic query execution without external services."""
+
+        def execute(self, *args: Any, **kwargs: Any) -> Any:
+            """Return a single final result and response content."""
+
+            captured["execute_kwargs"] = kwargs
+            return SimpleNamespace(
+                final_results=[SimpleNamespace(chunk_id="chunk-1", score=0.91)],
+                response=SimpleNamespace(
+                    content="[1] 微波炉应关注容量。",
+                    citations=[],
+                    images=[],
+                ),
+            )
+
+    class FakeChunkLookup:
+        """Resolve retrieved chunk IDs into text for Ragas contexts."""
+
+        def get_by_ids(self, chunk_ids: list[str]) -> list[Chunk]:
+            """Return chunks in the requested order."""
+
+            captured["chunk_ids"] = list(chunk_ids)
+            return [
+                Chunk(
+                    id="chunk-1",
+                    text="微波炉选购应关注容量、加热方式和售后。",
+                    chunk_index=1,
+                    start_offset=0,
+                    end_offset=20,
+                    metadata={},
+                )
+            ]
+
+    class FakeEvaluationService:
+        """Capture evaluator options passed by run_evaluation_cli."""
+
+        def __init__(self, pool: Any) -> None:
+            """Store the fake pool for assertion evidence."""
+
+            captured["service_pool"] = pool
+
+        def run_evaluation(self, **kwargs: Any) -> Any:
+            """Return a successful evaluation detail while recording kwargs."""
+
+            captured["evaluation_kwargs"] = kwargs
+            return SimpleNamespace(
+                run_id="eval-1",
+                collection_id=kwargs["collection_id"],
+                evaluator=kwargs["evaluator"],
+                dataset_name=kwargs["dataset_name"],
+                status="success",
+                metrics={"faithfulness": 0.9},
+                summary={"sample_count": 1},
+                error=None,
+            )
+
+    class FakeAImodelEvaluationClient:
+        """Capture AImodel chat calls without opening HTTP connections."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            """Store construction kwargs for configuration assertions."""
+
+            captured["aimodel_client_kwargs"] = kwargs
+
+        def chat(self, question: str) -> dict[str, Any]:
+            """Record the question and emulate a completed SSE chat."""
+
+            captured.setdefault("aimodel_questions", []).append(question)
+            return {"conversation_id": 99, "answer": "这是 AImodel 最终回答。"}
+
+    class FakeMessageAnswerRepository:
+        """Return a configured message answer for one AImodel chat result."""
+
+        def __init__(self, pool: Any) -> None:
+            """Store the fake pool for assertion evidence."""
+
+            captured["message_repository_pool"] = pool
+
+        def get_answer_from_chat_result(self, chat_result: dict[str, Any]) -> Any:
+            """Return the test-selected answer and record chat metadata."""
+
+            captured.setdefault("message_chat_results", []).append(chat_result)
+            return message_answer
+
+    class FakeQueryTraceResultRepository:
+        """Resolve AImodel-linked query traces without opening PostgreSQL."""
+
+        def __init__(self, pool: Any) -> None:
+            """Store the fake pool for assertion evidence."""
+
+            captured["query_trace_repository_pool"] = pool
+
+        def get_query_result(self, query_trace_id: str) -> dict[str, Any]:
+            """Return a query_result payload for the linked trace."""
+
+            captured.setdefault("query_result_trace_ids", []).append(query_trace_id)
+            return {
+                "contexts": [
+                    {"chunk_id": "chunk-1", "score": 0.91, "rank": 1}
+                ],
+                "content": "[1] 微波炉应关注容量。",
+                "citations": [],
+                "images": [],
+            }
+
+    monkeypatch.setattr(run_evaluation_module, "_load_local_environment", lambda: None)
+    monkeypatch.setattr(run_evaluation_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(run_evaluation_module, "_create_pool", lambda database: FakePool())
+    monkeypatch.setattr(run_evaluation_module, "init_schema", lambda pool: None)
+    monkeypatch.setattr(run_evaluation_module, "_build_runtime", lambda *args: FakeRuntime())
+    monkeypatch.setattr(
+        run_evaluation_module,
+        "uuid4",
+        lambda: SimpleNamespace(hex="fixed"),
+    )
+    monkeypatch.setattr(
+        run_evaluation_module.VectorStoreFactory,
+        "create",
+        lambda **kwargs: FakeChunkLookup(),
+    )
+    monkeypatch.setattr(run_evaluation_module, "EvaluationService", FakeEvaluationService)
+    monkeypatch.setattr(
+        run_evaluation_module,
+        "AImodelEvaluationClient",
+        FakeAImodelEvaluationClient,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_evaluation_module,
+        "MessageAnswerRepository",
+        FakeMessageAnswerRepository,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_evaluation_module,
+        "QueryTraceResultRepository",
+        FakeQueryTraceResultRepository,
+        raising=False,
+    )
 
 
 class _FakeEvaluationRepository:

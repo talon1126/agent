@@ -154,6 +154,12 @@ def test_default_component_selection_matches_the_spec() -> None:
     assert settings["ingestion"]["document_summary"]["llm_provider"] == "deepseek"
     assert settings["evaluation"]["llm_provider"] == "deepseek"
     assert settings["evaluation"]["embedding_provider"] == "dashscope"
+    assert settings["evaluation"]["answer_source"] == "message"
+    assert settings["evaluation"]["aimodel"] == {
+        "chat_url": "http://127.0.0.1:8001/AImodel/chat",
+        "user_id": 1,
+        "timeout_seconds": 120,
+    }
 
 
 def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:
