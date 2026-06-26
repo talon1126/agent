@@ -194,6 +194,7 @@ RAG 项目不能只靠人工体验判断效果，需要有可重复的质量评�
 | 向量库 | pgvector | 首版唯一实现 |
 | Embedding | 百炼 `text-embedding-v4`（Qwen3-Embedding 系列） | 使用 1536 维，与现有 pgvector schema 保持一致 |
 | Splitter | `langchain-text-splitters` | 只使用 splitter，不使用 LangChain RAG |
+| BM25 中文分词 | `jieba` 应用层 analyzer | C8 的 BM25Indexer 统一使用应用层 jieba 精确模式分词，摄取与查询共用同一 analyzer；不依赖 PostgreSQL 中文分词扩展，便于 Docker、本地测试和跨环境部署 |
 | PDF 转 Markdown | MarkItDown | 统一进入 Markdown 中间格式 |
 | MCP | Python 官方 MCP SDK + stdio transport | 暴露 RAG tools；开发与首版集成都使用 stdio，由 AImodel 后端长期拉起 RAG MCP 子进程 |
 | Dashboard | Streamlit | 本地轻量 Dashboard |
@@ -1596,7 +1597,7 @@ services/ai-service/rag/
 | `src/core/config.py` | 加载 settings 和 prompt 配置 | Pydantic/YAML 校验、环境变量覆盖、默认值处理 |
 | `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,metadata,chunk_index,start_offset,end_offset)`、`RetrievalResult(chunk_id,text,score,metadata)`、`Document.metadata.images[]` 的 `id/path` 契约、`Citation`、`TraceRecord` |
 | `src/core/errors.py` | 定义统一异常类型 | 配置错误、Provider 错误、检索错误、摄取错误、MCP 错误 |
-| `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用相同英文/数字 normalize、中文 full-span 与 2/3-gram 分词，避免分析漂移和 ingestion/storage 循环依赖 |
+| `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用同一个 analyzer；英文/数字保持 normalize，中文使用 jieba 精确模式分词，避免分析漂移和 ingestion/storage 循环依赖 |
 | `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、意图识别 |
 | `src/core/query_engine/hybrid_engine.py` | 编排混合检索主流程 | `HybridSearch`、Dense/BM25 双路召回、RRF Fusion、候选去重、保留过滤前 fusion 快照、rerank 前 metadata 过滤、单路失败降级 |
 | `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
@@ -2221,7 +2222,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | C5 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | BaseTransform、配置驱动 TransformPipeline、metadata enrich、chunk rewrite、semantic merge、denoise、英文 Prompt、噪声 fixture 和幂等测试；ChunkRewriter 仅使用文本节点与 Document.summary 调用 LLM，并按原顺序保留图片占位符；无效文本响应直接失败，纯图片占位符 chunk 跳过文本 rewrite |
 | C6 | 实现 ImageCaptioner | [✔] | 2026-06-11 | `image_captioner` transform step、`BaseVisionLLM`、`DashScopeVisionLLM`、正文 caption 注入和 Dense/BM25 索引；图片 caption/provenance 记录在 `transform.sub_stages` |
 | C7 | 实现 DenseEncoder | [✔] | 2026-06-06 | DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
-| C8 | 实现 BM25Indexer | [✔] | 2026-06-07 | BM25Candidate、BM25IndexResult、BM25Indexer.index/query、词频统计、倒排索引、关键词 Top-k 排序、中文连续文本 n-gram fallback 和重复 index 状态重建；6 个相关测试、137 个全量测试通过，2 个 external smoke test 默认跳过 |
+| C8 | 实现 BM25Indexer | [✔] | 2026-06-07 | BM25Candidate、BM25IndexResult、BM25Indexer.index/query、词频统计、倒排索引、关键词 Top-k 排序、应用层 jieba 中文分词和重复 index 状态重建；实现该分词优化后需要重建受影响 collection 的 BM25 posting，并用黄金集对比 Sparse/Hybrid 召回变化 |
 | C9 | 实现 BatchProcessor 批处理优化 | [✔] | 2026-06-07 | BatchProcessor、BatchRunResult、BatchSuccess、BatchFailure、DenseEncoder.encode_batch、batch_size 拆分、throttle_seconds 节流、有限 retry、失败隔离、EmbeddingStep.run_batch、Dense/BM25 批处理编排；20 个相关测试、145 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C10 | 实现统一 upsert | [✔] | 2026-06-07 | rag_bm25_terms schema、BM25Storage、UpsertStep 单事务完整快照写入、pgvector/image/repository 调用方事务接口、图片文件失败恢复、重复 upsert 幂等和内容变更旧 chunk 清理；2 个 C10 PostgreSQL 集成测试、148 个全量测试通过，2 个 external smoke test 默认跳过 |
 | C11 | 实现统一 Pipeline MVP 编排和集成测试 | [✔] | 2026-06-07 | IngestionPipelineResult、完整依赖校验、run_indexing、Markdown 图片摄取、Splitter、包含 ImageCaptioner 的 Transform Pipeline、成功文档 content_hash 向量复用、重复内容单次编码、Dense/BM25 batch、统一 upsert、lifecycle success 和重复文件 dedup skip；6 个 ingestion integration 测试、14 个 embedding 单元测试、153 个全量测试通过，2 个 external smoke test 默认跳过 |
@@ -2831,18 +2832,21 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 ##### C8：实现 BM25Indexer
 
-目标：为 Sparse Route 构建 BM25 词项、词频和倒排索引数据。
+目标：为 Sparse Route 构建 BM25 词项、词频和倒排索引数据，并通过应用层中文 analyzer 提升品牌、型号、参数词和政策关键词的稀疏召回稳定性。
 
-修改文件：`src/ingestion/embedding/bm25_indexer.py`、`tests/unit/test_bm25.py`
+修改文件：`src/core/bm25_analyzer.py`、`src/ingestion/embedding/bm25_indexer.py`、`src/storage/bm25_storage.py`、`tests/unit/test_bm25.py`、`tests/integration/test_query_pipeline.py`、`config/settings.example.yaml`、`pyproject.toml`、`uv.lock`
 
 实现类/函数：
 
-- `BM25Indexer.index()`：生成 BM25 词项、词频和倒排索引数据
+- `tokenize_bm25_text()`：使用 jieba 精确模式输出中文词项，并保留英文/数字 normalize
+- `normalize_bm25_keywords()`：查询侧复用同一 analyzer，确保摄取与在线检索词项一致
+- `BM25Indexer.index()`：使用统一 analyzer 生成 BM25 词项、词频和倒排索引数据
 - `BM25Indexer.query()`：根据关键词返回候选 `chunk_id` 和 BM25 分数
+- `BM25Storage.query()`：继续基于 PostgreSQL posting 动态计算 collection 级 BM25 分数，不依赖数据库中文分词扩展
 
-验收标准：可为 chunk 构建 BM25 索引；可按关键词召回候选 chunk；索引结果可被 Sparse Route 复用。
+验收标准：中文 analyzer 不依赖 PostgreSQL 扩展；中文内容使用 jieba 精确模式分词；英文品牌、数字型号和中英混合内容必须保持可检索；短 query 和长 chunk 使用同一 analyzer；实现后必须重新摄取或重建受影响 collection 的 BM25 posting，避免旧 posting 与新 analyzer 混用；RAGAS 和检索指标需要记录变更前后差异。
 
-测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_bm25.py -v`
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_bm25.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ##### C9：实现 BatchProcessor 批处理优化
 

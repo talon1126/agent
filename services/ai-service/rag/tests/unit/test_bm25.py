@@ -25,6 +25,41 @@ Chunk = types_module.Chunk
 BM25Candidate = embedding_module.BM25Candidate
 BM25Indexer = embedding_module.BM25Indexer
 BatchProcessor = embedding_module.BatchProcessor
+bm25_analyzer_module = importlib.import_module("src.core.bm25_analyzer")
+tokenize_bm25_text = bm25_analyzer_module.tokenize_bm25_text
+normalize_bm25_keywords = bm25_analyzer_module.normalize_bm25_keywords
+
+
+def test_bm25_analyzer_uses_jieba_without_synthetic_cjk_fragments() -> None:
+    """Require Chinese sparse terms to come from jieba, not synthetic CJK fragments.
+
+    C8 standardizes BM25 Chinese analysis on application-level jieba exact
+    segmentation. The analyzer must not emit old contiguous synthetic fragments,
+    because ingestion and query postings would otherwise drift from the selected
+    tokenizer contract.
+    """
+
+    tokens = tokenize_bm25_text("微波炉容量和功率")
+
+    assert "微波炉" in tokens
+    assert "容量" in tokens
+    assert "功率" in tokens
+    assert "波炉" not in tokens
+    assert "炉容" not in tokens
+    assert "微波炉容量和功率" not in tokens
+
+
+def test_bm25_keyword_normalization_reuses_jieba_for_processed_keywords() -> None:
+    """Require processed query keywords to share the same jieba analyzer."""
+
+    terms = normalize_bm25_keywords(["微波炉容量", "微波炉", "Panasonic NN-SN686S"])
+
+    assert terms.count("微波炉") == 1
+    assert "容量" in terms
+    assert "panasonic" in terms
+    assert "nn" in terms
+    assert "sn686s" in terms
+    assert "波炉" not in terms
 
 
 def make_chunk(
@@ -131,12 +166,11 @@ def test_bm25_query_handles_blank_or_unknown_keywords() -> None:
 
 
 def test_bm25_query_matches_chinese_terms_inside_long_sentences() -> None:
-    """Require Chinese product terms to match within unsegmented sentences.
+    """Require jieba terms to match within longer Chinese sentences.
 
-    The RAG knowledge base is expected to index Chinese shopping guides. Without
-    a full Chinese word segmenter, BM25 still needs a deterministic fallback
-    that can match a query term such as ``无线耳机`` inside longer continuous
-    text like ``高性价比无线耳机选购指南``.
+    The RAG knowledge base indexes Chinese shopping guides, so sparse retrieval
+    must tokenize ingestion chunks and query keywords with the same jieba
+    analyzer before BM25 scoring.
     """
 
     indexer = BM25Indexer()

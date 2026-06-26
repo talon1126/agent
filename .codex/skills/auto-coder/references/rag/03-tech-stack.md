@@ -14,6 +14,7 @@
 | 向量库 | pgvector | 首版唯一实现 |
 | Embedding | 百炼 `text-embedding-v4`（Qwen3-Embedding 系列） | 使用 1536 维，与现有 pgvector schema 保持一致 |
 | Splitter | `langchain-text-splitters` | 只使用 splitter，不使用 LangChain RAG |
+| BM25 中文分词 | `jieba` 应用层 analyzer | C8 的 BM25Indexer 统一使用应用层 jieba 精确模式分词，摄取与查询共用同一 analyzer；不依赖 PostgreSQL 中文分词扩展，便于 Docker、本地测试和跨环境部署 |
 | PDF 转 Markdown | MarkItDown | 统一进入 Markdown 中间格式 |
 | MCP | Python 官方 MCP SDK + stdio transport | 暴露 RAG tools；开发与首版集成都使用 stdio，由 AImodel 后端长期拉起 RAG MCP 子进程 |
 | Dashboard | Streamlit | 本地轻量 Dashboard |

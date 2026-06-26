@@ -8,13 +8,17 @@ drift caused by separate tokenization implementations.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
+import jieba
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+|[\u3400-\u9fff]+")
 _CJK_PATTERN = re.compile(r"^[\u3400-\u9fff]+$")
+
+jieba.setLogLevel(logging.WARNING)
 
 
 class BM25Candidate(BaseModel):
@@ -54,8 +58,7 @@ def normalize_bm25_keywords(keywords: list[str] | str) -> list[str]:
             ``ProcessedQuery``.
 
     Returns:
-        Ordered unique lowercase terms, including deterministic CJK 2-gram and
-        3-gram fallback tokens.
+        Ordered unique lowercase terms produced by the shared BM25 analyzer.
     """
 
     if isinstance(keywords, str):
@@ -73,33 +76,31 @@ def tokenize_bm25_text(text: str) -> list[str]:
         text: Chunk content or query text.
 
     Returns:
-        Lowercase English/numeric spans and CJK full-span plus 2/3-gram terms.
+        Lowercase English/numeric spans and jieba-segmented CJK terms.
     """
 
     tokens: list[str] = []
     for match in _TOKEN_PATTERN.finditer(text):
         raw_token = match.group(0).lower()
         if _CJK_PATTERN.fullmatch(raw_token):
-            tokens.extend(_expand_cjk_token(raw_token))
+            tokens.extend(_tokenize_cjk_span(raw_token))
         else:
             tokens.append(raw_token)
     return tokens
 
 
-def _expand_cjk_token(token: str) -> list[str]:
-    """Expand one contiguous CJK span into exact and fallback search terms."""
+def _tokenize_cjk_span(token: str) -> list[str]:
+    """Segment one contiguous CJK span with jieba exact mode.
 
-    if len(token) <= 1:
-        return [token]
-    tokens = [token]
-    for gram_size in (2, 3):
-        if len(token) < gram_size:
-            continue
-        tokens.extend(
-            token[start : start + gram_size]
-            for start in range(0, len(token) - gram_size + 1)
-        )
-    return tokens
+    Args:
+        token: A contiguous Chinese text span extracted from chunk content or
+            query text.
+
+    Returns:
+        Non-blank jieba terms in original order.
+    """
+
+    return [segment.strip() for segment in jieba.cut(token, cut_all=False) if segment.strip()]
 
 
 def _ordered_unique(values: list[Any]) -> list[str]:
