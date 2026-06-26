@@ -14,10 +14,12 @@ import math
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import src.scripts.run_evaluation as run_evaluation_module
 from src.core.types import Chunk
 from src.libs.evaluator import EvaluatorFactory
 from src.libs.evaluator import ragas_evaluator as ragas_evaluator_module
@@ -447,6 +449,143 @@ def test_select_single_collection_rejects_mixed_golden_sets_without_filter() -> 
 
     assert select_single_collection([{"collection": "shopping_guides"}]) == "shopping_guides"
 
+
+@pytest.mark.unit
+def test_run_evaluation_cli_passes_configured_ragas_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Require the real evaluation entrypoint to pass configured metric names."""
+
+    settings = run_evaluation_module.load_settings(
+        SETTINGS_PATH,
+        validate_environment=False,
+    )
+    golden_set_path = tmp_path / "golden_set.json"
+    golden_set_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "sample-1",
+                    "collection": "shopping_guides",
+                    "question": "如何挑选微波炉？",
+                    "golden_answer": "应关注容量、加热方式和售后。",
+                    "expected_sources": ["shopping_guides/microwave.md"],
+                    "expected_keywords": ["容量", "加热方式", "售后"],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, Any] = {}
+
+    class FakePool:
+        """Provide the minimal pool lifecycle used by run_evaluation_cli."""
+
+        def open(self) -> None:
+            """Record that the fake pool was opened."""
+
+            captured["pool_opened"] = True
+
+        def close(self) -> None:
+            """Record that the fake pool was closed."""
+
+            captured["pool_closed"] = True
+
+    class FakeRuntime:
+        """Return one deterministic query execution without external services."""
+
+        def execute(self, *args: Any, **kwargs: Any) -> Any:
+            """Return a single final result and response content."""
+
+            captured["execute_kwargs"] = kwargs
+            return SimpleNamespace(
+                final_results=[SimpleNamespace(chunk_id="chunk-1", score=0.91)],
+                response=SimpleNamespace(
+                    content="[1] 微波炉应关注容量。",
+                    citations=[],
+                    images=[],
+                ),
+            )
+
+    class FakeChunkLookup:
+        """Resolve retrieved chunk IDs into text for Ragas contexts."""
+
+        def get_by_ids(self, chunk_ids: list[str]) -> list[Chunk]:
+            """Return chunks in the requested order."""
+
+            captured["chunk_ids"] = list(chunk_ids)
+            return [
+                Chunk(
+                    id="chunk-1",
+                    text="微波炉选购应关注容量、加热方式和售后。",
+                    chunk_index=1,
+                    start_offset=0,
+                    end_offset=20,
+                    metadata={},
+                )
+            ]
+
+    class FakeEvaluationService:
+        """Capture evaluator options passed by run_evaluation_cli."""
+
+        def __init__(self, pool: Any) -> None:
+            """Store the fake pool for assertion evidence."""
+
+            captured["service_pool"] = pool
+
+        def run_evaluation(self, **kwargs: Any) -> Any:
+            """Return a successful evaluation detail while recording kwargs."""
+
+            captured["evaluation_kwargs"] = kwargs
+            return SimpleNamespace(
+                run_id="eval-1",
+                collection_id=kwargs["collection_id"],
+                evaluator=kwargs["evaluator"],
+                dataset_name=kwargs["dataset_name"],
+                status="success",
+                metrics={"faithfulness": 0.9},
+                summary={"sample_count": 1},
+                error=None,
+            )
+
+    monkeypatch.setattr(run_evaluation_module, "_load_local_environment", lambda: None)
+    monkeypatch.setattr(run_evaluation_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(run_evaluation_module, "_create_pool", lambda database: FakePool())
+    monkeypatch.setattr(run_evaluation_module, "init_schema", lambda pool: None)
+    monkeypatch.setattr(run_evaluation_module, "_build_runtime", lambda *args: FakeRuntime())
+    monkeypatch.setattr(
+        run_evaluation_module.VectorStoreFactory,
+        "create",
+        lambda **kwargs: FakeChunkLookup(),
+    )
+    monkeypatch.setattr(run_evaluation_module, "EvaluationService", FakeEvaluationService)
+    outputs: list[str] = []
+
+    exit_code = run_evaluation_module.run_evaluation_cli(
+        ["--collection", "shopping_guides", "--golden-set", str(golden_set_path)],
+        output=outputs.append,
+    )
+
+    assert exit_code == 0
+    assert captured["pool_opened"] is True
+    assert captured["pool_closed"] is True
+    assert captured["chunk_ids"] == ["chunk-1"]
+    evaluator_options = captured["evaluation_kwargs"]["evaluator_options"]
+    assert evaluator_options["settings"] is settings
+    assert evaluator_options["metric_names"] == [
+        "faithfulness",
+        "answer_relevancy",
+        "context_precision",
+        "context_recall",
+    ]
+    assert captured["evaluation_kwargs"]["settings_snapshot"]["generation_metrics"] == [
+        "faithfulness",
+        "answer_relevancy",
+        "context_precision",
+        "context_recall",
+    ]
 
 @pytest.mark.unit
 def test_evaluation_runner_compares_default_retrieval_strategies() -> None:

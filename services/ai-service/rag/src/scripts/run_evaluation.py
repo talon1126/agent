@@ -23,7 +23,12 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
-from src.core.config import RAG_ROOT, RagSettings, load_settings
+from src.core.config import (
+    RAG_ROOT,
+    RagSettings,
+    enabled_generation_metrics,
+    load_settings,
+)
 from src.core.types import Chunk
 from src.libs.vector_store import VectorStoreFactory
 from src.observability.services import EvaluationService
@@ -135,6 +140,7 @@ def run_evaluation_cli(
         pool.open()
         init_schema(pool)
         runtime = _build_runtime(settings, pool, args.no_rerank)
+        metric_names = enabled_generation_metrics(settings)
         chunk_lookup = VectorStoreFactory.create(settings=settings, pool=pool)
         predictions = [
             _prediction_for_sample(
@@ -154,7 +160,7 @@ def run_evaluation_cli(
             dataset_name=golden_set_path.stem,
             dataset=dataset,
             predictions=predictions,
-            evaluator_options={"settings": settings},
+            evaluator_options={"settings": settings, "metric_names": metric_names},
             settings_snapshot={
                 "answer_source": args.answer_source,
                 "collection": collection,
@@ -165,6 +171,7 @@ def run_evaluation_cli(
                 "evaluation_embedding_provider": (
                     settings.evaluation.embedding_provider
                 ),
+                "generation_metrics": metric_names,
                 "response_optimizer_enabled": (
                     settings.response.evidence_context_optimizer.enabled
                 ),

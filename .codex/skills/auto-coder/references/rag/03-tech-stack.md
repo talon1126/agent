@@ -578,6 +578,9 @@ evaluation:
     generation:
       faithfulness: true
       answer_relevancy: true
+      context_precision: true
+      context_recall: true
+      answer_correctness: false
 
 mcp:
   enabled: true

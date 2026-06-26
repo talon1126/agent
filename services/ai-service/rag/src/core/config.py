@@ -375,13 +375,42 @@ class DashboardSettings(ConfigSection):
     pages: list[str] = Field(min_length=1)
 
 
+class EvaluationRetrievalMetricsSettings(ConfigSection):
+    """Describe retrieval metric switches used by quality evaluation."""
+
+    hit_rate_at_k: bool = True
+    mrr: bool = True
+    ndcg: bool = True
+
+
+class EvaluationGenerationMetricsSettings(ConfigSection):
+    """Describe Ragas generation metric switches used by quality evaluation."""
+
+    faithfulness: bool = True
+    answer_relevancy: bool = True
+    context_precision: bool = True
+    context_recall: bool = True
+    answer_correctness: bool = False
+
+
+class EvaluationMetricsSettings(ConfigSection):
+    """Group retrieval and generation metric switches under one section."""
+
+    retrieval: EvaluationRetrievalMetricsSettings = Field(
+        default_factory=EvaluationRetrievalMetricsSettings
+    )
+    generation: EvaluationGenerationMetricsSettings = Field(
+        default_factory=EvaluationGenerationMetricsSettings
+    )
+
+
 class EvaluationSettings(ConfigSection):
     """Describe the golden dataset and configured quality metrics."""
 
     golden_set_path: str
     llm_provider: str = Field(min_length=1)
     embedding_provider: str = Field(min_length=1)
-    metrics: dict[str, Any]
+    metrics: EvaluationMetricsSettings = Field(default_factory=EvaluationMetricsSettings)
 
 
 class McpSettings(ConfigSection):
@@ -654,6 +683,36 @@ def load_settings(
         settings.validate_environment(environment)
     return settings
 
+
+
+def enabled_generation_metrics(settings: RagSettings) -> list[str]:
+    """Return enabled Ragas generation metrics in stable evaluation order.
+
+    Args:
+        settings: Fully validated runtime settings containing
+            ``evaluation.metrics.generation`` switches.
+
+    Returns:
+        Ordered Ragas metric names enabled for the next evaluation run.
+
+    Raises:
+        ValueError: If every generation metric is disabled, because an
+            evaluation run without metrics cannot produce useful persisted
+            results.
+    """
+
+    generation = settings.evaluation.metrics.generation
+    configured_metrics = [
+        ("faithfulness", generation.faithfulness),
+        ("answer_relevancy", generation.answer_relevancy),
+        ("context_precision", generation.context_precision),
+        ("context_recall", generation.context_recall),
+        ("answer_correctness", generation.answer_correctness),
+    ]
+    enabled = [metric_name for metric_name, is_enabled in configured_metrics if is_enabled]
+    if not enabled:
+        raise ValueError("At least one Ragas generation metrics switch must be enabled")
+    return enabled
 
 def load_prompt(path: str | Path) -> PromptTemplate:
     """Load and validate a versioned Prompt definition without rendering it.

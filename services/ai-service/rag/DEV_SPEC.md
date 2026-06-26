@@ -758,6 +758,9 @@ evaluation:
     generation:
       faithfulness: true
       answer_relevancy: true
+      context_precision: true
+      context_recall: true
+      answer_correctness: false
 
 mcp:
   enabled: true
@@ -1959,7 +1962,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase D | Retrieval | Query Processor、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Response Builder 和 query.py 脚本入口 | [✔] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [✔] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [✔] |
-| Phase G | 质量评估体系 | 黄金测试集、Ragas、自定义指标、真实 Query Pipeline 评估入口、策略对比和评估趋势 | [✔] |
+| Phase G | 质量评估体系 | 黄金测试集、检索指标、配置驱动 Ragas 生成指标、真实 Query Pipeline 评估入口、策略对比和评估趋势 | [✔] |
 | Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调、端到端测试和 MCP 长连接优化 | [✔] |
 
 ### 6.2 交付里程碑
@@ -2003,7 +2006,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase D | Retrieval | 在线查询主链路可基于已摄取知识库执行 Query Processor、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Response Builder 和 CLI 查询 | QueryProcessor、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
 | Phase E | MCP 工具服务 | MCP stdio 工具服务可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
 | Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作可用 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
-| Phase G | 质量评估体系 | 质量评估体系支持黄金测试集、检索指标、Ragas 生成质量适配、真实 Query Pipeline 评估入口、策略对比 runner 和评估趋势持久化 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、Ragas faithfulness、Ragas answer_relevancy adapter、`run_evaluation.py`、hybrid/dense_only/sparse_only/rerank 策略对比、evaluation run/results 持久化、Agent-ready final context 评估输入 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_response_builder.py services\ai-service\rag\tests\unit\test_evaluation.py -q` | 2026-06-12 |
+| Phase G | 质量评估体系 | 质量评估体系支持黄金测试集、检索指标、Ragas 生成质量适配、真实 Query Pipeline 评估入口、策略对比 runner 和评估趋势持久化 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、配置驱动 Ragas generation metrics、`faithfulness`、`answer_relevancy`、`context_precision`、`context_recall`、可选 `answer_correctness`、`run_evaluation.py`、hybrid/dense_only/sparse_only/rerank 策略对比、evaluation run/results 持久化、Agent-ready final context 评估输入 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_response_builder.py services\ai-service\rag\tests\unit\test_evaluation.py -q` | 2026-06-12 |
 | Phase H | AImodel 联调集成 | RAG 独立模块已通过集成前验收，shopping guide RAG 工具已接入 AImodel Agent 工具集合，推荐、链接对比、选购指南和政策 FAQ 场景规则已写入 Agent system prompt，流式前端输出具备 tool result 和内部 ID 防泄漏门禁，AImodel RAG MCP client 可长期复用 stdio 子进程 | Dashboard 六大页面 service-backed 渲染测试、离线摄取到 Hybrid Query 的全链路 E2E、MCP stdio 子进程工具发现、`search_shopping_guides` 工具适配、Agent tool list 接入、商品事实/API 与知识补充/RAG 边界、推荐/对比/指南/FAQ 场景覆盖、message-query-trace 逻辑关联、SSE tool JSON 过滤、chunk id/trace id 可见输出过滤、Persistent MCP client 长期复用子进程、FastAPI shutdown 释放 MCP client | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_agent.py -v` | 2026-06-12 |
 
 #### 阶段 A 交付里程碑：配置与项目骨架
@@ -2274,7 +2277,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | --- | --- | --- | --- | --- |
 | G1 | 准备黄金测试集格式 | [✔] | 2026-06-10 | `tests/fixtures/golden_set.json`，定义 `id/collection/question/golden_answer/expected_sources/expected_keywords` 字段，并覆盖无线耳机、人体工学键盘和解压玩具三类购物指南问题；2 个单元测试通过 |
 | G2 | 实现自定义检索指标 | [✔] | 2026-06-10 | `src/observability/evaluation/metrics.py`，实现无 LLM 依赖的 Hit Rate@K、MRR 和 NDCG@K；指标支持字符串来源和 mapping 候选输入，校验 dataset/predictions 对齐、top_k 和 expected_sources 契约；5 个 evaluation 单元测试通过 |
-| G3 | 接入 Ragas 生成指标 | [✔] | 2026-06-10 | `src/observability/evaluation/ragas_adapter.py`，封装 faithfulness 和 answer_relevancy 生成质量指标；真实 Ragas 依赖采用懒加载，普通单测使用 fake backend，真实 import 测试使用 external marker 隔离；adapter 在真实 backend 边界将项目内部 `question/answer/contexts/ground_truth` 行转换为 Ragas 0.2 的 `user_input/response/retrieved_contexts/reference` 列，并对空 `metric_names` fail fast；7 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
+| G3 | 接入 Ragas 生成指标 | [✔] | 2026-06-10 | `src/core/config.py`、`src/observability/evaluation/ragas_adapter.py`、`src/libs/evaluator/ragas_evaluator.py`、`src/scripts/run_evaluation.py`，封装配置驱动的 Ragas generation metrics；默认启用 `faithfulness`、`answer_relevancy`、`context_precision`、`context_recall`，`answer_correctness` 默认关闭；`enabled_generation_metrics()` 从 `settings.evaluation.metrics.generation` 解析启用指标并由 `run_evaluation.py` 传给 evaluator；真实 Ragas 依赖采用懒加载，普通单测使用 fake backend，真实 import 测试使用 external marker 隔离；adapter 在真实 backend 边界将项目内部 `question/answer/contexts/ground_truth` 行转换为 Ragas 0.2 的 `user_input/response/retrieved_contexts/reference` 列，并对空 `metric_names` fail fast |
 | G4 | 实现策略对比评估 | [✔] | 2026-06-10 | `src/observability/evaluation/runner.py` 通过可注入 retrieval callable 对比 hybrid、dense_only、sparse_only、rerank 四种策略，并复用 Hit Rate@K、MRR@K、NDCG@K 计算指标；runner 不直接打开数据库或构造 QueryRuntime；包入口导出 `RetrievalStrategy` 以支持外部自定义策略，空 metrics 配置 fail fast；9 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 | G5 | 实现评估历史趋势展示 | [✔] | 2026-06-10 | `EvaluationRunner.save_results()`，将策略对比结果写入 `EvaluationRepository` 边界，生成一条 evaluation run 和按 `strategy.metric` 命名的 metric rows；metric details 保留 strategy、retrieval_mode、use_rerank、raw_metric_name、sample_count 和 predictions，供 Dashboard 趋势与详情展示；保存前校验各策略 prediction 数量一致，避免 summary 误导；11 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 | G6 | 实现真实 Ragas 评估入口与最终上下文优化 | [✔] | 2026-06-12 | 注册 `ragas` 到 `EvaluatorFactory`；新增 `run_evaluation.py` 读取 golden set、调用真实 Query Pipeline、用 `query_result.content` 作为 RAG answer、按 `query_result.contexts` 回查 chunk 正文构造 Ragas `retrieved_contexts`、调用 `RagasEvaluator` 并写入 evaluation run/results；同时将 `query_result.content` 升级为配置驱动的 Agent-ready final context，优化失败 fallback 到原始编号证据块；58 个目标单元测试通过，ruff 通过，真实 Ragas provider 创建 smoke 通过 |
@@ -3590,19 +3593,21 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 ##### G3：接入 Ragas 指标
 
-目标：封装 Ragas 生成质量指标。
+目标：封装 Ragas 生成质量指标，并支持从统一配置读取本次启用的 generation metrics。
 
-修改文件：`src/observability/evaluation/__init__.py`、`src/observability/evaluation/ragas_adapter.py`、`tests/unit/test_evaluation.py`
+修改文件：`config/settings.example.yaml`、`src/core/config.py`、`src/observability/evaluation/__init__.py`、`src/observability/evaluation/ragas_adapter.py`、`src/libs/evaluator/ragas_evaluator.py`、`src/scripts/run_evaluation.py`、`tests/unit/test_config.py`、`tests/unit/test_evaluation.py`
 
 实现类/函数：
 
+- `EvaluationGenerationMetricsSettings`：描述 `settings.evaluation.metrics.generation` 下每个 Ragas 指标开关
+- `enabled_generation_metrics()`：从配置解析启用的 Ragas generation metrics，全部关闭时 fail fast
 - `RagasEvaluator`：封装 Ragas 生成质量评估执行逻辑
 - `RagasEvaluator.evaluate()`：将黄金集和生成结果转换为 Ragas-compatible rows，并返回归一化数值指标
 - `_load_ragas_backend()`：懒加载可选 Ragas 依赖，避免普通开发环境强制安装 evaluation extra
 - `_to_ragas_v02_row()`：在真实 Ragas backend 边界将项目行字段映射为 Ragas 0.2 单轮评估列
 - `_normalize_ragas_result()`：将 Ragas mapping、scores 或 dataframe 结果归一化为 `metric_name -> float`
 
-验收标准：Ragas 测试使用 marker 隔离；普通单元测试不得导入真实 Ragas 依赖；默认指标包含 `faithfulness` 和 `answer_relevancy`；空 `metric_names` 必须 fail fast；真实 Ragas 未安装时应返回可读 ProviderError。
+验收标准：`settings.example.yaml` 中 generation metrics 包含 `faithfulness`、`answer_relevancy`、`context_precision`、`context_recall` 和 `answer_correctness`；`faithfulness`、`answer_relevancy`、`context_precision`、`context_recall` 默认启用，`answer_correctness` 默认关闭；`enabled_generation_metrics()` 必须位于 `src/core/config.py` 并返回配置启用的指标列表；全部关闭时必须 fail fast；`run_evaluation.py` 必须把解析后的 `metric_names` 传入 `EvaluationService.run_evaluation(... evaluator_options=...)`，并写入 `settings_snapshot`；Ragas 测试使用 marker 隔离；普通单元测试不得导入真实 Ragas 依赖；空 `metric_names` 必须 fail fast；真实 Ragas 未安装时应返回可读 ProviderError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
 

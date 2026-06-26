@@ -35,6 +35,7 @@ PromptTemplate = config_module.PromptTemplate
 RagSettings = config_module.RagSettings
 load_prompt = config_module.load_prompt
 load_settings = config_module.load_settings
+enabled_generation_metrics = config_module.enabled_generation_metrics
 
 
 def load_settings_document() -> dict[str, Any]:
@@ -499,6 +500,39 @@ def test_environment_validation_lists_only_active_requirements() -> None:
     assert message.count("DASHSCOPE_API_KEY") == 1
 
 
+
+def test_evaluation_generation_metrics_are_config_driven() -> None:
+    """Verify Ragas generation metrics are selected from typed settings."""
+
+    settings = load_settings(SETTINGS_PATH, environ={}, validate_environment=False)
+
+    assert settings.evaluation.metrics.generation.faithfulness is True
+    assert settings.evaluation.metrics.generation.answer_relevancy is True
+    assert settings.evaluation.metrics.generation.context_precision is True
+    assert settings.evaluation.metrics.generation.context_recall is True
+    assert settings.evaluation.metrics.generation.answer_correctness is False
+    assert enabled_generation_metrics(settings) == [
+        "faithfulness",
+        "answer_relevancy",
+        "context_precision",
+        "context_recall",
+    ]
+
+
+def test_enabled_generation_metrics_fails_when_all_generation_metrics_are_disabled(
+    tmp_path: Path,
+) -> None:
+    """Reject evaluation runs that disable every Ragas generation metric."""
+
+    document = load_settings_document()
+    for metric_name in document["evaluation"]["metrics"]["generation"]:
+        document["evaluation"]["metrics"]["generation"][metric_name] = False
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    settings = load_settings(settings_path, environ={}, validate_environment=False)
+
+    with pytest.raises(ValueError, match="generation metrics"):
+        enabled_generation_metrics(settings)
 def test_load_prompt_returns_a_validated_template() -> None:
     """Verify Prompt loading produces a typed, render-ready configuration object.
 
