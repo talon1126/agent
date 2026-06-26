@@ -66,6 +66,7 @@ class ProviderSettings(ConfigSection):
     """
 
     model: str | None = None
+    api_key: str | None = None
     api_key_env: str | None = None
     base_url_env: str | None = None
     base_url: str | None = None

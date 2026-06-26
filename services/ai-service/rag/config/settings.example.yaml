@@ -22,6 +22,11 @@ llm:
       api_key_env: DASHSCOPE_API_KEY
       base_url_env: DASHSCOPE_BASE_URL
       timeout_seconds: 60
+    ccswitch:
+      model: gpt-5.5
+      api_key: ccswitch-local-key
+      base_url: http://127.0.0.1:5511/v1
+      timeout_seconds: 60
     openai:
       model: gpt-4.1-mini
       api_key_env: OPENAI_API_KEY

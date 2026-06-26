@@ -118,10 +118,10 @@ services/ai-service/rag/
 │   │   │   ├── base_llm.py                        # LLMClient 最小抽象接口
 │   │   │   ├── base_vision_llm.py                 # Vision LLM 最小抽象接口
 │   │   │   ├── llm_factory.py                     # 根据配置创建 LLMClient
-│   │   │   ├── openai_client.py                   # OpenAI Chat 实现
-│   │   │   ├── azure_openai_client.py             # Azure OpenAI Chat 实现
-│   │   │   ├── ollama_client.py                   # Ollama 本地 LLM 实现
-│   │   │   ├── deepseek_client.py                 # DeepSeek 兼容接口实现
+│   │   │   ├── fake_llm.py                        # 测试和离线降级使用的 Fake LLM 实现
+│   │   │   ├── openai_compatible_llm.py           # OpenAI-compatible Chat 通用适配器
+│   │   │   ├── deepseek_client.py                 # DeepSeek OpenAI-compatible Chat 实现
+│   │   │   ├── ccswitch_client.py                 # CCSwitch 本地 OpenAI-compatible Chat 实现
 │   │   │   └── dashscope_vision_llm.py            # 百炼 Qwen-VL 图片 caption 实现
 │   │   ├── splitter/
 │   │   │   ├── base_splitter.py                   # Splitter 最小抽象接口

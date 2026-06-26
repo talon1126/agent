@@ -49,6 +49,7 @@ FakeReranker = reranker_module.FakeReranker
 CrossEncoderReranker = reranker_module.CrossEncoderReranker
 NoOpReranker = reranker_module.NoOpReranker
 FakeEvaluator = evaluator_module.FakeEvaluator
+CCSwitchClient = llm_module.CCSwitchClient
 DeepSeekClient = llm_module.DeepSeekClient
 OpenAIEmbedding = embedding_module.OpenAIEmbedding
 PgVectorStore = vector_store_module.PgVectorStore
@@ -206,7 +207,7 @@ def test_factories_register_builtin_providers_through_explicit_method() -> None:
 
     assert {"fake", "markdown", "pdf"}.issubset(LoaderFactory.list_providers())
     assert {"fake", "recursive_character"}.issubset(SplitterFactory.list_providers())
-    assert {"deepseek", "fake"}.issubset(LLMFactory.list_providers())
+    assert {"ccswitch", "deepseek", "fake"}.issubset(LLMFactory.list_providers())
     assert {"fake", "openai"}.issubset(EmbeddingFactory.list_providers())
     assert {"fake", "pgvector"}.issubset(VectorStoreFactory.list_providers())
     assert {"fake", "none", "rrf", "fallback"}.issubset(
@@ -477,6 +478,53 @@ def test_b11_factories_fail_fast_for_unknown_or_unimplemented_providers() -> Non
     assert evaluator_error.value.context["provider"] == "custom"
 
 
+
+
+def test_ccswitch_client_uses_openai_compatible_chat_contract() -> None:
+    """Require the CCSwitch adapter to normalize SDK requests and identity."""
+
+    sdk_client = Mock()
+    sdk_client.chat.completions.create.return_value = SimpleNamespace(
+        id="ccswitch-response-1",
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Use the 5.5 model answer."),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=6,
+            total_tokens=16,
+        ),
+    )
+    llm = LLMFactory.create(
+        provider="ccswitch",
+        model="gpt-5.5",
+        api_key="local-test-key",
+        base_url="http://127.0.0.1:5511/v1",
+        timeout_seconds=30,
+        client=sdk_client,
+    )
+
+    response = llm.chat([ChatMessage(role="user", content="Hello")])
+
+    assert isinstance(llm, CCSwitchClient)
+    sdk_client.chat.completions.create.assert_called_once_with(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    assert response.content == "Use the 5.5 model answer."
+    assert response.provider == "ccswitch"
+    assert response.model == "gpt-5.5"
+    assert response.raw == {
+        "response_id": "ccswitch-response-1",
+        "finish_reason": "stop",
+        "prompt_tokens": 10,
+        "completion_tokens": 6,
+        "total_tokens": 16,
+    }
+
 def test_deepseek_client_uses_openai_compatible_chat_contract() -> None:
     """Require the Bailian DeepSeek adapter to normalize SDK requests and output."""
 
@@ -604,12 +652,12 @@ def test_real_provider_clients_wrap_sdk_initialization_failures(
 ) -> None:
     """Keep proxy or endpoint setup failures inside the configuration boundary."""
 
-    deepseek_module = importlib.import_module("src.libs.llm.deepseek_client")
+    llm_transport_module = importlib.import_module("src.libs.llm.openai_compatible_llm")
     openai_embedding_module = importlib.import_module(
         "src.libs.embedding.openai_embedding"
     )
     monkeypatch.setattr(
-        deepseek_module,
+        llm_transport_module,
         "OpenAI",
         Mock(side_effect=RuntimeError("invalid proxy with secret-value")),
     )

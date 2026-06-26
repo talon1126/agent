@@ -14,6 +14,7 @@ from typing import Any
 from src.core.config import RagSettings
 from src.core.errors import ConfigurationError
 from src.libs.llm.base_llm import BaseLLM
+from src.libs.llm.ccswitch_client import CCSwitchClient
 from src.libs.llm.deepseek_client import DeepSeekClient
 from src.libs.llm.fake_llm import FakeLLM
 
@@ -37,6 +38,7 @@ class LLMFactory:
         if cls._builtins_registered:
             return
         cls.register("fake", FakeLLM)
+        cls.register("ccswitch", CCSwitchClient)
         cls.register("deepseek", DeepSeekClient)
         cls._builtins_registered = True
 

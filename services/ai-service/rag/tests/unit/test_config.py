@@ -141,6 +141,7 @@ def test_default_component_selection_matches_the_spec() -> None:
 
     assert settings["llm"]["default"] == "deepseek"
     assert settings["llm"]["providers"]["deepseek"]["model"] == "deepseek-v4-flash"
+    assert settings["llm"]["providers"]["ccswitch"]["model"] == "gpt-5.5"
     assert settings["vision_llm"]["providers"]["qwen_vl_max"]["model"] == "qwen-vl-max"
     assert settings["embedding"]["default"] == "dashscope"
     assert settings["embedding"]["providers"]["dashscope"]["model"] == (
@@ -169,6 +170,8 @@ def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:
     assert settings["database"]["url_env"] == "DATABASE_URL"
     assert settings["database"]["timezone"] == "Asia/Shanghai"
     assert settings["llm"]["providers"]["deepseek"]["api_key_env"] == ("DASHSCOPE_API_KEY")
+    assert settings["llm"]["providers"]["ccswitch"]["api_key"] == "ccswitch-local-key"
+    assert settings["llm"]["providers"]["ccswitch"]["base_url"] == "http://127.0.0.1:5511/v1"
     assert settings["embedding"]["providers"]["dashscope"]["api_key_env"] == (
         "DASHSCOPE_API_KEY"
     )
@@ -411,6 +414,7 @@ def test_load_settings_returns_typed_configuration() -> None:
     assert isinstance(settings, RagSettings)
     assert settings.project.default_collection == "shopping_guides"
     assert settings.llm.selected_provider.model == "deepseek-v4-flash"
+    assert settings.llm.providers["ccswitch"].api_key == "ccswitch-local-key"
     assert settings.embedding.selected_provider.dimensions == 1536
     assert settings.evaluation.llm_provider == "deepseek"
     assert settings.evaluation.embedding_provider == "dashscope"
