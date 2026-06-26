@@ -267,7 +267,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `id` | `str` | 文档稳定 ID，建议由 `collection + source_path + source_hash` 生成 |
 | `text` | `str` | 文档统一文本内容，PDF 先转 Markdown，图片位置写入占位符 |
 | `summary` | `str/null` | 文档级语义摘要，供 chunk rewrite、文档摘要工具和 Dashboard 使用；空值表示摘要步骤未启用或摘要生成降级 |
-| `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息；其中 `images[]` 对外只保留 `id/path`，图片定位信息仅作为 Loader 内部插入占位符的临时数据 |
+| `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息；其中 `images[]` 对外只保留 `id/path`，图片定位信息仅作为 Loader 内部插入占位符的临时数据；Loader 可在内存态保留 `headings` 供 chunker 计算章节，但 `rag_documents.metadata` 持久化前必须裁剪 loader-only `headings` |
 
 `Chunk` 字段：
 
@@ -289,7 +289,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 说明：
 
 - 字段命名统一使用 `start_offset`，不使用 `start_offest`。
-- Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。
+- Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。`Document.metadata.headings` 只作为摄取内存态结构输入，用于 `DocumentChunker` 计算 chunk `section_path`，不得写入 `rag_documents.metadata`。
 - `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`。
 - `Chunk.metadata` 是 chunk 来源字段的唯一持久化载体，必须包含 `document_id` 和 `source_path`，并按需包含 `collection`、`doc_type`、`topic`、`chunk_index`、`section_path` 和 `image_refs`。
 - `Chunk.metadata` 只保留检索过滤、引用构造和业务解释需要的字段，例如 `collection`、`document_id`、`source_path`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。章节结构只使用 `section_path: List[str]` 表示，不额外保存 `section`、`h2`、`h3` 或 `h4` 对象。不得保存 `images`、`headings`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等图片详情和 Transform 执行信息。
@@ -2077,11 +2077,11 @@ RAG 提供可独立运行的离线数据摄取能力。统一 `IngestionPipeline
 可用功能：
 
 - 对未变化且已成功摄取的文档执行 SHA256 skipped 快速结束。
-- 从 Markdown/PDF 提取正文、标题层级、图片占位符和图片 metadata。
+- 从 Markdown/PDF 提取正文、标题层级、图片占位符和图片 metadata；标题层级作为内存态 chunker 输入，不作为文档表 metadata 持久化。
 - 生成稳定 chunk ID、来源 metadata、image_refs 和有序 chunk_index。
 - 串行执行 metadata enrich、chunk rewrite、semantic merge、denoise 和 image caption。
 - 复用成功文档中相同 content_hash 的 Dense 向量，仅编码未命中或内容变化的 chunk。
-- 将 document、chunk、pgvector、BM25 posting 和 image index 作为完整快照写入。
+- 将 document、chunk、pgvector、BM25 posting 和 image index 作为完整快照写入；document metadata 入库前裁剪 loader-only headings，chunk metadata 保留 `section_path`。
 - 通过 `python -m src.scripts.ingest --path ... [--collection ...] [--force]` 摄取单文件或递归目录。
 
 验证方式：
@@ -2875,13 +2875,13 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 - `UpsertStep.run()`：校验完整索引快照，并在一个 PostgreSQL 事务内统一写入 document、chunk、向量、BM25 和图片索引；图片 caption 优先读取 `image_caption_artifacts`
 - `BM25Storage.upsert_index()`：按 document 替换完整 BM25 posting 快照
-- `DocumentRepository.upsert_in_transaction()`：复用调用方事务写入 document
+- `DocumentRepository.upsert_in_transaction()`：复用调用方事务写入 document，并在写入 `rag_documents.metadata` 前裁剪 loader-only `headings`
 - `ChunkRepository.upsert_many_in_transaction()`：复用调用方事务替换完整 chunk 快照
 - `PgVectorStore.upsert_in_transaction()`：复用调用方事务写入 Dense 向量
 - `ImageStorage.image_path()`：安全解析 `data/images/{collection}/` 下的受管图片路径
 - `ImageStorage.upsert_index_in_transaction()`：复用调用方事务写入图片索引
 
-验收标准：同一完整快照重复 upsert 不产生重复记录且返回相同有序 ID；Transform 基于新 content_hash 生成新 chunk_id 后，统一 upsert 清理旧 chunk 及其 BM25 posting；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 在同一个 PostgreSQL 事务内一致写入；`image_index.metadata.caption` 优先使用 `image_caption_artifacts` 中的原始 caption，即使最终 chunk 正文被 rewrite 移除 `[[image_caption:...]]` 节点也必须保留 caption；没有 artifacts 时兼容解析最终 chunk 正文；向量或数据库写入失败时所有数据库记录回滚，事务前被替换的受管图片恢复原内容。
+验收标准：同一完整快照重复 upsert 不产生重复记录且返回相同有序 ID；Transform 基于新 content_hash 生成新 chunk_id 后，统一 upsert 清理旧 chunk 及其 BM25 posting；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 在同一个 PostgreSQL 事务内一致写入；`rag_documents.metadata` 不持久化 loader-only `headings`，`rag_chunks.metadata.section_path` 仍按 chunk 保留；`image_index.metadata.caption` 优先使用 `image_caption_artifacts` 中的原始 caption，即使最终 chunk 正文被 rewrite 移除 `[[image_caption:...]]` 节点也必须保留 caption；没有 artifacts 时兼容解析最终 chunk 正文；向量或数据库写入失败时所有数据库记录回滚，事务前被替换的受管图片恢复原内容。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 

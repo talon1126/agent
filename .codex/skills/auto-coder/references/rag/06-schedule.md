@@ -128,11 +128,11 @@ RAG 提供可独立运行的离线数据摄取能力。统一 `IngestionPipeline
 可用功能：
 
 - 对未变化且已成功摄取的文档执行 SHA256 skipped 快速结束。
-- 从 Markdown/PDF 提取正文、标题层级、图片占位符和图片 metadata。
+- 从 Markdown/PDF 提取正文、标题层级、图片占位符和图片 metadata；标题层级作为内存态 chunker 输入，不作为文档表 metadata 持久化。
 - 生成稳定 chunk ID、来源 metadata、image_refs 和有序 chunk_index。
 - 串行执行 metadata enrich、chunk rewrite、semantic merge、denoise 和 image caption。
 - 复用成功文档中相同 content_hash 的 Dense 向量，仅编码未命中或内容变化的 chunk。
-- 将 document、chunk、pgvector、BM25 posting 和 image index 作为完整快照写入。
+- 将 document、chunk、pgvector、BM25 posting 和 image index 作为完整快照写入；document metadata 入库前裁剪 loader-only headings，chunk metadata 保留 `section_path`。
 - 通过 `python -m src.scripts.ingest --path ... [--collection ...] [--force]` 摄取单文件或递归目录。
 
 验证方式：
@@ -926,13 +926,13 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 - `UpsertStep.run()`：校验完整索引快照，并在一个 PostgreSQL 事务内统一写入 document、chunk、向量、BM25 和图片索引；图片 caption 优先读取 `image_caption_artifacts`
 - `BM25Storage.upsert_index()`：按 document 替换完整 BM25 posting 快照
-- `DocumentRepository.upsert_in_transaction()`：复用调用方事务写入 document
+- `DocumentRepository.upsert_in_transaction()`：复用调用方事务写入 document，并在写入 `rag_documents.metadata` 前裁剪 loader-only `headings`
 - `ChunkRepository.upsert_many_in_transaction()`：复用调用方事务替换完整 chunk 快照
 - `PgVectorStore.upsert_in_transaction()`：复用调用方事务写入 Dense 向量
 - `ImageStorage.image_path()`：安全解析 `data/images/{collection}/` 下的受管图片路径
 - `ImageStorage.upsert_index_in_transaction()`：复用调用方事务写入图片索引
 
-验收标准：同一完整快照重复 upsert 不产生重复记录且返回相同有序 ID；Transform 基于新 content_hash 生成新 chunk_id 后，统一 upsert 清理旧 chunk 及其 BM25 posting；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 在同一个 PostgreSQL 事务内一致写入；`image_index.metadata.caption` 优先使用 `image_caption_artifacts` 中的原始 caption，即使最终 chunk 正文被 rewrite 移除 `[[image_caption:...]]` 节点也必须保留 caption；没有 artifacts 时兼容解析最终 chunk 正文；向量或数据库写入失败时所有数据库记录回滚，事务前被替换的受管图片恢复原内容。
+验收标准：同一完整快照重复 upsert 不产生重复记录且返回相同有序 ID；Transform 基于新 content_hash 生成新 chunk_id 后，统一 upsert 清理旧 chunk 及其 BM25 posting；支持批量 upsert 且返回结果保持输入顺序；文档、chunk、向量、BM25 和 `image_index` 在同一个 PostgreSQL 事务内一致写入；`rag_documents.metadata` 不持久化 loader-only `headings`，`rag_chunks.metadata.section_path` 仍按 chunk 保留；`image_index.metadata.caption` 优先使用 `image_caption_artifacts` 中的原始 caption，即使最终 chunk 正文被 rewrite 移除 `[[image_caption:...]]` 节点也必须保留 caption；没有 artifacts 时兼容解析最终 chunk 正文；向量或数据库写入失败时所有数据库记录回滚，事务前被替换的受管图片恢复原内容。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_ingestion_pipeline.py -v`
 

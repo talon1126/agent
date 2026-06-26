@@ -87,7 +87,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `id` | `str` | 文档稳定 ID，建议由 `collection + source_path + source_hash` 生成 |
 | `text` | `str` | 文档统一文本内容，PDF 先转 Markdown，图片位置写入占位符 |
 | `summary` | `str/null` | 文档级语义摘要，供 chunk rewrite、文档摘要工具和 Dashboard 使用；空值表示摘要步骤未启用或摘要生成降级 |
-| `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息；其中 `images[]` 对外只保留 `id/path`，图片定位信息仅作为 Loader 内部插入占位符的临时数据 |
+| `metadata` | `dict` | 文档元数据，包含来源、标题、collection、hash、图片列表等信息；其中 `images[]` 对外只保留 `id/path`，图片定位信息仅作为 Loader 内部插入占位符的临时数据；Loader 可在内存态保留 `headings` 供 chunker 计算章节，但 `rag_documents.metadata` 持久化前必须裁剪 loader-only `headings` |
 
 `Chunk` 字段：
 
@@ -109,7 +109,7 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 说明：
 
 - 字段命名统一使用 `start_offset`，不使用 `start_offest`。
-- Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。
+- Loader 可以在内部使用页码、物理位置、文本锚点、`text_offset` 和 `text_length` 生成图片占位符，但这些定位字段不得持久化到最终 `Document.metadata.images[]` 或 `Chunk.metadata`。`Document.metadata.headings` 只作为摄取内存态结构输入，用于 `DocumentChunker` 计算 chunk `section_path`，不得写入 `rag_documents.metadata`。
 - `DocumentChunker` 必须通过扫描 chunk 正文中的 `[[image:image_id]]` 占位符生成 `image_refs`。
 - `Chunk.metadata` 是 chunk 来源字段的唯一持久化载体，必须包含 `document_id` 和 `source_path`，并按需包含 `collection`、`doc_type`、`topic`、`chunk_index`、`section_path` 和 `image_refs`。
 - `Chunk.metadata` 只保留检索过滤、引用构造和业务解释需要的字段，例如 `collection`、`document_id`、`source_path`、`doc_type`、`topic`、`chunk_index`、`section_path` 和可选 `image_refs`。章节结构只使用 `section_path: List[str]` 表示，不额外保存 `section`、`h2`、`h3` 或 `h4` 对象。不得保存 `images`、`headings`、`source_type`、`source_hash`、`title`、`image_captions`、`rewrite`、`semantic_merge` 或 `denoise` 等图片详情和 Transform 执行信息。

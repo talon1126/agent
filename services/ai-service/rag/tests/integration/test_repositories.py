@@ -914,6 +914,103 @@ def test_document_and_chunk_repositories_round_trip_and_replace_content() -> Non
 
 
 @pytest.mark.integration
+def test_document_repository_drops_loader_headings_but_keeps_chunk_section_path() -> None:
+    """Persist compact document metadata while preserving chunk section paths."""
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for repository integration")
+
+    from src.core.types import Chunk, Document
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import ChunkRepository, DocumentRepository
+
+    collection_id = f"metadata-prune-{uuid4().hex}"
+    document_id = f"doc-{uuid4().hex}"
+    source_path = f"fixtures/{document_id}.md"
+    source_hash = sha256(b"document-with-headings").hexdigest()
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=3),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        document = Document(
+            id=document_id,
+            text="# Buying Guide\n\n## Audio\n\nWireless guidance.",
+            metadata={
+                "source_path": source_path,
+                "source_type": "markdown",
+                "source_hash": source_hash,
+                "title": "Buying Guide",
+                "headings": [
+                    {
+                        "level": 1,
+                        "title": "Buying Guide",
+                        "path": ["Buying Guide"],
+                        "text_offset": 0,
+                    },
+                    {
+                        "level": 2,
+                        "title": "Audio",
+                        "path": ["Buying Guide", "Audio"],
+                        "text_offset": 17,
+                    },
+                ],
+                "images": [{"id": "image-1", "path": "data/images/image-1.png"}],
+            },
+        )
+        chunk = Chunk(
+            id=f"chunk-{uuid4().hex}",
+            text="Wireless guidance.",
+            metadata={
+                "document_id": document_id,
+                "source_path": source_path,
+                "section_path": ["Audio"],
+            },
+            chunk_index=0,
+            start_offset=27,
+            end_offset=45,
+        )
+
+        documents = DocumentRepository(pool)
+        chunks = ChunkRepository(pool)
+        documents.upsert(
+            document,
+            collection_id=collection_id,
+            source_path=source_path,
+            source_hash=source_hash,
+            title="Buying Guide",
+        )
+        chunks.upsert_many([chunk], collection_id=collection_id, document_id=document_id)
+
+        with pool.connection() as connection:
+            persisted_document_metadata = connection.execute(
+                "SELECT metadata FROM rag_documents WHERE id = %s",
+                (document_id,),
+            ).fetchone()[0]
+            persisted_chunk_metadata = connection.execute(
+                "SELECT metadata FROM rag_chunks WHERE id = %s",
+                (chunk.id,),
+            ).fetchone()[0]
+
+        assert "headings" not in persisted_document_metadata
+        assert persisted_document_metadata["images"] == [
+            {"id": "image-1", "path": "data/images/image-1.png"}
+        ]
+        assert persisted_document_metadata["title"] == "Buying Guide"
+        assert persisted_chunk_metadata["section_path"] == ["Audio"]
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+@pytest.mark.integration
 def test_image_storage_saves_files_and_queries_upserted_indexes(
     tmp_path: Path,
 ) -> None:

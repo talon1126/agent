@@ -58,6 +58,30 @@ def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return frozen
 
 
+def _persistent_document_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the compact document metadata payload persisted to PostgreSQL.
+
+    Loader-produced ``headings`` can be large and is only needed while chunking
+    a document in memory. Chunk-level ``section_path`` is already persisted on
+    ``rag_chunks.metadata``, so storing the full heading list again in
+    ``rag_documents.metadata`` duplicates data without serving retrieval or
+    Dashboard reads.
+
+    Args:
+        metadata: Runtime ``Document.metadata`` produced by a loader and used
+            by downstream ingestion stages.
+
+    Returns:
+        A shallow copy suitable for ``rag_documents.metadata`` with loader-only
+        heading hierarchy removed. The caller-owned ``metadata`` mapping is not
+        mutated.
+    """
+
+    persisted = dict(metadata)
+    persisted.pop("headings", None)
+    return persisted
+
+
 def _freeze_stages(
     stages: list[dict[str, Any]] | tuple[Mapping[str, Any], ...],
 ) -> tuple[Mapping[str, Any], ...]:
@@ -273,7 +297,7 @@ class DocumentRepository:
                 title,
                 document.text,
                 document.summary,
-                Jsonb(document.metadata),
+                Jsonb(_persistent_document_metadata(document.metadata)),
             ),
         )
         return document
