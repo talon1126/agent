@@ -39,6 +39,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
+    { name = "ragas" },
     { name = "ruff" },
 ]
 evaluation = [
@@ -71,6 +72,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0,<2.0" },
     { name = "python-json-logger", specifier = ">=3.0,<5.0" },
     { name = "pyyaml", specifier = ">=6.0,<7.0" },
+    { name = "ragas", marker = "extra == 'dev'", specifier = ">=0.2,<1.0" },
     { name = "ragas", marker = "extra == 'evaluation'", specifier = ">=0.2,<1.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11,<1.0" },
     { name = "sentence-transformers", marker = "extra == 'rerank'", specifier = ">=3.0,<6.0" },
