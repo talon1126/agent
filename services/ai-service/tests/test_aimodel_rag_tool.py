@@ -364,6 +364,65 @@ def test_query_trace_ids_from_tool_results_deduplicates_rag_traces() -> None:
     assert _query_trace_ids_from_tool_results(tool_results) == ["query-a"]
 
 
+def test_stream_chat_force_rag_prefetches_requested_collection(monkeypatch) -> None:
+    """Evaluation mode should force one RAG call before agent generation."""
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    captured: dict[str, Any] = {}
+
+    def fake_streaming_agent_runner(
+        request: AiModelChatRequest,
+        tool_results: list[AiModelToolResult],
+    ) -> list[str]:
+        captured["tool_results_before_agent"] = [result.model_dump() for result in tool_results]
+        return ["这是最终回答。"]
+
+    def fake_search_shopping_guides(**kwargs: Any) -> AiModelToolResult:
+        captured["rag_call"] = kwargs
+        return AiModelToolResult(
+            tool="search_shopping_guides",
+            ok=True,
+            input=kwargs["query"],
+            data={
+                "trace_id": "query-forced",
+                "content": "[1] 办公椅应关注腰靠。",
+                "citations": [],
+                "images": [],
+                "is_empty": False,
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.routers.AImodel.service.run_search_shopping_guides",
+        fake_search_shopping_guides,
+    )
+
+    events = list(
+        stream_chat_events(
+            AiModelChatRequest(
+                user_id=1,
+                message="每天久坐办公，办公椅最应该看哪些地方？",
+                links=[],
+                force_rag=True,
+                rag_collection="shopping_guides",
+            ),
+            mock_api_url="http://mock-api",
+            streaming_agent_runner=fake_streaming_agent_runner,
+            memory_store=NoopAiModelMemoryStore(),
+        )
+    )
+
+    assert captured["rag_call"] == {
+        "query": "每天久坐办公，办公椅最应该看哪些地方？",
+        "collection": "shopping_guides",
+        "top_k": 5,
+        "no_rerank": False,
+        "include_image_base64": False,
+    }
+    assert captured["tool_results_before_agent"][0]["data"]["trace_id"] == "query-forced"
+    assert any("conversation_id" in event for event in events)
+
+
 def test_system_prompt_separates_product_api_facts_from_rag_knowledge() -> None:
     assert "商品事实" in SYSTEM_PROMPT
     assert "价格" in SYSTEM_PROMPT

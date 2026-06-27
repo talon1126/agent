@@ -97,11 +97,19 @@ class AImodelEvaluationClient:
 
         self._settings = settings
 
-    def chat(self, question: str) -> dict[str, Any]:
+    def chat(
+        self,
+        question: str,
+        *,
+        collection: str | None = None,
+        force_rag: bool = False,
+    ) -> dict[str, Any]:
         """Send one golden question to AImodel and return the final done payload.
 
         Args:
             question: User question from the golden set.
+            collection: Optional RAG collection that evaluation wants AImodel to query.
+            force_rag: Whether evaluation requires one RAG tool call before answering.
 
         Returns:
             Parsed SSE ``done`` payload emitted by ``/AImodel/chat``.
@@ -123,6 +131,8 @@ class AImodelEvaluationClient:
                 "user_id": self._settings.user_id,
                 "message": _required_text(question, field_name="question"),
                 "links": [],
+                "force_rag": force_rag,
+                "rag_collection": collection,
             },
             timeout=self._settings.timeout_seconds,
         )
@@ -317,7 +327,8 @@ def run_evaluation_cli(
         )
         if not dataset:
             raise ValueError("Golden set contains no samples for the selected collection")
-        collection = args.collection or select_single_collection(dataset)
+        collections = _dataset_collections(dataset)
+        collection = args.collection or _evaluation_collection_id(collections)
         answer_source = _answer_source(args.answer_source, settings=settings)
 
         pool = _create_pool(settings.database)
@@ -350,7 +361,7 @@ def run_evaluation_cli(
                 sample,
                 runtime=runtime,
                 chunk_lookup=chunk_lookup,
-                collection=collection,
+                collection=_collection_for_sample(sample, override=args.collection),
                 top_k=top_k,
                 no_rerank=args.no_rerank,
                 answer_source=answer_source,
@@ -371,6 +382,7 @@ def run_evaluation_cli(
             settings_snapshot={
                 "answer_source": answer_source.value,
                 "collection": collection,
+                "collections": collections,
                 "top_k": top_k,
                 "no_rerank": args.no_rerank,
                 "golden_set_path": str(golden_set_path),
@@ -430,6 +442,7 @@ def build_prediction_from_query_result(
     *,
     chunk_lookup: ChunkLookup,
     query_trace_id: str,
+    effective_collection: str | None = None,
 ) -> dict[str, Any]:
     """Build one Ragas-compatible prediction from a Query Trace result.
 
@@ -439,6 +452,8 @@ def build_prediction_from_query_result(
             and ranked context identities.
         chunk_lookup: Vector store or fake exposing ``get_by_ids``.
         query_trace_id: Trace ID written by the query pipeline.
+        effective_collection: Collection actually used for this sample. ``None``
+            records the sample's own collection.
 
     Returns:
         Prediction record with ``answer`` from ``query_result.content`` and
@@ -468,6 +483,8 @@ def build_prediction_from_query_result(
         "retrieved_contexts": retrieved_contexts,
         "query_trace_id": _required_text(query_trace_id, field_name="query_trace_id"),
         "context_chunk_ids": chunk_ids,
+        "sample_collection": sample.get("collection"),
+        "effective_collection": effective_collection or sample.get("collection"),
     }
 
 
@@ -478,6 +495,7 @@ def build_prediction_from_message_answer(
     chunk_lookup: ChunkLookup,
     query_trace_id: str,
     message_answer: MessageAnswer,
+    effective_collection: str | None = None,
 ) -> dict[str, Any]:
     """Build one Ragas prediction from a stored AImodel assistant message.
 
@@ -490,6 +508,7 @@ def build_prediction_from_message_answer(
         query_trace_id: Trace ID written by the query pipeline and associated
             with the final assistant message through ``message_query_trace``.
         message_answer: Stored AImodel assistant answer resolved by trace ID.
+        effective_collection: Collection actually used for this sample.
 
     Returns:
         Prediction record with ``answer`` from ``message.content`` and
@@ -505,6 +524,7 @@ def build_prediction_from_message_answer(
         query_result,
         chunk_lookup=chunk_lookup,
         query_trace_id=query_trace_id,
+        effective_collection=effective_collection,
     )
     prediction.update(
         {
@@ -578,6 +598,7 @@ def _prediction_for_sample(
             _query_result_from_execution(execution),
             chunk_lookup=chunk_lookup,
             query_trace_id=trace_id,
+            effective_collection=collection,
         )
     if (
         aimodel_client is None
@@ -585,7 +606,11 @@ def _prediction_for_sample(
         or query_trace_repository is None
     ):
         raise ValueError("message answer source requires AImodel and trace repositories")
-    chat_result = aimodel_client.chat(question)
+    chat_result = aimodel_client.chat(
+        question,
+        collection=collection,
+        force_rag=True,
+    )
     message_answer = message_repository.get_answer_from_chat_result(chat_result)
     if message_answer is None:
         conversation_id = chat_result.get("conversation_id")
@@ -607,6 +632,7 @@ def _prediction_for_sample(
         chunk_lookup=chunk_lookup,
         query_trace_id=primary_trace_id,
         message_answer=message_answer,
+        effective_collection=collection,
     )
 
 
@@ -770,6 +796,37 @@ def _resolve_golden_set_path(path: str | None, *, settings: RagSettings) -> Path
     if working_directory_candidate.exists():
         return working_directory_candidate
     return (RAG_ROOT / candidate).resolve()
+
+
+def _dataset_collections(dataset: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Return sorted collections represented by the validated dataset."""
+
+    return sorted(
+        {
+            _required_text(sample.get("collection"), field_name="collection")
+            for sample in dataset
+        }
+    )
+
+
+def _evaluation_collection_id(collections: Sequence[str]) -> str:
+    """Return the persisted evaluation run collection identifier."""
+
+    if len(collections) == 1:
+        return collections[0]
+    return "mixed"
+
+
+def _collection_for_sample(
+    sample: Mapping[str, Any],
+    *,
+    override: str | None,
+) -> str:
+    """Resolve the collection used to evaluate one golden-set sample."""
+
+    if override is not None:
+        return _required_text(override, field_name="collection")
+    return _required_text(sample.get("collection"), field_name="collection")
 
 
 def _filter_dataset(

@@ -448,6 +448,8 @@ def test_build_prediction_from_query_result_uses_ranked_chunk_text_for_contexts(
         "retrieved_contexts": ["First ranked text.", "Second ranked text."],
         "query_trace_id": "query-trace-1",
         "context_chunk_ids": ["chunk-a", "chunk-b"],
+        "sample_collection": None,
+        "effective_collection": None,
     }
 
 
@@ -644,6 +646,13 @@ def test_run_evaluation_cli_defaults_to_message_answer_source(
 
     assert exit_code == 0
     assert captured["aimodel_questions"] == ["如何挑选微波炉？"]
+    assert captured["aimodel_requests"] == [
+        {
+            "question": "如何挑选微波炉？",
+            "collection": "shopping_guides",
+            "force_rag": True,
+        }
+    ]
     assert "execute_kwargs" not in captured
     assert captured["message_chat_results"] == [
         {"conversation_id": 99, "answer": "这是 AImodel 最终回答。"}
@@ -658,6 +667,88 @@ def test_run_evaluation_cli_defaults_to_message_answer_source(
     assert prediction["query_trace_ids"] == ["query-aimodel-1"]
     snapshot = captured["evaluation_kwargs"]["settings_snapshot"]
     assert snapshot["answer_source"] == "message"
+
+
+@pytest.mark.unit
+def test_run_evaluation_cli_uses_sample_collection_when_cli_collection_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Allow one golden set to evaluate samples from different collections."""
+
+    settings = run_evaluation_module.load_settings(
+        SETTINGS_PATH,
+        validate_environment=False,
+    )
+    golden_set_path = tmp_path / "mixed_golden_set.json"
+    golden_set_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "sample-shopping",
+                    "collection": "shopping_guides",
+                    "question": "如何挑选微波炉？",
+                    "golden_answer": "应关注容量、加热方式和售后。",
+                },
+                {
+                    "id": "sample-policy",
+                    "collection": "policies",
+                    "question": "拒收商品后怎么处理？",
+                    "golden_answer": "应按平台拒收和异常物流规则处理。",
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, Any] = {}
+
+    _patch_evaluation_cli_dependencies(
+        monkeypatch,
+        settings=settings,
+        captured=captured,
+        message_answer=run_evaluation_module.MessageAnswer(
+            message_id=88,
+            conversation_id=99,
+            content="这是 AImodel 最终回答。",
+            query_trace_ids=("query-aimodel-1",),
+        ),
+    )
+    outputs: list[str] = []
+
+    exit_code = run_evaluation_module.run_evaluation_cli(
+        ["--golden-set", str(golden_set_path)],
+        output=outputs.append,
+    )
+
+    assert exit_code == 0
+    assert captured["aimodel_requests"] == [
+        {
+            "question": "如何挑选微波炉？",
+            "collection": "shopping_guides",
+            "force_rag": True,
+        },
+        {
+            "question": "拒收商品后怎么处理？",
+            "collection": "policies",
+            "force_rag": True,
+        },
+    ]
+    assert captured["evaluation_kwargs"]["collection_id"] == "mixed"
+    assert captured["evaluation_kwargs"]["settings_snapshot"]["collection"] == "mixed"
+    assert captured["evaluation_kwargs"]["settings_snapshot"]["collections"] == [
+        "policies",
+        "shopping_guides",
+    ]
+    predictions = captured["evaluation_kwargs"]["predictions"]
+    assert [prediction["sample_collection"] for prediction in predictions] == [
+        "shopping_guides",
+        "policies",
+    ]
+    assert [prediction["effective_collection"] for prediction in predictions] == [
+        "shopping_guides",
+        "policies",
+    ]
 
 
 @pytest.mark.unit
@@ -1100,9 +1191,22 @@ def _patch_evaluation_cli_dependencies(
 
             captured["aimodel_client_kwargs"] = kwargs
 
-        def chat(self, question: str) -> dict[str, Any]:
-            """Record the question and emulate a completed SSE chat."""
+        def chat(
+            self,
+            question: str,
+            *,
+            collection: str | None = None,
+            force_rag: bool = False,
+        ) -> dict[str, Any]:
+            """Record the forced-RAG request and emulate a completed SSE chat."""
 
+            captured.setdefault("aimodel_requests", []).append(
+                {
+                    "question": question,
+                    "collection": collection,
+                    "force_rag": force_rag,
+                }
+            )
             captured.setdefault("aimodel_questions", []).append(question)
             return {"conversation_id": 99, "answer": "这是 AImodel 最终回答。"}
 

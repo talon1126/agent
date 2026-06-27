@@ -8,6 +8,8 @@ class AiModelChatRequest(BaseModel):
     conversation_id: int | None = None
     message: str = Field(min_length=1)
     links: list[str] = Field(default_factory=list)
+    force_rag: bool = False
+    rag_collection: str | None = None
 
 
 class AiModelRecommendedLink(BaseModel):
