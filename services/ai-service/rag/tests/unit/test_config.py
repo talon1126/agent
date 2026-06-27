@@ -160,6 +160,10 @@ def test_default_component_selection_matches_the_spec() -> None:
         "user_id": 1,
         "timeout_seconds": 120,
     }
+    assert settings["evaluation"]["ragas"] == {
+        "timeout_seconds": 300,
+        "max_workers": 8,
+    }
 
 
 def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:

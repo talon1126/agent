@@ -405,6 +405,18 @@ class EvaluationMetricsSettings(ConfigSection):
     )
 
 
+class EvaluationRagasSettings(ConfigSection):
+    """Configure runtime limits passed to the real Ragas backend.
+
+    Ragas executes metric prompts and embedding work through its own executor.
+    Keeping these values in settings lets local evaluation tune long-running
+    faithfulness jobs without changing adapter code.
+    """
+
+    timeout_seconds: int = Field(default=300, gt=0)
+    max_workers: int = Field(default=8, gt=0)
+
+
 class EvaluationAImodelSettings(ConfigSection):
     """Describe how evaluation can call the AImodel chat endpoint.
 
@@ -428,6 +440,7 @@ class EvaluationSettings(ConfigSection):
     llm_provider: str = Field(min_length=1)
     embedding_provider: str = Field(min_length=1)
     aimodel: EvaluationAImodelSettings = Field(default_factory=EvaluationAImodelSettings)
+    ragas: EvaluationRagasSettings = Field(default_factory=EvaluationRagasSettings)
     metrics: EvaluationMetricsSettings = Field(default_factory=EvaluationMetricsSettings)
 
 

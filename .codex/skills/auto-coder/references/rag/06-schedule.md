@@ -1649,21 +1649,22 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 ##### G3：接入 Ragas 指标
 
-目标：封装 Ragas 生成质量指标，并支持从统一配置读取本次启用的 generation metrics。
+目标：封装 Ragas 生成质量指标，并支持从统一配置读取本次启用的 generation metrics 和 Ragas runtime 参数。
 
-修改文件：`config/settings.example.yaml`、`src/core/config.py`、`src/observability/evaluation/__init__.py`、`src/observability/evaluation/ragas_adapter.py`、`src/libs/evaluator/ragas_evaluator.py`、`src/scripts/run_evaluation.py`、`tests/unit/test_config.py`、`tests/unit/test_evaluation.py`
+修改文件：`config/settings.example.yaml`、`config/settings.yaml`、`src/core/config.py`、`src/observability/evaluation/__init__.py`、`src/observability/evaluation/ragas_adapter.py`、`src/libs/evaluator/ragas_evaluator.py`、`src/scripts/run_evaluation.py`、`tests/unit/test_config.py`、`tests/unit/test_evaluation.py`
 
 实现类/函数：
 
 - `EvaluationGenerationMetricsSettings`：描述 `settings.evaluation.metrics.generation` 下每个 Ragas 指标开关
 - `enabled_generation_metrics()`：从配置解析启用的 Ragas generation metrics，全部关闭时 fail fast
+- `EvaluationRagasSettings`：描述 `settings.evaluation.ragas` 下的 Ragas runtime 参数，例如 `timeout_seconds` 和 `max_workers`。
 - `RagasEvaluator`：封装 Ragas 生成质量评估执行逻辑
 - `RagasEvaluator.evaluate()`：将黄金集和生成结果转换为 Ragas-compatible rows，并返回归一化数值指标
 - `_load_ragas_backend()`：懒加载可选 Ragas 依赖，避免普通开发环境强制安装 evaluation extra
 - `_to_ragas_v02_row()`：在真实 Ragas backend 边界将项目行字段映射为 Ragas 0.2 单轮评估列
 - `_normalize_ragas_result()`：将 Ragas mapping、scores 或 dataframe 结果归一化为 `metric_name -> float`
 
-验收标准：`settings.example.yaml` 中 generation metrics 包含 `faithfulness`、`answer_relevancy`、`context_precision`、`context_recall` 和 `answer_correctness`；`faithfulness`、`answer_relevancy`、`context_precision`、`context_recall` 默认启用，`answer_correctness` 默认关闭；`enabled_generation_metrics()` 必须位于 `src/core/config.py` 并返回配置启用的指标列表；全部关闭时必须 fail fast；`run_evaluation.py` 必须把解析后的 `metric_names` 传入 `EvaluationService.run_evaluation(... evaluator_options=...)`，并写入 `settings_snapshot`；Ragas 测试使用 marker 隔离；普通单元测试不得导入真实 Ragas 依赖；空 `metric_names` 必须 fail fast；真实 Ragas 未安装时应返回可读 ProviderError。
+验收标准：`settings.example.yaml` 中 generation metrics 包含 `faithfulness`、`answer_relevancy`、`context_precision`、`context_recall` 和 `answer_correctness`；`faithfulness`、`answer_relevancy`、`context_precision`、`context_recall` 默认启用，`answer_correctness` 默认关闭；`settings.example.yaml` 和本地 `settings.yaml` 的 `evaluation.ragas` 必须声明 `timeout_seconds` 与 `max_workers`，真实 Ragas backend 必须使用该配置构造 RunConfig，不得在 adapter 中硬编码 runtime 参数；`enabled_generation_metrics()` 必须位于 `src/core/config.py` 并返回配置启用的指标列表；全部关闭时必须 fail fast；`run_evaluation.py` 必须把解析后的 `metric_names` 传入 `EvaluationService.run_evaluation(... evaluator_options=...)`，并写入 `settings_snapshot`；Ragas 测试使用 marker 隔离；普通单元测试不得导入真实 Ragas 依赖；空 `metric_names` 必须 fail fast；真实 Ragas 未安装时应返回可读 ProviderError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -v`
 

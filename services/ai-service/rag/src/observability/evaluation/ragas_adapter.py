@@ -31,6 +31,36 @@ EvaluationRecord = Mapping[str, Any]
 DEFAULT_RAGAS_METRICS = ("faithfulness", "answer_relevancy")
 
 
+@dataclass(frozen=True, slots=True)
+class RagasRuntimeConfig:
+    """Describe executor limits shared by fake and real Ragas backends.
+
+    Args:
+        timeout_seconds: Maximum seconds Ragas should allow one metric job to
+            run before timing out.
+        max_workers: Maximum number of worker jobs Ragas may run concurrently.
+    """
+
+    timeout_seconds: int = 300
+    max_workers: int = 8
+
+    def __post_init__(self) -> None:
+        """Reject invalid executor limits before reaching Ragas internals."""
+
+        if self.timeout_seconds <= 0:
+            raise ValueError("Ragas timeout_seconds must be greater than zero")
+        if self.max_workers <= 0:
+            raise ValueError("Ragas max_workers must be greater than zero")
+
+    def as_mapping(self) -> dict[str, int]:
+        """Return a test-friendly representation of the runtime settings."""
+
+        return {
+            "timeout_seconds": self.timeout_seconds,
+            "max_workers": self.max_workers,
+        }
+
+
 class RagasEvaluateFn(Protocol):
     """Describe the minimal callable boundary used to invoke Ragas.
 
@@ -44,6 +74,7 @@ class RagasEvaluateFn(Protocol):
         rows: list[dict[str, Any]],
         *,
         metrics: tuple[str, ...],
+        run_config: Mapping[str, int] | None = None,
     ) -> Any:
         """Evaluate prepared Ragas rows and return a raw metric result."""
 
@@ -68,6 +99,11 @@ class RagasEvaluator:
     evaluate_fn: RagasEvaluateFn | None = field(default=None, repr=False, compare=False)
     llm_client: BaseLLM | None = field(default=None, repr=False, compare=False)
     embedding_client: BaseEmbedding | None = field(default=None, repr=False, compare=False)
+    runtime_config: RagasRuntimeConfig = field(
+        default_factory=RagasRuntimeConfig,
+        repr=False,
+        compare=False,
+    )
 
     def __init__(
         self,
@@ -76,6 +112,8 @@ class RagasEvaluator:
         evaluate_fn: RagasEvaluateFn | None = None,
         llm_client: BaseLLM | None = None,
         embedding_client: BaseEmbedding | None = None,
+        timeout_seconds: int = 300,
+        max_workers: int = 8,
     ) -> None:
         """Create a Ragas adapter with deterministic metric-name validation.
 
@@ -88,6 +126,8 @@ class RagasEvaluator:
                 metric prompts.
             embedding_client: Optional project embedding client for Ragas
                 semantic metrics.
+            timeout_seconds: Maximum seconds allowed for one Ragas metric job.
+            max_workers: Maximum number of concurrent Ragas worker jobs.
         """
 
         object.__setattr__(
@@ -100,6 +140,14 @@ class RagasEvaluator:
         object.__setattr__(self, "evaluate_fn", evaluate_fn)
         object.__setattr__(self, "llm_client", llm_client)
         object.__setattr__(self, "embedding_client", embedding_client)
+        object.__setattr__(
+            self,
+            "runtime_config",
+            RagasRuntimeConfig(
+                timeout_seconds=timeout_seconds,
+                max_workers=max_workers,
+            ),
+        )
 
     def evaluate(
         self,
@@ -127,9 +175,14 @@ class RagasEvaluator:
         backend = self.evaluate_fn or _load_ragas_backend(
             llm_client=self.llm_client,
             embedding_client=self.embedding_client,
+            runtime_config=self.runtime_config,
         )
         try:
-            raw_result = backend(rows, metrics=self.metric_names)
+            raw_result = backend(
+                rows,
+                metrics=self.metric_names,
+                run_config=self.runtime_config.as_mapping(),
+            )
         except Exception as error:
             raise ProviderError(
                 "Ragas evaluation failed",
@@ -177,6 +230,7 @@ def _load_ragas_backend(
     *,
     llm_client: BaseLLM | None = None,
     embedding_client: BaseEmbedding | None = None,
+    runtime_config: RagasRuntimeConfig,
 ) -> RagasEvaluateFn:
     """Load the optional Ragas package only when a real evaluation runs.
 
@@ -184,6 +238,8 @@ def _load_ragas_backend(
         llm_client: Optional project LLM client wrapped as a Ragas LLM.
         embedding_client: Optional project embedding client wrapped as Ragas
             embeddings.
+        runtime_config: Configured executor limits used to build Ragas
+            ``RunConfig`` for the real backend.
 
     Returns:
         A callable that accepts project-normalized rows and forwards them to
@@ -218,7 +274,12 @@ def _load_ragas_backend(
 
             super().__init__()
             self._client = client
-            self.set_run_config(RunConfig())
+            self.set_run_config(
+                RunConfig(
+                    timeout=runtime_config.timeout_seconds,
+                    max_workers=runtime_config.max_workers,
+                )
+            )
 
         def generate_text(
             self,
@@ -282,7 +343,12 @@ def _load_ragas_backend(
 
             super().__init__()
             self._client = client
-            self.set_run_config(RunConfig())
+            self.set_run_config(
+                RunConfig(
+                    timeout=runtime_config.timeout_seconds,
+                    max_workers=runtime_config.max_workers,
+                )
+            )
 
         def embed_query(self, text: str) -> list[float]:
             """Embed one Ragas query string with the project embedding client."""
@@ -311,9 +377,15 @@ def _load_ragas_backend(
         else None
     )
 
-    def _run_ragas(rows: list[dict[str, Any]], *, metrics: tuple[str, ...]) -> Any:
+    def _run_ragas(
+        rows: list[dict[str, Any]],
+        *,
+        metrics: tuple[str, ...],
+        run_config: Mapping[str, int] | None = None,
+    ) -> Any:
         """Convert rows to a Hugging Face dataset and call ``ragas.evaluate``."""
 
+        del run_config
         dataset = Dataset.from_list([_to_ragas_v02_row(row) for row in rows])
         metric_objects = [_metric_object(ragas_metrics, metric_name) for metric_name in metrics]
         return ragas_evaluate(
@@ -322,6 +394,10 @@ def _load_ragas_backend(
             llm=ragas_llm,
             embeddings=ragas_embeddings,
             show_progress=False,
+            run_config=RunConfig(
+                timeout=runtime_config.timeout_seconds,
+                max_workers=runtime_config.max_workers,
+            ),
         )
 
     return _run_ragas

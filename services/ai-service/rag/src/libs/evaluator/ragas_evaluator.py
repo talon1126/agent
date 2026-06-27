@@ -55,11 +55,16 @@ class RagasEvaluatorClient(BaseEvaluator):
                 provider=settings.evaluation.embedding_provider,
             )
 
+        runtime_settings = settings.evaluation.ragas if settings is not None else None
         self._adapter = RagasEvaluator(
             metric_names=metric_names,
             evaluate_fn=evaluate_fn,
             llm_client=llm_client,
             embedding_client=embedding_client,
+            timeout_seconds=(
+                runtime_settings.timeout_seconds if runtime_settings is not None else 300
+            ),
+            max_workers=runtime_settings.max_workers if runtime_settings is not None else 8,
         )
 
     def evaluate(

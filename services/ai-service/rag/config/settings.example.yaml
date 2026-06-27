@@ -209,6 +209,9 @@ evaluation:
     chat_url: http://127.0.0.1:8001/AImodel/chat
     user_id: 1
     timeout_seconds: 120
+  ragas:
+    timeout_seconds: 300
+    max_workers: 8
   metrics:
     retrieval:
       hit_rate_at_k: true

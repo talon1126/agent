@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -178,14 +179,20 @@ def test_ragas_evaluator_builds_generation_samples_with_injected_backend() -> No
         rows: list[dict[str, Any]],
         *,
         metrics: tuple[str, ...],
+        run_config: Mapping[str, int] | None = None,
     ) -> dict[str, float]:
         """Record adapter input and return deterministic generation scores."""
 
         captured["rows"] = rows
         captured["metrics"] = metrics
+        captured["run_config"] = run_config
         return {"faithfulness": 0.91, "answer_relevancy": 0.87}
 
-    evaluator = RagasEvaluator(evaluate_fn=fake_ragas_evaluate)
+    evaluator = RagasEvaluator(
+        evaluate_fn=fake_ragas_evaluate,
+        timeout_seconds=300,
+        max_workers=8,
+    )
     dataset = [
         {
             "question": "如何挑选适合通勤的无线耳机？",
@@ -206,6 +213,7 @@ def test_ragas_evaluator_builds_generation_samples_with_injected_backend() -> No
 
     assert scores == {"faithfulness": pytest.approx(0.91), "answer_relevancy": pytest.approx(0.87)}
     assert captured["metrics"] == ("faithfulness", "answer_relevancy")
+    assert captured["run_config"] == {"timeout_seconds": 300, "max_workers": 8}
     assert captured["rows"] == [
         {
             "question": "如何挑选适合通勤的无线耳机？",
@@ -252,7 +260,7 @@ def test_ragas_evaluator_skips_non_finite_metric_values() -> None:
     """Keep usable Ragas metrics when one provider metric returns NaN."""
 
     evaluator = RagasEvaluator(
-        evaluate_fn=lambda rows, *, metrics: {
+        evaluate_fn=lambda rows, *, metrics, run_config=None: {
             "faithfulness": math.nan,
             "answer_relevancy": 0.82,
         }
@@ -271,7 +279,7 @@ def test_ragas_evaluator_fails_when_all_metric_values_are_non_finite() -> None:
     """Reject runs where Ragas cannot produce any finite metric."""
 
     evaluator = RagasEvaluator(
-        evaluate_fn=lambda rows, *, metrics: {
+        evaluate_fn=lambda rows, *, metrics, run_config=None: {
             "faithfulness": math.nan,
             "answer_relevancy": math.nan,
         }
@@ -309,11 +317,13 @@ def test_evaluator_factory_registers_ragas_provider_with_lazy_backend() -> None:
         rows: list[dict[str, Any]],
         *,
         metrics: tuple[str, ...],
+        run_config: Mapping[str, int] | None = None,
     ) -> dict[str, float]:
         """Capture rows so the factory test avoids importing real Ragas."""
 
         captured["rows"] = rows
         captured["metrics"] = metrics
+        captured["run_config"] = run_config
         return {"faithfulness": 0.93, "answer_relevancy": 0.89}
 
     evaluator = EvaluatorFactory.create(
@@ -329,6 +339,7 @@ def test_evaluator_factory_registers_ragas_provider_with_lazy_backend() -> None:
     assert scores == {"faithfulness": pytest.approx(0.93), "answer_relevancy": pytest.approx(0.89)}
     assert "ragas" in EvaluatorFactory.list_providers()
     assert captured["rows"][0]["ground_truth"] == "reference"
+    assert captured["run_config"] == {"timeout_seconds": 300, "max_workers": 8}
 
 
 @pytest.mark.unit
