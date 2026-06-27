@@ -12,12 +12,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+import threading
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -39,6 +43,508 @@ from src.scripts.query import (
 from src.storage.postgres import PostgresPool, init_schema
 from src.storage.repositories import TraceRepository
 
+EVALUATION_LOG_PATH = RAG_ROOT / "src" / "logs" / "evaluation.log.jsonl"
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+class EvaluationReporter:
+    """Emit human-readable and machine-readable progress for long evaluations.
+
+    The reporter is intentionally independent from the evaluation business
+    logic. It writes compact console status to stderr through the injected
+    writer while appending structured JSON Lines events for later debugging.
+    Final CLI success output still goes through ``run_evaluation_cli(output=...)``
+    so shell callers can parse that JSON without filtering progress messages.
+    """
+
+    def __init__(
+        self,
+        *,
+        console: Callable[[str], Any],
+        log_path: Path = EVALUATION_LOG_PATH,
+        clock: Callable[[], float] = time.monotonic,
+        refresh: bool = False,
+        heartbeat_interval_seconds: float = 0.0,
+    ) -> None:
+        """Create a reporter for one evaluation process.
+
+        Args:
+            console: Writer for readable progress lines, normally stderr.
+            log_path: JSON Lines diagnostics file path. Parent directories are
+                created lazily when the first event is written.
+            clock: Monotonic clock used for deterministic duration tests.
+            refresh: Whether console status should use carriage-return single
+                line refreshes. Tests and non-terminal writers can keep this
+                disabled to receive append-only messages.
+            heartbeat_interval_seconds: Optional refresh interval used by the
+                CLI to keep elapsed time moving while a provider call blocks.
+                A value of zero disables the background heartbeat for tests.
+        """
+
+        self._console = console
+        self._log_path = log_path
+        self._clock = clock
+        self._refresh = refresh
+        self._heartbeat_interval_seconds = max(heartbeat_interval_seconds, 0.0)
+        self._run_id: str | None = None
+        self._dataset_name: str | None = None
+        self._sample_count: int | None = None
+        self._run_started_at: float | None = None
+        self._active_step_started_at: float | None = None
+        self._step_starts: dict[str, float] = {}
+        self._console_lock = threading.Lock()
+        self._heartbeat_stop: threading.Event | None = None
+        self._heartbeat_thread: threading.Thread | None = None
+        self._heartbeat_message = ""
+
+    def run_started(
+        self,
+        *,
+        run_id: str,
+        dataset_name: str,
+        sample_count: int,
+        answer_source: str,
+        top_k: int,
+        no_rerank: bool,
+        evaluator: str,
+        metric_names: Sequence[str],
+        collections: Sequence[str],
+    ) -> None:
+        """Record the beginning of an evaluation run.
+
+        Args:
+            run_id: Stable run identifier used by console and JSONL events.
+            dataset_name: Golden set name without file extension.
+            sample_count: Number of samples that will be evaluated.
+            answer_source: ``message`` or ``rag`` answer source mode.
+            top_k: Retrieval result count requested by the run.
+            no_rerank: Whether rerank is disabled for the run.
+            evaluator: Evaluator provider name, usually ``ragas``.
+            metric_names: Configured generation metrics passed to the evaluator.
+            collections: Collections represented by the selected samples.
+        """
+
+        now = self._clock()
+        self._run_id = run_id
+        self._dataset_name = dataset_name
+        self._sample_count = sample_count
+        self._run_started_at = now
+        self._write_console(
+            f"[{run_id}] started dataset={dataset_name} samples={sample_count} "
+            f"answer_source={answer_source} top_k={top_k} "
+            f"rerank={'off' if no_rerank else 'on'} evaluator={evaluator} "
+            f"metrics={','.join(metric_names)} collections={','.join(collections)}"
+        )
+        self._write_event(
+            {
+                "event": "run_started",
+                "run_id": run_id,
+                "dataset_name": dataset_name,
+                "sample_count": sample_count,
+                "answer_source": answer_source,
+                "top_k": top_k,
+                "no_rerank": no_rerank,
+                "evaluator": evaluator,
+                "metric_names": list(metric_names),
+                "collections": list(collections),
+                "status": "started",
+                "timestamp_monotonic": now,
+            }
+        )
+
+    def step_started(self, step: str, *, details: Mapping[str, Any] | None = None) -> None:
+        """Record that a run-level stage has started.
+
+        Args:
+            step: Stable stage name such as ``build_predictions`` or
+                ``ragas_evaluation``.
+            details: Optional small diagnostic payload for the stage.
+        """
+
+        now = self._clock()
+        self._step_starts[step] = now
+        self._active_step_started_at = now
+        self._write_console(f"[{self._run_label()}] {step} started")
+        self._start_heartbeat(f"[{self._run_label()}] {step} running")
+        self._write_event(
+            self._base_event(
+                {
+                    "event": "step_started",
+                    "step": step,
+                    "status": "started",
+                    "timestamp_monotonic": now,
+                    **dict(details or {}),
+                }
+            )
+        )
+
+    def step_done(self, step: str, *, details: Mapping[str, Any] | None = None) -> None:
+        """Record that a run-level stage completed successfully.
+
+        Args:
+            step: Stage name previously passed to ``step_started``.
+            details: Optional small diagnostic payload for the completed stage.
+        """
+
+        now = self._clock()
+        duration_ms = self._duration_ms(self._step_starts.pop(step, now), now)
+        self._stop_heartbeat()
+        self._active_step_started_at = None
+        self._write_console(
+            f"[{self._run_label()}] {step} completed",
+            final=True,
+        )
+        self._write_event(
+            self._base_event(
+                {
+                    "event": "step_done",
+                    "step": step,
+                    "status": "success",
+                    "duration_ms": duration_ms,
+                    "timestamp_monotonic": now,
+                    **dict(details or {}),
+                }
+            )
+        )
+
+    def sample_started(
+        self,
+        *,
+        sample_index: int,
+        sample_count: int,
+        sample: Mapping[str, Any],
+    ) -> None:
+        """Record that prediction generation started for one golden sample.
+
+        Args:
+            sample_index: One-based sample index in the current run.
+            sample_count: Total sample count in the current run.
+            sample: Golden set sample containing ``id``, ``collection`` and
+                ``question`` fields.
+        """
+
+        sample_id = _sample_id(sample)
+        collection = str(sample.get("collection", ""))
+        question_preview = _preview_text(str(sample.get("question", "")))
+        self._write_console(
+            f"[{self._run_label()}] [{sample_index}/{sample_count}] "
+            f"{sample_id} collection={collection} "
+            f"question_chars={len(str(sample.get('question', '')))}"
+        )
+        self._write_event(
+            self._base_event(
+                {
+                    "event": "sample_started",
+                    "sample_index": sample_index,
+                    "sample_count": sample_count,
+                    "sample_id": sample_id,
+                    "collection": collection,
+                    "question_preview": question_preview,
+                    "status": "started",
+                    "timestamp_monotonic": self._clock(),
+                }
+            )
+        )
+
+    def sample_step_done(
+        self,
+        *,
+        sample_index: int,
+        sample: Mapping[str, Any],
+        step: str,
+        status: str = "success",
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Record a completed sub-step inside one sample prediction.
+
+        Args:
+            sample_index: One-based sample index in the current run.
+            sample: Golden set sample associated with the event.
+            step: Stable sub-step name such as ``aimodel_chat``.
+            status: Sub-step outcome, normally ``success``.
+            details: Optional small payload such as message or trace IDs.
+        """
+
+        payload = dict(details or {})
+        self._write_console(
+            _sample_step_status_text(
+                sample_index=sample_index,
+                sample_count=self._sample_count,
+                sample=sample,
+                step=step,
+                status=status,
+                details=payload,
+            )
+        )
+        self._write_event(
+            self._base_event(
+                {
+                    "event": "sample_step_done",
+                    "sample_index": sample_index,
+                    "sample_count": self._sample_count,
+                    "sample_id": _sample_id(sample),
+                    "collection": str(sample.get("collection", "")),
+                    "step": step,
+                    "status": status,
+                    "timestamp_monotonic": self._clock(),
+                    **payload,
+                }
+            )
+        )
+
+    def failed(
+        self,
+        *,
+        step: str,
+        error: Exception,
+        sample: Mapping[str, Any] | None = None,
+        sample_index: int | None = None,
+    ) -> None:
+        """Record a failure with enough context to locate the broken stage.
+
+        Args:
+            step: Run-level or sample-level step that raised the exception.
+            error: Exception raised by the evaluation flow.
+            sample: Optional sample active when the failure occurred.
+            sample_index: Optional one-based index for the active sample.
+        """
+
+        now = self._clock()
+        duration_ms = (
+            self._duration_ms(self._run_started_at, now)
+            if self._run_started_at is not None
+            else None
+        )
+        sample_payload = (
+            {
+                "sample_index": sample_index,
+                "sample_count": self._sample_count,
+                "sample_id": _sample_id(sample),
+                "collection": str(sample.get("collection", "")),
+            }
+            if sample is not None
+            else {}
+        )
+        message = str(error)
+        self._stop_heartbeat()
+        self._write_console(
+            f"[{self._run_label()}] {step} failed: "
+            f"{error.__class__.__name__}: {message}",
+            final=True,
+        )
+        self._write_event(
+            self._base_event(
+                {
+                    "event": "failed",
+                    "step": step,
+                    "status": "failed",
+                    "duration_ms": duration_ms,
+                    "error_type": error.__class__.__name__,
+                    "error_message": message,
+                    "timestamp_monotonic": now,
+                    **sample_payload,
+                }
+            )
+        )
+
+    def completed(self, *, detail: Any) -> None:
+        """Record the final persisted evaluation result summary.
+
+        Args:
+            detail: EvaluationRunDetail-like object returned by
+                ``EvaluationService.run_evaluation``.
+        """
+
+        now = self._clock()
+        duration_ms = (
+            self._duration_ms(self._run_started_at, now)
+            if self._run_started_at is not None
+            else None
+        )
+        metrics = dict(getattr(detail, "metrics", {}) or {})
+        summary = dict(getattr(detail, "summary", {}) or {})
+        run_id = str(getattr(detail, "run_id", self._run_label()))
+        self._stop_heartbeat()
+        self._write_console(
+            f"[{run_id}] completed status={getattr(detail, 'status', 'unknown')} "
+            f"samples={summary.get('sample_count')} metrics={metrics}",
+            final=True,
+        )
+        self._write_event(
+            self._base_event(
+                {
+                    "event": "completed",
+                    "run_id": run_id,
+                    "status": getattr(detail, "status", "unknown"),
+                    "duration_ms": duration_ms,
+                    "metrics": metrics,
+                    "summary": summary,
+                    "timestamp_monotonic": now,
+                }
+            )
+        )
+
+    def format_elapsed(self, elapsed_seconds: float) -> str:
+        """Format elapsed seconds using compact installer-style units.
+
+        Args:
+            elapsed_seconds: Seconds since the evaluation run started.
+
+        Returns:
+            ``7s`` below one minute, ``1m12s`` below one hour, and
+            ``1h01m01s`` for longer runs.
+        """
+
+        total_seconds = max(int(elapsed_seconds), 0)
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}h{minutes:02d}m{seconds:02d}s"
+        if minutes:
+            return f"{minutes}m{seconds:02d}s"
+        return f"{seconds}s"
+
+    def render_status(self, message: str, *, final: bool = False) -> None:
+        """Render one elapsed-time status line to the configured console.
+
+        Args:
+            message: Human-readable current status without elapsed prefix.
+            final: Whether the line should be terminated when refresh mode is
+                active, making the last status durable in the terminal.
+        """
+
+        self._write_console(message, final=final)
+
+    def ragas_observer(self, event: Mapping[str, Any]) -> None:
+        """Receive model-call events emitted by the Ragas adapter.
+
+        Args:
+            event: Trace-safe payload from the Ragas adapter. The payload must
+                not include full prompts, responses, context text, vectors, API
+                keys, or other large/sensitive values.
+        """
+
+        self._write_event(self._base_event(dict(event)))
+        status = str(event.get("status"))
+        status_text = _ragas_status_text(event)
+        if status == "started":
+            self._start_heartbeat(status_text)
+            self.render_status(status_text)
+            return
+        if status == "failed":
+            self._stop_heartbeat()
+            self.render_status(status_text, final=True)
+            return
+        self.render_status(status_text)
+        self._start_heartbeat(f"[{self._run_label()}] ragas_evaluation running")
+
+    def _base_event(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Attach run identity fields shared by every structured event."""
+
+        return {
+            "run_id": self._run_id,
+            "dataset_name": self._dataset_name,
+            "timestamp": _shanghai_timestamp(),
+            **dict(payload),
+        }
+
+    def _write_event(self, payload: Mapping[str, Any]) -> None:
+        """Append one JSON event to the diagnostics log file.
+
+        Side Effects:
+            Creates the log directory if needed and appends one UTF-8 JSON line.
+        """
+
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        event = dict(payload)
+        event.setdefault("timestamp", _shanghai_timestamp())
+        with self._log_path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    def _write_console(self, message: str, *, final: bool = False) -> None:
+        """Write one console status with elapsed-time prefix."""
+
+        elapsed = self._console_elapsed_seconds()
+        rendered = f"[{self.format_elapsed(elapsed)}] {message}"
+        with self._console_lock:
+            if self._refresh:
+                line_break = "\n" if final else ""
+                self._console(f"\r{rendered}{line_break}")
+            else:
+                self._console(rendered)
+
+
+    def _console_elapsed_seconds(self) -> float:
+        """Return elapsed seconds for the active console scope."""
+
+        if self._active_step_started_at is not None:
+            return max(self._clock() - self._active_step_started_at, 0.0)
+        if self._run_started_at is not None:
+            return max(self._clock() - self._run_started_at, 0.0)
+        return 0.0
+
+    def _start_heartbeat(self, message: str) -> None:
+        """Start or update the background elapsed-time refresh loop."""
+
+        self._heartbeat_message = message
+        if (
+            not self._refresh
+            or self._heartbeat_interval_seconds <= 0
+            or (
+                self._heartbeat_thread is not None
+                and self._heartbeat_thread.is_alive()
+            )
+        ):
+            return
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name="rag-evaluation-progress",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self) -> None:
+        """Stop the background elapsed-time refresh loop if it is active."""
+
+        stop_event = self._heartbeat_stop
+        thread = self._heartbeat_thread
+        self._heartbeat_stop = None
+        self._heartbeat_thread = None
+        if stop_event is not None:
+            stop_event.set()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.2)
+
+    def _heartbeat_loop(self) -> None:
+        """Refresh the current status line until the active step finishes."""
+
+        stop_event = self._heartbeat_stop
+        if stop_event is None:
+            return
+        while not stop_event.wait(self._heartbeat_interval_seconds):
+            if not self._heartbeat_message:
+                continue
+            self._write_console(self._heartbeat_message)
+
+    def _run_label(self) -> str:
+        """Return the current run ID or a readable placeholder before startup."""
+
+        return self._run_id or "evaluation"
+
+    @staticmethod
+    def _duration_ms(start: float | None, end: float) -> float | None:
+        """Return elapsed milliseconds when a start timestamp is available."""
+
+        if start is None:
+            return None
+        return max((end - start) * 1000, 0.0)
+
+
+def _shanghai_timestamp() -> str:
+    """Return an ISO-8601 Asia/Shanghai timestamp for JSONL diagnostics."""
+
+    return datetime.now(SHANGHAI_TZ).isoformat(timespec="milliseconds")
 
 class EvaluationAnswerSource(StrEnum):
     """Enumerate supported answer sources for generation-quality evaluation.
@@ -288,6 +794,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _write_stderr_progress(message: str) -> None:
+    """Write progress output without forcing line breaks during refresh mode."""
+
+    sys.stderr.write(message)
+    sys.stderr.flush()
+
+
 def run_evaluation_cli(
     argv: Sequence[str] | None = None,
     *,
@@ -312,8 +825,17 @@ def run_evaluation_cli(
     """
 
     args = parse_args(argv)
-    write_error = error_output or (lambda message: print(message, file=sys.stderr))
+    write_error = error_output or _write_stderr_progress
     pool: PostgresPool | None = None
+    reporter = EvaluationReporter(
+        console=write_error,
+        log_path=EVALUATION_LOG_PATH,
+        refresh=True,
+        heartbeat_interval_seconds=10.0,
+    )
+    active_step = "startup"
+    active_sample: Mapping[str, Any] | None = None
+    active_sample_index: int | None = None
     try:
         _load_local_environment()
         settings = load_settings()
@@ -330,16 +852,33 @@ def run_evaluation_cli(
         collections = _dataset_collections(dataset)
         collection = args.collection or _evaluation_collection_id(collections)
         answer_source = _answer_source(args.answer_source, settings=settings)
+        metric_names = enabled_generation_metrics(settings)
+        run_id = f"eval-{uuid4().hex}"
+        reporter.run_started(
+            run_id=run_id,
+            dataset_name=golden_set_path.stem,
+            sample_count=len(dataset),
+            answer_source=answer_source.value,
+            top_k=top_k,
+            no_rerank=args.no_rerank,
+            evaluator=args.evaluator,
+            metric_names=metric_names,
+            collections=collections,
+        )
 
+        active_step = "database_setup"
+        reporter.step_started(active_step)
         pool = _create_pool(settings.database)
         pool.open()
         init_schema(pool)
+        reporter.step_done(active_step)
+        active_step = "runtime_setup"
+        reporter.step_started(active_step)
         runtime = (
             _build_runtime(settings, pool, args.no_rerank)
             if answer_source is EvaluationAnswerSource.RAG
             else None
         )
-        metric_names = enabled_generation_metrics(settings)
         chunk_lookup = VectorStoreFactory.create(settings=settings, pool=pool)
         aimodel_client = (
             AImodelEvaluationClient(settings.evaluation.aimodel)
@@ -356,29 +895,52 @@ def run_evaluation_cli(
             if answer_source is EvaluationAnswerSource.MESSAGE
             else None
         )
-        predictions = [
-            _prediction_for_sample(
-                sample,
-                runtime=runtime,
-                chunk_lookup=chunk_lookup,
-                collection=_collection_for_sample(sample, override=args.collection),
-                top_k=top_k,
-                no_rerank=args.no_rerank,
-                answer_source=answer_source,
-                aimodel_client=aimodel_client,
-                message_repository=message_repository,
-                query_trace_repository=query_trace_repository,
+        reporter.step_done(active_step)
+        active_step = "build_predictions"
+        reporter.step_started(active_step)
+        predictions = []
+        for sample_index, sample in enumerate(dataset, start=1):
+            active_sample = sample
+            active_sample_index = sample_index
+            reporter.sample_started(
+                sample_index=sample_index,
+                sample_count=len(dataset),
+                sample=sample,
             )
-            for sample in dataset
-        ]
+            predictions.append(
+                _prediction_for_sample(
+                    sample,
+                    runtime=runtime,
+                    chunk_lookup=chunk_lookup,
+                    collection=_collection_for_sample(sample, override=args.collection),
+                    top_k=top_k,
+                    no_rerank=args.no_rerank,
+                    answer_source=answer_source,
+                    aimodel_client=aimodel_client,
+                    message_repository=message_repository,
+                    query_trace_repository=query_trace_repository,
+                    reporter=reporter,
+                    sample_index=sample_index,
+                )
+            )
+        active_sample = None
+        active_sample_index = None
+        reporter.step_done(active_step, details={"prediction_count": len(predictions)})
 
+        active_step = "ragas_evaluation"
+        reporter.step_started(active_step)
         detail = EvaluationService(pool).run_evaluation(
             collection_id=collection,
             evaluator=args.evaluator,
             dataset_name=golden_set_path.stem,
             dataset=dataset,
             predictions=predictions,
-            evaluator_options={"settings": settings, "metric_names": metric_names},
+            evaluator_options={
+                "settings": settings,
+                "metric_names": metric_names,
+                "ragas_observer": reporter.ragas_observer,
+            },
+            run_id=run_id,
             settings_snapshot={
                 "answer_source": answer_source.value,
                 "collection": collection,
@@ -396,9 +958,17 @@ def run_evaluation_cli(
                 ),
             },
         )
+        reporter.step_done(active_step)
+        reporter.completed(detail=detail)
         output(json.dumps(_detail_payload(detail), ensure_ascii=False))
         return 0 if detail.status == "success" else 1
     except Exception as error:
+        reporter.failed(
+            step=active_step,
+            error=error,
+            sample=active_sample,
+            sample_index=active_sample_index,
+        )
         write_error(f"Evaluation failed: {error}")
         return 1
     finally:
@@ -540,6 +1110,7 @@ def build_prediction_from_message_answer(
     )
     return prediction
 
+
 def main() -> int:
     """Run the evaluation CLI with process arguments."""
 
@@ -558,6 +1129,8 @@ def _prediction_for_sample(
     aimodel_client: AImodelEvaluationClient | None,
     message_repository: MessageAnswerRepository | None,
     query_trace_repository: QueryTraceResultRepository | None,
+    reporter: EvaluationReporter | None = None,
+    sample_index: int | None = None,
 ) -> dict[str, Any]:
     """Execute one query and convert its result into a prediction record.
 
@@ -593,13 +1166,35 @@ def _prediction_for_sample(
             no_rerank=no_rerank,
             trace_id=trace_id,
         )
-        return build_prediction_from_query_result(
+        _report_sample_step(
+            reporter,
+            sample=sample,
+            sample_index=sample_index,
+            step="query_runtime",
+            details={"query_trace_id": trace_id},
+        )
+        prediction = build_prediction_from_query_result(
             sample,
             _query_result_from_execution(execution),
             chunk_lookup=chunk_lookup,
             query_trace_id=trace_id,
             effective_collection=collection,
         )
+        _report_sample_step(
+            reporter,
+            sample=sample,
+            sample_index=sample_index,
+            step="chunk_lookup",
+            details={"context_count": len(prediction["contexts"])},
+        )
+        _report_sample_step(
+            reporter,
+            sample=sample,
+            sample_index=sample_index,
+            step="prediction_ready",
+            details={"query_trace_id": prediction["query_trace_id"]},
+        )
+        return prediction
     if (
         aimodel_client is None
         or message_repository is None
@@ -611,6 +1206,13 @@ def _prediction_for_sample(
         collection=collection,
         force_rag=True,
     )
+    _report_sample_step(
+        reporter,
+        sample=sample,
+        sample_index=sample_index,
+        step="aimodel_chat",
+        details={"conversation_id": chat_result.get("conversation_id")},
+    )
     message_answer = message_repository.get_answer_from_chat_result(chat_result)
     if message_answer is None:
         conversation_id = chat_result.get("conversation_id")
@@ -621,12 +1223,30 @@ def _prediction_for_sample(
         raise ValueError(
             f"No RAG query traces linked to message_id={message_answer.message_id}"
         )
+    _report_sample_step(
+        reporter,
+        sample=sample,
+        sample_index=sample_index,
+        step="message_resolve",
+        details={
+            "message_id": message_answer.message_id,
+            "conversation_id": message_answer.conversation_id,
+            "query_trace_ids": list(message_answer.query_trace_ids),
+        },
+    )
     query_results = [
         _required_query_result(query_trace_repository, query_trace_id)
         for query_trace_id in message_answer.query_trace_ids
     ]
+    _report_sample_step(
+        reporter,
+        sample=sample,
+        sample_index=sample_index,
+        step="query_trace_load",
+        details={"query_trace_ids": list(message_answer.query_trace_ids)},
+    )
     primary_trace_id = message_answer.query_trace_ids[0]
-    return build_prediction_from_message_answer(
+    prediction = build_prediction_from_message_answer(
         sample,
         _merge_query_results(query_results),
         chunk_lookup=chunk_lookup,
@@ -634,6 +1254,25 @@ def _prediction_for_sample(
         message_answer=message_answer,
         effective_collection=collection,
     )
+    _report_sample_step(
+        reporter,
+        sample=sample,
+        sample_index=sample_index,
+        step="chunk_lookup",
+        details={"context_count": len(prediction["contexts"])},
+    )
+    _report_sample_step(
+        reporter,
+        sample=sample,
+        sample_index=sample_index,
+        step="prediction_ready",
+        details={
+            "message_id": message_answer.message_id,
+            "query_trace_id": primary_trace_id,
+            "context_count": len(prediction["contexts"]),
+        },
+    )
+    return prediction
 
 
 def _query_result_from_execution(execution: Any) -> dict[str, Any]:
@@ -712,6 +1351,108 @@ def _merge_query_results(query_results: Sequence[Mapping[str, Any]]) -> dict[str
         ],
     }
 
+
+def _report_sample_step(
+    reporter: EvaluationReporter | None,
+    *,
+    sample: Mapping[str, Any],
+    sample_index: int | None,
+    step: str,
+    details: Mapping[str, Any] | None = None,
+) -> None:
+    """Emit one sample-level progress event when a reporter is active.
+
+    Args:
+        reporter: Optional reporter injected by ``run_evaluation_cli``.
+        sample: Golden set sample associated with the event.
+        sample_index: One-based sample index. ``None`` is accepted for direct
+            unit calls that bypass the CLI loop.
+        step: Stable sub-step name written to the JSONL diagnostics log.
+        details: Optional small payload such as message IDs or trace IDs.
+    """
+
+    if reporter is None:
+        return
+    reporter.sample_step_done(
+        sample_index=sample_index or 0,
+        sample=sample,
+        step=step,
+        details=details,
+    )
+
+
+
+def _sample_step_status_text(
+    *,
+    sample_index: int,
+    sample_count: int | None,
+    sample: Mapping[str, Any],
+    step: str,
+    status: str,
+    details: Mapping[str, Any],
+) -> str:
+    """Build a compact console line for one build_predictions sub-step."""
+
+    sample_total = sample_count if sample_count is not None else "?"
+    sample_id = _sample_id(sample)
+    detail_keys = []
+    for key in ("conversation_id", "message_id", "context_count"):
+        if key in details:
+            detail_keys.append(f"{key}={details[key]}")
+    detail_text = f" {' '.join(detail_keys)}" if detail_keys else ""
+    return f"[{sample_index}/{sample_total}] {sample_id} {step} {status}{detail_text}"
+
+def _sample_id(sample: Mapping[str, Any]) -> str:
+    """Return a readable sample identifier for progress and diagnostics."""
+
+    value = sample.get("id")
+    return str(value).strip() if value is not None and str(value).strip() else "unknown"
+
+
+def _preview_text(value: str, *, max_length: int = 80) -> str:
+    """Return a single-line preview that keeps progress output compact."""
+
+    normalized = " ".join(value.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[: max_length - 3]}..."
+
+
+def _ragas_status_text(event: Mapping[str, Any]) -> str:
+    """Build a detailed console status from a Ragas model-call event."""
+
+    step = str(event.get("step", "ragas_model"))
+    status = str(event.get("status", "unknown"))
+    parts = [step, status, f"call_id={event.get('call_id', '')}"]
+    _append_event_field(parts, event, "method")
+    duration = event.get("duration_ms")
+    if isinstance(duration, int | float):
+        parts.append(f"duration={float(duration) / 1000:.1f}s")
+    for key in (
+        "provider",
+        "model",
+        "prompt_chars",
+        "n",
+        "temperature",
+        "has_stop",
+        "text_count",
+        "total_chars",
+        "output_chars",
+        "vector_count",
+        "dimension",
+        "error_type",
+    ):
+        _append_event_field(parts, event, key)
+    return " ".join(parts)
+
+
+def _append_event_field(parts: list[str], event: Mapping[str, Any], key: str) -> None:
+    """Append one trace-safe field to a console status line when present."""
+
+    value = event.get(key)
+    if value is not None:
+        parts.append(f"{key}={value}")
+
 def _answer_source(value: str | None, *, settings: RagSettings) -> EvaluationAnswerSource:
     """Resolve CLI and configuration into a concrete answer-source enum.
 
@@ -786,6 +1527,8 @@ def _iter_sse_events(body: str) -> Iterator[tuple[str, dict[str, Any]]]:
             event_name = line.removeprefix("event:").strip()
         elif line.startswith("data:"):
             data_lines.append(line.removeprefix("data:").strip())
+
+
 def _resolve_golden_set_path(path: str | None, *, settings: RagSettings) -> Path:
     """Resolve configured or CLI-provided golden set paths."""
 

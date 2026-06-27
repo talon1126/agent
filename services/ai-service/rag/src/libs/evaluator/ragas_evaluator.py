@@ -18,6 +18,7 @@ from src.libs.llm.llm_factory import LLMFactory
 from src.observability.evaluation.ragas_adapter import (
     RagasEvaluateFn,
     RagasEvaluator,
+    RagasModelCallObserver,
 )
 
 
@@ -40,8 +41,17 @@ class RagasEvaluatorClient(BaseEvaluator):
         metric_names: Sequence[str] | None = None,
         evaluate_fn: RagasEvaluateFn | None = None,
         settings: RagSettings | None = None,
+        ragas_observer: RagasModelCallObserver | None = None,
     ) -> None:
-        """Create the underlying adapter while preserving lazy Ragas imports."""
+        """Create the underlying adapter while preserving lazy Ragas imports.
+
+        Args:
+            metric_names: Optional Ragas metrics requested by the caller.
+            evaluate_fn: Optional fake backend for unit tests.
+            settings: Optional RAG settings used to create project model clients.
+            ragas_observer: Optional trace-safe callback for model calls made
+                inside the real Ragas backend.
+        """
 
         llm_client = None
         embedding_client = None
@@ -61,6 +71,7 @@ class RagasEvaluatorClient(BaseEvaluator):
             evaluate_fn=evaluate_fn,
             llm_client=llm_client,
             embedding_client=embedding_client,
+            model_call_observer=ragas_observer,
             timeout_seconds=(
                 runtime_settings.timeout_seconds if runtime_settings is not None else 300
             ),

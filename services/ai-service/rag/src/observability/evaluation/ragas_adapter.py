@@ -19,15 +19,18 @@ from __future__ import annotations
 
 import asyncio
 import math
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from uuid import uuid4
 
 from src.core.errors import ProviderError
 from src.libs.embedding.base_embedding import BaseEmbedding
 from src.libs.llm.base_llm import BaseLLM, ChatMessage
 
 EvaluationRecord = Mapping[str, Any]
+RagasModelCallObserver = Callable[[Mapping[str, Any]], None]
 DEFAULT_RAGAS_METRICS = ("faithfulness", "answer_relevancy")
 
 
@@ -99,6 +102,11 @@ class RagasEvaluator:
     evaluate_fn: RagasEvaluateFn | None = field(default=None, repr=False, compare=False)
     llm_client: BaseLLM | None = field(default=None, repr=False, compare=False)
     embedding_client: BaseEmbedding | None = field(default=None, repr=False, compare=False)
+    model_call_observer: RagasModelCallObserver | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     runtime_config: RagasRuntimeConfig = field(
         default_factory=RagasRuntimeConfig,
         repr=False,
@@ -112,6 +120,7 @@ class RagasEvaluator:
         evaluate_fn: RagasEvaluateFn | None = None,
         llm_client: BaseLLM | None = None,
         embedding_client: BaseEmbedding | None = None,
+        model_call_observer: RagasModelCallObserver | None = None,
         timeout_seconds: int = 300,
         max_workers: int = 8,
     ) -> None:
@@ -126,6 +135,8 @@ class RagasEvaluator:
                 metric prompts.
             embedding_client: Optional project embedding client for Ragas
                 semantic metrics.
+            model_call_observer: Optional trace-safe callback for LLM and
+                embedding calls made inside Ragas metric execution.
             timeout_seconds: Maximum seconds allowed for one Ragas metric job.
             max_workers: Maximum number of concurrent Ragas worker jobs.
         """
@@ -140,6 +151,7 @@ class RagasEvaluator:
         object.__setattr__(self, "evaluate_fn", evaluate_fn)
         object.__setattr__(self, "llm_client", llm_client)
         object.__setattr__(self, "embedding_client", embedding_client)
+        object.__setattr__(self, "model_call_observer", model_call_observer)
         object.__setattr__(
             self,
             "runtime_config",
@@ -176,6 +188,7 @@ class RagasEvaluator:
             llm_client=self.llm_client,
             embedding_client=self.embedding_client,
             runtime_config=self.runtime_config,
+            observer=self.model_call_observer,
         )
         try:
             raw_result = backend(
@@ -231,6 +244,7 @@ def _load_ragas_backend(
     llm_client: BaseLLM | None = None,
     embedding_client: BaseEmbedding | None = None,
     runtime_config: RagasRuntimeConfig,
+    observer: RagasModelCallObserver | None = None,
 ) -> RagasEvaluateFn:
     """Load the optional Ragas package only when a real evaluation runs.
 
@@ -240,6 +254,7 @@ def _load_ragas_backend(
             embeddings.
         runtime_config: Configured executor limits used to build Ragas
             ``RunConfig`` for the real backend.
+        observer: Optional trace-safe callback receiving model-call events.
 
     Returns:
         A callable that accepts project-normalized rows and forwards them to
@@ -291,24 +306,72 @@ def _load_ragas_backend(
         ) -> Any:
             """Generate one or more Ragas completions synchronously."""
 
-            del temperature, callbacks
+            del callbacks
             prompt_text = _prompt_to_text(prompt)
             generations: list[Generation] = []
-            for _ in range(max(n, 1)):
-                response = self._client.chat(
-                    [ChatMessage(role="user", content=prompt_text)]
-                )
-                text = _apply_stop_tokens(response.content, stop)
-                generations.append(
-                    Generation(
-                        text=text,
-                        generation_info={
-                            "finish_reason": "stop",
-                            "provider": response.provider,
-                            "model": response.model,
-                        },
+            call_id = _model_call_id("llm")
+            started_at = time.monotonic()
+            _emit_model_event(
+                observer,
+                {
+                    "event": "ragas_llm_call_started",
+                    "call_id": call_id,
+                    "step": "ragas_llm",
+                    "status": "started",
+                    "prompt_chars": len(prompt_text),
+                    "n": max(n, 1),
+                    "temperature": temperature,
+                    "has_stop": bool(stop),
+                },
+            )
+            try:
+                provider = None
+                model = None
+                output_chars = 0
+                for _ in range(max(n, 1)):
+                    response = self._client.chat(
+                        [ChatMessage(role="user", content=prompt_text)]
                     )
+                    text = _apply_stop_tokens(response.content, stop)
+                    provider = response.provider
+                    model = response.model
+                    output_chars += len(text)
+                    generations.append(
+                        Generation(
+                            text=text,
+                            generation_info={
+                                "finish_reason": "stop",
+                                "provider": response.provider,
+                                "model": response.model,
+                            },
+                        )
+                    )
+            except Exception as error:
+                _emit_model_event(
+                    observer,
+                    _failed_model_event(
+                        call_id=call_id,
+                        event="ragas_llm_call_failed",
+                        step="ragas_llm",
+                        started_at=started_at,
+                        error=error,
+                        extra={"prompt_chars": len(prompt_text)},
+                    ),
                 )
+                raise
+            _emit_model_event(
+                observer,
+                {
+                    "event": "ragas_llm_call_done",
+                    "call_id": call_id,
+                    "step": "ragas_llm",
+                    "status": "success",
+                    "duration_ms": _elapsed_ms(started_at),
+                    "provider": provider,
+                    "model": model,
+                    "output_chars": output_chars,
+                },
+            )
             return LLMResult(generations=[generations])
 
         async def agenerate_text(
@@ -353,12 +416,75 @@ def _load_ragas_backend(
         def embed_query(self, text: str) -> list[float]:
             """Embed one Ragas query string with the project embedding client."""
 
-            return self._client.embed(text)
+            call_id = _model_call_id("emb")
+            started_at = time.monotonic()
+            _emit_embedding_started(
+                observer,
+                call_id=call_id,
+                method="embed_query",
+                texts=[text],
+            )
+            try:
+                vector = self._client.embed(text)
+            except Exception as error:
+                _emit_model_event(
+                    observer,
+                    _failed_model_event(
+                        call_id=call_id,
+                        event="ragas_embedding_call_failed",
+                        step="ragas_embedding",
+                        started_at=started_at,
+                        error=error,
+                        extra={"method": "embed_query"},
+                    ),
+                )
+                raise
+            _emit_embedding_done(
+                observer,
+                call_id=call_id,
+                method="embed_query",
+                vectors=[vector],
+                started_at=started_at,
+                client=self._client,
+            )
+            return vector
 
         def embed_documents(self, texts: list[str]) -> list[list[float]]:
             """Embed Ragas context strings in one provider batch."""
 
-            return self._client.embed_batch(list(texts))
+            documents = list(texts)
+            call_id = _model_call_id("emb")
+            started_at = time.monotonic()
+            _emit_embedding_started(
+                observer,
+                call_id=call_id,
+                method="embed_documents",
+                texts=documents,
+            )
+            try:
+                vectors = self._client.embed_batch(documents)
+            except Exception as error:
+                _emit_model_event(
+                    observer,
+                    _failed_model_event(
+                        call_id=call_id,
+                        event="ragas_embedding_call_failed",
+                        step="ragas_embedding",
+                        started_at=started_at,
+                        error=error,
+                        extra={"method": "embed_documents", "text_count": len(documents)},
+                    ),
+                )
+                raise
+            _emit_embedding_done(
+                observer,
+                call_id=call_id,
+                method="embed_documents",
+                vectors=vectors,
+                started_at=started_at,
+                client=self._client,
+            )
+            return vectors
 
         async def aembed_query(self, text: str) -> list[float]:
             """Embed one Ragas query string asynchronously."""
@@ -402,6 +528,181 @@ def _load_ragas_backend(
 
     return _run_ragas
 
+
+
+def _load_ragas_backend_for_test(
+    *,
+    llm_client: BaseLLM,
+    embedding_client: BaseEmbedding,
+    observer: RagasModelCallObserver,
+    timeout_seconds: int,
+    max_workers: int,
+) -> RagasEvaluateFn:
+    """Create a no-dependency fake Ragas backend for observer unit tests."""
+
+    runtime_config = RagasRuntimeConfig(
+        timeout_seconds=timeout_seconds,
+        max_workers=max_workers,
+    )
+
+    def _run_fake(
+        rows: list[dict[str, Any]],
+        *,
+        metrics: tuple[str, ...],
+        run_config: Mapping[str, int] | None = None,
+    ) -> dict[str, float]:
+        """Exercise project LLM and embedding calls without importing Ragas."""
+
+        del run_config
+        runtime_config.as_mapping()
+        call_id = _model_call_id("llm")
+        started_at = time.monotonic()
+        prompt_text = "\n".join(row["question"] for row in rows)
+        _emit_model_event(
+            observer,
+            {
+                "event": "ragas_llm_call_started",
+                "call_id": call_id,
+                "step": "ragas_llm",
+                "status": "started",
+                "prompt_chars": len(prompt_text),
+                "n": 1,
+                "temperature": 0.01,
+                "has_stop": False,
+            },
+        )
+        response = llm_client.chat([ChatMessage(role="user", content=prompt_text)])
+        _emit_model_event(
+            observer,
+            {
+                "event": "ragas_llm_call_done",
+                "call_id": call_id,
+                "step": "ragas_llm",
+                "status": "success",
+                "duration_ms": _elapsed_ms(started_at),
+                "provider": response.provider,
+                "model": response.model,
+                "output_chars": len(response.content),
+            },
+        )
+        documents = [context for row in rows for context in row["contexts"]]
+        emb_call_id = _model_call_id("emb")
+        emb_started_at = time.monotonic()
+        _emit_embedding_started(
+            observer,
+            call_id=emb_call_id,
+            method="embed_documents",
+            texts=documents,
+        )
+        vectors = embedding_client.embed_batch(documents)
+        _emit_embedding_done(
+            observer,
+            call_id=emb_call_id,
+            method="embed_documents",
+            vectors=vectors,
+            started_at=emb_started_at,
+            client=embedding_client,
+        )
+        return {metric_name: 1.0 for metric_name in metrics}
+
+    return _run_fake
+
+
+def _model_call_id(prefix: str) -> str:
+    """Return a short trace identifier for one Ragas model call."""
+
+    return f"{prefix}-{uuid4().hex}"
+
+
+def _elapsed_ms(started_at: float) -> float:
+    """Return elapsed milliseconds for model-call observer events."""
+
+    return max((time.monotonic() - started_at) * 1000, 0.0)
+
+
+def _emit_model_event(
+    observer: RagasModelCallObserver | None,
+    event: Mapping[str, Any],
+) -> None:
+    """Send one trace-safe model-call event when an observer is configured."""
+
+    if observer is not None:
+        observer(dict(event))
+
+
+def _emit_embedding_started(
+    observer: RagasModelCallObserver | None,
+    *,
+    call_id: str,
+    method: str,
+    texts: Sequence[str],
+) -> None:
+    """Emit a safe embedding start event without storing source text."""
+
+    _emit_model_event(
+        observer,
+        {
+            "event": "ragas_embedding_call_started",
+            "call_id": call_id,
+            "step": "ragas_embedding",
+            "status": "started",
+            "method": method,
+            "text_count": len(texts),
+            "total_chars": sum(len(text) for text in texts),
+        },
+    )
+
+
+def _emit_embedding_done(
+    observer: RagasModelCallObserver | None,
+    *,
+    call_id: str,
+    method: str,
+    vectors: Sequence[Sequence[float]],
+    started_at: float,
+    client: BaseEmbedding,
+) -> None:
+    """Emit a safe embedding success event without storing vector values."""
+
+    first_vector = vectors[0] if vectors else []
+    _emit_model_event(
+        observer,
+        {
+            "event": "ragas_embedding_call_done",
+            "call_id": call_id,
+            "step": "ragas_embedding",
+            "status": "success",
+            "method": method,
+            "duration_ms": _elapsed_ms(started_at),
+            "provider": getattr(client, "provider", None),
+            "model": getattr(client, "model", None),
+            "vector_count": len(vectors),
+            "dimension": len(first_vector),
+        },
+    )
+
+
+def _failed_model_event(
+    *,
+    call_id: str,
+    event: str,
+    step: str,
+    started_at: float,
+    error: Exception,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a trace-safe failure event for a Ragas model call."""
+
+    return {
+        "event": event,
+        "call_id": call_id,
+        "step": step,
+        "status": "failed",
+        "duration_ms": _elapsed_ms(started_at),
+        "error_type": error.__class__.__name__,
+        "error_message": str(error),
+        **dict(extra or {}),
+    }
 
 def _prompt_to_text(prompt: Any) -> str:
     """Convert a Ragas/LangChain prompt value into non-empty text."""

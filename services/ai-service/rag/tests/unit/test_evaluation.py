@@ -25,6 +25,7 @@ from src.core.types import Chunk
 from src.libs.evaluator import EvaluatorFactory
 from src.libs.evaluator import ragas_evaluator as ragas_evaluator_module
 from src.observability.evaluation import RetrievalStrategy as ExportedRetrievalStrategy
+from src.observability.evaluation import ragas_adapter as ragas_adapter_module
 from src.observability.evaluation.metrics import HitRateMetric, MRRMetric, NDCGMetric
 from src.observability.evaluation.ragas_adapter import RagasEvaluator
 from src.observability.evaluation.runner import (
@@ -557,7 +558,7 @@ def test_run_evaluation_cli_passes_configured_ragas_metrics(
 
             captured["evaluation_kwargs"] = kwargs
             return SimpleNamespace(
-                run_id="eval-1",
+                run_id=kwargs["run_id"],
                 collection_id=kwargs["collection_id"],
                 evaluator=kwargs["evaluator"],
                 dataset_name=kwargs["dataset_name"],
@@ -794,6 +795,300 @@ def test_run_evaluation_cli_supports_rag_answer_source_for_context_debugging(
 
 
 @pytest.mark.unit
+def test_evaluation_reporter_writes_console_progress_and_jsonl_events(
+    tmp_path: Path,
+) -> None:
+    """Require evaluation progress to be visible without corrupting final JSON output."""
+
+    log_path = tmp_path / "evaluation.log.jsonl"
+    console_lines: list[str] = []
+    clock_values = iter([10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5])
+    reporter = run_evaluation_module.EvaluationReporter(
+        console=console_lines.append,
+        log_path=log_path,
+        clock=lambda: next(clock_values),
+    )
+
+    reporter.run_started(
+        run_id="eval-test",
+        dataset_name="golden_set",
+        sample_count=2,
+        answer_source="message",
+        top_k=5,
+        no_rerank=False,
+        evaluator="ragas",
+        metric_names=["faithfulness", "answer_relevancy"],
+        collections=["faq", "shopping_guides"],
+    )
+    reporter.step_started("build_predictions")
+    reporter.sample_started(
+        sample_index=1,
+        sample_count=2,
+        sample={
+            "id": "sample-1",
+            "collection": "faq",
+            "question": "微波炉售后政策是什么？",
+        },
+    )
+    reporter.sample_step_done(
+        sample_index=1,
+        sample={"id": "sample-1", "collection": "faq"},
+        step="aimodel_chat",
+        status="success",
+        details={"message_id": 88, "query_trace_ids": ["query-1"]},
+    )
+    reporter.step_done("build_predictions")
+
+    assert any("[eval-test] started" in line for line in console_lines)
+    assert any("[0s] [eval-test] build_predictions started" in line for line in console_lines)
+    assert any("sample-1 aimodel_chat success message_id=88" in line for line in console_lines)
+    completed_line = next(line for line in console_lines if "build_predictions completed" in line)
+    assert "duration=" not in completed_line
+    sample_line = next(line for line in console_lines if "[1/2] sample-1" in line)
+    assert "question_chars=11" in sample_line
+    assert "微波炉" not in sample_line
+    events = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["event"] for event in events] == [
+        "run_started",
+        "step_started",
+        "sample_started",
+        "sample_step_done",
+        "step_done",
+    ]
+    assert all(event["timestamp"].endswith("+08:00") for event in events)
+    assert events[0]["dataset_name"] == "golden_set"
+    assert events[0]["sample_count"] == 2
+    assert events[0]["answer_source"] == "message"
+    assert events[2]["sample_index"] == 1
+    assert events[2]["collection"] == "faq"
+    assert events[2]["question_preview"] == "微波炉售后政策是什么？"
+    assert events[3]["step"] == "aimodel_chat"
+    assert events[3]["message_id"] == 88
+    assert events[4]["duration_ms"] == pytest.approx(3000.0)
+
+
+
+@pytest.mark.unit
+def test_run_evaluation_cli_reports_sample_progress_without_changing_final_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Keep stdout machine-readable while stderr exposes long-running progress."""
+
+    settings = run_evaluation_module.load_settings(
+        SETTINGS_PATH,
+        validate_environment=False,
+    )
+    golden_set_path = _write_single_sample_golden_set(tmp_path)
+    captured: dict[str, Any] = {}
+
+    _patch_evaluation_cli_dependencies(
+        monkeypatch,
+        settings=settings,
+        captured=captured,
+        message_answer=run_evaluation_module.MessageAnswer(
+            message_id=88,
+            conversation_id=99,
+            content="这是 AImodel 最终回答。",
+            query_trace_ids=("query-aimodel-1",),
+        ),
+    )
+    log_path = tmp_path / "evaluation.log.jsonl"
+    monkeypatch.setattr(
+        run_evaluation_module,
+        "EVALUATION_LOG_PATH",
+        log_path,
+        raising=False,
+    )
+    outputs: list[str] = []
+    progress_lines: list[str] = []
+
+    exit_code = run_evaluation_module.run_evaluation_cli(
+        ["--collection", "shopping_guides", "--golden-set", str(golden_set_path)],
+        output=outputs.append,
+        error_output=progress_lines.append,
+    )
+
+    assert exit_code == 0
+    assert len(outputs) == 1
+    final_payload = json.loads(outputs[0])
+    assert final_payload["run_id"] == captured["evaluation_kwargs"]["run_id"]
+    assert any("build_predictions started" in line for line in progress_lines)
+    assert any("[1/1] sample-1" in line for line in progress_lines)
+    assert any("aimodel_chat success" in line for line in progress_lines)
+    assert any("message_resolve success" in line for line in progress_lines)
+    assert any("query_trace_load success" in line for line in progress_lines)
+    assert any("prediction_ready success" in line for line in progress_lines)
+    assert any("ragas_evaluation completed" in line for line in progress_lines)
+    events = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert "sample_started" in [event["event"] for event in events]
+    assert {
+        event["step"]
+        for event in events
+        if event["event"] == "sample_step_done"
+    } >= {"aimodel_chat", "message_resolve", "query_trace_load", "prediction_ready"}
+
+
+@pytest.mark.unit
+def test_evaluation_reporter_formats_elapsed_time_and_refreshes_single_line(
+    tmp_path: Path,
+) -> None:
+    """Require the console UI to use installer-style elapsed time refreshes."""
+
+    writes: list[str] = []
+    reporter = run_evaluation_module.EvaluationReporter(
+        console=writes.append,
+        log_path=tmp_path / "evaluation.log.jsonl",
+        clock=lambda: 0.0,
+        refresh=True,
+    )
+
+    assert reporter.format_elapsed(7) == "7s"
+    assert reporter.format_elapsed(72) == "1m12s"
+    assert reporter.format_elapsed(3661) == "1h01m01s"
+
+    reporter.run_started(
+        run_id="eval-refresh",
+        dataset_name="golden_set",
+        sample_count=1,
+        answer_source="message",
+        top_k=5,
+        no_rerank=False,
+        evaluator="ragas",
+        metric_names=["faithfulness"],
+        collections=["faq"],
+    )
+    reporter.step_started("ragas_evaluation")
+    reporter.render_status("ragas_evaluation running llm_calls=12 embedding_calls=4")
+
+    assert writes[-1].startswith("\r[0s] ragas_evaluation running")
+    assert not writes[-1].endswith("\n")
+
+
+
+@pytest.mark.unit
+def test_ragas_adapter_reports_llm_and_embedding_model_calls() -> None:
+    """Expose Ragas model-call progress without logging prompts or vectors."""
+
+    events: list[dict[str, Any]] = []
+    llm = _ObservedFakeLLM()
+    embedding = _ObservedFakeEmbedding()
+    backend = ragas_adapter_module._load_ragas_backend_for_test(
+        llm_client=llm,
+        embedding_client=embedding,
+        observer=events.append,
+        timeout_seconds=300,
+        max_workers=8,
+    )
+
+    result = backend(
+        [
+            {
+                "question": "q",
+                "answer": "a",
+                "contexts": ["context one", "context two"],
+                "ground_truth": "reference",
+            }
+        ],
+        metrics=("faithfulness", "answer_relevancy"),
+        run_config={"timeout_seconds": 300, "max_workers": 8},
+    )
+
+    assert result == {"faithfulness": 1.0, "answer_relevancy": 1.0}
+    event_names = [event["event"] for event in events]
+    assert "ragas_llm_call_started" in event_names
+    assert "ragas_llm_call_done" in event_names
+    assert "ragas_embedding_call_started" in event_names
+    assert "ragas_embedding_call_done" in event_names
+    llm_done = next(event for event in events if event["event"] == "ragas_llm_call_done")
+    assert llm_done["provider"] == "fake"
+    assert llm_done["model"] == "fake-eval"
+    assert llm_done["output_chars"] == len("faithful answer")
+    embedding_done = next(
+        event for event in events if event["event"] == "ragas_embedding_call_done"
+    )
+    assert embedding_done["method"] == "embed_documents"
+    assert embedding_done["vector_count"] == 2
+    assert embedding_done["dimension"] == 3
+    assert all("prompt" not in event for event in events)
+    assert all("vectors" not in event for event in events)
+
+
+
+@pytest.mark.unit
+def test_ragas_status_text_expands_llm_and_embedding_details() -> None:
+    """Show useful Ragas model-call details in console progress."""
+
+    llm_started = run_evaluation_module._ragas_status_text(
+        {
+            "step": "ragas_llm",
+            "status": "started",
+            "call_id": "llm-1",
+            "prompt_chars": 4307,
+            "n": 1,
+            "temperature": 0.01,
+            "has_stop": False,
+        }
+    )
+    assert llm_started == (
+        "ragas_llm started call_id=llm-1 prompt_chars=4307 n=1 "
+        "temperature=0.01 has_stop=False"
+    )
+
+    llm_done = run_evaluation_module._ragas_status_text(
+        {
+            "step": "ragas_llm",
+            "status": "success",
+            "call_id": "llm-1",
+            "duration_ms": 7562.0,
+            "provider": "ccswitch",
+            "model": "gpt-5.5",
+            "output_chars": 138,
+        }
+    )
+    assert llm_done == (
+        "ragas_llm success call_id=llm-1 duration=7.6s "
+        "provider=ccswitch model=gpt-5.5 output_chars=138"
+    )
+
+    embedding_started = run_evaluation_module._ragas_status_text(
+        {
+            "step": "ragas_embedding",
+            "status": "started",
+            "call_id": "emb-1",
+            "method": "embed_documents",
+            "text_count": 3,
+            "total_chars": 153,
+        }
+    )
+    assert embedding_started == (
+        "ragas_embedding started call_id=emb-1 method=embed_documents "
+        "text_count=3 total_chars=153"
+    )
+
+    embedding_done = run_evaluation_module._ragas_status_text(
+        {
+            "step": "ragas_embedding",
+            "status": "success",
+            "call_id": "emb-1",
+            "method": "embed_documents",
+            "duration_ms": 218.0,
+            "vector_count": 3,
+            "dimension": 1536,
+        }
+    )
+    assert embedding_done == (
+        "ragas_embedding success call_id=emb-1 method=embed_documents "
+        "duration=0.2s vector_count=3 dimension=1536"
+    )
+
+@pytest.mark.unit
 def test_run_evaluation_cli_fails_when_message_answer_is_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -822,7 +1117,10 @@ def test_run_evaluation_cli_fails_when_message_answer_is_missing(
     )
 
     assert exit_code == 1
-    assert "No assistant message found for AImodel conversation_id=99" in errors[0]
+    assert any(
+        "No assistant message found for AImodel conversation_id=99" in line
+        for line in errors
+    )
     assert "evaluation_kwargs" not in captured
 
 
@@ -860,7 +1158,7 @@ def test_run_evaluation_cli_fails_when_message_trace_link_is_missing(
     )
 
     assert exit_code == 1
-    assert "No RAG query traces linked to message_id=88" in errors[0]
+    assert any("No RAG query traces linked to message_id=88" in line for line in errors)
     assert "evaluation_kwargs" not in captured
 @pytest.mark.unit
 def test_evaluation_runner_compares_default_retrieval_strategies() -> None:
@@ -1173,7 +1471,7 @@ def _patch_evaluation_cli_dependencies(
 
             captured["evaluation_kwargs"] = kwargs
             return SimpleNamespace(
-                run_id="eval-1",
+                run_id=kwargs["run_id"],
                 collection_id=kwargs["collection_id"],
                 evaluator=kwargs["evaluator"],
                 dataset_name=kwargs["dataset_name"],
@@ -1280,6 +1578,38 @@ def _patch_evaluation_cli_dependencies(
         raising=False,
     )
 
+
+class _ObservedFakeLLM:
+    """Return one deterministic evaluation answer for Ragas observer tests."""
+
+    def chat(self, messages: list[Any]) -> Any:
+        """Record prompt length indirectly while returning provider metadata."""
+
+        assert messages
+        return SimpleNamespace(
+            content="faithful answer",
+            provider="fake",
+            model="fake-eval",
+        )
+
+
+class _ObservedFakeEmbedding:
+    """Return deterministic vectors for Ragas observer tests."""
+
+    provider = "fake-embedding"
+    model = "fake-embedding-v1"
+
+    def embed(self, text: str) -> list[float]:
+        """Return one fixed vector for a query string."""
+
+        assert text
+        return [1.0, 0.0, 0.0]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Return one fixed vector per document string."""
+
+        assert texts
+        return [[1.0, 0.0, 0.0] for _ in texts]
 
 class _FakeEvaluationRepository:
     """Capture evaluation writes without opening PostgreSQL in unit tests."""
