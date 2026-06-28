@@ -8,3 +8,4 @@ AGENTS.md
 .pytest_cache/
 pytest-cache-files-*/
 __pycache__/
+services/ai-service/rag/data/
