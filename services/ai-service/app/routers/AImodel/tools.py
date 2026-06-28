@@ -18,6 +18,7 @@ from app.routers.AImodel.schemas import AiModelToolResult
 
 
 DEFAULT_RAG_COLLECTION = "shopping_guides"
+RAG_TOOL_NAME = "rag_tool"
 DEFAULT_RAG_TOP_K = 5
 DEFAULT_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 DEFAULT_TAVILY_MAX_RESULTS = 5
@@ -124,7 +125,7 @@ class RagKnowledgeClient(Protocol):
         self,
         *,
         query: str,
-        collection: str,
+        collection: str | None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -186,7 +187,7 @@ class StdioMcpRagKnowledgeClient:
         self,
         *,
         query: str,
-        collection: str,
+        collection: str | None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -207,7 +208,7 @@ class StdioMcpRagKnowledgeClient:
         self,
         *,
         query: str,
-        collection: str,
+        collection: str | None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -307,7 +308,7 @@ class PersistentMcpRagKnowledgeClient:
         self,
         *,
         query: str,
-        collection: str,
+        collection: str | None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -316,7 +317,7 @@ class PersistentMcpRagKnowledgeClient:
 
         Args:
             query: User question sent to the RAG knowledge hub.
-            collection: Target RAG collection.
+            collection: Optional target collection. ``None`` lets RAG routing choose.
             top_k: Number of final contexts requested.
             no_rerank: Whether RAG should skip reranking.
             include_image_base64: Whether image bytes should be returned.
@@ -599,7 +600,7 @@ def search_products(
             client.close()
 
 
-def search_shopping_guides(
+def rag_tool(
     query: str,
     *,
     rag_client: RagKnowledgeClient | None = None,
@@ -608,14 +609,14 @@ def search_shopping_guides(
     no_rerank: bool = False,
     include_image_base64: bool = False,
 ) -> AiModelToolResult:
-    """Search the RAG shopping-guide knowledge base for Agent-ready context.
+    """Search TalonMart internal knowledge base for Agent-ready context.
 
     Args:
-        query: User question or intent that needs durable guide knowledge.
+        query: User question or intent that needs durable internal knowledge.
         rag_client: Optional test or production client. ``None`` uses the
             process-wide MCP stdio adapter.
-        collection: Optional RAG collection override. The default is
-            ``RAG_DEFAULT_COLLECTION`` or ``shopping_guides``.
+        collection: Optional RAG collection override. ``None`` lets the RAG
+            intent router choose the most suitable collection.
         top_k: Final number of knowledge snippets requested from RAG.
         no_rerank: Whether to skip reranker inside the RAG query pipeline.
         include_image_base64: Explicitly request image bytes. AImodel keeps this
@@ -629,24 +630,21 @@ def search_shopping_guides(
     normalized_query = query.strip() if isinstance(query, str) else ""
     if not normalized_query:
         return AiModelToolResult(
-            tool="search_shopping_guides",
+            tool=RAG_TOOL_NAME,
             ok=False,
             input=query,
             error="query_required",
         )
     if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
         return AiModelToolResult(
-            tool="search_shopping_guides",
+            tool=RAG_TOOL_NAME,
             ok=False,
             input=query,
             error="top_k_must_be_positive_integer",
         )
 
     active_collection = (
-        collection.strip()
-        if isinstance(collection, str) and collection.strip()
-        else os.getenv("RAG_DEFAULT_COLLECTION", DEFAULT_RAG_COLLECTION).strip()
-        or DEFAULT_RAG_COLLECTION
+        collection.strip() if isinstance(collection, str) and collection.strip() else None
     )
     client = rag_client or get_rag_knowledge_client()
     try:
@@ -659,7 +657,7 @@ def search_shopping_guides(
         )
     except Exception as error:
         return AiModelToolResult(
-            tool="search_shopping_guides",
+            tool=RAG_TOOL_NAME,
             ok=False,
             input=query,
             error=f"rag_query_failed: {error}",
@@ -667,7 +665,7 @@ def search_shopping_guides(
 
     if payload.get("ok") is False:
         return AiModelToolResult(
-            tool="search_shopping_guides",
+            tool=RAG_TOOL_NAME,
             ok=False,
             input=query,
             data={"error": payload.get("error", {})},
@@ -675,10 +673,31 @@ def search_shopping_guides(
         )
 
     return AiModelToolResult(
-        tool="search_shopping_guides",
+        tool=RAG_TOOL_NAME,
         ok=True,
         input=query,
         data=_public_rag_tool_data(payload),
+    )
+
+
+def search_shopping_guides(
+    query: str,
+    *,
+    rag_client: RagKnowledgeClient | None = None,
+    collection: str | None = None,
+    top_k: int = DEFAULT_RAG_TOP_K,
+    no_rerank: bool = False,
+    include_image_base64: bool = False,
+) -> AiModelToolResult:
+    """Backward-compatible wrapper for callers not yet renamed to rag_tool."""
+
+    return rag_tool(
+        query,
+        rag_client=rag_client,
+        collection=collection,
+        top_k=top_k,
+        no_rerank=no_rerank,
+        include_image_base64=include_image_base64,
     )
 
 

@@ -42,7 +42,7 @@ from app.routers.AImodel.tools import (
     RagKnowledgeClient,
     fetch_product_detail_from_link,
     recommended_links_from_tool_results,
-    search_shopping_guides as run_search_shopping_guides,
+    rag_tool as run_rag_tool,
     search_web_with_tavily as run_search_web_with_tavily,
     search_products,
 )
@@ -54,20 +54,18 @@ StreamingAgentRunner = Callable[
 
 SYSTEM_PROMPT = """
 你是 TalonMart 的 AImodel 购物助手。
-你需要根据用户意图决定是否调用工具。
-推荐场景：当用户想要商品推荐、购买建议或“有什么值得买”时，必须使用商品搜索工具获取真实商品后再推荐。
+你需要根据用户意图决定是否调用工具，并严格区分信息来源。
+商品推荐场景：当用户想要商品推荐、购买建议、可购买商品或“有什么值得买”时，必须先使用商品搜索工具获取真实商品后再推荐。
 商品链接对比场景：当用户提供一个或多个商品链接并要求对比、总结或判断时，必须使用商品详情工具获取真实商品信息后再回答。
-选购指南场景：当用户询问怎么选、判断标准、避坑点、参数含义或品类知识时，必须使用 RAG 工具检索选购指南。
-政策 FAQ 场景：当用户询问售后政策、退换货、保修、配送规则或文档 FAQ 时，必须使用 RAG 工具检索政策 FAQ 或文档知识。
-当用户提供商品链接时，必须使用商品详情工具获取真实商品信息后再对比或总结。
-当用户询问推荐时，必须使用商品搜索工具获取真实商品后再推荐。
-只能推荐工具返回的真实商品和链接，不能编造商品、价格、库存或链接。
+内部知识场景：当用户询问怎么选、判断标准、避坑点、参数含义、品类知识、平台政策、FAQ、客服话术、售后、退换货、保修、配送、履约或账号安全时，必须使用 RAG 工具检索内部知识库。
+公开信息场景：当用户询问外部市场趋势、品牌新品背景、公开排行榜或商品库与内部知识库之外的信息时，才使用联网搜索工具。
 商品事实必须来自商品搜索工具或商品详情工具，包括价格、库存、优惠、规格、可购买商品和商品链接。
-RAG 工具只用于补充选购指南、品类知识、政策 FAQ、售后规则和文档知识上下文。
-联网搜索工具只用于查询商品库和 RAG 知识库之外的公开网页信息，例如行业趋势、新品背景和公开资料补充。
-联网搜索工具不能替代商品搜索工具、商品详情工具或 RAG 工具，不能用来覆盖价格、库存、优惠、可购买链接或引用上下文。
-不能使用 RAG 内容当作实时商品事实来源，不能用 RAG 生成价格、库存、优惠、可购买商品或商品链接。
-RAG 返回引用时可以在回答中展示引用标题或章节，但不能编造引用，也不能展示内部 chunk id、trace id 或原始工具 JSON。
+RAG 工具返回的是可直接用于回答的内部知识上下文，不是最终答案；你需要基于这些上下文组织自然回答。
+不能使用 RAG 内容生成实时商品事实，不能用 RAG 编造价格、库存、优惠、可购买商品或商品链接。
+联网搜索工具不能替代商品搜索工具、商品详情工具或 RAG 工具，不能覆盖平台内部政策、售后规则或客服口径。
+当 RAG 与联网搜索冲突时，平台内部规则、政策、FAQ 和客服口径以 RAG 为准；外部市场信息以联网搜索为准。
+如果 RAG 返回空结果或证据不足，应明确说明当前内部知识库没有足够依据，不要用常识补写平台规则。
+RAG 返回引用时可以在回答中展示引用标题或章节，但不能编造引用，也不能展示内部 chunk id、trace id、query_trace_id 或原始工具 JSON。
 如果工具没有找到合适商品，请明确说明未找到。
 回答使用中文，简洁、实用，并优先给出可执行建议。
 回答必须使用清晰 Markdown 格式：短段落说明结论，多个要点使用无序列表，每个列表项只表达一个建议。
@@ -420,7 +418,7 @@ def build_rag_tool(
     *,
     rag_client: RagKnowledgeClient | None = None,
 ) -> Any:
-    """Build the LangChain tool that exposes shopping-guide RAG knowledge.
+    """Build the LangChain tool that exposes TalonMart internal RAG knowledge.
 
     Args:
         tool_results: Mutable per-request tool result buffer. The returned tool
@@ -430,7 +428,7 @@ def build_rag_tool(
             this as ``None`` so the H2 MCP stdio client is used.
 
     Returns:
-        A LangChain tool named ``search_shopping_guides``. The tool returns the
+        A LangChain tool named ``rag_tool``. The tool returns the
         same public dictionary shape as other AImodel tools, allowing the
         existing stream filter and trace-id collector to work without special
         cases.
@@ -440,7 +438,7 @@ def build_rag_tool(
         from langchain.tools import tool
     except ModuleNotFoundError:
         return _SimpleAImodelTool(
-            name="search_shopping_guides",
+            name="rag_tool",
             handler=lambda query: _run_rag_tool(
                 query,
                 tool_results=tool_results,
@@ -448,9 +446,9 @@ def build_rag_tool(
             ),
         )
 
-    @tool("search_shopping_guides")
-    def search_shopping_guides_tool(query: str) -> dict[str, Any]:
-        """Search shopping guide knowledge and return grounded context."""
+    @tool("rag_tool")
+    def rag_tool_langchain(query: str) -> dict[str, Any]:
+        """Search TalonMart internal knowledge base and return grounded context."""
 
         return _run_rag_tool(
             query,
@@ -458,7 +456,7 @@ def build_rag_tool(
             rag_client=rag_client,
         )
 
-    return search_shopping_guides_tool
+    return rag_tool_langchain
 
 
 class _SimpleAImodelTool:
@@ -520,7 +518,7 @@ def _run_rag_tool(
     tool_results: list[AiModelToolResult],
     rag_client: RagKnowledgeClient | None,
 ) -> dict[str, Any]:
-    """Execute ``search_shopping_guides`` and record its result for memory.
+    """Execute ``rag_tool`` and record its result for memory.
 
     Args:
         query: User query passed by the Agent.
@@ -531,7 +529,7 @@ def _run_rag_tool(
         Serializable AImodel tool result dictionary returned to the Agent.
     """
 
-    result = run_search_shopping_guides(
+    result = run_rag_tool(
         query,
         rag_client=rag_client,
     )
@@ -544,6 +542,7 @@ def _build_user_prompt(request: AiModelChatRequest) -> str:
     # 中文注释：把用户问题和显式商品链接放进上下文，工具选择仍由 Agent 按系统提示自行决策。
     return f"用户问题：{request.message}\n用户提供的商品链接：\n{links}"
 
+
 def _query_trace_ids_from_tool_results(
     tool_results: list[AiModelToolResult],
 ) -> list[str]:
@@ -551,7 +550,7 @@ def _query_trace_ids_from_tool_results(
 
     trace_ids: list[str] = []
     for result in tool_results:
-        if result.tool != "search_shopping_guides":
+        if result.tool not in {"rag_tool", "search_shopping_guides"}:
             continue
         trace_id = (
             result.data.get("trace_id") if isinstance(result.data, dict) else None
@@ -724,6 +723,7 @@ def _is_tool_result_json(text: str) -> bool:
             "search_products",
             "search_product_catalog",
             "get_product_detail_from_link",
+            "rag_tool",
             "search_shopping_guides",
             "search_web_with_tavily",
         }

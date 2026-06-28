@@ -338,13 +338,13 @@ def test_stream_chat_associates_rag_trace_ids_with_the_assistant_message(
         tool_results.extend(
             [
                 AiModelToolResult(
-                    tool="search_shopping_guides",
+                    tool="rag_tool",
                     ok=True,
                     input=request.message,
                     data={"trace_id": "query-a"},
                 ),
                 AiModelToolResult(
-                    tool="search_shopping_guides",
+                    tool="rag_tool",
                     ok=True,
                     input=request.message,
                     data={"trace_id": "query-b"},

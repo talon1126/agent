@@ -33,7 +33,7 @@ class FakeRagKnowledgeClient:
         self,
         *,
         query: str,
-        collection: str,
+        collection: str | None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -84,7 +84,7 @@ def test_search_shopping_guides_returns_public_rag_tool_result() -> None:
         no_rerank=True,
     )
 
-    assert result.tool == "search_shopping_guides"
+    assert result.tool == "rag_tool"
     assert result.ok is True
     assert result.input == "无线耳机怎么选"
     assert result.data == {
@@ -112,7 +112,7 @@ def test_search_shopping_guides_returns_public_rag_tool_result() -> None:
     assert client.calls == [
         {
             "query": "无线耳机怎么选",
-            "collection": "shopping_guides",
+            "collection": None,
             "top_k": 3,
             "no_rerank": True,
             "include_image_base64": False,
@@ -133,7 +133,7 @@ def test_search_shopping_guides_returns_readable_business_error() -> None:
 
     result = search_shopping_guides("无线耳机怎么选", rag_client=client)
 
-    assert result.tool == "search_shopping_guides"
+    assert result.tool == "rag_tool"
     assert result.ok is False
     assert result.error == "no_collections: no searchable collections are available"
     assert result.data == {
@@ -333,24 +333,24 @@ def test_build_rag_tool_invokes_search_shopping_guides_and_tracks_trace() -> Non
     rag_tool = build_rag_tool(tool_results, rag_client=client)
     payload = rag_tool.invoke({"query": "降噪耳机怎么选"})
 
-    assert rag_tool.name == "search_shopping_guides"
-    assert payload["tool"] == "search_shopping_guides"
+    assert rag_tool.name == "rag_tool"
+    assert payload["tool"] == "rag_tool"
     assert payload["ok"] is True
     assert payload["data"]["trace_id"] == "query-trace-agent"
-    assert [result.tool for result in tool_results] == ["search_shopping_guides"]
+    assert [result.tool for result in tool_results] == ["rag_tool"]
     assert _query_trace_ids_from_tool_results(tool_results) == ["query-trace-agent"]
 
 
 def test_query_trace_ids_from_tool_results_deduplicates_rag_traces() -> None:
     tool_results = [
         AiModelToolResult(
-            tool="search_shopping_guides",
+            tool="rag_tool",
             ok=True,
             input="无线耳机",
             data={"trace_id": "query-a"},
         ),
         AiModelToolResult(
-            tool="search_shopping_guides",
+            tool="rag_tool",
             ok=True,
             input="蓝牙耳机",
             data={"trace_id": "query-a"},
@@ -366,6 +366,19 @@ def test_query_trace_ids_from_tool_results_deduplicates_rag_traces() -> None:
     assert _query_trace_ids_from_tool_results(tool_results) == ["query-a"]
 
 
+def test_query_trace_ids_from_tool_results_accepts_legacy_rag_tool_name() -> None:
+    tool_results = [
+        AiModelToolResult(
+            tool="search_shopping_guides",
+            ok=True,
+            input="legacy",
+            data={"trace_id": "query-legacy"},
+        )
+    ]
+
+    assert _query_trace_ids_from_tool_results(tool_results) == ["query-legacy"]
+
+
 def test_stream_chat_does_not_prefetch_rag_before_agent(monkeypatch) -> None:
     """Normal AImodel chat should let the Agent decide whether to call RAG."""
 
@@ -379,18 +392,18 @@ def test_stream_chat_does_not_prefetch_rag_before_agent(monkeypatch) -> None:
         captured["tool_results_before_agent"] = [result.model_dump() for result in tool_results]
         return ["这是最终回答。"]
 
-    def fake_search_shopping_guides(**kwargs: Any) -> AiModelToolResult:
+    def fake_rag_tool(**kwargs: Any) -> AiModelToolResult:
         captured["rag_call"] = kwargs
         return AiModelToolResult(
-            tool="search_shopping_guides",
+            tool="rag_tool",
             ok=True,
             input=kwargs["query"],
             data={"trace_id": "query-unexpected"},
         )
 
     monkeypatch.setattr(
-        "app.routers.AImodel.service.run_search_shopping_guides",
-        fake_search_shopping_guides,
+        "app.routers.AImodel.service.run_rag_tool",
+        fake_rag_tool,
     )
 
     events = list(
@@ -430,9 +443,9 @@ def test_system_prompt_separates_product_api_facts_from_rag_knowledge() -> None:
     assert "商品搜索工具" in SYSTEM_PROMPT
     assert "商品详情工具" in SYSTEM_PROMPT
     assert "RAG" in SYSTEM_PROMPT
-    assert "选购指南" in SYSTEM_PROMPT
-    assert "政策 FAQ" in SYSTEM_PROMPT
-    assert "不能使用 RAG" in SYSTEM_PROMPT
+    assert "内部知识库" in SYSTEM_PROMPT
+    assert "政策" in SYSTEM_PROMPT
+    assert "不能使用 RAG 内容生成实时商品事实" in SYSTEM_PROMPT
     assert "不能编造引用" in SYSTEM_PROMPT
 
 
@@ -441,9 +454,9 @@ def test_system_prompt_covers_recommendation_comparison_guide_and_policy_faq_sce
     assert "商品搜索工具" in SYSTEM_PROMPT
     assert "商品链接对比场景" in SYSTEM_PROMPT
     assert "商品详情工具" in SYSTEM_PROMPT
-    assert "选购指南场景" in SYSTEM_PROMPT
+    assert "内部知识场景" in SYSTEM_PROMPT
     assert "必须使用 RAG 工具" in SYSTEM_PROMPT
-    assert "政策 FAQ 场景" in SYSTEM_PROMPT
+    assert "证据不足" in SYSTEM_PROMPT
 
 
 def test_stream_chat_hides_rag_tool_payload_and_internal_ids_from_frontend(
@@ -453,7 +466,7 @@ def test_stream_chat_hides_rag_tool_payload_and_internal_ids_from_frontend(
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
     leaked_rag_json = (
-        '{"tool": "search_shopping_guides", "ok": true, "input": "无线耳机怎么选", '
+        '{"tool": "rag_tool", "ok": true, "input": "无线耳机怎么选", '
         '"data": {"trace_id": "query-secret", "content": "[1] 关注佩戴舒适度", '
         '"citations": [{"chunk_id": "chunk-secret", "title": "无线耳机选购指南"}]}, '
         '"error": null}'
@@ -465,7 +478,7 @@ def test_stream_chat_hides_rag_tool_payload_and_internal_ids_from_frontend(
     ) -> list[str]:
         tool_results.append(
             AiModelToolResult(
-                tool="search_shopping_guides",
+                tool="rag_tool",
                 ok=True,
                 input=request.message,
                 data={"trace_id": "query-secret"},
@@ -490,7 +503,7 @@ def test_stream_chat_hides_rag_tool_payload_and_internal_ids_from_frontend(
     response_text = "".join(events)
 
     assert "可以参考选购指南" in response_text
-    assert "search_shopping_guides" not in response_text
+    assert "rag_tool" not in response_text
     assert "chunk_id" not in response_text
     assert "chunk-secret" not in response_text
     assert "trace_id" not in response_text
