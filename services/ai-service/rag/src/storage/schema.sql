@@ -204,6 +204,33 @@ CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding
     ON rag_chunks
     USING hnsw (embedding vector_cosine_ops);
 
+
+-- Cache Intent Router collection profile embeddings so service startup can
+-- load stable vectors without repeatedly calling the embedding provider.
+CREATE TABLE IF NOT EXISTS rag_collection_profiles (
+    id TEXT PRIMARY KEY,
+    collection TEXT NOT NULL,
+    profile_name TEXT NOT NULL,
+    profile_text TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    embedding vector(1536),
+    provider TEXT,
+    model TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_rag_collection_profiles_collection_name
+        UNIQUE (collection, profile_name),
+    CONSTRAINT chk_rag_collection_profiles_id_not_blank CHECK (length(btrim(id)) > 0),
+    CONSTRAINT chk_rag_collection_profiles_collection_not_blank CHECK (length(btrim(collection)) > 0),
+    CONSTRAINT chk_rag_collection_profiles_name_not_blank CHECK (length(btrim(profile_name)) > 0),
+    CONSTRAINT chk_rag_collection_profiles_text_not_blank CHECK (length(btrim(profile_text)) > 0),
+    CONSTRAINT chk_rag_collection_profiles_hash_sha256
+        CHECK (content_hash ~ '^[0-9a-fA-F]{64}$')
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_collection_profiles_collection
+    ON rag_collection_profiles (collection);
+
 -- Persist the sparse statistics required to calculate BM25 scores without
 -- re-tokenizing chunk text during query execution. One row represents one
 -- term/chunk posting. Document-level replacement deletes stale postings

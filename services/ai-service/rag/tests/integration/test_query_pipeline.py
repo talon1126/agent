@@ -508,6 +508,7 @@ def test_query_pipeline_hybrid() -> None:
             for stage in query_trace["stages"]  # type: ignore[index]
         ] == [
             "query_processing",
+            "intent_routing",
             "dense",
             "sparse",
             "fusion",
@@ -723,6 +724,7 @@ def test_query_pipeline_falls_back_to_sparse_when_dense_provider_fails() -> None
             for stage in fallback_trace["stages"]  # type: ignore[index]
         ] == [
             "query_processing",
+            "intent_routing",
             "dense",
             "sparse",
             "fusion",

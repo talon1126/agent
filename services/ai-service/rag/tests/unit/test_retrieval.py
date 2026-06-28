@@ -2,8 +2,8 @@
 
 D1 establishes the stable ``ProcessedQuery`` object consumed by Dense, Sparse,
 Hybrid, trace, and local CLI components. These tests define normalization,
-intent classification, keyword extraction, settings defaults, caller
-overrides, and optional rewrite fallback without invoking an external LLM.
+keyword extraction, settings defaults, caller overrides, and optional rewrite
+fallback without invoking an external LLM.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from src.core.query_engine.fusion import reciprocal_rank_fusion
 from src.core.query_engine.hybrid_engine import CandidateFilter, HybridSearch
 from src.core.query_engine.query_processor import (
     ProcessedQuery,
-    QueryIntent,
     QueryProcessor,
 )
 from src.core.query_engine.reranker import RerankOutcome
@@ -105,10 +104,8 @@ def _processed_query() -> ProcessedQuery:
         raw_query="无线耳机推荐",
         normalized_query="无线耳机推荐",
         keywords=("无线耳机", "推荐"),
-        intent=QueryIntent.RECOMMENDATION,
         collection="shopping_guides",
         top_k=5,
-        requires_product_tool=True,
     )
 
 
@@ -161,27 +158,25 @@ def test_query_processor_applies_settings_defaults_and_validates_overrides() -> 
         processor.process("无线耳机", top_k=0)
 
 
-@pytest.mark.parametrize(
-    ("query", "expected_intent", "requires_product_tool"),
-    [
-        ("帮我对比这两款无线耳机", QueryIntent.COMPARISON, True),
-        ("推荐一款高性价比无线耳机并给我商品链接", QueryIntent.RECOMMENDATION, True),
-        ("主动降噪耳机的原理是什么", QueryIntent.KNOWLEDGE_QUERY, False),
-        ("这款耳机现在多少钱还有库存吗", QueryIntent.PRODUCT_LOOKUP, True),
-    ],
-)
-def test_query_processor_classifies_shopping_intent_and_tool_coordination(
-    query: str,
-    expected_intent: QueryIntent,
-    requires_product_tool: bool,
-) -> None:
-    """Require deterministic intent labels to drive RAG and product-tool routing."""
+def test_processed_query_excludes_business_intent_fields() -> None:
+    """Query preprocessing must not own business routing decisions."""
 
-    result = QueryProcessor(settings=_settings(rewrite_enabled=False)).process(query)
+    result = QueryProcessor(settings=_settings(rewrite_enabled=False)).process(
+        "推荐一款高性价比无线耳机并给我商品链接"
+    )
 
-    assert result.intent is expected_intent
-    assert result.requires_product_tool is requires_product_tool
-
+    dumped = result.model_dump()
+    assert "intent" not in dumped
+    assert "requires_product_tool" not in dumped
+    with pytest.raises(ValidationError):
+        ProcessedQuery(
+            raw_query="q",
+            normalized_query="q",
+            keywords=(),
+            collection="shopping_guides",
+            top_k=3,
+            intent="recommendation",
+        )
 
 def test_query_processor_extracts_ordered_unique_keywords() -> None:
     """Require Sparse Route keywords to remove question filler and duplicates."""
@@ -305,10 +300,8 @@ def test_dense_route_processes_raw_query_and_allows_top_k_override() -> None:
         raw_query="耳机推荐",
         normalized_query="耳机推荐",
         keywords=("耳机", "推荐"),
-        intent=QueryIntent.RECOMMENDATION,
         collection="shopping_guides",
         top_k=5,
-        requires_product_tool=True,
     )
     embedding = Mock()
     embedding.embed.return_value = [1.0, 0.0]
@@ -535,10 +528,8 @@ def test_sparse_route_processes_raw_query_and_allows_top_k_override() -> None:
         raw_query="耳机推荐",
         normalized_query="耳机推荐",
         keywords=("耳机", "推荐"),
-        intent=QueryIntent.RECOMMENDATION,
         collection="shopping_guides",
         top_k=5,
-        requires_product_tool=True,
     )
     bm25_indexer = Mock()
     bm25_indexer.query.return_value = []
@@ -569,10 +560,8 @@ def test_sparse_route_skips_empty_keywords_before_provider_calls() -> None:
         raw_query="?",
         normalized_query="?",
         keywords=(),
-        intent=QueryIntent.KNOWLEDGE_QUERY,
         collection="shopping_guides",
         top_k=5,
-        requires_product_tool=False,
     )
     bm25_indexer = Mock()
     vector_store = Mock()
@@ -621,10 +610,8 @@ def test_sparse_route_skips_missing_hydrated_chunks_and_records_trace_details() 
         raw_query="耳机",
         normalized_query="耳机",
         keywords=("耳机",),
-        intent=QueryIntent.RECOMMENDATION,
         collection="shopping_guides",
         top_k=5,
-        requires_product_tool=True,
     )
     bm25_indexer = Mock()
     bm25_indexer.query.return_value = [
@@ -1275,6 +1262,16 @@ def test_run_query_cli_emits_public_response_and_verbose_stage_summaries() -> No
     )
     execution = query_module.QueryExecutionResult(
         processed_query=processed,
+        intent_route=query_module.IntentRoute(
+            collection="premium_guides",
+            collections=("premium_guides",),
+            domain_intent="buying_guide",
+            complexity="simple",
+            retrieval_strategy="hybrid",
+            confidence=0.95,
+            method="rules",
+            reason="test route",
+        ),
         dense_results=tuple(dense),
         sparse_results=tuple(sparse),
         fused_results=tuple(fused),
@@ -1409,9 +1406,7 @@ def test_postgres_bm25_query_scores_collection_postings_in_rank_order() -> None:
     assert candidates[0].score > candidates[1].score > 0
     params = connection.execute.call_args.args[1]
     assert params[0] == "shopping_guides"
-    assert params[1][0] == "无线耳机"
-    assert "耳机" in params[1]
-    assert "推荐" in params[1]
+    assert params[1] == ["无线耳机", "推荐"]
 
 
 @pytest.mark.parametrize(
@@ -1543,6 +1538,68 @@ def test_query_runtime_skips_reranker_and_preserves_filtered_order() -> None:
     assert execution.rerank_applied is False
     assert execution.fallback_used is False
 
+
+
+def test_query_runtime_records_routed_collection_in_trace_snapshot() -> None:
+    """Trace top-level collection should follow the Intent Router output."""
+
+    processed = _processed_query().model_copy(update={"collection": "shopping_guides"})
+    hybrid_report = SimpleNamespace(
+        dense_results=[],
+        sparse_results=[],
+        fused_results=[],
+        results=[],
+        fallback_used=False,
+    )
+    query_processor = Mock()
+    query_processor.process.return_value = processed
+    hybrid_search = Mock()
+    hybrid_search.search.return_value = hybrid_report
+    response_builder = Mock()
+    response_builder.build.return_value = KnowledgeHubResponse(
+        content="",
+        citations=(),
+        images=(),
+        trace_id="query-runtime-routed",
+        is_empty=True,
+    )
+    intent_router = Mock()
+    intent_router.route.return_value = query_module.IntentRoute(
+        collection="policies",
+        collections=("policies",),
+        domain_intent="policy_query",
+        complexity="simple",
+        retrieval_strategy="hybrid",
+        confidence=0.96,
+        method="rules",
+        reason="matched policy route",
+    )
+    traces: list[dict[str, object]] = []
+    runtime = query_module.QueryRuntime(
+        query_processor=query_processor,
+        hybrid_search=hybrid_search,
+        rerank_controller=None,
+        response_builder=response_builder,
+        intent_router=intent_router,
+        trace_sink=traces.append,
+    )
+
+    execution = runtime.execute(
+        "退货规则是什么",
+        collection="shopping_guides",
+        top_k=2,
+        no_rerank=True,
+        trace_id="query-runtime-routed",
+    )
+
+    assert execution.processed_query.collection == "policies"
+    assert traces[0]["collection"] == "policies"
+    assert traces[0]["basic_info"]["collection"] == "policies"
+    hybrid_search.search.assert_called_once_with(
+        execution.processed_query,
+        filters={"collection": "policies"},
+        trace_context=ANY,
+    )
 
 def test_query_runtime_applies_reranker_before_response_construction() -> None:
     """Exercise the enabled rerank path and preserve its final result snapshot."""

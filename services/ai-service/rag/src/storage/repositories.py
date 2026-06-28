@@ -1216,6 +1216,145 @@ class EvaluationSampleResultRecord:
             object.__setattr__(self, "error", _freeze_mapping(self.error))
 
 
+class CollectionProfileRepository:
+    """Persist Intent Router collection profile embedding cache rows.
+
+    The router owns route selection, but repository persistence keeps profile
+    embeddings reusable across Docker restarts and multiple worker processes.
+    Rows are keyed by stable collection/profile names plus a content hash so
+    changed profile text triggers exactly one refresh.
+    """
+
+    def __init__(self, pool: PostgresPool) -> None:
+        """Bind the repository to an application-managed PostgreSQL pool."""
+
+        self._pool = pool
+
+    def get_profile_embedding(
+        self,
+        collection: str,
+        profile_name: str,
+    ) -> dict[str, Any] | None:
+        """Return one profile embedding cache row if it exists.
+
+        Args:
+            collection: Collection identifier from ``collection_profiles.yaml``.
+            profile_name: Stable profile name, usually ``default``.
+
+        Returns:
+            A mutable mapping containing profile text, content hash, embedding,
+            provider, and model, or ``None`` when absent.
+        """
+
+        row = _read_rows(
+            self._pool,
+            operation="collection_profile_get",
+            query="""
+                SELECT profile_text, content_hash, embedding::text, provider, model
+                FROM rag_collection_profiles
+                WHERE collection = %s AND profile_name = %s
+                LIMIT 1
+            """,
+            params=(collection, profile_name),
+            many=False,
+        )
+        if row is None:
+            return None
+        return {
+            "profile_text": str(row[0]),
+            "content_hash": str(row[1]),
+            "embedding": _parse_vector_text(row[2]),
+            "provider": row[3],
+            "model": row[4],
+        }
+
+    def upsert_profile_embedding(
+        self,
+        *,
+        collection: str,
+        profile_name: str,
+        profile_text: str,
+        content_hash: str,
+        embedding: list[float],
+        provider: str | None,
+        model: str | None,
+    ) -> None:
+        """Insert or replace one collection profile embedding cache row."""
+
+        profile_id = sha256(f"{collection}:{profile_name}".encode()).hexdigest()
+        try:
+            with self._pool.transaction() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO rag_collection_profiles (
+                        id,
+                        collection,
+                        profile_name,
+                        profile_text,
+                        content_hash,
+                        embedding,
+                        provider,
+                        model,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s::vector, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (collection, profile_name) DO UPDATE SET
+                        profile_text = EXCLUDED.profile_text,
+                        content_hash = EXCLUDED.content_hash,
+                        embedding = EXCLUDED.embedding,
+                        provider = EXCLUDED.provider,
+                        model = EXCLUDED.model,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        profile_id,
+                        collection,
+                        profile_name,
+                        profile_text,
+                        content_hash,
+                        _vector_literal(embedding),
+                        provider,
+                        model,
+                    ),
+                )
+        except DatabaseError:
+            raise
+        except psycopg.Error as error:
+            raise DatabaseError(
+                "PostgreSQL collection profile upsert failed",
+                context={"operation": "collection_profile_upsert"},
+                cause=error,
+            ) from error
+
+
+def _vector_literal(values: list[float]) -> str:
+    """Return a pgvector-compatible literal for a finite float list."""
+
+    if not values:
+        raise ValueError("profile embedding must not be empty")
+    normalized: list[str] = []
+    for value in values:
+        number = float(value)
+        if not number == number or number in (float("inf"), float("-inf")):
+            raise ValueError("profile embedding values must be finite")
+        normalized.append(repr(number))
+    return "[" + ",".join(normalized) + "]"
+
+
+def _parse_vector_text(value: Any) -> list[float] | None:
+    """Parse the textual form returned by ``embedding::text``."""
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    stripped = text.strip("[]")
+    if not stripped:
+        return []
+    return [float(part) for part in stripped.split(",")]
+
+
 class TraceRepository:
     """Persist Query and Ingestion traces for Dashboard history views."""
 

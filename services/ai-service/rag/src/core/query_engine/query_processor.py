@@ -1,21 +1,21 @@
 """Normalize user questions into the stable input consumed by retrieval routes.
 
 ``QueryProcessor`` is the first online-query boundary. It validates raw input,
-normalizes Unicode and whitespace, classifies shopping intent, extracts ordered
-keywords for BM25, applies settings-backed collection and Top-k defaults, and
-optionally delegates query rewriting through a minimal injected interface.
+normalizes Unicode and whitespace, extracts ordered keywords for BM25, applies
+settings-backed collection and Top-k defaults, and optionally delegates query
+rewriting through a minimal injected interface.
 
-This module does not instantiate an LLM, calculate embeddings, query storage,
-or write trace records. Those responsibilities belong to composition roots and
-later query-engine stages. Rewrite failures deliberately fall back to the
-normalized original query so optional model availability cannot disable search.
+This module does not classify business intent, instantiate an LLM, calculate
+embeddings, query storage, or write trace records. Business routing belongs to
+``IntentRouter`` after preprocessing. Rewrite failures deliberately fall back to
+the normalized original query so optional model availability cannot disable
+search.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from enum import StrEnum
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -24,7 +24,7 @@ from src.core.config import RagSettings
 from src.core.errors import RetrievalError
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")
-_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]*|[\u3400-\u4dbf\u4e00-\u9fff]+")
+_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]*|[㐀-䶿一-鿿]+")
 
 # The first-release vocabulary keeps deterministic Chinese keyword extraction
 # useful without introducing a tokenizer dependency. Unknown Chinese runs are
@@ -95,28 +95,6 @@ _ENGLISH_STOP_WORDS = frozenset(
     }
 )
 
-_COMPARISON_MARKERS = ("对比", "比较", "区别", "差异", "vs", "versus")
-_RECOMMENDATION_MARKERS = ("推荐", "选购", "挑选", "怎么选", "如何选", "哪款", "哪个好")
-_PRODUCT_LOOKUP_MARKERS = (
-    "价格",
-    "多少钱",
-    "库存",
-    "有货",
-    "购买链接",
-    "商品链接",
-    "优惠",
-    "折扣",
-)
-
-
-class QueryIntent(StrEnum):
-    """Describe the high-level routing intent inferred from a user question."""
-
-    KNOWLEDGE_QUERY = "knowledge_query"
-    RECOMMENDATION = "recommendation"
-    COMPARISON = "comparison"
-    PRODUCT_LOOKUP = "product_lookup"
-
 
 class QueryRewriter(Protocol):
     """Define the optional query-rewrite dependency accepted by the processor."""
@@ -139,18 +117,16 @@ class QueryRewriter(Protocol):
 
 
 class ProcessedQuery(BaseModel):
-    """Carry validated query state shared by Dense and Sparse retrieval routes.
+    """Carry validated query state shared by retrieval and routing stages.
 
     Attributes:
         raw_query: Unmodified user input retained for trace and debugging.
         normalized_query: Canonical query used by retrieval. A successful
             rewrite replaces the normalized original text in this field.
         keywords: Immutable ordered unique terms consumed by Sparse Route.
-        intent: Deterministic shopping intent used by upper-layer routing.
-        collection: Target knowledge collection.
+        collection: Target knowledge collection selected by caller defaults or
+            later refined by ``IntentRouter``.
         top_k: Requested final result count.
-        requires_product_tool: Whether dynamic product facts or links require
-            coordination with the existing product API tool.
         rewrite_applied: Whether ``normalized_query`` came from the rewriter.
         rewrite_fallback_reason: Stable reason for a failed rewrite, or ``None``.
     """
@@ -160,10 +136,8 @@ class ProcessedQuery(BaseModel):
     raw_query: str
     normalized_query: str = Field(min_length=1)
     keywords: tuple[str, ...] = Field(default_factory=tuple)
-    intent: QueryIntent
     collection: str = Field(min_length=1)
     top_k: int = Field(gt=0)
-    requires_product_tool: bool = False
     rewrite_applied: bool = False
     rewrite_fallback_reason: str | None = None
 
@@ -215,7 +189,7 @@ class QueryProcessor:
         collection: str | None = None,
         top_k: int | None = None,
     ) -> ProcessedQuery:
-        """Validate, normalize, classify, optionally rewrite, and tokenize input.
+        """Validate, normalize, optionally rewrite, and tokenize input.
 
         Args:
             query: Raw natural-language question from AImodel, MCP, or CLI.
@@ -225,7 +199,7 @@ class QueryProcessor:
                 ``retrieval.final_top_k`` is used.
 
         Returns:
-            An immutable ``ProcessedQuery`` suitable for every retrieval route.
+            An immutable ``ProcessedQuery`` suitable for routing and retrieval.
 
         Raises:
             RetrievalError: If query or collection is blank, top_k is not
@@ -267,16 +241,13 @@ class QueryProcessor:
         if selected_top_k <= 0:
             raise RetrievalError("top_k must be greater than zero")
 
-        intent = _classify_intent(normalized_original)
         retrieval_query, rewrite_applied, fallback_reason = self._rewrite(normalized_original)
         return ProcessedQuery(
             raw_query=query,
             normalized_query=retrieval_query,
             keywords=_extract_keywords(retrieval_query),
-            intent=intent,
             collection=selected_collection,
             top_k=selected_top_k,
-            requires_product_tool=intent is not QueryIntent.KNOWLEDGE_QUERY,
             rewrite_applied=rewrite_applied,
             rewrite_fallback_reason=fallback_reason,
         )
@@ -307,19 +278,6 @@ def _normalize_query(query: str) -> str:
 
     normalized = unicodedata.normalize("NFKC", query)
     return _WHITESPACE_PATTERN.sub(" ", normalized).strip()
-
-
-def _classify_intent(query: str) -> QueryIntent:
-    """Classify shopping intent with deterministic, explainable precedence."""
-
-    lowered = query.casefold()
-    if any(marker in lowered for marker in _COMPARISON_MARKERS):
-        return QueryIntent.COMPARISON
-    if any(marker in lowered for marker in _RECOMMENDATION_MARKERS):
-        return QueryIntent.RECOMMENDATION
-    if any(marker in lowered for marker in _PRODUCT_LOOKUP_MARKERS):
-        return QueryIntent.PRODUCT_LOOKUP
-    return QueryIntent.KNOWLEDGE_QUERY
 
 
 def _extract_keywords(query: str) -> tuple[str, ...]:

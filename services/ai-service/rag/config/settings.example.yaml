@@ -127,6 +127,15 @@ retrieval:
     include_deleted: false
     default_collection: shopping_guides
 
+intent_router:
+  enabled: true
+  rules_path: config/intent_routes.yaml
+  collection_profiles_path: config/collection_profiles.yaml
+  rule_threshold: 0.75
+  semantic_threshold: 0.7
+  llm_fallback_enabled: false
+  llm_provider: deepseek
+
 # Reranking falls back to the filtered RRF order when the selected backend fails.
 rerank:
   enabled: true

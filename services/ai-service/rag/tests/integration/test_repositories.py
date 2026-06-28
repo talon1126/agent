@@ -402,6 +402,27 @@ def test_core_schema_uses_python_domain_ids_as_primary_keys() -> None:
 
 
 @pytest.mark.integration
+def test_core_schema_adds_collection_profile_embedding_cache() -> None:
+    """Intent Router semantic profiles should be cached in PostgreSQL."""
+
+    sql = _schema_sql()
+    profiles = _table_definition(sql, "rag_collection_profiles")
+
+    for field_contract in (
+        r"\bid\s+TEXT\s+PRIMARY\s+KEY\b",
+        r"\bcollection\s+TEXT\s+NOT\s+NULL\b",
+        r"\bprofile_name\s+TEXT\s+NOT\s+NULL\b",
+        r"\bprofile_text\s+TEXT\s+NOT\s+NULL\b",
+        r"\bcontent_hash\s+TEXT\s+NOT\s+NULL\b",
+        r"\bembedding\s+vector\(1536\)",
+        r"\bprovider\s+TEXT\b",
+        r"\bmodel\s+TEXT\b",
+    ):
+        assert re.search(field_contract, profiles, re.IGNORECASE)
+    assert "UNIQUE (collection, profile_name)" in profiles
+    assert "idx_rag_collection_profiles_collection" in sql
+
+
 def test_core_schema_enables_pgvector_and_preserves_domain_fields() -> None:
     """Require pgvector and fields needed to reconstruct domain objects.
 
@@ -503,6 +524,7 @@ def test_core_schema_declares_idempotent_tables_and_indexes() -> None:
         "rag_documents",
         "rag_chunks",
         "rag_bm25_terms",
+        "rag_collection_profiles",
         "image_index",
         "rag_query_traces",
         "rag_ingestion_traces",
@@ -1829,3 +1851,57 @@ def test_document_repository_deduplicates_only_successful_same_source() -> None:
                 (collection_id,),
             )
         pool.close()
+
+
+@pytest.mark.integration
+def test_collection_profile_repository_upserts_and_reads_embedding_cache() -> None:
+    """Repository should reuse profile embeddings by collection and profile name."""
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for PostgreSQL repository integration")
+
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import CollectionProfileRepository
+
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=2),
+        environ={"DATABASE_URL": database_url},
+    )
+    collection = f"profiles-{uuid4().hex}"
+    try:
+        pool.open()
+        init_schema(pool)
+        repository = CollectionProfileRepository(pool)
+
+        repository.upsert_profile_embedding(
+            collection=collection,
+            profile_name="default",
+            profile_text="客服话术 profile",
+            content_hash="a" * 64,
+            embedding=[0.1] * 1536,
+            provider="fake",
+            model="fake-model",
+        )
+        first = repository.get_profile_embedding(collection, "default")
+        assert first is not None
+        assert first["content_hash"] == "a" * 64
+        assert first["embedding"] == [0.1] * 1536
+
+        repository.upsert_profile_embedding(
+            collection=collection,
+            profile_name="default",
+            profile_text="客服话术 profile changed",
+            content_hash="b" * 64,
+            embedding=[0.4] * 1536,
+            provider="fake",
+            model="fake-model-v2",
+        )
+        second = repository.get_profile_embedding(collection, "default")
+        assert second is not None
+        assert second["content_hash"] == "b" * 64
+        assert second["embedding"] == [0.4] * 1536
+        assert second["model"] == "fake-model-v2"
+    finally:
+        if pool.is_open:
+            pool.close()

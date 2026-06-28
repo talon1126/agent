@@ -107,15 +107,10 @@ RAG 质量评估需要准备 **黄金测试集**，每条样本包含问题、�
     "id": "guide_wireless_earbuds_001",
     "question": "如何挑选高性价比无线耳机？",
     "golden_answer": "高性价比无线耳机应重点关注连接稳定性、续航、佩戴舒适度、通话质量和售后保障。如果用于通勤，还应关注主动降噪和抗风噪表现。",
-    "expected_sources": [
-      "shopping_guides/wireless-earbuds.md"
+    "expected_doc_ids": [
+      "doc-wireless-earbuds"
     ],
-    "expected_keywords": [
-      "连接稳定性",
-      "续航",
-      "主动降噪",
-      "售后保障"
-    ]
+    "difficulty": "easy"
   }
 ]
 ```

@@ -24,6 +24,8 @@ import yaml
 RAG_ROOT = Path(__file__).resolve().parents[2]
 SETTINGS_PATH = RAG_ROOT / "config" / "settings.example.yaml"
 PROMPTS_DIR = RAG_ROOT / "config" / "prompts"
+INTENT_ROUTES_PATH = RAG_ROOT / "config" / "intent_routes.yaml"
+COLLECTION_PROFILES_PATH = RAG_ROOT / "config" / "collection_profiles.yaml"
 
 # The RAG subsystem is independently installable, but repository-level pytest
 # runs it directly from source. Add only this module root so imports match the
@@ -103,6 +105,7 @@ def test_settings_contains_required_sections() -> None:
         "splitter",
         "transform",
         "retrieval",
+        "intent_router",
         "rerank",
         "response",
         "ingestion",
@@ -209,6 +212,51 @@ def test_dashboard_lists_all_six_management_pages() -> None:
         "ingestion_trace",
         "evaluation",
     ]
+
+
+def test_intent_router_config_files_are_versioned_and_referenced() -> None:
+    """Intent routing rules and collection profiles must be configurable assets."""
+
+    settings = load_settings_document()
+    route_doc = yaml.safe_load(INTENT_ROUTES_PATH.read_text(encoding="utf-8"))
+    profile_doc = yaml.safe_load(COLLECTION_PROFILES_PATH.read_text(encoding="utf-8"))
+
+    assert settings["intent_router"]["enabled"] is True
+    assert settings["intent_router"]["rules_path"] == "config/intent_routes.yaml"
+    assert settings["intent_router"]["collection_profiles_path"] == (
+        "config/collection_profiles.yaml"
+    )
+    assert settings["intent_router"]["rule_threshold"] == 0.75
+    assert settings["intent_router"]["semantic_threshold"] == 0.7
+    assert route_doc["version"] == "1.0"
+    assert set(route_doc["routers"]) >= {"support", "chat"}
+    support = route_doc["routers"]["support"]
+    categories = support["categories"]
+    assert set(categories) >= {"presale", "usage", "aftersales"}
+    assert set(categories["presale"]["intents"]) >= {
+        "buying_recommendation",
+        "parameter_consulting",
+        "comparison",
+        "price_promotion",
+        "use_case",
+    }
+    chat_all = route_doc["routers"]["chat"]["categories"]["chat_all"]["intents"]
+    assert set(chat_all) >= {"greeting", "out_of_scope", "complaint_venting"}
+    assert all(intent["rag_enabled"] is False for intent in chat_all.values())
+    assert all(intent["action"] == "direct_llm_reply" for intent in chat_all.values())
+    collections = {
+        intent["collection"]
+        for category in categories.values()
+        for intent in category["intents"].values()
+    }
+    assert collections >= {"policies", "manual", "faq", "shopping_guides"}
+    assert profile_doc["version"] == "1.0"
+    assert set(profile_doc["profiles"]) >= {
+        "policies",
+        "manual",
+        "faq",
+        "shopping_guides",
+    }
 
 
 def test_observability_transform_snapshot_defaults_are_bounded() -> None:

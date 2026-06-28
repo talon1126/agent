@@ -1,0 +1,335 @@
+version: "1.0"
+routers:
+  support:
+    description: 售前、使用、售后相关用户支持意图。
+    categories:
+      presale:
+        description: 售前咨询、选购推荐、参数咨询和商品对比。
+        intents:
+          buying_recommendation:
+            collection: shopping_guides
+            priority: 70
+            confidence: 0.82
+            description: 购买建议、品牌型号推荐、场景化推荐和预算推荐相关问题。
+            match:
+              any:
+                - 怎么选
+                - 选购
+                - 推荐
+                - 哪个品牌
+                - 哪款
+                - 性价比
+                - 适合
+                - 购买建议
+              all: []
+              regex:
+                - ".*怎么.*选.*"
+                - ".*哪个.*适合.*"
+
+          parameter_consulting:
+            collection: shopping_guides
+            priority: 65
+            confidence: 0.80
+            description: 商品参数、规格、性能指标和配置含义相关问题。
+            match:
+              any:
+                - 参数
+                - 规格
+                - 配置
+                - 容量
+                - 功率
+                - 能效
+                - 尺寸
+                - 材质
+                - 性能
+                - 指标
+              all: []
+              regex:
+                - ".*参数.*怎么看.*"
+                - ".*规格.*区别.*"
+
+          comparison:
+            collection: shopping_guides
+            priority: 60
+            confidence: 0.80
+            description: 品牌、型号、功能和价格带对比相关问题。
+            match:
+              any:
+                - 对比
+                - 区别
+                - 差异
+                - 哪款
+                - 哪个更好
+                - vs
+                - 比较
+              all: []
+              regex:
+                - ".*和.*区别.*"
+                - ".*哪个.*更好.*"
+
+          price_promotion:
+            collection: shopping_guides
+            priority: 62
+            confidence: 0.80
+            description: 价格、折扣、促销、活动和价格保护相关的售前咨询问题。
+            match:
+              any:
+                - 价格
+                - 优惠
+                - 折扣
+                - 促销
+                - 活动
+                - 满减
+                - 秒杀
+                - 价保
+                - 划算
+              all: []
+              regex:
+                - ".*什么时候.*便宜.*"
+                - ".*有没有.*活动.*"
+
+          use_case:
+            collection: shopping_guides
+            priority: 63
+            confidence: 0.81
+            description: 使用场景、适用人群、空间条件和需求匹配相关的售前咨询问题。
+            match:
+              any:
+                - 适用场景
+                - 使用场景
+                - 适合谁
+                - 家用
+                - 通勤
+                - 办公
+                - 小户型
+                - 大户型
+                - 租房
+                - 母婴
+                - 老人
+              all: []
+              regex:
+                - ".*适合.*场景.*"
+                - ".*适合.*人群.*"
+
+      usage:
+        description: 商品使用方法、故障排查和维护保养。
+        intents:
+          operation_guide:
+            collection: faq
+            priority: 85
+            confidence: 0.86
+            description: 商品使用方法、操作指引、安装设置和使用限制相关问题。
+            match:
+              any:
+                - 常见问题
+                - faq
+                - 怎么用
+                - 如何使用
+                - 操作
+                - 设置
+                - 安装
+                - 使用限制
+                - 使用禁忌
+                - 注意事项
+                - 能不能
+                - 是否可以
+                - 可以放
+              all: []
+              regex:
+                - ".*怎么.*使用.*"
+                - ".*能不能.*"
+                - ".*是否可以.*"
+
+          troubleshooting:
+            collection: faq
+            priority: 80
+            confidence: 0.86
+            description: 故障排查、异常现象、报错解释和原因分析相关问题。
+            match:
+              any:
+                - 怎么办
+                - 故障
+                - 不工作
+                - 不加热
+                - 加热不均匀
+                - 外热内冷
+                - 异响
+                - 报错
+                - 显示
+                - 原因
+                - 为什么
+              all: []
+              regex:
+                - ".*为什么.*"
+                - ".*怎么办.*"
+
+          maintenance:
+            collection: faq
+            priority: 75
+            confidence: 0.84
+            description: 清洁、保养、维护、耗材更换和长期使用相关问题。
+            match:
+              any:
+                - 清洁
+                - 保养
+                - 维护
+                - 耗材
+                - 滤芯
+                - 除垢
+                - 消毒
+                - 收纳
+              all: []
+              regex:
+                - ".*怎么.*清洁.*"
+                - ".*多久.*更换.*"
+
+      aftersales:
+        description: 售后政策、退换货、客服话术、物流履约和账号发票政策。
+        intents:
+          shipping_policy:
+            collection: policies
+            priority: 110
+            confidence: 0.94
+            description: 物流履约、发货时效、延迟发货和配送规则相关的平台政策问题。
+            match:
+              any:
+                - 发货
+                - 延迟发货
+                - 发货规则
+                - 发货时效
+                - 配送
+                - 配送时效
+                - 物流
+                - 履约
+                - 运费
+                - 拒收
+              all: []
+              regex:
+                - ".*多久.*发货.*"
+                - ".*支付.*多久.*发货.*"
+                - ".*延迟发货.*怎么.*"
+                - ".*运费.*谁.*承担.*"
+
+          return_exchange:
+            collection: policies
+            priority: 105
+            confidence: 0.94
+            description: 售后政策、退换货、退款、拒收和保修规则相关的平台政策问题。
+            match:
+              any:
+                - 退货
+                - 退款
+                - 换货
+                - 拒收
+                - 退运费
+                - 价保
+                - 保修
+              all: []
+              regex:
+                - ".*多久.*退款.*"
+                - ".*质量问题.*售后.*"
+
+          account_invoice:
+            collection: policies
+            priority: 95
+            confidence: 0.90
+            description: 发票、会员、积分、账号安全和企业采购相关的平台政策问题。
+            match:
+              any:
+                - 发票
+                - 会员
+                - 积分
+                - 账号
+                - 隐私
+                - 企业采购
+                - 抬头
+              all: []
+              regex:
+                - ".*发票.*怎么.*"
+                - ".*积分.*什么时候.*"
+
+          service_script:
+            collection: manual
+            priority: 90
+            confidence: 0.90
+            description: 客服话术、投诉处理、催发货、催退款和物流异常安抚相关问题。
+            match:
+              any:
+                - 话术
+                - 怎么回复
+                - 怎么安抚
+                - 投诉
+                - 催发货
+                - 催退款
+                - 缺货替代
+                - 客服
+              all: []
+              regex:
+                - ".*客户.*生气.*怎么.*"
+                - ".*用户.*投诉.*怎么.*"
+
+  chat:
+    description: 不需要检索知识库的对话类意图，由 AImodel 直接生成固定或安全回复。
+    categories:
+      chat_all:
+        description: 寒暄问候、越界提问、投诉吐槽等非知识检索类对话。
+        intents:
+          greeting:
+            collection: shopping_guides
+            priority: 200
+            confidence: 0.95
+            rag_enabled: false
+            action: direct_llm_reply
+            description: 寒暄、问候、感谢和简单闲聊。
+            match:
+              any:
+                - 你好
+                - 您好
+                - hello
+                - hi
+                - 谢谢
+                - 辛苦了
+              all: []
+              regex:
+                - "^(你好|您好|hello|hi)[!！。 ]*$"
+
+          out_of_scope:
+            collection: shopping_guides
+            priority: 195
+            confidence: 0.94
+            rag_enabled: false
+            action: direct_llm_reply
+            description: 明显超出平台业务和商品服务范围的问题。
+            match:
+              any:
+                - 写代码
+                - 炒股
+                - 医疗诊断
+                - 法律意见
+                - 政治立场
+                - 成人内容
+                - 攻击别人
+              all: []
+              regex:
+                - ".*和平台.*无关.*"
+
+          complaint_venting:
+            collection: manual
+            priority: 190
+            confidence: 0.90
+            rag_enabled: false
+            action: direct_llm_reply
+            description: 用户情绪宣泄、吐槽和非具体订单问题投诉。
+            match:
+              any:
+                - 太差了
+                - 垃圾
+                - 生气
+                - 无语
+                - 投诉你们
+                - 体验很差
+                - 不想买了
+              all: []
+              regex:
+                - ".*太.*差.*"
+                - ".*我要.*投诉.*"

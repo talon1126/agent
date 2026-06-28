@@ -28,6 +28,7 @@ _VALID_TRACE_STATUSES = {"running", "success", "skipped", "failed", "degraded"}
 _VALID_STAGE_STATUSES = {"success", "skipped", "failed", "degraded"}
 _QUERY_STAGES = {
     "query_processing",
+    "intent_routing",
     "dense",
     "sparse",
     "fusion",

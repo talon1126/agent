@@ -284,6 +284,20 @@ def test_query_trace_records_only_documented_stages() -> None:
     )
 
     context.record_query_stage(
+        "intent_routing",
+        duration_ms=3,
+        input_summary={"normalized_query": "推荐适合办公室的解压玩具"},
+        output_summary={
+            "collection": "shopping_guides",
+            "domain_intent": "buying_guide",
+            "confidence": 0.92,
+        },
+        method="rules",
+        provider="IntentRouter",
+        details={"matched_rule": "shopping_guides_buying_advice"},
+    )
+
+    context.record_query_stage(
         "dense",
         duration_ms=18,
         input_summary={"embedding_model": "text-embedding-v4"},
@@ -300,7 +314,10 @@ def test_query_trace_records_only_documented_stages() -> None:
         details={"vector_dimension": 1536},
     )
 
-    stage = context.to_dict()["stages"][0]
+    stages = context.to_dict()["stages"]
+    assert stages[0]["stage"] == "intent_routing"
+    assert stages[0]["details"] == {"matched_rule": "shopping_guides_buying_advice"}
+    stage = stages[1]
     assert stage["stage"] == "dense"
     assert stage["duration_ms"] == 18.0
     assert stage["candidate_count"] == 2

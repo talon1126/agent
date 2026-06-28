@@ -15,9 +15,16 @@ from src.core.query_engine.hybrid_engine import (
     HybridSearchResult,
     HybridTraceContext,
 )
+from src.core.query_engine.intent_router import (
+    CollectionProfile,
+    IntentRoute,
+    IntentRouter,
+    IntentRule,
+    load_collection_profiles,
+    load_intent_rules,
+)
 from src.core.query_engine.query_processor import (
     ProcessedQuery,
-    QueryIntent,
     QueryProcessor,
     QueryRewriter,
 )
@@ -36,8 +43,13 @@ __all__ = (
     "HybridSearch",
     "HybridSearchResult",
     "HybridTraceContext",
+    "CollectionProfile",
+    "IntentRoute",
+    "IntentRouter",
+    "IntentRule",
+    "load_collection_profiles",
+    "load_intent_rules",
     "ProcessedQuery",
-    "QueryIntent",
     "QueryProcessor",
     "QueryRewriter",
     "RerankController",

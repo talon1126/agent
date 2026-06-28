@@ -271,6 +271,25 @@ class RetrievalSettings(ConfigSection):
         return self
 
 
+
+
+class IntentRouterSettings(ConfigSection):
+    """Configure query intent routing before hybrid retrieval.
+
+    Rules and collection profiles live in versioned YAML files so routing can be
+    tuned without changing Python control flow. Thresholds determine when a
+    strategy is confident enough to stop before later fallback layers run.
+    """
+
+    enabled: bool = True
+    rules_path: str = Field(min_length=1)
+    collection_profiles_path: str = Field(min_length=1)
+    rule_threshold: float = Field(default=0.75, ge=0, le=1)
+    semantic_threshold: float = Field(default=0.7, ge=0, le=1)
+    llm_fallback_enabled: bool = False
+    llm_provider: str | None = None
+
+
 class RerankSettings(ConfigSection):
     """Describe reranker selection, fallback order, and Prompt location."""
 
@@ -472,6 +491,7 @@ class RagSettings(BaseModel):
     splitter: SplitterSettings
     transform: TransformPipelineSettings
     retrieval: RetrievalSettings
+    intent_router: IntentRouterSettings
     rerank: RerankSettings
     response: ResponseSettings
     ingestion: IngestionSettings
@@ -505,6 +525,16 @@ class RagSettings(BaseModel):
             raise ValueError(
                 "response.evidence_context_optimizer.llm_provider must reference "
                 f"a configured llm provider; provider={optimizer.llm_provider}, "
+                f"available={sorted(self.llm.providers)}"
+            )
+        if (
+            self.intent_router.llm_fallback_enabled
+            and self.intent_router.llm_provider not in self.llm.providers
+        ):
+            raise ValueError(
+                "intent_router.llm_provider must reference a configured llm "
+                f"provider when fallback is enabled; "
+                f"provider={self.intent_router.llm_provider}, "
                 f"available={sorted(self.llm.providers)}"
             )
         if self.evaluation.llm_provider not in self.llm.providers:
@@ -548,6 +578,10 @@ class RagSettings(BaseModel):
                 self.evaluation.embedding_provider
             ].environment_references()
         )
+        if self.intent_router.llm_fallback_enabled and self.intent_router.llm_provider:
+            required.update(
+                self.llm.providers[self.intent_router.llm_provider].environment_references()
+            )
         if self.vision_llm.enabled:
             required.update(self.vision_llm.selected_provider.environment_references())
         return required

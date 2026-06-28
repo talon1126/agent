@@ -265,8 +265,10 @@ services/ai-service/rag/
 | `Dockerfile` | 构建独立 RAG 服务镜像 | Python 3.12、固定版本 uv、`uv sync --frozen --no-dev`、非 root 运行、健康检查预留 |
 | `.dockerignore` | 控制 Docker 构建上下文 | 排除缓存、日志、测试数据和本地数据库文件 |
 | `.gitignore` | 控制 RAG 模块本地忽略文件 | 排除本地 `config/settings.yaml`、`src/logs/*.log`、`src/cache/`、`data/db/`、临时图片和模型缓存 |
-| `config/settings.example.yaml` | 提供完整版本化配置模板 | 展示 LLM、Embedding、Splitter、Transform steps、VectorStore、Reranker、Evaluator 配置和参数 |
+| `config/settings.example.yaml` | 提供完整版本化配置模板 | 展示 LLM、Embedding、Splitter、Transform steps、VectorStore、Reranker、Evaluator、Intent Router 配置和参数 |
 | `config/settings.yaml` | 管理本地运行配置和组件选择 | 由示例模板复制，允许环境定制并被 Git 忽略 |
+| `config/intent_routes.yaml` | 保存 Intent Router 规则路由配置 | 按 route 定义 collection、domain_intent、priority、confidence、any/all/regex 匹配条件；由代码加载、校验并预编译 regex，不写死在业务代码中 |
+| `config/collection_profiles.yaml` | 保存 collection 语义画像 | 为 `shopping_guides/faq/policies/manual` 等 collection 定义 description 和 examples；profile 文本 hash 与 embedding 缓存在 `rag_collection_profiles` |
 | `config/prompts/rerank_prompt.yaml` | 保存 rerank 阶段提示词 | prompt 与代码分离，便于评估不同 rerank 策略 |
 | `config/prompts/document_summary_prompt.yaml` | 保存文档级摘要提示词 | 在 Loader 后生成 `Document.summary`，为 chunk rewrite 提供全局语义上下文；首版通过 `ingestion.document_summary.llm_provider=deepseek` 显式使用 DeepSeek |
 | `config/prompts/rewrite_chunk_prompt.yaml` | 保存 chunk 语义改写提示词 | 支持 Transform 阶段结合 `Document.summary` 做 chunk rewrite；Prompt 只接收 chunk 正文和文档摘要，不接收 metadata 或 image_refs；输出只允许把 searchable text 写入 `text` 字段，禁止把 metadata/image_refs 报告写入正文 |
@@ -275,7 +277,7 @@ services/ai-service/rag/
 | `data/raw/shopping_guides/` | 存放 shopping_guides collection 原始文档 | 按 collection 分类，便于离线摄取和回归测试 |
 | `data/db/postgres/` | 存放 PostgreSQL 本地开发辅助数据 | 保存初始化辅助文件、dump 或本地持久化数据 |
 | `data/db/bm25/` | 存放 BM25 本地索引辅助数据 | 保存倒排索引和词项统计缓存 |
-| `tests/fixtures/golden_set.json` | 存放黄金测试集 | JSON 格式，包含问题、标准答案、来源文档和关键词；与 `evaluation.golden_set_path` 保持一致 |
+| `tests/fixtures/golden_set.json` | 存放黄金测试集 | JSON 格式，包含问题、标准答案、collection、期望文档 ID 和难度；与 `evaluation.golden_set_path` 保持一致 |
 
 #### 5.3.2 Core 层
 
@@ -285,8 +287,9 @@ services/ai-service/rag/
 | `src/core/types.py` | 定义核心数据结构 | `Document(id,text,summary,metadata)`、`Chunk(id,text,metadata,chunk_index,start_offset,end_offset)`、`RetrievalResult(chunk_id,text,score,metadata)`、`Document.metadata.images[]` 的 `id/path` 契约、`Citation`、`TraceRecord` |
 | `src/core/errors.py` | 定义统一异常类型 | 配置错误、Provider 错误、检索错误、摄取错误、MCP 错误 |
 | `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用同一个 analyzer；英文/数字保持 normalize，中文使用 jieba 精确模式分词，避免分析漂移和 ingestion/storage 循环依赖 |
-| `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、意图识别 |
-| `src/core/query_engine/hybrid_engine.py` | 编排混合检索主流程 | `HybridSearch`、Dense/BM25 双路召回、RRF Fusion、候选去重、保留过滤前 fusion 快照、rerank 前 metadata 过滤、单路失败降级 |
+| `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、关键词提取；不承担业务意图识别 |
+| `src/core/query_engine/intent_router.py` | 执行查询意图识别与路由 | `IntentRouter` 在 Query Processor 之后运行；先按 `intent_routes.yaml` 执行规则路由，再按 `collection_profiles.yaml` 与 `rag_collection_profiles` 执行语义画像路由，最后按配置进入 LLM fallback；输出候选 collection、domain intent、复杂度、检索策略、置信度、命中原因和降级状态，并写入 `intent_routing` trace stage |
+| `src/core/query_engine/hybrid_engine.py` | 编排混合检索主流程 | `HybridSearch`、Intent Router 结果消费、Dense/BM25 双路召回、RRF Fusion、候选去重、保留过滤前 fusion 快照、rerank 前 metadata 过滤、单路失败降级 |
 | `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
 | `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，直接复用 Chunk.metadata 中的来源字段供 CitationBuilder 使用 |
 | `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
@@ -496,17 +499,24 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
     v
 [2] Query Processor
     - query 标准化
-    - 用户意图识别
     - 可选 query rewrite
-    - 判断是否需要商品 API 工具协同
+    - 关键词提取
+    - 解析 collection / top_k 默认值
     |
     v
-[3] TraceContext
+[3] Intent Router
+    - 识别知识域和业务意图
+    - 判断问题复杂度与检索策略
+    - 输出候选 collection、置信度和原因
+    - 写入 query trace 的 intent_routing stage
+    |
+    v
+[4] TraceContext
     - 创建 query trace
     - 记录基础请求信息
     |
     v
-[4] HybridSearch
+[5] HybridSearch
     |
     |-- Dense Route
     |   - 计算 Query Embedding
@@ -524,27 +534,27 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
         - 不直接比较 Dense 分数和 BM25 分数
     |
     v
-[5] Rerank 前候选过滤
+[6] Rerank 前候选过滤
     - 根据 collection、doc_type、来源类型等参数过滤融合候选
     - deleted / failed / 无权限候选不会进入 Reranker
     |
     v
-[6] Reranker 可用性判断
+[7] Reranker 可用性判断
     - 如果可用：对过滤后的候选执行 Cross-Encoder 或 LLM Rerank，输出精排结果
     - 如果不可用 / 超时 / 异常：fallback 到过滤后的 RRF 排序结果
     |
     v
-[7] Response Builder
+[8] Response Builder
     - 构造引用来源
     - 组装多模态内容
     - 隐藏内部工具调用细节
     |
     v
-[8] 返回 MCP / AImodel / query.py
+[9] 返回 MCP / AImodel / query.py
     - 上下文 + 引用 + trace_id
     |
     v
-[9] Query Trace
+[10] Query Trace
      - 记录召回对比、rerank 前后变化和端到端耗时
 ```
 

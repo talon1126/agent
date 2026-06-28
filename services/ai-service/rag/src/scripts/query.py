@@ -35,10 +35,14 @@ from src.core.config import (
 from src.core.query_engine import (
     DenseRoute,
     HybridSearch,
+    IntentRoute,
+    IntentRouter,
     ProcessedQuery,
     QueryProcessor,
     RerankController,
     SparseRoute,
+    load_collection_profiles,
+    load_intent_rules,
 )
 from src.core.query_engine.trace_snapshots import candidate_snapshots
 from src.core.response import (
@@ -57,7 +61,7 @@ from src.libs.vector_store import VectorStoreFactory
 from src.storage.bm25_storage import BM25Storage
 from src.storage.image_storage import ImageStorage
 from src.storage.postgres import PostgresPool, init_schema
-from src.storage.repositories import TraceRepository
+from src.storage.repositories import CollectionProfileRepository, TraceRepository
 from src.storage.trace_log_storage import build_trace_writer
 
 SettingsLoader = Callable[[], RagSettings]
@@ -74,6 +78,7 @@ class QueryExecutionResult:
 
     Attributes:
         processed_query: Immutable normalized query produced before retrieval.
+        intent_route: Collection-routing decision applied before retrieval.
         dense_results: Dense candidates in provider order.
         sparse_results: Sparse candidates in BM25 order.
         fused_results: RRF candidates before metadata filtering.
@@ -85,6 +90,7 @@ class QueryExecutionResult:
     """
 
     processed_query: ProcessedQuery
+    intent_route: IntentRoute
     dense_results: tuple[RetrievalResult, ...]
     sparse_results: tuple[RetrievalResult, ...]
     fused_results: tuple[RetrievalResult, ...]
@@ -105,12 +111,14 @@ class QueryRuntime:
         hybrid_search: HybridSearch,
         rerank_controller: RerankController | None,
         response_builder: KnowledgeHubResponseBuilder,
+        intent_router: IntentRouter | None = None,
         trace_sink: TraceSink | None = None,
     ) -> None:
         """Configure the already-created query pipeline components.
 
         Args:
-            query_processor: User-query normalization and intent component.
+            query_processor: User-query normalization component.
+            intent_router: Optional collection router executed after query preprocessing.
             hybrid_search: Dense, Sparse, RRF, and metadata-filter orchestration.
             rerank_controller: Optional rerank/fallback controller. ``None``
                 means reranking is disabled by configuration.
@@ -121,6 +129,7 @@ class QueryRuntime:
         """
 
         self._query_processor = query_processor
+        self._intent_router = intent_router
         self._hybrid_search = hybrid_search
         self._rerank_controller = rerank_controller
         self._response_builder = response_builder
@@ -196,13 +205,55 @@ class QueryRuntime:
                 output_summary={
                     "normalized_query": processed.normalized_query,
                     "keywords": list(processed.keywords),
-                    "intent": processed.intent.value,
                     "collection": processed.collection,
                     "top_k": processed.top_k,
                     "rewrite_applied": processed.rewrite_applied,
                 },
                 method="normalize_rewrite_tokenize",
                 provider=type(self._query_processor).__name__,
+            )
+            route_started = perf_counter()
+            if self._intent_router is not None:
+                intent_route = self._intent_router.route(query, processed)
+                route_status = "success"
+                route_details = intent_route.to_trace_details()
+            else:
+                intent_route = IntentRoute(
+                    collection=processed.collection,
+                    collections=(processed.collection,),
+                    domain_intent="default",
+                    complexity="simple",
+                    retrieval_strategy="hybrid",
+                    confidence=0.0,
+                    method="disabled",
+                    provider="IntentRouter",
+                    reason="intent_router_disabled",
+                )
+                route_status = "skipped"
+                route_details = intent_route.to_trace_details()
+            if intent_route.collection != processed.collection:
+                processed = processed.model_copy(
+                    update={"collection": intent_route.collection}
+                )
+                trace_controller.context.collection = intent_route.collection
+            trace_controller.record_stage(
+                "intent_routing",
+                duration_ms=(perf_counter() - route_started) * 1000,
+                input_summary={
+                    "normalized_query": processed.normalized_query,
+                    "keyword_count": len(processed.keywords),
+                },
+                output_summary={
+                    "collection": intent_route.collection,
+                    "collections": list(intent_route.collections),
+                    "domain_intent": intent_route.domain_intent,
+                    "retrieval_strategy": intent_route.retrieval_strategy,
+                    "confidence": intent_route.confidence,
+                },
+                method=intent_route.method,
+                provider=intent_route.provider or "IntentRouter",
+                status=route_status,
+                details=route_details,
             )
             hybrid = self._hybrid_search.search(
                 processed,
@@ -278,6 +329,7 @@ class QueryRuntime:
             )
             return QueryExecutionResult(
                 processed_query=processed,
+                intent_route=intent_route,
                 dense_results=tuple(hybrid.dense_results),
                 sparse_results=tuple(hybrid.sparse_results),
                 fused_results=tuple(hybrid.fused_results),
@@ -521,6 +573,7 @@ def _build_runtime(
     return QueryRuntime(
         query_processor=query_processor,
         hybrid_search=hybrid_search,
+        intent_router=_build_intent_router(settings, embedding, pool),
         rerank_controller=rerank_controller,
         response_builder=KnowledgeHubResponseBuilder(
             multimodal_assembler=MultimodalAssembler(
@@ -535,6 +588,42 @@ def _build_runtime(
             fallback_to_raw_content=optimizer_settings.fallback_to_raw,
         ),
         trace_sink=_trace_sink_from_settings(settings, pool),
+    )
+
+
+def _build_intent_router(
+    settings: RagSettings,
+    embedding: Any,
+    pool: PostgresPool,
+) -> IntentRouter | None:
+    """Create the optional intent router from versioned configuration files.
+
+    Args:
+        settings: Validated runtime settings containing router file paths and
+            thresholds.
+        embedding: Configured embedding client reused for semantic profile
+            routing so query execution does not create a second provider.
+        pool: Open PostgreSQL pool used for profile embedding cache rows.
+
+    Returns:
+        Configured ``IntentRouter`` or ``None`` when disabled.
+    """
+
+    router_settings = getattr(settings, "intent_router", None)
+    if router_settings is None or not router_settings.enabled:
+        return None
+    return IntentRouter(
+        rules=load_intent_rules(
+            _resolve_runtime_path(router_settings.rules_path)
+        ),
+        profiles=load_collection_profiles(
+            _resolve_runtime_path(router_settings.collection_profiles_path)
+        ),
+        embedding_client=embedding,
+        profile_repository=CollectionProfileRepository(pool),
+        default_collection=settings.retrieval.filters.default_collection,
+        rule_threshold=router_settings.rule_threshold,
+        semantic_threshold=router_settings.semantic_threshold,
     )
 
 
@@ -557,12 +646,12 @@ def _build_verbose_debug(
             "raw_query": processed.raw_query,
             "normalized_query": processed.normalized_query,
             "keywords": list(processed.keywords),
-            "intent": processed.intent.value,
             "collection": processed.collection,
             "top_k": processed.top_k,
             "rewrite_applied": processed.rewrite_applied,
             "rewrite_fallback_reason": processed.rewrite_fallback_reason,
         },
+        "intent_routing": execution.intent_route.to_trace_details(),
         "dense": _result_summaries(execution.dense_results),
         "sparse": _result_summaries(execution.sparse_results),
         "fusion": _result_summaries(execution.fused_results),

@@ -130,14 +130,12 @@ RAG 流水线内部统一使用 `Document` 和 `Chunk` 作为核心数据对象�
 | `raw_query` | `str` | 用户原始输入，保留用于 Trace 和问题回溯 |
 | `normalized_query` | `str` | Unicode、全半角和空白归一化后的检索 query；rewrite 成功时保存 rewrite 结果 |
 | `keywords` | `tuple[str, ...]` | 不可变的有序去重关键词快照，供 Sparse Route 查询 BM25 |
-| `intent` | `str` | `knowledge_query`、`recommendation`、`comparison` 或 `product_lookup` |
-| `collection` | `str` | 查询目标知识集合 |
+| `collection` | `str` | 调用方或 Intent Router 最终确定的查询目标知识集合 |
 | `top_k` | `int` | 最终期望返回数量 |
-| `requires_product_tool` | `bool` | 是否需要商品 API 补充价格、库存、链接或具体商品事实 |
 | `rewrite_applied` | `bool` | 是否成功应用 query rewrite |
 | `rewrite_fallback_reason` | `str/null` | rewrite 异常或空结果时的稳定降级原因 |
 
-Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Query Processor 不直接创建或判断具体 LLM Provider。未注入 rewriter 或配置关闭时直接使用原始标准化 query；Provider 异常或返回空白时自动 fallback，不阻断后续检索。
+Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Query Processor 不直接创建或判断具体 LLM Provider。未注入 rewriter 或配置关闭时直接使用原始标准化 query；Provider 异常或返回空白时自动 fallback，不阻断后续检索。Query Processor 只负责查询文本标准化、关键词提取、rewrite 和基础参数解析，不承载业务意图识别；意图识别由独立 Intent Router 在 Query Processor 之后执行。
 
 #### 3.2.4 检索流水线
 
@@ -145,8 +143,9 @@ Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Quer
 
 | 阶段 | 职责 | 关键实现要素 |
 | --- | --- | --- |
-| 查询预处理 | 清洗和理解用户问题 | 做 query normalize、关键词提取、可选 query rewrite；识别 collection、top_k、用户意图和是否需要商品工具协同 |
-| 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery`，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
+| 查询预处理 | 清洗和标准化用户问题 | 做 query normalize、关键词提取、可选 query rewrite，并解析 collection/top_k 等基础调用参数；不做业务意图识别 |
+| 意图识别与路由 | 判断查询所属知识域和检索策略 | **Intent Router**：输入 `raw_query` 和 `ProcessedQuery`，基于规则、轻量语义匹配和可选 LLM fallback 输出候选 collection、domain intent、问题复杂度、检索策略、置信度和原因；结果写入 query trace 的 `intent_routing` stage |
+| 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery` 和 Intent Router 的路由结果，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Intent Router、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
 | Rerank 前候选过滤 | 在精排前过滤候选 | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker |
 | 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
 | 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 先基于最终候选生成编号证据块，再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
@@ -618,6 +617,7 @@ PostgreSQL 是唯一持久化层，不使用 SQLite。所有数据库时间字�
 | `rag_collections` | collection 元数据 |
 | `rag_documents` | 文档正文、文档级摘要、元数据、SHA256、摄取状态 |
 | `rag_chunks` | chunk 文本、metadata、embedding vector |
+| `rag_collection_profiles` | Intent Router collection profile 文本、content_hash 和缓存 embedding |
 | `rag_bm25_terms` | BM25 词项统计 |
 | `image_index` | 图片文件路径和来源索引 |
 | `rag_query_traces` | Query Trace 索引及顶层 `query_result` JSONB 快照 |
@@ -625,6 +625,29 @@ PostgreSQL 是唯一持久化层，不使用 SQLite。所有数据库时间字�
 | `rag_evaluation_runs` | 评估任务 |
 | `rag_evaluation_results` | run 级聚合评估指标，用于历史趋势 |
 | `rag_evaluation_sample_results` | golden sample 级评估诊断明细，用于定位低分样本 |
+
+`rag_collection_profiles` 用于持久化 Intent Router 的 collection profile embedding，避免服务启动时重复调用 embedding provider：
+
+```sql
+CREATE TABLE IF NOT EXISTS rag_collection_profiles (
+    id TEXT PRIMARY KEY,
+    collection TEXT NOT NULL,
+    profile_name TEXT NOT NULL,
+    profile_text TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    embedding vector(1536),
+    provider TEXT,
+    model TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (collection, profile_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_collection_profiles_collection
+    ON rag_collection_profiles(collection);
+```
+
+`id` 使用 `hash(collection + profile_name)`，`content_hash` 使用 `sha256(profile_text)`。Intent Router 启动时读取配置中的 profile 文本并计算 hash：数据库中 hash 相同且 embedding 存在时直接加载；hash 变化或记录不存在时才调用 embedding provider，并通过 upsert 更新缓存。首版推荐每个 collection 聚合为一条 profile（description + examples），将 `shopping_guides/faq/policies/manual` 控制在少量 profile embedding，查询时只需要对用户 query 做一次 embedding，再与内存 profile 向量做本地 cosine similarity。
 
 `rag_chunks.embedding` 使用 pgvector：
 
@@ -869,7 +892,8 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 
 | 阶段 | 记录内容 |
 | --- | --- |
-| `query_processing` | 原始 query、改写 query（若有）、query normalize 方法、意图识别结果、耗时 |
+| `query_processing` | 原始 query、改写 query（若有）、query normalize 方法、关键词数量、collection/top_k 参数、耗时 |
+| `intent_routing` | 输入 query 摘要、候选 collection、domain intent、问题复杂度、检索策略、置信度、命中原因、fallback 状态、耗时 |
 | `dense` | Query Embedding 模型、向量库 Provider、命中的 chunk ID 列表、候选数量、耗时 |
 | `sparse` | BM25 方法、倒排索引命中词、命中的 chunk ID 列表、候选数量、缺失 chunk ID、耗时 |
 | `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果、耗时 |
