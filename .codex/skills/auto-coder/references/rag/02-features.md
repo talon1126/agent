@@ -119,6 +119,7 @@ RAG 项目不能只靠人工体验判断效果，需要有可重复的质量评�
 - 评估入口从 golden set 读取问题和标准答案，调用真实 Query Pipeline 生成
   `query_result`，再按 `query_result.contexts[*].chunk_id` 回查 chunk 正文构造
   Ragas `retrieved_contexts`。
-- 评估结果写入 PostgreSQL，并在 Dashboard 中展示趋势。
+- 评估结果写入 PostgreSQL：`rag_evaluation_results` 保存 run 级聚合指标，`rag_evaluation_sample_results.metrics` 保存每条 golden sample 自己的 Ragas 指标，便于定位 faithfulness、answer_relevancy、context_precision、context_recall 等低分原因；如果 evaluator 只返回聚合指标，不得把聚合分数复制到样本级结果。
+- Dashboard 评估面板基于 PostgreSQL 展示历史趋势、聚合分数和样本级诊断明细。
 
 这样可以把 RAG 从“能跑的功能”提升为“能持续优化的系统”。

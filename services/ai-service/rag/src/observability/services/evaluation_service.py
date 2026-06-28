@@ -174,8 +174,12 @@ class EvaluationService:
             **dict(evaluator_options or {}),
         )
         try:
-            metric_values = evaluator_client.evaluate(dataset, predictions)
-            normalized_metrics = _normalize_metric_values(metric_values)
+            metric_result = _evaluate_with_optional_samples(
+                evaluator_client,
+                dataset,
+                predictions,
+            )
+            normalized_metrics = _normalize_metric_values(metric_result.metrics)
         except Exception as error:
             failed_at = self._clock()
             failed_run = self._repository.upsert_run(
@@ -238,6 +242,7 @@ class EvaluationService:
                 dataset,
                 predictions,
                 normalized_metrics,
+                sample_metrics=metric_result.sample_metrics,
             ),
         )
         return _run_detail(run, results, sample_results)
@@ -316,6 +321,48 @@ class EvaluationService:
         return trends
 
 
+@dataclass(frozen=True, slots=True)
+class _EvaluationMetricResult:
+    """Hold aggregate and optional per-sample evaluator metric output."""
+
+    metrics: Mapping[str, Any]
+    sample_metrics: tuple[Mapping[str, Any], ...] = ()
+
+
+def _evaluate_with_optional_samples(
+    evaluator_client: Any,
+    dataset: Sequence[Mapping[str, Any]],
+    predictions: Sequence[Mapping[str, Any]],
+) -> _EvaluationMetricResult:
+    """Run an evaluator and preserve per-sample metric evidence when available."""
+
+    if hasattr(evaluator_client, "evaluate_with_samples"):
+        raw_result = evaluator_client.evaluate_with_samples(dataset, predictions)
+    else:
+        raw_result = evaluator_client.evaluate(dataset, predictions)
+    if isinstance(raw_result, Mapping) and isinstance(raw_result.get("metrics"), Mapping):
+        raw_sample_metrics = raw_result.get("sample_metrics") or ()
+        if not isinstance(raw_sample_metrics, Sequence) or isinstance(
+            raw_sample_metrics,
+            (str, bytes),
+        ):
+            raise ValueError("sample_metrics must be a sequence of metric mappings")
+        sample_metrics: list[Mapping[str, Any]] = []
+        for item in raw_sample_metrics:
+            if not isinstance(item, Mapping):
+                raise ValueError("sample_metrics must contain metric mappings")
+            sample_metrics.append(dict(item))
+        if sample_metrics and len(sample_metrics) != len(dataset):
+            raise ValueError("sample_metrics must match dataset sample count")
+        return _EvaluationMetricResult(
+            metrics=dict(raw_result["metrics"]),
+            sample_metrics=tuple(sample_metrics),
+        )
+    if not isinstance(raw_result, Mapping):
+        raise ValueError("Evaluator result must be a metric mapping")
+    return _EvaluationMetricResult(metrics=dict(raw_result))
+
+
 def _run_summary(
     run: EvaluationRunRecord,
     results: list[EvaluationResultRecord],
@@ -369,6 +416,8 @@ def _sample_result_records(
     dataset: Sequence[Mapping[str, Any]],
     predictions: Sequence[Mapping[str, Any]],
     aggregate_metrics: Mapping[str, float],
+    *,
+    sample_metrics: Sequence[Mapping[str, Any]] = (),
 ) -> list[EvaluationSampleResultRecord]:
     """Build per-sample diagnostic rows from aligned dataset and predictions.
 
@@ -399,7 +448,7 @@ def _sample_result_records(
         sample_id = _sample_id(sample, index)
         metrics = prediction.get("metrics")
         if not isinstance(metrics, Mapping):
-            metrics = {}
+            metrics = sample_metrics[index - 1] if sample_metrics else {}
         records.append(
             EvaluationSampleResultRecord(
                 id=_sample_result_id(run_id, sample_id),
@@ -504,6 +553,7 @@ def _optional_mapping(value: Any) -> Mapping[str, Any] | None:
     if not isinstance(value, Mapping):
         raise ValueError("error must be an object when provided")
     return value
+
 
 def _metric_map(results: list[EvaluationResultRecord]) -> dict[str, float]:
     """Return metric values keyed by stable metric name."""

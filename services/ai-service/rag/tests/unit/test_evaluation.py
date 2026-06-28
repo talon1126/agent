@@ -234,6 +234,73 @@ def test_ragas_evaluator_builds_generation_samples_with_injected_backend() -> No
 
 
 @pytest.mark.unit
+def test_ragas_evaluator_returns_dataframe_sample_metrics() -> None:
+    """Extract per-sample Ragas scores from dataframe-backed results."""
+
+    class FakeSeries(list[float]):
+        """Provide the pandas Series mean method used by the adapter."""
+
+        def mean(self) -> float:
+            """Return the arithmetic mean of the fake column."""
+
+            return sum(self) / len(self)
+
+    class FakeDataFrame:
+        """Expose the minimal pandas DataFrame behavior used by the adapter."""
+
+        def __init__(self) -> None:
+            """Store deterministic row-level metric values."""
+
+            self._rows = [
+                {"faithfulness": 0.9, "answer_relevancy": 0.8},
+                {"faithfulness": 0.6, "answer_relevancy": 0.7},
+            ]
+
+        def __getitem__(self, key: str) -> FakeSeries:
+            """Return one fake metric column by name."""
+
+            return FakeSeries([row[key] for row in self._rows])
+
+        def to_dict(self, orient: str) -> list[dict[str, float]]:
+            """Return row dictionaries for ``orient=records``."""
+
+            assert orient == "records"
+            return list(self._rows)
+
+    class FakeRagasResult:
+        """Expose a dataframe-backed Ragas result shape."""
+
+        def to_pandas(self) -> FakeDataFrame:
+            """Return the fake dataframe used by adapter normalization."""
+
+            return FakeDataFrame()
+
+    evaluator = RagasEvaluator(
+        evaluate_fn=lambda rows, *, metrics, run_config=None: FakeRagasResult()
+    )
+
+    result = evaluator.evaluate_with_samples(
+        [
+            {"question": "q1", "golden_answer": "reference 1"},
+            {"question": "q2", "golden_answer": "reference 2"},
+        ],
+        [
+            {"answer": "answer 1", "contexts": ["context 1"]},
+            {"answer": "answer 2", "contexts": ["context 2"]},
+        ],
+    )
+
+    assert result["metrics"] == {
+        "faithfulness": pytest.approx(0.75),
+        "answer_relevancy": pytest.approx(0.75),
+    }
+    assert result["sample_metrics"] == (
+        {"faithfulness": 0.9, "answer_relevancy": 0.8},
+        {"faithfulness": 0.6, "answer_relevancy": 0.7},
+    )
+
+
+@pytest.mark.unit
 def test_ragas_evaluator_validates_generation_metric_contracts() -> None:
     """Fail fast when Ragas generation metrics cannot be computed safely."""
 
@@ -1358,6 +1425,86 @@ def test_evaluation_service_persists_sample_result_diagnostics(
         "物流异常应先安抚用户并发起催查。",
     )
     assert sample_results[1].metrics == {"faithfulness": 0.55, "answer_relevancy": 0.7}
+
+
+@pytest.mark.unit
+def test_evaluation_service_persists_evaluator_sample_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persist true per-sample metrics returned by the evaluator backend."""
+
+    class FakeEvaluator:
+        """Return aggregate metrics plus aligned per-sample metric evidence."""
+
+        def evaluate(
+            self,
+            dataset: list[Mapping[str, Any]],
+            predictions: list[Mapping[str, Any]],
+        ) -> Mapping[str, Any]:
+            """Return a result shape containing sample_metrics."""
+
+            assert len(dataset) == 2
+            assert len(predictions) == 2
+            return {
+                "metrics": {"faithfulness": 0.75, "answer_relevancy": 0.8},
+                "sample_metrics": [
+                    {"faithfulness": 0.9, "answer_relevancy": 0.8},
+                    {"faithfulness": 0.6, "answer_relevancy": 0.7},
+                ],
+            }
+
+    repository = _FakeEvaluationRepository()
+    monkeypatch.setattr(EvaluatorFactory, "create", lambda **kwargs: FakeEvaluator())
+    service = EvaluationService(
+        SimpleNamespace(),
+        repository=repository,
+        clock=lambda: datetime(2026, 6, 27, 12, 0, tzinfo=UTC),
+    )
+    dataset = [
+        {
+            "id": "sample-1",
+            "collection": "faq",
+            "question": "金属碗能放微波炉吗？",
+            "golden_answer": "普通家庭不建议把金属碗放入微波炉。",
+        },
+        {
+            "id": "sample-2",
+            "collection": "manual",
+            "question": "物流异常怎么安抚？",
+            "golden_answer": "客服应先安抚并发起物流催查。",
+        },
+    ]
+    predictions = [
+        {
+            "answer": "不建议将金属碗放入微波炉。",
+            "retrieved_contexts": ["金属会反射微波并产生火花。"],
+            "context_chunk_ids": ["chunk-1"],
+            "query_trace_id": "trace-1",
+            "effective_collection": "faq",
+        },
+        {
+            "answer": "先安抚用户，再发起物流催查。",
+            "retrieved_contexts": ["物流异常应先安抚用户并发起催查。"],
+            "context_chunk_ids": ["chunk-2"],
+            "query_trace_ids": ["trace-2"],
+            "effective_collection": "manual",
+        },
+    ]
+
+    service.run_evaluation(
+        collection_id="mixed",
+        evaluator="ragas",
+        dataset_name="golden_set",
+        dataset=dataset,
+        predictions=predictions,
+        run_id="eval-sample-metrics",
+    )
+
+    sample_results = repository.sample_result_batches[0][1]
+    assert [result.metrics for result in sample_results] == [
+        {"faithfulness": 0.9, "answer_relevancy": 0.8},
+        {"faithfulness": 0.6, "answer_relevancy": 0.7},
+    ]
 
 
 @pytest.mark.unit

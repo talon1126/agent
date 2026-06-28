@@ -177,7 +177,8 @@ RAG 项目不能只靠人工体验判断效果，需要有可重复的质量评�
 - 评估入口从 golden set 读取问题和标准答案，调用真实 Query Pipeline 生成
   `query_result`，再按 `query_result.contexts[*].chunk_id` 回查 chunk 正文构造
   Ragas `retrieved_contexts`。
-- 评估结果写入 PostgreSQL，并在 Dashboard 中展示趋势。
+- 评估结果写入 PostgreSQL：`rag_evaluation_results` 保存 run 级聚合指标，`rag_evaluation_sample_results.metrics` 保存每条 golden sample 自己的 Ragas 指标，便于定位 faithfulness、answer_relevancy、context_precision、context_recall 等低分原因；如果 evaluator 只返回聚合指标，不得把聚合分数复制到样本级结果。
+- Dashboard 评估面板基于 PostgreSQL 展示历史趋势、聚合分数和样本级诊断明细。
 
 这样可以把 RAG 从“能跑的功能”提升为“能持续优化的系统”。
 
@@ -1687,9 +1688,9 @@ services/ai-service/rag/
 | `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、LLM Rerank、None/fallback |
 | `src/libs/reranker/cross_encoder_reranker.py` | Cross-Encoder 精排实现 | query-document pair 打分、排序 |
 | `src/libs/reranker/llm_reranker.py` | LLM Rerank 实现 | prompt 驱动排序、超时 fallback |
-| `src/libs/evaluator/base_evaluator.py` | 定义 Evaluator 抽象接口 | `evaluate(dataset, predictions) -> metrics` |
+| `src/libs/evaluator/base_evaluator.py` | 定义 Evaluator 抽象接口 | `evaluate(dataset, predictions) -> metrics` 保持最小抽象；支持具体 evaluator 额外提供 `evaluate_with_samples()` 返回样本级指标 |
 | `src/libs/evaluator/evaluator_factory.py` | 创建 Evaluator | Ragas 或自定义指标 |
-| `src/libs/evaluator/ragas_evaluator.py` | Ragas 指标实现 | Faithfulness、Answer Relevancy |
+| `src/libs/evaluator/ragas_evaluator.py` | Ragas 指标实现 | Faithfulness、Answer Relevancy、Context Precision、Context Recall；透出聚合指标和可选样本级指标 |
 | `src/libs/evaluator/custom_evaluator.py` | 自定义指标实现 | Hit Rate、MRR、NDCG、citation_hit_rate |
 
 #### 5.3.4 Ingestion 层
@@ -1745,7 +1746,7 @@ services/ai-service/rag/
 | `src/observability/services/data_browser_service.py` | Dashboard 查询数据资产 | 文档、chunk、图片、metadata、索引状态 |
 | `src/observability/services/trace_reader_service.py` | Dashboard 读取 trace | query/ingestion 历史、主阶段瀑布图、Transform 子阶段 DTO、Transform snapshot DTO、fallback 原因；兼容缺少 `sub_stages/snapshots` 字段的 trace |
 | `src/observability/services/ingestion_operation_service.py` | Dashboard 摄取操作编排 | 接收页面提交的 collection/source_path/force，复用 ingestion pipeline/CLI 组装逻辑触发真实摄取，返回成功、跳过、失败、trace_id 和处理数量；不得只返回 pending DTO |
-| `src/observability/services/evaluation_service.py` | Dashboard 运行评估 | 触发评估、读取历史趋势 |
+| `src/observability/services/evaluation_service.py` | Dashboard 运行评估 | 触发评估、读取历史趋势、持久化 run 级指标和 golden sample 级诊断指标；只在 evaluator 返回真实样本级指标时写入 `sample_results.metrics` |
 | `src/observability/pages/overview.py` | 系统总览页面 | 组件配置、collection 统计、健康指标 |
 | `src/observability/pages/query_trace.py` | Query Trace 页面 | Dense/BM25 对比、RRF、rerank 前后对比 |
 | `src/observability/pages/ingestion_trace.py` | Ingestion Trace 页面 | 主阶段耗时瀑布图、Transform Breakdown、按 Transform 类型着色且用红绿标注文本变更的 Transform Result Diff、跳过原因和失败详情 |
@@ -1756,7 +1757,7 @@ services/ai-service/rag/
 | `src/observability/dashboard/layout.py` | Dashboard 公共布局 | 导航、筛选器、通用图表容器 |
 | `src/observability/evaluation/runner.py` | 评估任务运行器 | 读取黄金测试集、执行检索和生成评估 |
 | `src/observability/evaluation/metrics.py` | 自定义指标 | Hit Rate、MRR、NDCG、citation_hit_rate |
-| `src/observability/evaluation/ragas_adapter.py` | Ragas 适配 | Faithfulness、Answer Relevancy |
+| `src/observability/evaluation/ragas_adapter.py` | Ragas 适配 | 将项目数据转换为 Ragas 0.2 输入列，返回 run 级聚合指标，并从 Ragas dataframe 提取逐样本指标用于诊断 |
 
 #### 5.3.7 外部接口层
 
@@ -2335,7 +2336,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | G4 | 实现策略对比评估 | [✔] | 2026-06-10 | `src/observability/evaluation/runner.py` 通过可注入 retrieval callable 对比 hybrid、dense_only、sparse_only、rerank 四种策略，并复用 Hit Rate@K、MRR@K、NDCG@K 计算指标；runner 不直接打开数据库或构造 QueryRuntime；包入口导出 `RetrievalStrategy` 以支持外部自定义策略，空 metrics 配置 fail fast；9 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 | G5 | 实现评估历史趋势展示 | [✔] | 2026-06-10 | `EvaluationRunner.save_results()`，将策略对比结果写入 `EvaluationRepository` 边界，生成一条 evaluation run 和按 `strategy.metric` 命名的 metric rows；metric details 保留 strategy、retrieval_mode、use_rerank、raw_metric_name、sample_count 和 predictions，供 Dashboard 趋势与详情展示；保存前校验各策略 prediction 数量一致，避免 summary 误导；11 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 | G6 | 实现评估脚本进度日志与控制台反馈 | [✔] | 2026-06-27 | `run_evaluation.py` 通过 `EvaluationReporter` 输出可读阶段日志、样本级进度、耗时、trace/message 关联和失败定位；同时写入 `src/logs/evaluation.log.jsonl` JSONL 诊断日志，保留最终评估 JSON 输出契约；单元测试覆盖 reporter 注入、样本进度、失败事件和最终结果输出；25 个 evaluation 单元测试通过，1 个 external 测试按环境跳过，ruff 通过 |
-| G7 | 实现真实 Ragas 评估入口与最终上下文优化 | [✔] | 2026-06-12 | 注册 `ragas` 到 `EvaluatorFactory`；新增 `run_evaluation.py` 读取 golden set、调用真实 Query Pipeline、支持 `message` 与 `rag` 两种 answer source；默认 `message` 对每个 golden question 调用 AImodel chat 接口生成 assistant message，再通过 `message_query_trace` 读取 message 作为 Ragas answer；显式 `rag` 才使用 `query_result.content` 作为上下文包调试 answer；按 `query_result.contexts` 回查 chunk 正文构造 Ragas `retrieved_contexts`、调用 `RagasEvaluator` 并写入 evaluation run/results；同时将 `query_result.content` 升级为配置驱动的 Agent-ready final context，优化失败 fallback 到原始编号证据块；58 个目标单元测试通过，ruff 通过，真实 Ragas provider 创建 smoke 通过 |
+| G7 | 实现真实 Ragas 评估入口与最终上下文优化 | [✔] | 2026-06-12 | 注册 `ragas` 到 `EvaluatorFactory`；新增 `run_evaluation.py` 读取 golden set、调用真实 Query Pipeline、支持 `message` 与 `rag` 两种 answer source；默认 `message` 对每个 golden question 调用 AImodel chat 接口生成 assistant message，再通过 `message_query_trace` 读取 message 作为 Ragas answer；显式 `rag` 才使用 `query_result.content` 作为上下文包调试 answer；按 `query_result.contexts` 回查 chunk 正文构造 Ragas `retrieved_contexts`、调用 `RagasEvaluator` 并写入 evaluation run/results/sample_results；`RagasEvaluator.evaluate_with_samples()` 从 Ragas dataframe 提取逐样本指标，`EvaluationService` 将其写入 `rag_evaluation_sample_results.metrics`，aggregate-only evaluator 不复制聚合指标到样本结果；同时将 `query_result.content` 升级为配置驱动的 Agent-ready final context，优化失败 fallback 到原始编号证据块；evaluation 单元测试覆盖样本级 metrics 持久化，ruff 通过，真实 Ragas provider 创建 smoke 通过 |
 
 #### 阶段 H：AImodel 联调集成
 

@@ -339,9 +339,9 @@ services/ai-service/rag/
 | `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、LLM Rerank、None/fallback |
 | `src/libs/reranker/cross_encoder_reranker.py` | Cross-Encoder 精排实现 | query-document pair 打分、排序 |
 | `src/libs/reranker/llm_reranker.py` | LLM Rerank 实现 | prompt 驱动排序、超时 fallback |
-| `src/libs/evaluator/base_evaluator.py` | 定义 Evaluator 抽象接口 | `evaluate(dataset, predictions) -> metrics` |
+| `src/libs/evaluator/base_evaluator.py` | 定义 Evaluator 抽象接口 | `evaluate(dataset, predictions) -> metrics` 保持最小抽象；支持具体 evaluator 额外提供 `evaluate_with_samples()` 返回样本级指标 |
 | `src/libs/evaluator/evaluator_factory.py` | 创建 Evaluator | Ragas 或自定义指标 |
-| `src/libs/evaluator/ragas_evaluator.py` | Ragas 指标实现 | Faithfulness、Answer Relevancy |
+| `src/libs/evaluator/ragas_evaluator.py` | Ragas 指标实现 | Faithfulness、Answer Relevancy、Context Precision、Context Recall；透出聚合指标和可选样本级指标 |
 | `src/libs/evaluator/custom_evaluator.py` | 自定义指标实现 | Hit Rate、MRR、NDCG、citation_hit_rate |
 
 #### 5.3.4 Ingestion 层
@@ -397,7 +397,7 @@ services/ai-service/rag/
 | `src/observability/services/data_browser_service.py` | Dashboard 查询数据资产 | 文档、chunk、图片、metadata、索引状态 |
 | `src/observability/services/trace_reader_service.py` | Dashboard 读取 trace | query/ingestion 历史、主阶段瀑布图、Transform 子阶段 DTO、Transform snapshot DTO、fallback 原因；兼容缺少 `sub_stages/snapshots` 字段的 trace |
 | `src/observability/services/ingestion_operation_service.py` | Dashboard 摄取操作编排 | 接收页面提交的 collection/source_path/force，复用 ingestion pipeline/CLI 组装逻辑触发真实摄取，返回成功、跳过、失败、trace_id 和处理数量；不得只返回 pending DTO |
-| `src/observability/services/evaluation_service.py` | Dashboard 运行评估 | 触发评估、读取历史趋势 |
+| `src/observability/services/evaluation_service.py` | Dashboard 运行评估 | 触发评估、读取历史趋势、持久化 run 级指标和 golden sample 级诊断指标；只在 evaluator 返回真实样本级指标时写入 `sample_results.metrics` |
 | `src/observability/pages/overview.py` | 系统总览页面 | 组件配置、collection 统计、健康指标 |
 | `src/observability/pages/query_trace.py` | Query Trace 页面 | Dense/BM25 对比、RRF、rerank 前后对比 |
 | `src/observability/pages/ingestion_trace.py` | Ingestion Trace 页面 | 主阶段耗时瀑布图、Transform Breakdown、按 Transform 类型着色且用红绿标注文本变更的 Transform Result Diff、跳过原因和失败详情 |
@@ -408,7 +408,7 @@ services/ai-service/rag/
 | `src/observability/dashboard/layout.py` | Dashboard 公共布局 | 导航、筛选器、通用图表容器 |
 | `src/observability/evaluation/runner.py` | 评估任务运行器 | 读取黄金测试集、执行检索和生成评估 |
 | `src/observability/evaluation/metrics.py` | 自定义指标 | Hit Rate、MRR、NDCG、citation_hit_rate |
-| `src/observability/evaluation/ragas_adapter.py` | Ragas 适配 | Faithfulness、Answer Relevancy |
+| `src/observability/evaluation/ragas_adapter.py` | Ragas 适配 | 将项目数据转换为 Ragas 0.2 输入列，返回 run 级聚合指标，并从 Ragas dataframe 提取逐样本指标用于诊断 |
 
 #### 5.3.7 外部接口层
 

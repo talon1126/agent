@@ -94,3 +94,21 @@ class RagasEvaluatorClient(BaseEvaluator):
         """
 
         return self._adapter.evaluate(dataset, predictions)
+
+    def evaluate_with_samples(
+        self,
+        dataset: Sequence[Mapping[str, Any]],
+        predictions: Sequence[Mapping[str, Any]],
+    ) -> Mapping[str, Any]:
+        """Evaluate aggregate and per-sample Ragas metrics.
+
+        Args:
+            dataset: Golden records with question and reference answer fields.
+            predictions: Generated answer records with retrieved text contexts.
+
+        Returns:
+            Mapping containing ``metrics`` and, when available from Ragas,
+            ``sample_metrics`` aligned to ``dataset``.
+        """
+
+        return self._adapter.evaluate_with_samples(dataset, predictions)

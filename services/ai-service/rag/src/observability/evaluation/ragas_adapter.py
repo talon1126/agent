@@ -183,6 +183,32 @@ class RagasEvaluator:
             ProviderError: If the real or injected Ragas backend fails.
         """
 
+        result = self.evaluate_with_samples(dataset, predictions)
+        return dict(result["metrics"])
+
+    def evaluate_with_samples(
+        self,
+        dataset: Sequence[EvaluationRecord],
+        predictions: Sequence[EvaluationRecord],
+    ) -> dict[str, Any]:
+        """Evaluate aggregate scores and preserve per-sample metric rows.
+
+        Args:
+            dataset: Golden records containing ``question`` and reference text.
+            predictions: Aligned prediction records containing answer text and
+                retrieved contexts.
+
+        Returns:
+            A mapping with ``metrics`` for run-level scores and
+            ``sample_metrics`` aligned to the input dataset when the backend
+            exposes per-row values.
+
+        Raises:
+            ValueError: If the dataset and predictions are misaligned or a
+                required field is missing.
+            ProviderError: If the real or injected Ragas backend fails.
+        """
+
         rows = _build_ragas_rows(dataset, predictions)
         backend = self.evaluate_fn or _load_ragas_backend(
             llm_client=self.llm_client,
@@ -202,7 +228,14 @@ class RagasEvaluator:
                 context={"metrics": list(self.metric_names), "sample_count": len(rows)},
                 cause=error,
             ) from error
-        return _normalize_ragas_result(raw_result, self.metric_names)
+        return {
+            "metrics": _normalize_ragas_result(raw_result, self.metric_names),
+            "sample_metrics": _sample_metrics_from_ragas_result(
+                raw_result,
+                self.metric_names,
+                expected_count=len(rows),
+            ),
+        }
 
 
 def _build_ragas_rows(
@@ -831,6 +864,101 @@ def _metrics_from_dataframe(dataframe: Any, metric_names: Sequence[str]) -> dict
             raise ValueError(f"Ragas result is missing metric: {metric_name}") from error
         values[metric_name] = _average_numeric(column, field_name=metric_name)
     return values
+
+
+def _sample_metrics_from_ragas_result(
+    raw_result: Any,
+    metric_names: Sequence[str],
+    *,
+    expected_count: int,
+) -> tuple[dict[str, float], ...]:
+    """Read per-sample metric values from supported Ragas result shapes.
+
+    Args:
+        raw_result: Raw value returned by the real or injected Ragas backend.
+        metric_names: Metric names requested for the run.
+        expected_count: Number of golden samples used to validate alignment.
+
+    Returns:
+        A tuple aligned to the input samples. Empty dictionaries are preserved
+        for rows where Ragas returned only non-finite values. An empty tuple
+        means the backend did not expose row-level metrics.
+
+    Raises:
+        ValueError: If an explicit sample metric payload has the wrong length
+            or shape.
+    """
+
+    if isinstance(raw_result, Mapping):
+        raw_sample_metrics = raw_result.get("sample_metrics")
+        if raw_sample_metrics is None:
+            return ()
+        return _normalize_sample_metric_rows(
+            raw_sample_metrics,
+            metric_names,
+            expected_count=expected_count,
+        )
+    if hasattr(raw_result, "to_pandas"):
+        dataframe = raw_result.to_pandas()
+        return _sample_metrics_from_dataframe(
+            dataframe,
+            metric_names,
+            expected_count=expected_count,
+        )
+    return ()
+
+
+def _sample_metrics_from_dataframe(
+    dataframe: Any,
+    metric_names: Sequence[str],
+    *,
+    expected_count: int,
+) -> tuple[dict[str, float], ...]:
+    """Read one metric mapping per dataframe row from a Ragas result."""
+
+    if not hasattr(dataframe, "to_dict"):
+        return ()
+    rows = dataframe.to_dict("records")
+    return _normalize_sample_metric_rows(
+        rows,
+        metric_names,
+        expected_count=expected_count,
+        skip_missing_metrics=True,
+    )
+
+
+def _normalize_sample_metric_rows(
+    rows: Any,
+    metric_names: Sequence[str],
+    *,
+    expected_count: int,
+    skip_missing_metrics: bool = False,
+) -> tuple[dict[str, float], ...]:
+    """Validate and normalize row-level metric mappings."""
+
+    if not isinstance(rows, Sequence) or isinstance(rows, str | bytes):
+        raise ValueError("sample_metrics must be a sequence of metric mappings")
+    if len(rows) != expected_count:
+        raise ValueError("sample_metrics must match dataset sample count")
+    normalized_rows: list[dict[str, float]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("sample_metrics must contain metric mappings")
+        normalized: dict[str, float] = {}
+        for metric_name in metric_names:
+            if metric_name not in row:
+                if skip_missing_metrics:
+                    continue
+                raise ValueError(f"sample_metrics row is missing metric: {metric_name}")
+            try:
+                normalized[metric_name] = _finite_float(
+                    row[metric_name],
+                    field_name=metric_name,
+                )
+            except ValueError:
+                continue
+        normalized_rows.append(normalized)
+    return tuple(normalized_rows)
 
 
 def _average_numeric(values: Any, *, field_name: str) -> float:
