@@ -319,6 +319,51 @@ class RerankSettings(ConfigSection):
         return self
 
 
+class SelfRagSettings(ConfigSection):
+    """Configure post-rerank evidence gating before response construction.
+
+    Score thresholds keep the common high-confidence path model-free, while
+    medium-confidence evidence can call one judge LLM that returns relevance
+    and evidence sufficiency together. The first release only supports the
+    safe ``empty`` fallback so unsupported answers do not leak downstream.
+    """
+
+    enabled: bool = True
+    high_confidence_top_n: int = Field(default=3, gt=0)
+    high_confidence_min_score: float = Field(default=0.75, ge=0, le=1)
+    medium_confidence_min_top_score: float = Field(default=0.35, ge=0, le=1)
+    judge_min_candidate_score: float = Field(default=0.15, ge=0, le=1)
+    relevance_threshold: float = Field(default=0.7, ge=0, le=1)
+    evidence_sufficiency_threshold: float = Field(default=0.7, ge=0, le=1)
+    fallback_action: str = Field(default="empty", pattern="^empty$")
+    judge_llm_provider: str = Field(min_length=1)
+    judge_prompt_path: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_score_threshold_order(self) -> Self:
+        """Ensure score bands cannot overlap in surprising ways.
+
+        Returns:
+            The validated Self-RAG settings.
+
+        Raises:
+            ValueError: If medium-confidence or judge-trim thresholds are above
+                the high-confidence score threshold.
+        """
+
+        if self.medium_confidence_min_top_score > self.high_confidence_min_score:
+            raise ValueError(
+                "self_rag.medium_confidence_min_top_score must be less than or "
+                "equal to high_confidence_min_score"
+            )
+        if self.judge_min_candidate_score > self.medium_confidence_min_top_score:
+            raise ValueError(
+                "self_rag.judge_min_candidate_score must be less than or equal "
+                "to medium_confidence_min_top_score"
+            )
+        return self
+
+
 class EvidenceContextOptimizerSettings(ConfigSection):
     """Configure final-context optimization for public RAG responses.
 
@@ -493,6 +538,7 @@ class RagSettings(BaseModel):
     retrieval: RetrievalSettings
     intent_router: IntentRouterSettings
     rerank: RerankSettings
+    self_rag: SelfRagSettings
     response: ResponseSettings
     ingestion: IngestionSettings
     storage: StorageSettings
@@ -525,6 +571,13 @@ class RagSettings(BaseModel):
             raise ValueError(
                 "response.evidence_context_optimizer.llm_provider must reference "
                 f"a configured llm provider; provider={optimizer.llm_provider}, "
+                f"available={sorted(self.llm.providers)}"
+            )
+        if self.self_rag.enabled and self.self_rag.judge_llm_provider not in self.llm.providers:
+            raise ValueError(
+                "self_rag.judge_llm_provider must reference a configured llm "
+                f"provider when Self-RAG is enabled; "
+                f"provider={self.self_rag.judge_llm_provider}, "
                 f"available={sorted(self.llm.providers)}"
             )
         if (
@@ -581,6 +634,10 @@ class RagSettings(BaseModel):
         if self.intent_router.llm_fallback_enabled and self.intent_router.llm_provider:
             required.update(
                 self.llm.providers[self.intent_router.llm_provider].environment_references()
+            )
+        if self.self_rag.enabled:
+            required.update(
+                self.llm.providers[self.self_rag.judge_llm_provider].environment_references()
             )
         if self.vision_llm.enabled:
             required.update(self.vision_llm.selected_provider.environment_references())

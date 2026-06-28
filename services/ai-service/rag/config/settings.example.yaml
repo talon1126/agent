@@ -151,6 +151,20 @@ rerank:
       model: BAAI/bge-reranker-base
       device: cpu
 
+
+# Self-RAG gates reranked evidence before response construction.
+self_rag:
+  enabled: true
+  high_confidence_top_n: 3
+  high_confidence_min_score: 0.75
+  medium_confidence_min_top_score: 0.35
+  judge_min_candidate_score: 0.15
+  relevance_threshold: 0.7
+  evidence_sufficiency_threshold: 0.7
+  fallback_action: empty
+  judge_llm_provider: deepseek
+  judge_prompt_path: config/prompts/self_rag_judge_prompt.yaml
+
 # Response context optimization turns ranked evidence into Agent-ready context.
 response:
   evidence_context_optimizer:

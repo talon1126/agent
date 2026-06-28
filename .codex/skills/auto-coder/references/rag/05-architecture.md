@@ -72,6 +72,7 @@ services/ai-service/rag/
 │   ├── settings.yaml                              # 本地运行配置，由模板复制且不提交 Git
 │   └── prompts/
 │       ├── rerank_prompt.yaml                     # Rerank 阶段使用的提示词模板
+│       ├── self_rag_judge_prompt.yaml             # Self-RAG 阶段一次性判断 relevance 和 evidence sufficiency 的提示词模板
 │       ├── document_summary_prompt.yaml           # 文档级语义摘要提示词模板
 │       ├── rewrite_chunk_prompt.yaml              # chunk 语义改写与增强提示词模板
 │       ├── semantic_merge_prompt.yaml              # 相邻 chunk 语义合并判断提示词模板
@@ -98,7 +99,8 @@ services/ai-service/rag/
 │   │   │   ├── sparse_route.py                    # BM25 和倒排索引关键词召回
 │   │   │   ├── fusion.py                          # RRF 排名倒数融合
 │   │   │   ├── trace_snapshots.py                 # Query Trace 候选快照构造
-│   │   │   └── reranker.py                        # 调用 reranker 并处理 fallback
+│   │   │   ├── reranker.py                        # 调用 reranker 并处理 fallback
+│   │   │   └── self_rag_controller.py             # Rerank 后执行证据相关性、充分性判断和 empty fallback
 │   │   ├── response/
 │   │   │   ├── __init__.py                        # 导出 Citation、KnowledgeHubResponse 等响应层公共契约
 │   │   │   ├── response_builder.py                # 构建格式化上下文、引用、图片和空结果标记
@@ -295,6 +297,7 @@ services/ai-service/rag/
 | `src/core/query_engine/fusion.py` | 融合 Dense/BM25 结果 | RRF 基于排名倒数加权，不直接比较不同分数 |
 | `src/core/query_engine/trace_snapshots.py` | 构造 Query Trace 候选快照 | 输出不含正文的轻量候选快照；Dense/Sparse 只记录 chunk IDs，Fusion/Filter/Rerank 记录排序与过滤变化 |
 | `src/core/query_engine/reranker.py` | 编排过滤后候选的精排与降级 | `RerankController` 调用 Cross-Encoder/LLM Reranker；provider 缺失、超时、异常或返回过滤集外候选时 fallback 到调用前保存的过滤后 RRF 顺序；`RerankOutcome` 显式返回最终结果、fallback 状态和原因，禁止从 provider metadata 推断控制流；输出和 fallback 均使用防御性副本并记录低侵入 rerank trace |
+| `src/core/query_engine/self_rag_controller.py` | 执行 rerank 后证据决策 | `SelfRagController` 根据 TopN rerank 分数进行高/中/低置信分档；中置信时先剔除极低分候选，再用一个 LLM judge 同时返回 relevance 与 evidence sufficiency；当前 fallback 只支持 empty result，不直接调用 Web/Tavily |
 | `src/core/response/response_builder.py` | 构建 RAG 工具公开响应 | `KnowledgeHubResponseBuilder` 先从最终排序 chunk 文本生成编号证据块，再调用可选 `EvidenceContextOptimizer` 生成 Agent-ready final context；优化失败时按配置 fallback 到原始编号证据块；不序列化内部 route/tool metadata |
 | `src/core/response/evidence_context_optimizer.py` | 优化最终上下文 | 读取 `evidence_context_prompt.yaml`，调用统一 `BaseLLM.chat()` 将编号证据压缩、去重和结构化为供 AImodel 直接使用的上下文；禁止生成最终答案或动态商品事实 |
 | `src/core/response/__init__.py` | 导出响应层公共契约 | 为 MCP、AImodel、CLI 和 Dashboard 稳定导出 Citation、KnowledgeHubResponse、ResponseImage 及其 Builder/Assembler |
@@ -490,7 +493,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 
 #### 5.4.2 在线查询数据流
 
-在线查询数据流从 AImodel、MCP 工具或本地 `query.py` 脚本请求开始，经过 Query Processor、HybridSearch、Rerank 前候选过滤、Rerank 和 Response Builder，最终返回带引用来源的上下文结果。
+在线查询数据流从 AImodel、MCP 工具或本地 `query.py` 脚本请求开始，经过 Query Processor、Intent Router、HybridSearch、Rerank 前候选过滤、Rerank、Self-RAG Controller 和 Response Builder，最终返回带引用来源的上下文结果。
 
 ```text
 [1] 用户问题 / AImodel 请求
@@ -566,6 +569,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 - RRF Fusion 基于排名融合，避免 Dense 分数和 BM25 分数量纲不同导致排序失真。
 - 候选过滤必须发生在 Rerank 前，避免不符合 `collection`、`doc_type`、权限或生命周期状态的内容进入重排阶段。
 - Reranker 不可用时必须优雅降级，保证查询链路仍然可以返回可用结果。
+- Self-RAG Controller 负责判断 rerank 后证据是否相关且足够；证据不足时暂时只返回 empty result，不在 RAG 内部直接调用 Web/Tavily。
 - Response Builder 负责隐藏内部工具细节，只返回适合 Agent 使用的格式化内容、引用和多模态材料。
 
 #### 5.4.3 管理操作数据流

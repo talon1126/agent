@@ -299,6 +299,26 @@ def test_retrieval_and_transform_defaults_are_complete() -> None:
     assert transform_steps[-1]["prompt_path"] == "config/prompts/image_caption_prompt.yaml"
 
 
+
+def test_self_rag_settings_define_score_gate_and_judge_prompt() -> None:
+    """Protect the Self-RAG score gate and one-call judge configuration."""
+
+    settings = load_settings_document()
+
+    assert settings["self_rag"] == {
+        "enabled": True,
+        "high_confidence_top_n": 3,
+        "high_confidence_min_score": 0.75,
+        "medium_confidence_min_top_score": 0.35,
+        "judge_min_candidate_score": 0.15,
+        "relevance_threshold": 0.7,
+        "evidence_sufficiency_threshold": 0.7,
+        "fallback_action": "empty",
+        "judge_llm_provider": "deepseek",
+        "judge_prompt_path": "config/prompts/self_rag_judge_prompt.yaml",
+    }
+
+
 def test_response_context_optimizer_defaults_are_complete() -> None:
     """Protect the Agent-ready final context optimization configuration."""
 
@@ -327,6 +347,7 @@ def test_prompt_definitions_share_a_stable_contract() -> None:
         "semantic_merge_prompt.yaml",
         "image_caption_prompt.yaml",
         "evidence_context_prompt.yaml",
+        "self_rag_judge_prompt.yaml",
     )
 
     for file_name in prompt_files:
@@ -367,6 +388,8 @@ def test_prompt_instruction_content_is_written_in_english() -> None:
         "rewrite_chunk_prompt.yaml",
         "semantic_merge_prompt.yaml",
         "image_caption_prompt.yaml",
+        "evidence_context_prompt.yaml",
+        "self_rag_judge_prompt.yaml",
     )
     cjk_pattern = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]")
 
@@ -392,6 +415,25 @@ def test_rerank_prompt_requires_structured_ranking_output() -> None:
     assert prompt["input_variables"] == ["query", "candidates"]
     assert prompt["output_schema"]["type"] == "json"
     assert {"candidate_id", "score", "reason"} <= set(prompt["output_schema"]["item_fields"])
+
+
+
+def test_self_rag_prompt_requires_single_structured_judge_output() -> None:
+    """Require one judge call to return relevance and sufficiency together."""
+
+    prompt = load_prompt_document("self_rag_judge_prompt.yaml")
+
+    assert prompt["input_variables"] == ["query", "candidates"]
+    assert prompt["output_schema"]["type"] == "object"
+    assert {
+        "relevant",
+        "relevance_score",
+        "sufficient",
+        "evidence_sufficiency_score",
+        "missing_evidence",
+        "reason",
+    } <= set(prompt["output_schema"]["properties"])
+    assert "Do not answer the user" in prompt["system_prompt"]
 
 
 def test_document_summary_prompt_defines_short_semantic_summary() -> None:
@@ -476,6 +518,8 @@ def test_load_settings_returns_typed_configuration() -> None:
     assert settings.embedding.selected_provider.dimensions == 1536
     assert settings.evaluation.llm_provider == "deepseek"
     assert settings.evaluation.embedding_provider == "dashscope"
+    assert settings.self_rag.enabled is True
+    assert settings.self_rag.judge_llm_provider == "deepseek"
     assert settings.dashboard.pages[-1] == "evaluation"
 
 

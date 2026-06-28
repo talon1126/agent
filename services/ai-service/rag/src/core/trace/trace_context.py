@@ -34,9 +34,10 @@ _QUERY_STAGES = {
     "fusion",
     "filter",
     "rerank",
+    "self_rag",
     "response",
 }
-_QUERY_CANDIDATE_STAGES = {"dense", "sparse", "fusion", "filter", "rerank"}
+_QUERY_CANDIDATE_STAGES = {"dense", "sparse", "fusion", "filter", "rerank", "self_rag"}
 _INGESTION_STAGES = {
     "dedup",
     "load",
@@ -462,7 +463,7 @@ def _validate_candidate_count_by_stage(
     Args:
         value: Mapping from retrieval stage names to non-negative candidate
             counts. The accepted keys match the summary metric contract:
-            ``dense``, ``sparse``, ``fusion``, ``filter``, and ``rerank``.
+            ``dense``, ``sparse``, ``fusion``, ``filter``, ``rerank``, and ``self_rag``.
         field_name: Metric name used in validation errors.
 
     Returns:
@@ -751,7 +752,7 @@ class TraceContext:
 
         Args:
             stage: One of ``query_processing``, ``dense``, ``sparse``,
-                ``fusion``, ``filter``, ``rerank``, or ``response``.
+                ``fusion``, ``filter``, ``rerank``, ``self_rag``, or ``response``.
             duration_ms: Stage duration in milliseconds.
             input_summary: Query or candidate input digest.
             output_summary: Candidate, ranking, or rewrite output digest.

@@ -33,6 +33,12 @@ from src.core.query_engine.reranker import (
     RerankOutcome,
     RerankTraceContext,
 )
+from src.core.query_engine.self_rag_controller import (
+    SelfRagController,
+    SelfRagDecision,
+    SelfRagJudgeResult,
+    SelfRagTraceContext,
+)
 from src.core.query_engine.sparse_route import SparseRoute, SparseTraceContext
 
 __all__ = (
@@ -55,6 +61,10 @@ __all__ = (
     "RerankController",
     "RerankOutcome",
     "RerankTraceContext",
+    "SelfRagController",
+    "SelfRagDecision",
+    "SelfRagJudgeResult",
+    "SelfRagTraceContext",
     "reciprocal_rank_fusion",
     "SparseRoute",
     "SparseTraceContext",

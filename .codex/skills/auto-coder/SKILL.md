@@ -37,6 +37,12 @@ Run this workflow when the user wants one-shot automation from specification to 
   --build <service>` during verification. Import changed n8n workflow files into
   the running n8n instance when the user expects live workflow behavior.
 - Use values from `config/settings.yaml`; do not hardcode project configuration.
+- When adding, renaming, deleting, or changing any runtime configuration key,
+  update both the versioned `config/settings.example.yaml` template and the
+  local `config/settings.yaml` shape. Preserve existing local secret values and
+  environment-specific values; only add or adjust the relevant keys and safe
+  defaults. Because `settings.yaml` is ignored by Git, do not stage it, but do
+  mention in the final task summary whether the local settings file was synced.
 - Write tests with implementation. Put tests under the path required by the spec, usually `tests/unit/` or `tests/integration/`.
 - Mock external dependencies in unit tests.
 - Do not ask for confirmation during the normal flow unless prerequisites are missing, the spec conflicts with the codebase, or the task is blocked.
@@ -145,6 +151,8 @@ Before running tests, self-check:
 - test imports resolve
 - changed code follows the architecture in `05-architecture.md`
 - config comes from `config/settings.yaml` or settings objects
+- runtime config-key changes are reflected in both `settings.example.yaml` and
+  the local ignored `settings.yaml` without overwriting secrets
 
 ### 5. Test and Auto-Repair
 

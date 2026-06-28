@@ -57,7 +57,7 @@ markers =
 | 底层 | 检索算法测试 | 较高 | 每次修改检索策略时运行 | 验证排序、融合和 fallback 行为 | Dense Route、Sparse Route、RRF、过滤、Rerank、Rerank fallback |
 | 中层 | Ingestion 集成测试 | 中等 | 修改摄取链路时运行 | 验证摄取链路模块协作 | PDF/Markdown -> Document -> Chunk -> Transform -> Embedding -> pgvector upsert |
 | 中层 | Indexing 集成测试 | 中等 | 修改索引链路时运行 | 验证索引 MVP 编排 | content_hash 差量判断 -> Dense 编码 -> BM25Indexer -> pgvector/BM25 upsert |
-| 中层 | Query 集成测试 | 中等 | 修改检索链路时运行 | 验证查询链路模块协作 | Query Processing -> Dense/BM25 -> RRF -> Rerank -> Citation |
+| 中层 | Query 集成测试 | 中等 | 修改检索链路时运行 | 验证查询链路模块协作 | Query Processing -> Dense/BM25 -> RRF -> Rerank -> Self-RAG -> Citation |
 | 中层 | MCP 契约测试 | 中等 | 修改 MCP tool 时运行 | 验证外部工具接口稳定 | tools schema、正常查询、空 collection、异常返回 |
 | 中层 | Dashboard 测试 | 较少 | 修改可视化页面时运行 | 验证本地 Dashboard 六大页面可读取数据并渲染 | 系统总览、Ingestion 管理、数据浏览器、Query Trace、Ingestion Trace、评估面板 |
 | 顶层 | E2E 测试 | 最少 | AImodel 集成前、发布前或关键改动后运行 | 验证完整用户路径 | 摄取 shopping guide -> 索引 -> 查询 -> Trace -> Dashboard 展示 -> AImodel 工具返回引用 |
@@ -75,6 +75,7 @@ markers =
 | BM25 | 分词、倒排索引、关键词候选召回 | 验证关键词命中文档；验证品牌、型号、政策词能精确召回；验证空 query 或停用词 query 的处理 |
 | Retrieval | Query 预处理、Dense Route、Sparse Route、RRF 融合、过滤 | 验证 Query Embedding 被调用；验证 BM25 和 pgvector 双路候选合并；验证 RRF 基于排名倒数融合；验证 deleted/failed 文档不会进入结果 |
 | Reranker | Cross-Encoder/LLM Rerank、排序变化、fallback | 验证 rerank 前后排名变化被记录；验证 reranker 超时或异常时 fallback 到 RRF 排序 |
+| Self-RAG | rerank 后证据分档、低分候选裁剪、单次 LLM judge、empty fallback | 验证 Top2/Top3 高分直接通过；验证中置信候选先剔除极低分 chunk 后一次性返回 relevance 与 evidence sufficiency；验证极低置信或 judge 不通过时返回 empty result 且不调用 Web |
 | TraceContext | 阶段记录、耗时统计、JSON Lines 输出 | 验证 `record_stage()` 记录阶段详情；验证 `flush()` 写出结构化 JSON；验证 error 和 fallback 信息进入汇总指标 |
 | Factory | 配置驱动、接口隔离、优雅降级 | 验证根据 `settings.yaml` 创建指定 Provider；验证未知 Provider 抛出可读错误；验证默认 fallback 策略生效 |
 

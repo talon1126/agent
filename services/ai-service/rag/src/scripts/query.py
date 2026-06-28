@@ -40,6 +40,8 @@ from src.core.query_engine import (
     ProcessedQuery,
     QueryProcessor,
     RerankController,
+    SelfRagController,
+    SelfRagDecision,
     SparseRoute,
     load_collection_profiles,
     load_intent_rules,
@@ -83,7 +85,8 @@ class QueryExecutionResult:
         sparse_results: Sparse candidates in BM25 order.
         fused_results: RRF candidates before metadata filtering.
         filtered_results: Candidates allowed to enter reranking.
-        final_results: Reranked or explicitly preserved RRF candidates.
+        final_results: Self-RAG-gated final candidates.
+        self_rag_decision: Optional Self-RAG gate decision applied after rerank.
         response: Public knowledge response containing no internal metadata.
         rerank_applied: Whether a configured reranker stage was attempted.
         fallback_used: Whether route or reranker degradation preserved results.
@@ -96,6 +99,7 @@ class QueryExecutionResult:
     fused_results: tuple[RetrievalResult, ...]
     filtered_results: tuple[RetrievalResult, ...]
     final_results: tuple[RetrievalResult, ...]
+    self_rag_decision: SelfRagDecision | None
     response: KnowledgeHubResponse
     rerank_applied: bool
     fallback_used: bool
@@ -111,6 +115,7 @@ class QueryRuntime:
         hybrid_search: HybridSearch,
         rerank_controller: RerankController | None,
         response_builder: KnowledgeHubResponseBuilder,
+        self_rag_controller: SelfRagController | None = None,
         intent_router: IntentRouter | None = None,
         trace_sink: TraceSink | None = None,
     ) -> None:
@@ -123,6 +128,8 @@ class QueryRuntime:
             rerank_controller: Optional rerank/fallback controller. ``None``
                 means reranking is disabled by configuration.
             response_builder: Public evidence, citation, and image assembler.
+            self_rag_controller: Optional post-rerank evidence gate. ``None``
+                means Self-RAG is disabled or rerank scores are unavailable.
             trace_sink: Optional trace sink receiving one finished query
                 snapshot. Production can inject JSON Lines logging while tests
                 pass a list appender.
@@ -133,6 +140,7 @@ class QueryRuntime:
         self._hybrid_search = hybrid_search
         self._rerank_controller = rerank_controller
         self._response_builder = response_builder
+        self._self_rag_controller = self_rag_controller
         self._trace_sink = trace_sink
 
     def execute(
@@ -173,6 +181,7 @@ class QueryRuntime:
         trace_controller = TraceController(trace_context, sink=self._trace_sink)
         hybrid = None
         final_results: list[RetrievalResult] = []
+        self_rag_decision: SelfRagDecision | None = None
         rerank_applied = False
         fallback_used = False
         try:
@@ -293,6 +302,33 @@ class QueryRuntime:
                     },
                 )
 
+            if (
+                self._self_rag_controller is not None
+                and rerank_applied
+                and not rerank_fallback
+            ):
+                self_rag_decision = self._self_rag_controller.evaluate(
+                    processed.normalized_query,
+                    final_results,
+                    trace_context=trace_controller.context,
+                )
+                final_results = self_rag_decision.selected_results
+            elif self._self_rag_controller is not None:
+                trace_controller.record_stage(
+                    "self_rag",
+                    duration_ms=0,
+                    method="score_gate_or_llm_judge",
+                    provider="SelfRagController",
+                    candidate_count=len(final_results),
+                    status="skipped",
+                    details={
+                        "reason": "rerank_scores_unavailable",
+                        "selected_chunk_ids": [
+                            candidate.chunk_id for candidate in final_results
+                        ],
+                    },
+                )
+
             response_started = perf_counter()
             response = self._response_builder.build(
                 final_results,
@@ -312,7 +348,11 @@ class QueryRuntime:
                 provider=type(self._response_builder).__name__,
                 candidate_count=len(final_results),
             )
-            fallback_used = hybrid.fallback_used or rerank_fallback
+            self_rag_fallback = (
+                self_rag_decision is not None
+                and self_rag_decision.fallback_action is not None
+            )
+            fallback_used = hybrid.fallback_used or rerank_fallback or self_rag_fallback
             trace_controller.flush_query(
                 status="degraded" if fallback_used else "success",
                 query_result=_query_result_snapshot(response, final_results),
@@ -322,6 +362,8 @@ class QueryRuntime:
                     sparse_results=hybrid.sparse_results,
                     fused_results=hybrid.fused_results,
                     filtered_results=hybrid.results,
+                    rerank_results=outcome.results if rerank_applied else final_results,
+                    self_rag_results=final_results if self_rag_decision is not None else None,
                     final_results=final_results,
                 ),
                 fallback_used=fallback_used,
@@ -335,6 +377,7 @@ class QueryRuntime:
                 fused_results=tuple(hybrid.fused_results),
                 filtered_results=tuple(hybrid.results),
                 final_results=tuple(final_results),
+                self_rag_decision=self_rag_decision,
                 response=response,
                 rerank_applied=rerank_applied,
                 fallback_used=fallback_used,
@@ -350,6 +393,8 @@ class QueryRuntime:
                         sparse_results=hybrid.sparse_results if hybrid else [],
                         fused_results=hybrid.fused_results if hybrid else [],
                         filtered_results=hybrid.results if hybrid else [],
+                        rerank_results=final_results,
+                        self_rag_results=final_results if self_rag_decision is not None else None,
                         final_results=final_results,
                     ),
                     fallback_used=fallback_used,
@@ -536,6 +581,7 @@ def _build_runtime(
         ),
     )
     rerank_controller: RerankController | None = None
+    self_rag_controller: SelfRagController | None = None
     if settings.rerank.enabled and not no_rerank:
         reranker_options: dict[str, Any] = {}
         provider_settings = settings.rerank.providers.get(
@@ -558,6 +604,15 @@ def _build_runtime(
                 **reranker_options,
             ),
         )
+        self_rag_settings = getattr(settings, "self_rag", None)
+        if self_rag_settings is not None and self_rag_settings.enabled:
+            self_rag_controller = SelfRagController(
+                settings=settings,
+                llm_client=LLMFactory.create(
+                    settings=settings,
+                    provider=self_rag_settings.judge_llm_provider,
+                ),
+            )
 
     optimizer_settings = settings.response.evidence_context_optimizer
     evidence_context_optimizer = None
@@ -575,6 +630,7 @@ def _build_runtime(
         hybrid_search=hybrid_search,
         intent_router=_build_intent_router(settings, embedding, pool),
         rerank_controller=rerank_controller,
+        self_rag_controller=self_rag_controller,
         response_builder=KnowledgeHubResponseBuilder(
             multimodal_assembler=MultimodalAssembler(
                 resolver=ImageStorage(
@@ -661,6 +717,16 @@ def _build_verbose_debug(
             "fallback_used": execution.fallback_used,
             "results": _result_summaries(execution.final_results),
         },
+        "self_rag": {
+            "applied": execution.self_rag_decision is not None,
+            "decision": execution.self_rag_decision.decision
+            if execution.self_rag_decision is not None
+            else None,
+            "reason": execution.self_rag_decision.reason
+            if execution.self_rag_decision is not None
+            else None,
+            "results": _result_summaries(execution.final_results),
+        },
     }
 
 
@@ -732,6 +798,8 @@ def _candidate_counts(
     sparse_results: Sequence[RetrievalResult],
     fused_results: Sequence[RetrievalResult],
     filtered_results: Sequence[RetrievalResult],
+    rerank_results: Sequence[RetrievalResult],
+    self_rag_results: Sequence[RetrievalResult] | None,
     final_results: Sequence[RetrievalResult],
 ) -> dict[str, int]:
     """Build the documented per-stage candidate count summary.
@@ -741,19 +809,24 @@ def _candidate_counts(
         sparse_results: BM25 Sparse Route candidates.
         fused_results: RRF candidates before metadata filtering.
         filtered_results: Candidates that passed exact metadata filtering.
-        final_results: Reranked or preserved final candidates.
+        rerank_results: Candidates after rerank or filtered-order fallback.
+        self_rag_results: Candidates after Self-RAG, or ``None`` when skipped.
+        final_results: Response-builder candidates after all gates.
 
     Returns:
         Dictionary aligned with the TraceContext query summary contract.
     """
 
-    return {
+    counts = {
         "dense": len(dense_results),
         "sparse": len(sparse_results),
         "fusion": len(fused_results),
         "filter": len(filtered_results),
-        "rerank": len(final_results),
+        "rerank": len(rerank_results),
     }
+    if self_rag_results is not None:
+        counts["self_rag"] = len(self_rag_results)
+    return counts
 
 
 def _trace_sink_from_settings(

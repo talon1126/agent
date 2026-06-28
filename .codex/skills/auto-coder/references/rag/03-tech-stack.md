@@ -148,11 +148,12 @@ Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Quer
 | 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery` 和 Intent Router 的路由结果，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Intent Router、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
 | Rerank 前候选过滤 | 在精排前过滤候选 | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker |
 | 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
-| 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 先基于最终候选生成编号证据块，再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
+| Self-RAG 证据决策 | 判断 rerank 后证据是否相关且足够 | **SelfRagController** 位于 rerank 之后、Response Builder 之前；Top2/Top3 分数稳定较高时直接通过；中等置信度时先剔除极低分 chunk，减少 judge 上下文拥挤，再通过一次 LLM 调用同时返回 relevance 与 evidence sufficiency 判断；极低置信度或 judge 不通过时暂时只返回 empty result，不直接调用 Web/Tavily；后续可扩展纠错、重试或外部搜索建议 |
+| 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 先基于 Self-RAG 通过的最终候选生成编号证据块，再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
 
 RRF 融合不直接比较 Dense 分数和 BM25 分数，因为两类分数的量纲不同。融合时基于候选在各自检索结果中的排名进行倒数加权，排名越靠前贡献越大，从而让语义召回和关键词召回都能公平参与最终排序。
 
-检索链路必须能解释每一步：原始 query 如何被预处理，BM25 和 Dense 各自召回了什么，哪些结果在 rerank 前被过滤，rerank 如何改变排序，最终引用来自哪里。
+检索链路必须能解释每一步：原始 query 如何被预处理，BM25 和 Dense 各自召回了什么，哪些结果在 rerank 前被过滤，rerank 如何改变排序，Self-RAG 为什么接受或拒绝证据，最终引用来自哪里。
 
 ### 3.3 MCP 服务设计
 
@@ -510,6 +511,18 @@ rerank:
   default: llm
   fallback: rrf
   prompt_path: config/prompts/rerank_prompt.yaml
+
+self_rag:
+  enabled: true
+  high_confidence_top_n: 3
+  high_confidence_min_score: 0.75
+  medium_confidence_min_top_score: 0.35
+  judge_min_candidate_score: 0.15
+  relevance_threshold: 0.70
+  evidence_sufficiency_threshold: 0.70
+  fallback_action: empty
+  judge_llm_provider: deepseek
+  judge_prompt_path: config/prompts/self_rag_judge_prompt.yaml
   top_k: 5
   providers:
     llm:
@@ -899,8 +912,9 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果、耗时 |
 | `filter` | 过滤参数、过滤前候选快照、过滤后候选快照、被过滤候选与原因、耗时 |
 | `rerank` | Reranker Provider、过滤后 rerank 前候选快照、rerank 后候选快照、fallback 原因（若有）、耗时 |
+| `self_rag` | 证据分档、极低分候选裁剪数量、单次 LLM judge 输入摘要、relevance/evidence sufficiency 判断、最终通过候选快照、empty fallback 原因、耗时 |
 
-候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank 阶段记录排序变化和过滤变化，用于后续 Hit Rate、MRR、NDCG、rerank delta 与空结果原因分析。
+候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化和证据决策结果，用于后续 Hit Rate、MRR、NDCG、rerank delta、evidence sufficiency 与空结果原因分析。
 
 查询结果：
 
@@ -917,7 +931,7 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | --- | --- |
 | `total_duration_ms` | 从 query_processing 到 response 的端到端耗时 |
 | `top_score` | 最终排名第一项的分数；空结果时为 `null` |
-| `candidate_count_by_stage` | dense、sparse、fusion、filter、rerank 各阶段候选数量 |
+| `candidate_count_by_stage` | dense、sparse、fusion、filter、rerank、self_rag 各阶段候选数量 |
 | `fallback_used` | 是否触发降级，例如 rerank fallback 到 RRF |
 | `error` | 链路级错误信息；无错误时为空 |
 
@@ -975,7 +989,7 @@ Dashboard 使用 Streamlit 实现，面向开发者、面试官和项目演示�
 | 模块 | 功能 |
 | --- | --- |
 | 历史列表 | 展示历史 query trace，支持按 collection、状态、耗时、是否 fallback 过滤 |
-| 单次查询详情 | 展示 query 原文、改写 query、各阶段耗时瀑布图、Dense/BM25 召回对比、RRF 融合结果、Rerank 前后对比和最终 Top-k 结果 |
+| 单次查询详情 | 展示 query 原文、改写 query、各阶段耗时瀑布图、Dense/BM25 召回对比、RRF 融合结果、Rerank 前后对比、Self-RAG 证据决策和最终 Top-k 结果 |
 
 页面 4：**Ingestion 管理**
 

@@ -25,9 +25,15 @@ from src.core.query_engine.query_processor import (
     QueryProcessor,
 )
 from src.core.query_engine.reranker import RerankOutcome
+from src.core.query_engine.self_rag_controller import (
+    SelfRagController,
+    SelfRagDecision,
+    SelfRagJudgeResult,
+)
 from src.core.query_engine.sparse_route import SparseRoute
 from src.core.response import KnowledgeHubResponse
 from src.core.types import Chunk, RetrievalResult
+from src.libs.llm import ChatMessage, LLMResponse
 from src.scripts import query as query_module
 from src.storage.bm25_storage import BM25Storage
 
@@ -96,6 +102,59 @@ def _result(
         },
     )
 
+
+
+class _FakeJudgeLLM:
+    """Capture Self-RAG judge prompts and return one configured response."""
+
+    def __init__(self, content: str) -> None:
+        """Store the response payload returned by ``chat()``.
+
+        Args:
+            content: Strict JSON, invalid JSON, or any text fixture used by a
+                controller test to exercise parsing and fallback behavior.
+        """
+
+        self.content = content
+        self.messages: list[list[ChatMessage]] = []
+
+    def chat(self, messages: list[ChatMessage]) -> LLMResponse:
+        """Return a deterministic judge response while preserving messages."""
+
+        self.messages.append(list(messages))
+        return LLMResponse(
+            content=self.content,
+            provider="fake-judge",
+            model="fake-self-rag",
+        )
+
+
+class _FailingTraceSink:
+    """Trace sink fixture that proves Self-RAG decisions survive trace errors."""
+
+    def record_stage(self, **_: object) -> None:
+        """Raise on every trace write attempt."""
+
+        raise RuntimeError("trace sink unavailable")
+
+
+def _self_rag_settings(**overrides: object) -> SimpleNamespace:
+    """Build a minimal settings object consumed by ``SelfRagController``."""
+
+    values = {
+        "enabled": True,
+        "high_confidence_top_n": 3,
+        "high_confidence_min_score": 0.75,
+        "medium_confidence_min_top_score": 0.35,
+        "judge_min_candidate_score": 0.15,
+        "relevance_threshold": 0.7,
+        "evidence_sufficiency_threshold": 0.7,
+        "fallback_action": "empty",
+        "judge_llm_provider": "deepseek",
+        "judge_prompt_path": "config/prompts/self_rag_judge_prompt.yaml",
+    }
+    values.update(overrides)
+    return SimpleNamespace(self_rag=SimpleNamespace(**values))
 
 def _processed_query() -> ProcessedQuery:
     """Build a reusable processed query fixture for hybrid retrieval tests."""
@@ -1277,6 +1336,7 @@ def test_run_query_cli_emits_public_response_and_verbose_stage_summaries() -> No
         fused_results=tuple(fused),
         filtered_results=tuple(filtered),
         final_results=tuple(final),
+        self_rag_decision=None,
         response=response,
         rerank_applied=True,
         fallback_used=False,
@@ -1468,6 +1528,189 @@ def test_postgres_bm25_query_wraps_driver_failures() -> None:
         "collection": "shopping_guides",
     }
     assert isinstance(captured.value.cause, psycopg.OperationalError)
+
+
+
+def test_self_rag_controller_accepts_high_confidence_without_judge() -> None:
+    """Skip LLM judging when the top reranked candidates are already strong."""
+
+    judge = _FakeJudgeLLM('{"relevant": false}')
+    traces: list[dict[str, object]] = []
+    controller = SelfRagController(settings=_self_rag_settings(), llm_client=judge)
+    candidates = [
+        _result("chunk-a", score=0.91),
+        _result("chunk-b", score=0.86),
+        _result("chunk-c", score=0.79),
+    ]
+
+    decision = controller.evaluate(
+        "无线耳机怎么选",
+        candidates,
+        trace_context=SimpleNamespace(record_stage=lambda **kwargs: traces.append(kwargs)),
+    )
+
+    assert decision.decision == "accepted"
+    assert decision.score_band == "high_confidence"
+    assert [result.chunk_id for result in decision.selected_results] == [
+        "chunk-a",
+        "chunk-b",
+        "chunk-c",
+    ]
+    assert judge.messages == []
+    assert decision.selected_results[0] is not candidates[0]
+    assert traces[0]["stage"] == "self_rag"
+    assert traces[0]["details"]["judge_called"] is False
+
+
+def test_self_rag_controller_trims_low_score_candidates_and_accepts_judge() -> None:
+    """Call one judge after dropping weak rerank candidates from the Prompt."""
+
+    judge = _FakeJudgeLLM(
+        json.dumps(
+            {
+                "relevant": True,
+                "relevance_score": 0.82,
+                "sufficient": True,
+                "evidence_sufficiency_score": 0.78,
+                "missing_evidence": [],
+                "reason": "The retained evidence answers the query.",
+            }
+        )
+    )
+    controller = SelfRagController(settings=_self_rag_settings(), llm_client=judge)
+    candidates = [
+        _result("chunk-a", score=0.64),
+        _result("chunk-b", score=0.32),
+        _result("chunk-c", score=0.04),
+    ]
+
+    decision = controller.evaluate("退货规则是什么", candidates)
+
+    assert decision.decision == "accepted"
+    assert decision.score_band == "medium_confidence"
+    assert decision.judge_result == SelfRagJudgeResult(
+        relevant=True,
+        relevance_score=0.82,
+        sufficient=True,
+        evidence_sufficiency_score=0.78,
+        missing_evidence=(),
+        reason="The retained evidence answers the query.",
+    )
+    assert [result.chunk_id for result in decision.selected_results] == [
+        "chunk-a",
+        "chunk-b",
+    ]
+    assert len(judge.messages) == 1
+    rendered_prompt = judge.messages[0][1].content
+    assert "chunk-a" in rendered_prompt
+    assert "chunk-b" in rendered_prompt
+    assert "chunk-c" not in rendered_prompt
+
+
+def test_self_rag_controller_returns_empty_when_judge_rejects_evidence() -> None:
+    """Use the empty fallback when relevance or sufficiency fails."""
+
+    judge = _FakeJudgeLLM(
+        json.dumps(
+            {
+                "relevant": True,
+                "relevance_score": 0.75,
+                "sufficient": False,
+                "evidence_sufficiency_score": 0.42,
+                "missing_evidence": ["delivery window"],
+                "reason": "No delivery timing evidence is present.",
+            }
+        )
+    )
+    controller = SelfRagController(settings=_self_rag_settings(), llm_client=judge)
+
+    decision = controller.evaluate("多久能送到", [_result("chunk-a", score=0.58)])
+
+    assert decision.decision == "empty"
+    assert decision.selected_results == []
+    assert decision.fallback_action == "empty"
+    assert decision.reason == "judge_rejected"
+    assert decision.judge_result is not None
+    assert decision.judge_result.missing_evidence == ("delivery window",)
+
+
+def test_self_rag_controller_returns_empty_for_low_confidence_without_judge() -> None:
+    """Avoid model cost when rerank scores are below the medium threshold."""
+
+    judge = _FakeJudgeLLM('{"relevant": true}')
+    controller = SelfRagController(settings=_self_rag_settings(), llm_client=judge)
+
+    decision = controller.evaluate("保修政策", [_result("chunk-a", score=0.18)])
+
+    assert decision.decision == "empty"
+    assert decision.score_band == "low_confidence"
+    assert decision.reason == "low_confidence"
+    assert judge.messages == []
+
+
+def test_self_rag_controller_invalid_judge_json_returns_empty() -> None:
+    """Treat malformed judge output as an empty fallback instead of leaking results."""
+
+    controller = SelfRagController(
+        settings=_self_rag_settings(),
+        llm_client=_FakeJudgeLLM("not json"),
+    )
+
+    decision = controller.evaluate("退货规则", [_result("chunk-a", score=0.61)])
+
+    assert decision.decision == "empty"
+    assert decision.reason == "invalid_judge_output"
+    assert decision.selected_results == []
+
+
+
+def test_self_rag_controller_invalid_judge_schema_returns_empty() -> None:
+    """Reject parsed JSON whose field types violate the judge schema."""
+
+    controller = SelfRagController(
+        settings=_self_rag_settings(),
+        llm_client=_FakeJudgeLLM(
+            json.dumps(
+                {
+                    "relevant": "false",
+                    "relevance_score": 0.8,
+                    "sufficient": True,
+                    "evidence_sufficiency_score": 0.8,
+                    "missing_evidence": [],
+                    "reason": "Invalid boolean fixture.",
+                }
+            )
+        ),
+    )
+
+    decision = controller.evaluate("退货规则", [_result("chunk-a", score=0.61)])
+
+    assert decision.decision == "empty"
+    assert decision.reason == "invalid_judge_output"
+    assert decision.selected_results == []
+
+
+def test_self_rag_controller_trace_failure_does_not_break_decision() -> None:
+    """Keep answer gating independent from observability failures."""
+
+    controller = SelfRagController(settings=_self_rag_settings(), llm_client=None)
+
+    decision = controller.evaluate(
+        "无线耳机怎么选",
+        [
+            _result("chunk-a", score=0.9),
+            _result("chunk-b", score=0.86),
+            _result("chunk-c", score=0.8),
+        ],
+        trace_context=_FailingTraceSink(),
+    )
+
+    assert decision.decision == "accepted"
+    assert [result.chunk_id for result in decision.selected_results] == [
+        "chunk-a",
+        "chunk-b",
+        "chunk-c",
+    ]
 
 
 def test_query_runtime_skips_reranker_and_preserves_filtered_order() -> None:
@@ -1668,6 +1911,84 @@ def test_query_runtime_applies_reranker_before_response_construction() -> None:
     )
     assert execution.final_results == tuple(reranked)
     assert execution.rerank_applied is True
+    assert execution.fallback_used is False
+
+
+
+def test_query_runtime_applies_self_rag_before_response_construction() -> None:
+    """Gate reranked candidates through Self-RAG before building public context."""
+
+    processed = _processed_query().model_copy(update={"top_k": 2})
+    filtered = [
+        _result("filtered-a", score=0.04),
+        _result("filtered-b", score=0.03),
+    ]
+    reranked = [
+        _result("filtered-b", score=0.64),
+        _result("filtered-a", score=0.21),
+    ]
+    selected = [reranked[0].model_copy(deep=True)]
+    query_processor = Mock()
+    query_processor.process.return_value = processed
+    hybrid_search = Mock()
+    hybrid_search.search.return_value = SimpleNamespace(
+        dense_results=[],
+        sparse_results=[],
+        fused_results=list(filtered),
+        results=list(filtered),
+        fallback_used=False,
+    )
+    rerank_controller = Mock()
+    rerank_controller.rerank_with_outcome.return_value = RerankOutcome(
+        results=reranked,
+        fallback_used=False,
+        fallback_reason=None,
+    )
+    self_rag_controller = Mock()
+    self_rag_controller.evaluate.return_value = SelfRagDecision(
+        decision="accepted",
+        score_band="medium_confidence",
+        selected_results=selected,
+        fallback_action=None,
+        judge_result=None,
+        reason="judge_passed",
+    )
+    response_builder = Mock()
+    response_builder.build.return_value = KnowledgeHubResponse(
+        content="[1] Selected",
+        citations=(),
+        images=(),
+        trace_id="query-runtime-self-rag",
+        is_empty=False,
+    )
+    runtime = query_module.QueryRuntime(
+        query_processor=query_processor,
+        hybrid_search=hybrid_search,
+        rerank_controller=rerank_controller,
+        self_rag_controller=self_rag_controller,
+        response_builder=response_builder,
+    )
+
+    execution = runtime.execute(
+        "无线耳机怎么选",
+        collection="shopping_guides",
+        top_k=2,
+        no_rerank=False,
+        trace_id="query-runtime-self-rag",
+    )
+
+    self_rag_controller.evaluate.assert_called_once_with(
+        processed.normalized_query,
+        reranked,
+        trace_context=ANY,
+    )
+    response_builder.build.assert_called_once_with(
+        selected,
+        trace_id="query-runtime-self-rag",
+        query=processed.normalized_query,
+    )
+    assert execution.final_results == tuple(selected)
+    assert execution.self_rag_decision is self_rag_controller.evaluate.return_value
     assert execution.fallback_used is False
 
 

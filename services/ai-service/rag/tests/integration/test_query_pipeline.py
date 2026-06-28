@@ -29,6 +29,7 @@ from src.core.query_engine import (
     HybridSearch,
     QueryProcessor,
     RerankController,
+    SelfRagController,
     SparseRoute,
 )
 from src.core.response import KnowledgeHubResponseBuilder, MultimodalAssembler
@@ -179,7 +180,21 @@ def _settings(collection_id: str) -> RagSettings:
         }
     )
     rerank = settings.rerank.model_copy(update={"enabled": True, "top_k": 2})
-    return settings.model_copy(update={"retrieval": retrieval, "rerank": rerank})
+    self_rag = settings.self_rag.model_copy(
+        update={
+            "high_confidence_top_n": 2,
+            "high_confidence_min_score": 0.0,
+            "medium_confidence_min_top_score": 0.0,
+            "judge_min_candidate_score": 0.0,
+        }
+    )
+    return settings.model_copy(
+        update={
+            "retrieval": retrieval,
+            "rerank": rerank,
+            "self_rag": self_rag,
+        }
+    )
 
 
 def _unit_vector(index: int) -> list[float]:
@@ -389,10 +404,16 @@ def _runtime(
         if reranker is not None
         else None
     )
+    self_rag_controller = (
+        SelfRagController(settings=fixture.settings, llm_client=None)
+        if reranker is not None
+        else None
+    )
     return QueryRuntime(
         query_processor=processor,
         hybrid_search=hybrid,
         rerank_controller=controller,
+        self_rag_controller=self_rag_controller,
         response_builder=KnowledgeHubResponseBuilder(
             multimodal_assembler=MultimodalAssembler(resolver=_ImageResolver())
         ),
@@ -514,6 +535,7 @@ def test_query_pipeline_hybrid() -> None:
             "fusion",
             "filter",
             "rerank",
+            "self_rag",
             "response",
         ]
         stage_by_name = {
@@ -561,6 +583,12 @@ def test_query_pipeline_hybrid() -> None:
         assert [candidate["chunk_id"] for candidate in rerank_details["after_candidates"]] == [
             result.chunk_id for result in execution.final_results
         ]
+        self_rag_details = stage_by_name["self_rag"]["details"]
+        assert self_rag_details["score_band"] == "high_confidence"
+        assert self_rag_details["judge_called"] is False
+        assert self_rag_details["selected_chunk_ids"] == [
+            result.chunk_id for result in execution.final_results
+        ]
         query_summary = query_trace["summary_metrics"]
         query_evaluation = query_trace["evaluation_metrics"]
         assert isinstance(query_summary, dict)
@@ -600,6 +628,7 @@ def test_query_pipeline_hybrid() -> None:
         assert query_summary["top_score"] == execution.final_results[0].score
         assert "top_k_results" not in query_summary
         assert query_counts["rerank"] == 2
+        assert query_counts["self_rag"] == 2
         assert query_evaluation["empty_result"] is False
 
         output: list[str] = []
