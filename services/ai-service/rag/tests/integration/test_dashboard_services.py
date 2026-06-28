@@ -527,7 +527,7 @@ def test_evaluation_service_runs_evaluator_and_reads_metric_trends() -> None:
             "id": "wireless-001",
             "question": "How should I choose wireless headphones?",
             "golden_answer": "Compare stability, comfort, battery, and warranty.",
-            "expected_sources": ["wireless.md"],
+            "expected_doc_ids": ["wireless.md"],
         }
     ]
     predictions = [

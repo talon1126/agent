@@ -159,19 +159,6 @@ def stream_chat_events(
         yield _format_sse("error", {"content": f"AImodel memory failed: {error}"})
         return
 
-    if request.force_rag:
-        yield _format_sse("status", {"content": "正在检索知识库"})
-        tool_results.append(
-            run_search_shopping_guides(
-                query=request.message,
-                collection=request.rag_collection,
-                top_k=5,
-                no_rerank=False,
-                include_image_base64=False,
-            )
-        )
-        yield _format_sse("status", {"content": "已获取知识库上下文"})
-
     if request.links:
         yield _format_sse("status", {"content": "正在识别商品链接"})
         for link in request.links:
@@ -554,18 +541,8 @@ def _run_rag_tool(
 
 def _build_user_prompt(request: AiModelChatRequest) -> str:
     links = "\n".join(f"- {link}" for link in request.links) if request.links else "无"
-    rag_instruction = (
-        f"评估模式：必须使用 RAG 工具检索 {request.rag_collection or '默认'} 知识库后再回答。"
-        if request.force_rag
-        else "无"
-    )
-    # 中文注释：把显式链接和评估强制 RAG 约束放进用户上下文，便于 agent 判断必须调用的工具。
-    return (
-        f"用户问题：{request.message}\n"
-        f"用户提供的商品链接：\n{links}\n"
-        f"RAG 检索要求：{rag_instruction}"
-    )
-
+    # 中文注释：把用户问题和显式商品链接放进上下文，工具选择仍由 Agent 按系统提示自行决策。
+    return f"用户问题：{request.message}\n用户提供的商品链接：\n{links}"
 
 def _query_trace_ids_from_tool_results(
     tool_results: list[AiModelToolResult],

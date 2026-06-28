@@ -9,7 +9,7 @@ introducing a dependency from observability code back into the retrieval engine.
 Input contract:
 
 - ``dataset`` is an ordered sequence of golden records.
-- Each golden record must contain ``expected_sources`` as a non-empty list of
+- Each golden record must contain ``expected_doc_ids`` as a non-empty list of
   source identifiers.
 - ``predictions`` is an ordered sequence aligned with ``dataset``.
 - Each prediction must contain ``retrieved_sources`` as an ordered list of
@@ -65,7 +65,7 @@ class HitRateMetric:
         """Return the average Hit Rate@K score.
 
         Args:
-            dataset: Golden records containing ``expected_sources``.
+            dataset: Golden records containing ``expected_doc_ids``.
             predictions: Aligned prediction records containing
                 ``retrieved_sources`` in ranked order.
 
@@ -79,7 +79,7 @@ class HitRateMetric:
             return 0.0
         hits = 0
         for golden_record, prediction_record in pairs:
-            expected = _expected_sources(golden_record)
+            expected = _expected_doc_ids(golden_record)
             retrieved = _retrieved_sources(prediction_record, top_k=self.top_k)
             hits += int(any(source in expected for source in retrieved))
         return hits / len(pairs)
@@ -120,7 +120,7 @@ class MRRMetric:
         """Return the average reciprocal rank across all samples.
 
         Args:
-            dataset: Golden records containing ``expected_sources``.
+            dataset: Golden records containing ``expected_doc_ids``.
             predictions: Aligned prediction records containing ranked
                 ``retrieved_sources``.
 
@@ -133,7 +133,7 @@ class MRRMetric:
             return 0.0
         reciprocal_ranks: list[float] = []
         for golden_record, prediction_record in pairs:
-            expected = _expected_sources(golden_record)
+            expected = _expected_doc_ids(golden_record)
             retrieved = _retrieved_sources(prediction_record, top_k=self.top_k)
             reciprocal_ranks.append(_reciprocal_rank(expected, retrieved))
         return sum(reciprocal_ranks) / len(reciprocal_ranks)
@@ -172,7 +172,7 @@ class NDCGMetric:
         """Return the average binary NDCG@K score.
 
         Args:
-            dataset: Golden records containing ``expected_sources``.
+            dataset: Golden records containing ``expected_doc_ids``.
             predictions: Aligned prediction records containing ranked
                 ``retrieved_sources``.
 
@@ -186,7 +186,7 @@ class NDCGMetric:
             return 0.0
         scores = []
         for golden_record, prediction_record in pairs:
-            expected = _expected_sources(golden_record)
+            expected = _expected_doc_ids(golden_record)
             retrieved = _retrieved_sources(prediction_record, top_k=self.top_k)
             scores.append(_ndcg_at_k(expected, retrieved, top_k=self.top_k))
         return sum(scores) / len(scores)
@@ -217,15 +217,15 @@ def _aligned_records(
     return list(zip(dataset, predictions, strict=True))
 
 
-def _expected_sources(record: EvaluationRecord) -> set[str]:
-    """Extract and validate expected source identifiers from a golden record."""
+def _expected_doc_ids(record: EvaluationRecord) -> set[str]:
+    """Extract and validate expected document identifiers from a golden record."""
 
-    raw_sources = record.get("expected_sources")
+    raw_sources = record.get("expected_doc_ids")
     if not isinstance(raw_sources, Sequence) or isinstance(raw_sources, str):
-        raise ValueError("expected_sources must be a non-empty list of strings")
-    sources = {_non_blank_string(source, field_name="expected_sources") for source in raw_sources}
+        raise ValueError("expected_doc_ids must be a non-empty list of strings")
+    sources = {_non_blank_string(source, field_name="expected_doc_ids") for source in raw_sources}
     if not sources:
-        raise ValueError("expected_sources must be a non-empty list of strings")
+        raise ValueError("expected_doc_ids must be a non-empty list of strings")
     return sources
 
 

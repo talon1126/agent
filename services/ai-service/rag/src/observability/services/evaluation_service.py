@@ -376,8 +376,10 @@ def _sample_result_records(
         run_id: Parent evaluation run identifier.
         dataset: Golden-set rows passed to the evaluator.
         predictions: Generated prediction rows aligned with ``dataset``.
-        aggregate_metrics: Run-level metrics copied into sample rows only when
-            no prediction-specific metric map is available.
+        aggregate_metrics: Run-level metrics persisted separately in
+            ``rag_evaluation_results``. They are not copied into sample rows
+            because that would misrepresent aggregate scores as per-sample
+            metric evidence.
 
     Returns:
         One immutable sample diagnostic record per golden sample.
@@ -397,7 +399,7 @@ def _sample_result_records(
         sample_id = _sample_id(sample, index)
         metrics = prediction.get("metrics")
         if not isinstance(metrics, Mapping):
-            metrics = dict(aggregate_metrics)
+            metrics = {}
         records.append(
             EvaluationSampleResultRecord(
                 id=_sample_result_id(run_id, sample_id),

@@ -594,7 +594,7 @@ def _seed_evaluation_run(
                 "id": "wireless-001",
                 "question": "How should I choose wireless headphones?",
                 "golden_answer": "Compare comfort, battery life, and warranty.",
-                "expected_sources": ["wireless-guide.md"],
+                "expected_doc_ids": ["wireless-guide.md"],
             }
         ],
         predictions=[

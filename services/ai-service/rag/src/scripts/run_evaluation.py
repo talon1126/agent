@@ -606,16 +606,13 @@ class AImodelEvaluationClient:
     def chat(
         self,
         question: str,
-        *,
-        collection: str | None = None,
-        force_rag: bool = False,
     ) -> dict[str, Any]:
         """Send one golden question to AImodel and return the final done payload.
 
         Args:
-            question: User question from the golden set.
-            collection: Optional RAG collection that evaluation wants AImodel to query.
-            force_rag: Whether evaluation requires one RAG tool call before answering.
+            question: User question from the golden set. Evaluation does not
+                force collection selection or RAG usage, so this request follows
+                the same routing path as a normal user conversation.
 
         Returns:
             Parsed SSE ``done`` payload emitted by ``/AImodel/chat``.
@@ -637,8 +634,6 @@ class AImodelEvaluationClient:
                 "user_id": self._settings.user_id,
                 "message": _required_text(question, field_name="question"),
                 "links": [],
-                "force_rag": force_rag,
-                "rag_collection": collection,
             },
             timeout=self._settings.timeout_seconds,
         )
@@ -1201,11 +1196,7 @@ def _prediction_for_sample(
         or query_trace_repository is None
     ):
         raise ValueError("message answer source requires AImodel and trace repositories")
-    chat_result = aimodel_client.chat(
-        question,
-        collection=collection,
-        force_rag=True,
-    )
+    chat_result = aimodel_client.chat(question)
     _report_sample_step(
         reporter,
         sample=sample,

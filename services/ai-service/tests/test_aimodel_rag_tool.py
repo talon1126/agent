@@ -2,6 +2,8 @@ from typing import Any
 import importlib
 import threading
 
+import pytest
+
 from app.routers.AImodel.memory import NoopAiModelMemoryStore
 from app.routers.AImodel.schemas import AiModelChatRequest, AiModelToolResult
 from app.routers.AImodel.service import (
@@ -364,8 +366,8 @@ def test_query_trace_ids_from_tool_results_deduplicates_rag_traces() -> None:
     assert _query_trace_ids_from_tool_results(tool_results) == ["query-a"]
 
 
-def test_stream_chat_force_rag_prefetches_requested_collection(monkeypatch) -> None:
-    """Evaluation mode should force one RAG call before agent generation."""
+def test_stream_chat_does_not_prefetch_rag_before_agent(monkeypatch) -> None:
+    """Normal AImodel chat should let the Agent decide whether to call RAG."""
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
     captured: dict[str, Any] = {}
@@ -383,13 +385,7 @@ def test_stream_chat_force_rag_prefetches_requested_collection(monkeypatch) -> N
             tool="search_shopping_guides",
             ok=True,
             input=kwargs["query"],
-            data={
-                "trace_id": "query-forced",
-                "content": "[1] 办公椅应关注腰靠。",
-                "citations": [],
-                "images": [],
-                "is_empty": False,
-            },
+            data={"trace_id": "query-unexpected"},
         )
 
     monkeypatch.setattr(
@@ -403,8 +399,6 @@ def test_stream_chat_force_rag_prefetches_requested_collection(monkeypatch) -> N
                 user_id=1,
                 message="每天久坐办公，办公椅最应该看哪些地方？",
                 links=[],
-                force_rag=True,
-                rag_collection="shopping_guides",
             ),
             mock_api_url="http://mock-api",
             streaming_agent_runner=fake_streaming_agent_runner,
@@ -412,15 +406,20 @@ def test_stream_chat_force_rag_prefetches_requested_collection(monkeypatch) -> N
         )
     )
 
-    assert captured["rag_call"] == {
-        "query": "每天久坐办公，办公椅最应该看哪些地方？",
-        "collection": "shopping_guides",
-        "top_k": 5,
-        "no_rerank": False,
-        "include_image_base64": False,
-    }
-    assert captured["tool_results_before_agent"][0]["data"]["trace_id"] == "query-forced"
+    assert "rag_call" not in captured
+    assert captured["tool_results_before_agent"] == []
     assert any("conversation_id" in event for event in events)
+
+
+def test_chat_request_rejects_force_rag_fields() -> None:
+    """The public AImodel request contract should not expose force-RAG controls."""
+
+    with pytest.raises(ValueError):
+        AiModelChatRequest(
+            user_id=1,
+            message="每天久坐办公，办公椅最应该看哪些地方？",
+            force_rag=True,
+        )
 
 
 def test_system_prompt_separates_product_api_facts_from_rag_knowledge() -> None:

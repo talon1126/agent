@@ -1,15 +1,15 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AiModelChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     user_id: int = Field(gt=0)
     conversation_id: int | None = None
     message: str = Field(min_length=1)
     links: list[str] = Field(default_factory=list)
-    force_rag: bool = False
-    rag_collection: str | None = None
 
 
 class AiModelRecommendedLink(BaseModel):

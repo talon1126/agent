@@ -83,9 +83,9 @@ def test_golden_set_samples_follow_required_schema() -> None:
         collection = _required_non_empty_string(sample, "collection")
         _required_non_empty_string(sample, "question")
         _required_non_empty_string(sample, "golden_answer")
-        expected_sources = _required_non_empty_string_list(sample, "expected_sources")
+        expected_doc_ids = _required_non_empty_string_list(sample, "expected_doc_ids")
 
-        assert all(source.startswith(f"{collection}/") for source in expected_sources)
+        assert all(source.startswith(f"{collection}/") for source in expected_doc_ids)
         assert len(str(sample["golden_answer"])) >= 30
 
 
@@ -94,9 +94,9 @@ def test_custom_retrieval_metrics_score_ranked_sources_without_llm() -> None:
     """Score retrieval quality from ranked source IDs without calling any model."""
 
     dataset = [
-        {"expected_sources": ["shopping_guides/headphones.md#wireless"]},
-        {"expected_sources": ["shopping_guides/keyboards.md#ergonomic"]},
-        {"expected_sources": ["shopping_guides/toys.md#stress-relief"]},
+        {"expected_doc_ids": ["shopping_guides/headphones.md#wireless"]},
+        {"expected_doc_ids": ["shopping_guides/keyboards.md#ergonomic"]},
+        {"expected_doc_ids": ["shopping_guides/toys.md#stress-relief"]},
     ]
     predictions = [
         {
@@ -135,7 +135,7 @@ def test_custom_retrieval_metrics_score_ranked_sources_without_llm() -> None:
 def test_custom_retrieval_metrics_accept_mapping_candidates() -> None:
     """Allow future runners to pass retrieved candidates as mapping objects."""
 
-    dataset = [{"expected_sources": ["shopping_guides/headphones.md#wireless"]}]
+    dataset = [{"expected_doc_ids": ["shopping_guides/headphones.md#wireless"]}]
     predictions = [
         {
             "retrieved_sources": [
@@ -164,11 +164,11 @@ def test_custom_retrieval_metrics_validate_dataset_and_prediction_contracts() ->
 
     with pytest.raises(ValueError, match="same number"):
         MRRMetric(top_k=3).score(
-            [{"expected_sources": ["shopping_guides/a.md#section"]}],
+            [{"expected_doc_ids": ["shopping_guides/a.md#section"]}],
             [],
         )
 
-    with pytest.raises(ValueError, match="expected_sources"):
+    with pytest.raises(ValueError, match="expected_doc_ids"):
         NDCGMetric(top_k=3).score(
             [{"question": "missing source contract"}],
             [{"retrieved_sources": ["shopping_guides/a.md#section"]}],
@@ -494,7 +494,7 @@ def test_run_evaluation_cli_passes_configured_ragas_metrics(
                     "collection": "shopping_guides",
                     "question": "如何挑选微波炉？",
                     "golden_answer": "应关注容量、加热方式和售后。",
-                    "expected_sources": ["shopping_guides/microwave.md"],
+                    "expected_doc_ids": ["shopping_guides/microwave.md"],
                 }
             ],
             ensure_ascii=False,
@@ -655,8 +655,6 @@ def test_run_evaluation_cli_defaults_to_message_answer_source(
     assert captured["aimodel_requests"] == [
         {
             "question": "如何挑选微波炉？",
-            "collection": "shopping_guides",
-            "force_rag": True,
         }
     ]
     assert "execute_kwargs" not in captured
@@ -729,16 +727,8 @@ def test_run_evaluation_cli_uses_sample_collection_when_cli_collection_is_absent
 
     assert exit_code == 0
     assert captured["aimodel_requests"] == [
-        {
-            "question": "如何挑选微波炉？",
-            "collection": "shopping_guides",
-            "force_rag": True,
-        },
-        {
-            "question": "拒收商品后怎么处理？",
-            "collection": "policies",
-            "force_rag": True,
-        },
+        {"question": "如何挑选微波炉？"},
+        {"question": "拒收商品后怎么处理？"},
     ]
     assert captured["evaluation_kwargs"]["collection_id"] == "mixed"
     assert captured["evaluation_kwargs"]["settings_snapshot"]["collection"] == "mixed"
@@ -1170,12 +1160,12 @@ def test_evaluation_runner_compares_default_retrieval_strategies() -> None:
         {
             "id": "sample-1",
             "question": "如何挑选通勤无线耳机？",
-            "expected_sources": ["shopping_guides/headphones.md#wireless"],
+            "expected_doc_ids": ["shopping_guides/headphones.md#wireless"],
         },
         {
             "id": "sample-2",
             "question": "人体工学键盘看什么？",
-            "expected_sources": ["shopping_guides/keyboards.md#ergonomic"],
+            "expected_doc_ids": ["shopping_guides/keyboards.md#ergonomic"],
         },
     ]
 
@@ -1248,7 +1238,7 @@ def test_evaluation_runner_validates_strategy_inputs() -> None:
 
     with pytest.raises(ValueError, match="question"):
         runner.compare_strategies(
-            [{"id": "sample-1", "expected_sources": ["shopping_guides/a.md#x"]}],
+            [{"id": "sample-1", "expected_doc_ids": ["shopping_guides/a.md#x"]}],
             retrieval_fn=lambda sample, *, strategy, top_k: [],
         )
 
@@ -1257,7 +1247,7 @@ def test_evaluation_runner_validates_strategy_inputs() -> None:
             [
                 {
                     "question": "q",
-                    "expected_sources": ["shopping_guides/a.md#x"],
+                    "expected_doc_ids": ["shopping_guides/a.md#x"],
                 }
             ],
             retrieval_fn=lambda sample, *, strategy, top_k: [],
@@ -1371,6 +1361,75 @@ def test_evaluation_service_persists_sample_result_diagnostics(
 
 
 @pytest.mark.unit
+def test_evaluation_service_does_not_copy_aggregate_metrics_to_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sample rows must not pretend aggregate run metrics are per-sample scores."""
+
+    class FakeEvaluator:
+        """Return aggregate metrics only, with no per-sample evidence."""
+
+        def evaluate(
+            self,
+            dataset: list[Mapping[str, Any]],
+            predictions: list[Mapping[str, Any]],
+        ) -> dict[str, float]:
+            """Return run-level metrics for the full dataset."""
+
+            assert len(dataset) == 2
+            assert len(predictions) == 2
+            return {"faithfulness": 0.75, "answer_relevancy": 0.8}
+
+    repository = _FakeEvaluationRepository()
+    monkeypatch.setattr(EvaluatorFactory, "create", lambda **kwargs: FakeEvaluator())
+    service = EvaluationService(
+        SimpleNamespace(),
+        repository=repository,
+        clock=lambda: datetime(2026, 6, 27, 12, 0, tzinfo=UTC),
+    )
+    dataset = [
+        {
+            "id": "sample-1",
+            "collection": "faq",
+            "question": "金属碗能放微波炉吗？",
+            "golden_answer": "普通家庭不建议把金属碗放入微波炉。",
+        },
+        {
+            "id": "sample-2",
+            "collection": "manual",
+            "question": "物流异常时客服如何安抚？",
+            "golden_answer": "客服应先安抚，再说明催查和补发退款流程。",
+        },
+    ]
+    predictions = [
+        {
+            "answer": "不建议将金属碗放入微波炉。",
+            "contexts": ["金属会反射微波并产生火花。"],
+            "context_chunk_ids": ["chunk-1"],
+            "query_trace_id": "trace-1",
+        },
+        {
+            "answer": "我理解您着急，会帮您核查物流。",
+            "contexts": ["物流异常应先安抚用户并发起催查。"],
+            "context_chunk_ids": ["chunk-2"],
+            "query_trace_id": "trace-2",
+        },
+    ]
+
+    service.run_evaluation(
+        collection_id="mixed",
+        evaluator="fake",
+        dataset_name="golden_set",
+        dataset=dataset,
+        predictions=predictions,
+        run_id="eval-no-sample-metrics",
+    )
+
+    sample_results = repository.sample_result_batches[0][1]
+    assert [result.metrics for result in sample_results] == [{}, {}]
+
+
+@pytest.mark.unit
 def test_evaluation_runner_saves_strategy_results_for_dashboard_trends() -> None:
     """Persist strategy comparison results through the repository boundary."""
 
@@ -1381,7 +1440,7 @@ def test_evaluation_runner_saves_strategy_results_for_dashboard_trends() -> None
             {
                 "id": "sample-1",
                 "question": "如何挑选通勤无线耳机？",
-                "expected_sources": ["shopping_guides/headphones.md#wireless"],
+                "expected_doc_ids": ["shopping_guides/headphones.md#wireless"],
             }
         ],
         retrieval_fn=lambda sample, *, strategy, top_k: [
@@ -1441,7 +1500,7 @@ def test_evaluation_runner_save_results_validates_persistence_inputs() -> None:
                     [
                         {
                             "question": "q",
-                            "expected_sources": ["shopping_guides/a.md#x"],
+                            "expected_doc_ids": ["shopping_guides/a.md#x"],
                         }
                     ],
                     retrieval_fn=lambda sample, *, strategy, top_k: [
@@ -1496,7 +1555,7 @@ def _write_single_sample_golden_set(tmp_path: Path) -> Path:
                     "collection": "shopping_guides",
                     "question": "如何挑选微波炉？",
                     "golden_answer": "应关注容量、加热方式和售后。",
-                    "expected_sources": ["shopping_guides/microwave.md"],
+                    "expected_doc_ids": ["shopping_guides/microwave.md"],
                 }
             ],
             ensure_ascii=False,
@@ -1596,18 +1655,11 @@ def _patch_evaluation_cli_dependencies(
         def chat(
             self,
             question: str,
-            *,
-            collection: str | None = None,
-            force_rag: bool = False,
         ) -> dict[str, Any]:
-            """Record the forced-RAG request and emulate a completed SSE chat."""
+            """Record the production-shaped request and emulate completed chat."""
 
             captured.setdefault("aimodel_requests", []).append(
-                {
-                    "question": question,
-                    "collection": collection,
-                    "force_rag": force_rag,
-                }
+                {"question": question}
             )
             captured.setdefault("aimodel_questions", []).append(question)
             return {"conversation_id": 99, "answer": "这是 AImodel 最终回答。"}

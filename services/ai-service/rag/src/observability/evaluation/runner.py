@@ -169,7 +169,7 @@ class EvaluationRunner:
 
         Args:
             dataset: Ordered golden records. Each record must contain a
-                non-empty ``question`` and ``expected_sources`` because strategy
+                non-empty ``question`` and ``expected_doc_ids`` because strategy
                 comparison evaluates retrieval quality.
             retrieval_fn: Callable that executes or simulates retrieval for one
                 sample and strategy.
@@ -410,11 +410,11 @@ def _validate_dataset(dataset: Sequence[EvaluationRecord]) -> tuple[EvaluationRe
     samples = tuple(dataset)
     for sample in samples:
         _require_non_blank(sample.get("question"), field_name="question")
-        expected_sources = sample.get("expected_sources")
-        if not isinstance(expected_sources, Sequence) or isinstance(expected_sources, str):
-            raise ValueError("expected_sources must be a non-empty list of strings")
-        if not expected_sources:
-            raise ValueError("expected_sources must be a non-empty list of strings")
+        expected_doc_ids = sample.get("expected_doc_ids")
+        if not isinstance(expected_doc_ids, Sequence) or isinstance(expected_doc_ids, str):
+            raise ValueError("expected_doc_ids must be a non-empty list of strings")
+        if not expected_doc_ids:
+            raise ValueError("expected_doc_ids must be a non-empty list of strings")
     return samples
 
 
