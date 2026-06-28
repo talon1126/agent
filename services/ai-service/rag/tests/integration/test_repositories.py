@@ -508,6 +508,7 @@ def test_core_schema_declares_idempotent_tables_and_indexes() -> None:
         "rag_ingestion_traces",
         "rag_evaluation_runs",
         "rag_evaluation_results",
+        "rag_evaluation_sample_results",
     )
     for table_name in required_tables:
         _table_definition(sql, table_name)
@@ -646,6 +647,7 @@ def test_evaluation_results_belong_to_runs() -> None:
     sql = _schema_sql()
     runs = _table_definition(sql, "rag_evaluation_runs")
     results = _table_definition(sql, "rag_evaluation_results")
+    sample_results = _table_definition(sql, "rag_evaluation_sample_results")
 
     for field_contract in (
         r"\bid\s+TEXT\s+PRIMARY\s+KEY\b",
@@ -665,6 +667,23 @@ def test_evaluation_results_belong_to_runs() -> None:
     ):
         assert re.search(field_contract, results, re.IGNORECASE)
 
+    for field_contract in (
+        r"\bid\s+TEXT\s+PRIMARY\s+KEY\b",
+        r"\brun_id\s+TEXT\s+NOT\s+NULL\b",
+        r"\bsample_id\s+TEXT\s+NOT\s+NULL\b",
+        r"\bsample_index\s+INTEGER\s+NOT\s+NULL\b",
+        r"\bcollection_id\s+TEXT\b",
+        r"\bquestion\s+TEXT\s+NOT\s+NULL\b",
+        r"\bgolden_answer\s+TEXT\s+NOT\s+NULL\b",
+        r"\bgenerated_answer\s+TEXT\s+NOT\s+NULL\b",
+        r"\bretrieved_contexts\s+JSONB\s+NOT\s+NULL\b",
+        r"\bcontext_chunk_ids\s+JSONB\s+NOT\s+NULL\b",
+        r"\bquery_trace_ids\s+JSONB\s+NOT\s+NULL\b",
+        r"\bmetrics\s+JSONB\s+NOT\s+NULL\b",
+        r"\berror\s+JSONB\b",
+    ):
+        assert re.search(field_contract, sample_results, re.IGNORECASE)
+
     assert re.search(
         r"FOREIGN\s+KEY\s*\(\s*run_id\s*\)\s*"
         r"REFERENCES\s+rag_evaluation_runs\s*\(\s*id\s*\)",
@@ -682,6 +701,22 @@ def test_evaluation_results_belong_to_runs() -> None:
         r"'Infinity'::DOUBLE\s+PRECISION\s*,\s*"
         r"'-Infinity'::DOUBLE\s+PRECISION\s*\)",
         results,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert re.search(
+        r"FOREIGN\s+KEY\s*\(\s*run_id\s*\)\s*"
+        r"REFERENCES\s+rag_evaluation_runs\s*\(\s*id\s*\)",
+        sample_results,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert re.search(
+        r"UNIQUE\s*\(\s*run_id\s*,\s*sample_id\s*\)",
+        sample_results,
+        re.IGNORECASE,
+    )
+    assert re.search(
+        r"CHECK\s*\(\s*jsonb_typeof\s*\(\s*retrieved_contexts\s*\)\s*=\s*'array'",
+        sample_results,
         re.IGNORECASE | re.DOTALL,
     )
 
@@ -1502,6 +1537,104 @@ def test_evaluation_repository_upserts_runs_and_metric_results() -> None:
         assert repository.list_results(run_id) == [
             replace(updated_hit_rate, created_at=stored_results[0].created_at),
             stored_results[1],
+        ]
+    finally:
+        with pool.transaction() as connection:
+            connection.execute(
+                "DELETE FROM rag_collections WHERE id = %s",
+                (collection_id,),
+            )
+        pool.close()
+
+
+@pytest.mark.integration
+def test_evaluation_repository_upserts_sample_results() -> None:
+    """Persist per-sample evaluation diagnostics for low-score analysis."""
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required for evaluation repository integration")
+
+    from src.storage.postgres import PostgresPool, init_schema
+    from src.storage.repositories import (
+        EvaluationRepository,
+        EvaluationRunRecord,
+        EvaluationSampleResultRecord,
+    )
+
+    collection_id = f"b5-eval-samples-{uuid4().hex}"
+    run_id = f"run-{uuid4().hex}"
+    started_at = datetime.now(UTC)
+    pool = PostgresPool.from_settings(
+        _database_settings(pool_size=3),
+        environ={"DATABASE_URL": database_url},
+    )
+    pool.open()
+    try:
+        init_schema(pool)
+        repository = EvaluationRepository(pool)
+        repository.upsert_run(
+            EvaluationRunRecord(
+                id=run_id,
+                collection_id=collection_id,
+                evaluator="ragas",
+                dataset_name="golden_set",
+                status="success",
+                started_at=started_at,
+                finished_at=started_at + timedelta(seconds=3),
+                summary={"sample_count": 2},
+            )
+        )
+        initial = [
+            EvaluationSampleResultRecord(
+                id=f"sample-result-{uuid4().hex}",
+                run_id=run_id,
+                sample_id="sample-2",
+                sample_index=2,
+                collection_id="manual",
+                question="物流异常时客服如何回复？",
+                golden_answer="客服应安抚并说明催查流程。",
+                generated_answer="我理解您着急，会为您发起物流催查。",
+                retrieved_contexts=("物流异常应先安抚用户。",),
+                context_chunk_ids=("chunk-2",),
+                query_trace_ids=("trace-2", "trace-3"),
+                metrics={"faithfulness": 0.72},
+                error=None,
+            ),
+            EvaluationSampleResultRecord(
+                id=f"sample-result-{uuid4().hex}",
+                run_id=run_id,
+                sample_id="sample-1",
+                sample_index=1,
+                collection_id="faq",
+                question="金属碗能放微波炉吗？",
+                golden_answer="不建议把金属碗放入微波炉。",
+                generated_answer="普通家庭不建议将金属碗放入微波炉。",
+                retrieved_contexts=("金属会反射微波并产生火花。",),
+                context_chunk_ids=("chunk-1",),
+                query_trace_ids=("trace-1",),
+                metrics={"faithfulness": 0.95, "answer_relevancy": 0.9},
+                error=None,
+            ),
+        ]
+
+        stored = repository.upsert_sample_results(run_id, initial)
+        replacement = replace(
+            initial[0],
+            id=f"sample-result-{uuid4().hex}",
+            generated_answer="更新后的客服回答。",
+            metrics={"faithfulness": 0.8},
+            error={"type": "diagnostic", "message": "updated"},
+        )
+        repository.upsert_sample_results(run_id, [replacement])
+
+        assert stored == [
+            replace(initial[0], created_at=stored[0].created_at),
+            replace(initial[1], created_at=stored[1].created_at),
+        ]
+        assert repository.list_sample_results(run_id) == [
+            replace(initial[1], created_at=stored[1].created_at),
+            replace(replacement, created_at=stored[0].created_at),
         ]
     finally:
         with pool.transaction() as connection:

@@ -33,11 +33,16 @@ from src.observability.evaluation.runner import (
     RetrievalStrategy,
     StrategyComparisonResult,
 )
+from src.observability.services.evaluation_service import EvaluationService
 from src.scripts.run_evaluation import (
     build_prediction_from_query_result,
     select_single_collection,
 )
-from src.storage.repositories import EvaluationResultRecord, EvaluationRunRecord
+from src.storage.repositories import (
+    EvaluationResultRecord,
+    EvaluationRunRecord,
+    EvaluationSampleResultRecord,
+)
 
 RAG_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_SET_PATH = RAG_ROOT / "tests" / "fixtures" / "golden_set.json"
@@ -870,7 +875,6 @@ def test_evaluation_reporter_writes_console_progress_and_jsonl_events(
     assert events[4]["duration_ms"] == pytest.approx(3000.0)
 
 
-
 @pytest.mark.unit
 def test_run_evaluation_cli_reports_sample_progress_without_changing_final_json(
     monkeypatch: pytest.MonkeyPatch,
@@ -934,7 +938,6 @@ def test_run_evaluation_cli_reports_sample_progress_without_changing_final_json(
         if event["event"] == "sample_step_done"
     } >= {"aimodel_chat", "message_resolve", "query_trace_load", "prediction_ready"}
 
-
 @pytest.mark.unit
 def test_evaluation_reporter_formats_elapsed_time_and_refreshes_single_line(
     tmp_path: Path,
@@ -969,7 +972,6 @@ def test_evaluation_reporter_formats_elapsed_time_and_refreshes_single_line(
 
     assert writes[-1].startswith("\r[0s] ragas_evaluation running")
     assert not writes[-1].endswith("\n")
-
 
 
 @pytest.mark.unit
@@ -1018,7 +1020,6 @@ def test_ragas_adapter_reports_llm_and_embedding_model_calls() -> None:
     assert embedding_done["dimension"] == 3
     assert all("prompt" not in event for event in events)
     assert all("vectors" not in event for event in events)
-
 
 
 @pytest.mark.unit
@@ -1264,6 +1265,109 @@ def test_evaluation_runner_validates_strategy_inputs() -> None:
         )
 
     assert ExportedRetrievalStrategy is RetrievalStrategy
+
+
+@pytest.mark.unit
+def test_evaluation_service_persists_sample_result_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Store per-golden-sample answers, contexts, trace IDs, and metrics."""
+
+    class FakeEvaluator:
+        """Return aggregate metrics while exposing per-sample metric evidence."""
+
+        def evaluate(
+            self,
+            dataset: list[Mapping[str, Any]],
+            predictions: list[Mapping[str, Any]],
+        ) -> dict[str, float]:
+            """Validate aligned inputs and return deterministic aggregate scores."""
+
+            assert len(dataset) == 2
+            assert len(predictions) == 2
+            return {"faithfulness": 0.75, "answer_relevancy": 0.8}
+
+    repository = _FakeEvaluationRepository()
+    monkeypatch.setattr(
+        EvaluatorFactory,
+        "create",
+        lambda **kwargs: FakeEvaluator(),
+    )
+    service = EvaluationService(
+        SimpleNamespace(),
+        repository=repository,
+        clock=lambda: datetime(2026, 6, 27, 12, 0, tzinfo=UTC),
+    )
+    dataset = [
+        {
+            "id": "sample-1",
+            "collection": "faq",
+            "question": "金属碗能放微波炉吗？",
+            "golden_answer": "普通家庭不建议把金属碗放入微波炉。",
+        },
+        {
+            "id": "sample-2",
+            "collection": "manual",
+            "question": "物流异常时客服如何安抚？",
+            "golden_answer": "客服应先安抚，再说明催查和补发退款流程。",
+        },
+    ]
+    predictions = [
+        {
+            "answer": "不建议将金属碗放入微波炉。",
+            "contexts": ["金属会反射微波并产生火花。"],
+            "context_chunk_ids": ["chunk-1"],
+            "query_trace_id": "trace-1",
+            "query_trace_ids": ["trace-1"],
+            "sample_collection": "faq",
+            "effective_collection": "faq",
+            "message_id": 88,
+            "conversation_id": 99,
+            "metrics": {"faithfulness": 0.95},
+        },
+        {
+            "answer": "我理解您着急，会帮您核查物流。",
+            "retrieved_contexts": ["物流异常应先安抚用户并发起催查。"],
+            "context_chunk_ids": ["chunk-2"],
+            "query_trace_ids": ["trace-2", "trace-3"],
+            "sample_collection": "manual",
+            "effective_collection": "manual",
+            "metrics": {"faithfulness": 0.55, "answer_relevancy": 0.7},
+        },
+    ]
+
+    detail = service.run_evaluation(
+        collection_id="mixed",
+        evaluator="fake",
+        dataset_name="golden_set",
+        dataset=dataset,
+        predictions=predictions,
+        run_id="eval-samples",
+    )
+
+    assert detail.metrics == {"faithfulness": 0.75, "answer_relevancy": 0.8}
+    assert repository.sample_result_batches[0][0] == "eval-samples"
+    sample_results = repository.sample_result_batches[0][1]
+    assert [result.sample_id for result in sample_results] == ["sample-1", "sample-2"]
+    assert sample_results[0] == EvaluationSampleResultRecord(
+        id="eval-samples:sample:sample-1",
+        run_id="eval-samples",
+        sample_id="sample-1",
+        sample_index=1,
+        collection_id="faq",
+        question="金属碗能放微波炉吗？",
+        golden_answer="普通家庭不建议把金属碗放入微波炉。",
+        generated_answer="不建议将金属碗放入微波炉。",
+        retrieved_contexts=("金属会反射微波并产生火花。",),
+        context_chunk_ids=("chunk-1",),
+        query_trace_ids=("trace-1",),
+        metrics={"faithfulness": 0.95},
+        error=None,
+    )
+    assert sample_results[1].retrieved_contexts == (
+        "物流异常应先安抚用户并发起催查。",
+    )
+    assert sample_results[1].metrics == {"faithfulness": 0.55, "answer_relevancy": 0.7}
 
 
 @pytest.mark.unit
@@ -1579,6 +1683,7 @@ def _patch_evaluation_cli_dependencies(
     )
 
 
+
 class _ObservedFakeLLM:
     """Return one deterministic evaluation answer for Ragas observer tests."""
 
@@ -1619,6 +1724,7 @@ class _FakeEvaluationRepository:
 
         self.run_records: list[EvaluationRunRecord] = []
         self.result_batches: list[tuple[str, list[EvaluationResultRecord]]] = []
+        self.sample_result_batches: list[tuple[str, list[EvaluationSampleResultRecord]]] = []
 
     def upsert_run(self, run: EvaluationRunRecord) -> EvaluationRunRecord:
         """Store one run record and return it like ``EvaluationRepository``."""
@@ -1634,6 +1740,16 @@ class _FakeEvaluationRepository:
         """Store one metric batch and return it in caller order."""
 
         self.result_batches.append((run_id, results))
+        return results
+
+    def upsert_sample_results(
+        self,
+        run_id: str,
+        results: list[EvaluationSampleResultRecord],
+    ) -> list[EvaluationSampleResultRecord]:
+        """Store one sample diagnostic batch and return it in caller order."""
+
+        self.sample_result_batches.append((run_id, results))
         return results
 
 

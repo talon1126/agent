@@ -24,6 +24,7 @@ from src.storage.repositories import (
     EvaluationRepository,
     EvaluationResultRecord,
     EvaluationRunRecord,
+    EvaluationSampleResultRecord,
 )
 
 EvaluationClock = Callable[[], datetime]
@@ -93,6 +94,7 @@ class EvaluationRunDetail:
     created_at: datetime | None
     metrics: Mapping[str, float] = field(default_factory=dict)
     metric_details: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    sample_results: tuple[EvaluationSampleResultRecord, ...] = field(default_factory=tuple)
     settings_snapshot: Mapping[str, Any] = field(default_factory=dict)
     summary: Mapping[str, Any] = field(default_factory=dict)
     error: Mapping[str, Any] | None = None
@@ -153,8 +155,9 @@ class EvaluationService:
             Persisted evaluation detail with metric values and metadata.
 
         Side Effects:
-            Writes one ``rag_evaluation_runs`` row and one
-            ``rag_evaluation_results`` row per returned metric.
+            Writes one ``rag_evaluation_runs`` row, one
+            ``rag_evaluation_results`` row per aggregate metric, and one
+            ``rag_evaluation_sample_results`` row per golden sample.
         """
 
         collection = _require_non_blank(collection_id, field_name="collection_id")
@@ -192,7 +195,7 @@ class EvaluationService:
                     },
                 )
             )
-            return _run_detail(failed_run, [])
+            return _run_detail(failed_run, [], [])
 
         finished_at = self._clock()
         run = self._repository.upsert_run(
@@ -228,7 +231,16 @@ class EvaluationService:
                 for metric_name, metric_value in normalized_metrics.items()
             ],
         )
-        return _run_detail(run, results)
+        sample_results = self._repository.upsert_sample_results(
+            stable_run_id,
+            _sample_result_records(
+                stable_run_id,
+                dataset,
+                predictions,
+                normalized_metrics,
+            ),
+        )
+        return _run_detail(run, results, sample_results)
 
     def list_runs(self, collection_id: str) -> list[EvaluationRunSummary]:
         """Return evaluation run summaries newest-first for one collection.
@@ -261,7 +273,11 @@ class EvaluationService:
         run = self._repository.get_run(stable_run_id)
         if run is None:
             return None
-        return _run_detail(run, self._repository.list_results(stable_run_id))
+        return _run_detail(
+            run,
+            self._repository.list_results(stable_run_id),
+            self._repository.list_sample_results(stable_run_id),
+        )
 
     def metric_trends(
         self,
@@ -326,6 +342,7 @@ def _run_summary(
 def _run_detail(
     run: EvaluationRunRecord,
     results: list[EvaluationResultRecord],
+    sample_results: list[EvaluationSampleResultRecord] | None = None,
 ) -> EvaluationRunDetail:
     """Convert repository records into a Dashboard run detail payload."""
 
@@ -340,11 +357,151 @@ def _run_detail(
         created_at=run.created_at,
         metrics=_metric_map(results),
         metric_details={result.metric_name: result.details for result in results},
+        sample_results=tuple(sample_results or ()),
         settings_snapshot=run.settings_snapshot,
         summary=run.summary,
         error=run.error,
     )
 
+
+def _sample_result_records(
+    run_id: str,
+    dataset: Sequence[Mapping[str, Any]],
+    predictions: Sequence[Mapping[str, Any]],
+    aggregate_metrics: Mapping[str, float],
+) -> list[EvaluationSampleResultRecord]:
+    """Build per-sample diagnostic rows from aligned dataset and predictions.
+
+    Args:
+        run_id: Parent evaluation run identifier.
+        dataset: Golden-set rows passed to the evaluator.
+        predictions: Generated prediction rows aligned with ``dataset``.
+        aggregate_metrics: Run-level metrics copied into sample rows only when
+            no prediction-specific metric map is available.
+
+    Returns:
+        One immutable sample diagnostic record per golden sample.
+
+    Raises:
+        ValueError: If dataset and prediction counts differ, or required fields
+            for low-score diagnosis are missing.
+    """
+
+    if len(dataset) != len(predictions):
+        raise ValueError("dataset and predictions must have the same number of samples")
+    records: list[EvaluationSampleResultRecord] = []
+    for index, (sample, prediction) in enumerate(
+        zip(dataset, predictions, strict=True),
+        start=1,
+    ):
+        sample_id = _sample_id(sample, index)
+        metrics = prediction.get("metrics")
+        if not isinstance(metrics, Mapping):
+            metrics = dict(aggregate_metrics)
+        records.append(
+            EvaluationSampleResultRecord(
+                id=_sample_result_id(run_id, sample_id),
+                run_id=run_id,
+                sample_id=sample_id,
+                sample_index=index,
+                collection_id=_optional_text(
+                    prediction.get("effective_collection")
+                    or prediction.get("sample_collection")
+                    or sample.get("collection")
+                ),
+                question=_required_text(sample.get("question"), field_name="question"),
+                golden_answer=_required_text(
+                    sample.get("golden_answer") or sample.get("reference"),
+                    field_name="golden_answer",
+                ),
+                generated_answer=_required_text(
+                    prediction.get("answer"),
+                    field_name="answer",
+                ),
+                retrieved_contexts=_text_tuple(
+                    prediction.get("retrieved_contexts") or prediction.get("contexts"),
+                    field_name="retrieved_contexts",
+                ),
+                context_chunk_ids=_text_tuple(
+                    prediction.get("context_chunk_ids"),
+                    field_name="context_chunk_ids",
+                    allow_empty=True,
+                ),
+                query_trace_ids=_query_trace_ids(prediction),
+                metrics=dict(metrics),
+                error=_optional_mapping(prediction.get("error")),
+            )
+        )
+    return records
+
+
+def _sample_id(sample: Mapping[str, Any], index: int) -> str:
+    """Return the golden sample ID or a stable index-based fallback."""
+
+    value = sample.get("id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return f"sample-{index}"
+
+
+def _sample_result_id(run_id: str, sample_id: str) -> str:
+    """Return a stable ID for one run/sample diagnostic row."""
+
+    digest = sha256(f"{run_id}:{sample_id}".encode()).hexdigest()[:16]
+    if len(run_id) + len(sample_id) < 180:
+        return f"{run_id}:sample:{sample_id}"
+    return f"{run_id}:sample:{digest}"
+
+
+def _required_text(value: Any, *, field_name: str) -> str:
+    """Return a required non-blank string for sample diagnostics."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value.strip()
+
+
+def _optional_text(value: Any) -> str | None:
+    """Return a stripped optional string or ``None``."""
+
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _text_tuple(
+    value: Any,
+    *,
+    field_name: str,
+    allow_empty: bool = False,
+) -> tuple[str, ...]:
+    """Normalize a JSON list of strings for diagnostic persistence."""
+
+    if value is None and allow_empty:
+        return ()
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise ValueError(f"{field_name} must be a list of strings")
+    items = tuple(str(item) for item in value if str(item).strip())
+    if not items and not allow_empty:
+        raise ValueError(f"{field_name} must contain at least one string")
+    return items
+
+
+def _query_trace_ids(prediction: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return all trace IDs linked to a prediction in stable order."""
+
+    raw_ids = prediction.get("query_trace_ids")
+    if raw_ids is None:
+        raw_ids = [prediction.get("query_trace_id")]
+    return _text_tuple(raw_ids, field_name="query_trace_ids", allow_empty=True)
+
+
+def _optional_mapping(value: Any) -> Mapping[str, Any] | None:
+    """Return optional mapping evidence for failed sample diagnostics."""
+
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("error must be an object when provided")
+    return value
 
 def _metric_map(results: list[EvaluationResultRecord]) -> dict[str, float]:
     """Return metric values keyed by stable metric name."""

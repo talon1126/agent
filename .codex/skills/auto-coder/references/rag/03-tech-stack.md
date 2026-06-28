@@ -623,7 +623,8 @@ PostgreSQL 是唯一持久化层，不使用 SQLite。所有数据库时间字�
 | `rag_query_traces` | Query Trace 索引及顶层 `query_result` JSONB 快照 |
 | `rag_ingestion_traces` | Ingestion Trace 索引、摄取历史和 skipped 结果摘要 |
 | `rag_evaluation_runs` | 评估任务 |
-| `rag_evaluation_results` | 评估结果 |
+| `rag_evaluation_results` | run 级聚合评估指标，用于历史趋势 |
+| `rag_evaluation_sample_results` | golden sample 级评估诊断明细，用于定位低分样本 |
 
 `rag_chunks.embedding` 使用 pgvector：
 

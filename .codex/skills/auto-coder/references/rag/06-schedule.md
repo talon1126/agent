@@ -514,8 +514,11 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 ##### B2：建立图片、Trace、评估 schema
 
 目标：补齐 `image_index` 图片索引、Trace 索引和评估历史相关表。
-评估历史必须拆分为 `rag_evaluation_runs` 任务表和
-`rag_evaluation_results` 指标结果表，支持一个评估任务保存多项指标结果。
+评估历史必须拆分为 `rag_evaluation_runs` 任务表、
+`rag_evaluation_results` 聚合指标结果表和
+`rag_evaluation_sample_results` 样本级诊断表。聚合指标用于 Dashboard
+历史趋势；样本级结果用于保存每条 golden question 的 answer、contexts、
+trace/chunk 溯源和 per-sample metrics，避免只能从 message/trace 反查低分原因。
 
 修改文件：`src/storage/schema.sql`、`tests/integration/test_repositories.py`
 
@@ -525,12 +528,15 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 - `rag_query_traces`：定义数据库表结构
 - `rag_ingestion_traces`：定义数据库表结构
 - `rag_evaluation_runs`：定义数据库表结构
-- `rag_evaluation_results`：按 `run_id` 保存单项评估指标和结果详情
+- `rag_evaluation_results`：按 `run_id` 保存 run 级单项聚合指标和结果详情
+- `rag_evaluation_sample_results`：按 `run_id + sample_id` 幂等保存每条样本的输入、输出、溯源和指标明细
 
-验收标准：`image_index`、Trace 和两张评估表可初始化；
+验收标准：`image_index`、Trace 和三张评估表可初始化；
 `idx_collection`、`idx_doc_hash` 索引存在；Trace 表分别保存基础信息、
 阶段详情、汇总指标和评估指标；评估结果通过外键归属评估任务；
-schema 可重复执行。
+样本级结果通过 `run_id + sample_id` 保持幂等，至少包含 `question`、
+`golden_answer`、`generated_answer`、`retrieved_contexts`、`context_chunk_ids`、
+`query_trace_ids`、`metrics` 和 `error`；schema 可重复执行。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
 
@@ -601,6 +607,7 @@ schema 可重复执行。
 - `IngestionTraceRecord`：以深层不可变结构表示 Ingestion Trace 四段式数据
 - `EvaluationRunRecord`：保存评估任务状态、配置快照、汇总和错误信息
 - `EvaluationResultRecord`：保存单项指标分数及其证据详情
+- `EvaluationSampleResultRecord`：保存单条 golden sample 的问题、标准答案、生成答案、检索上下文、chunk/trace 溯源、per-sample metrics 和错误信息
 - `TraceRepository.upsert_query_trace()`：自动创建缺失 collection，并按 `trace_id` 幂等写入 Query Trace
 - `TraceRepository.upsert_ingestion_trace()`：按 `trace_id` 幂等写入 Ingestion Trace
 - `TraceRepository.get_query_trace()`：按 ID 查询 Query Trace
@@ -609,14 +616,16 @@ schema 可重复执行。
 - `TraceRepository.list_ingestion_traces()`：按 collection 和开始时间倒序查询 Ingestion Trace 历史
 - `EvaluationRepository.upsert_run()`：自动创建缺失 collection，并按稳定 ID 更新评估任务生命周期
 - `EvaluationRepository.upsert_results()`：事务内批量写入指标，按 `run_id + metric_name` 幂等更新并保持输入顺序
+- `EvaluationRepository.upsert_sample_results()`：事务内批量写入样本级诊断，按 `run_id + sample_id` 幂等更新并保持输入顺序
 - `EvaluationRepository.get_run()`：按稳定 ID 查询评估任务
 - `EvaluationRepository.list_runs()`：按 collection 和创建时间倒序查询评估历史
 - `EvaluationRepository.list_results()`：按指标名称稳定排序查询任务结果
+- `EvaluationRepository.list_sample_results()`：按 sample 顺序查询任务的样本级诊断结果
 
 验收标准：Query/Ingestion Trace 可从 running 状态幂等更新为完成状态，Ingestion 四段式与 Query 五段式
 JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 查询；评估任务
 和多个指标结果可写入和查询；同一任务同名指标再次写入时更新稳定结果 ID、
-分数和详情，保留原始创建时间；批量结果返回顺序与输入一致；所有只读 SQL
+分数和详情，保留原始创建时间；同一任务同一 sample 再次写入时更新`r`nanswer、contexts、trace/chunk 溯源、metrics 和 error，保留原始创建时间；`r`n批量结果返回顺序与输入一致；所有只读 SQL
 异常统一转换为带 operation context 和原始 cause 的 `DatabaseError`。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py -v`
@@ -1750,7 +1759,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `RagasEvaluatorClient.__init__()`：读取 `evaluation.llm_provider` 与 `evaluation.embedding_provider`，将项目 LLM/Embedding 客户端注入 Ragas
 - `_load_ragas_backend()`：将项目 `BaseLLM`/`BaseEmbedding` 包装为 Ragas 可用的 LLM 与 Embeddings，避免真实评估依赖 Ragas 默认模型
 - `EvaluatorFactory.register_builtin_providers()`：注册 `fake` 和 `ragas`
-- `run_evaluation_cli()`：加载 golden set、执行 Query Pipeline、构造 predictions、调用 evaluator 并持久化结果
+- `run_evaluation_cli()`：加载 golden set、执行 Query Pipeline、构造 predictions、调用 evaluator 并持久化聚合指标和样本级诊断结果
 - `_prediction_from_query_result()`：将 `query_result.content` 映射为 Ragas answer，并按 contexts 回查 chunk text 构造 `retrieved_contexts`
 - `EvaluationAnswerSource`：声明 `rag` 与 `message` 两种 answer source，避免命令行参数和内部分支使用裸字符串
 - `AImodelEvaluationClient.chat()`：在评估模式下调用 AImodel chat 接口，发送 golden question、样本 collection 和强制 RAG 标记，并消费 SSE/响应流直到 assistant message 落库
@@ -1759,7 +1768,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `_collection_for_sample()`：当 CLI 未显式传入 `--collection` 时，从 golden sample 的 `collection` 字段选择本条样本的目标知识库；当 CLI 显式传入 collection 时使用该值覆盖全部样本
 - `_prediction_from_message_answer()`：以 AImodel assistant message 作为 Ragas answer，并使用关联 trace 的 `query_result.contexts` 对应 chunk text 构造 `retrieved_contexts`
 
-验收标准：`settings.example.yaml` 包含 `response.evidence_context_optimizer` 配置以及 `evaluation.llm_provider/evaluation.embedding_provider` 配置；Prompt 使用英文指令；启用优化时 `query_result.content` 是 Agent-ready final context，并保留 `[1]` 等证据编号；LLM 优化失败、未配置或返回空内容时按配置 fallback 到原始编号证据块；`query_result.contexts` 继续保存 `chunk_id/score/rank` 用于溯源和评估；`EvaluatorFactory.create(provider="ragas")` 可创建真实 Ragas evaluator 且仍保持懒加载；真实 Ragas 评估必须使用项目配置的 LLM/Embedding provider，不依赖 Ragas 默认模型；`run_evaluation.py` 支持 `--collection`、`--golden-set`、`--evaluator`、`--top-k`、`--no-rerank` 和 `--answer-source message|rag`；`--answer-source` 默认值必须为 `message`；`--collection` 缺省时必须按每条 golden sample 的 `collection` 字段自动选择目标知识库，允许一次评估跨 `shopping_guides/faq/policies/manual` 等多个 collection；`--collection` 显式传入时继续覆盖所有样本以便做单 collection 调试；默认 message 模式必须为每个 golden question 调用 AImodel chat，并把样本 collection 和强制 RAG 标记传给 AImodel，使评估样本必须产生至少一个 RAG tool call 与 `message_query_trace` 关联；先根据 chat 结果定位落库 assistant message，再通过 `message_query_trace` 读取该 message 关联的真实 RAG query trace；显式 `--answer-source rag` 才使用 `query_result.content` 作为上下文包调试 answer；默认 message 模式下未找到 message、AImodel 调用失败或 trace 关联缺失时必须 fail fast，不能静默 fallback 到 `query_result.content`；evaluation run 的 `settings_snapshot` 和 result details 必须记录 `answer_source`、`sample_collection`、`effective_collection`、`query_trace_id`、`query_trace_ids`、`message_id` 和 `conversation_id`；可把评估结果写入 `rag_evaluation_runs` 和 `rag_evaluation_results`；单元测试不得真实调用外部 LLM、Embedding、Ragas backend 或 AImodel HTTP 服务。
+验收标准：`settings.example.yaml` 包含 `response.evidence_context_optimizer` 配置以及 `evaluation.llm_provider/evaluation.embedding_provider` 配置；Prompt 使用英文指令；启用优化时 `query_result.content` 是 Agent-ready final context，并保留 `[1]` 等证据编号；LLM 优化失败、未配置或返回空内容时按配置 fallback 到原始编号证据块；`query_result.contexts` 继续保存 `chunk_id/score/rank` 用于溯源和评估；`EvaluatorFactory.create(provider="ragas")` 可创建真实 Ragas evaluator 且仍保持懒加载；真实 Ragas 评估必须使用项目配置的 LLM/Embedding provider，不依赖 Ragas 默认模型；`run_evaluation.py` 支持 `--collection`、`--golden-set`、`--evaluator`、`--top-k`、`--no-rerank` 和 `--answer-source message|rag`；`--answer-source` 默认值必须为 `message`；`--collection` 缺省时必须按每条 golden sample 的 `collection` 字段自动选择目标知识库，允许一次评估跨 `shopping_guides/faq/policies/manual` 等多个 collection；`--collection` 显式传入时继续覆盖所有样本以便做单 collection 调试；默认 message 模式必须为每个 golden question 调用 AImodel chat，并把样本 collection 和强制 RAG 标记传给 AImodel，使评估样本必须产生至少一个 RAG tool call 与 `message_query_trace` 关联；先根据 chat 结果定位落库 assistant message，再通过 `message_query_trace` 读取该 message 关联的真实 RAG query trace；显式 `--answer-source rag` 才使用 `query_result.content` 作为上下文包调试 answer；默认 message 模式下未找到 message、AImodel 调用失败或 trace 关联缺失时必须 fail fast，不能静默 fallback 到 `query_result.content`；evaluation run 的 `settings_snapshot` 和 result details 必须记录 `answer_source`、`sample_collection`、`effective_collection`、`query_trace_id`、`query_trace_ids`、`message_id` 和 `conversation_id`；评估结果必须写入 `rag_evaluation_runs`、`rag_evaluation_results` 和 `rag_evaluation_sample_results`；样本级结果必须保存每条 golden question 的 `question`、`golden_answer`、`generated_answer`、`retrieved_contexts`、`context_chunk_ids`、`query_trace_ids`、`metrics` 和 `error`，便于定位 faithfulness/answer_relevancy 低分原因；单元测试不得真实调用外部 LLM、Embedding、Ragas backend 或 AImodel HTTP 服务。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_response_builder.py services\ai-service\rag\tests\unit\test_evaluation.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 

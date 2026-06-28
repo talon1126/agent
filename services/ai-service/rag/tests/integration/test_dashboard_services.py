@@ -526,6 +526,7 @@ def test_evaluation_service_runs_evaluator_and_reads_metric_trends() -> None:
         {
             "id": "wireless-001",
             "question": "How should I choose wireless headphones?",
+            "golden_answer": "Compare stability, comfort, battery, and warranty.",
             "expected_sources": ["wireless.md"],
         }
     ]
@@ -533,6 +534,9 @@ def test_evaluation_service_runs_evaluator_and_reads_metric_trends() -> None:
         {
             "id": "wireless-001",
             "answer": "Compare stability, comfort, battery, and warranty.",
+            "contexts": ["Wireless headphones require stable Bluetooth and comfortable fit."],
+            "context_chunk_ids": ["chunk-wireless-1"],
+            "query_trace_id": "trace-wireless-1",
             "sources": ["wireless.md"],
         }
     ]

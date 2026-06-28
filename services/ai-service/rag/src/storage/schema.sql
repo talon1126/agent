@@ -522,3 +522,58 @@ CREATE INDEX IF NOT EXISTS idx_rag_evaluation_results_run_id
     ON rag_evaluation_results (run_id);
 CREATE INDEX IF NOT EXISTS idx_rag_evaluation_results_metric_created_at
     ON rag_evaluation_results (metric_name, created_at DESC);
+
+
+-- Store one diagnostic row per golden-set sample so low aggregate Ragas scores
+-- can be traced back to the exact answer, contexts, chunks, traces, and errors
+-- that produced them. Aggregate metric trend rows remain in
+-- rag_evaluation_results.
+CREATE TABLE IF NOT EXISTS rag_evaluation_sample_results (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    sample_id TEXT NOT NULL,
+    sample_index INTEGER NOT NULL,
+    collection_id TEXT,
+    question TEXT NOT NULL,
+    golden_answer TEXT NOT NULL,
+    generated_answer TEXT NOT NULL,
+    retrieved_contexts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    context_chunk_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    query_trace_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_rag_evaluation_sample_results_run
+        FOREIGN KEY (run_id)
+        REFERENCES rag_evaluation_runs(id)
+        ON DELETE CASCADE,
+    CONSTRAINT uq_rag_evaluation_sample_results_run_sample
+        UNIQUE (run_id, sample_id),
+    CONSTRAINT chk_rag_evaluation_sample_results_id_not_blank
+        CHECK (length(btrim(id)) > 0),
+    CONSTRAINT chk_rag_evaluation_sample_results_sample_not_blank
+        CHECK (length(btrim(sample_id)) > 0),
+    CONSTRAINT chk_rag_evaluation_sample_results_index_positive
+        CHECK (sample_index > 0),
+    CONSTRAINT chk_rag_evaluation_sample_results_question_not_blank
+        CHECK (length(btrim(question)) > 0),
+    CONSTRAINT chk_rag_evaluation_sample_results_golden_not_blank
+        CHECK (length(btrim(golden_answer)) > 0),
+    CONSTRAINT chk_rag_evaluation_sample_results_generated_not_blank
+        CHECK (length(btrim(generated_answer)) > 0),
+    CONSTRAINT chk_rag_evaluation_sample_results_contexts_array
+        CHECK (jsonb_typeof(retrieved_contexts) = 'array'),
+    CONSTRAINT chk_rag_evaluation_sample_results_chunk_ids_array
+        CHECK (jsonb_typeof(context_chunk_ids) = 'array'),
+    CONSTRAINT chk_rag_evaluation_sample_results_trace_ids_array
+        CHECK (jsonb_typeof(query_trace_ids) = 'array'),
+    CONSTRAINT chk_rag_evaluation_sample_results_metrics_object
+        CHECK (jsonb_typeof(metrics) = 'object'),
+    CONSTRAINT chk_rag_evaluation_sample_results_error_object
+        CHECK (error IS NULL OR jsonb_typeof(error) = 'object')
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_evaluation_sample_results_run_id
+    ON rag_evaluation_sample_results (run_id, sample_index ASC);
+CREATE INDEX IF NOT EXISTS idx_rag_evaluation_sample_results_sample_id
+    ON rag_evaluation_sample_results (sample_id);

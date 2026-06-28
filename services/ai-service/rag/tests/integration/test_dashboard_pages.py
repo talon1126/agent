@@ -593,6 +593,7 @@ def _seed_evaluation_run(
             {
                 "id": "wireless-001",
                 "question": "How should I choose wireless headphones?",
+                "golden_answer": "Compare comfort, battery life, and warranty.",
                 "expected_sources": ["wireless-guide.md"],
             }
         ],
@@ -600,6 +601,9 @@ def _seed_evaluation_run(
             {
                 "id": "wireless-001",
                 "answer": "Compare comfort, Bluetooth stability, and battery.",
+                "contexts": ["Wireless guide evidence covers comfort, stability, and battery."],
+                "context_chunk_ids": ["chunk-wireless-1"],
+                "query_trace_id": "trace-wireless-1",
                 "sources": ["wireless-guide.md"],
             }
         ],

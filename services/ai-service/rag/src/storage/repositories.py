@@ -5,7 +5,7 @@ code and the PostgreSQL schema. ``DocumentRepository`` owns collection-aware
 document persistence, while ``ChunkRepository`` owns ordered chunk persistence
 and content-hash calculation. ``TraceRepository`` stores Query/Ingestion trace
 sections plus the Query-only result snapshot, and ``EvaluationRepository`` stores evaluation
-runs plus independently queryable metric rows.
+runs, aggregate metric rows, and per-sample diagnostic rows.
 
 The repositories do not open database connections, initialize schema, create
 embeddings, calculate evaluation metrics, or implement document lifecycle state
@@ -1153,6 +1153,69 @@ class EvaluationResultRecord:
         object.__setattr__(self, "details", _freeze_mapping(self.details))
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluationSampleResultRecord:
+    """Represent one golden-set sample diagnostic row for an evaluation run.
+
+    The aggregate ``rag_evaluation_results`` table explains trend-level scores.
+    This record preserves the concrete inputs and outputs that produced those
+    scores so low faithfulness or answer relevancy can be traced to one sample.
+
+    Attributes:
+        id: Stable Python-generated sample result ID.
+        run_id: Parent evaluation run ID.
+        sample_id: Golden-set sample identifier.
+        sample_index: One-based sample order inside the run.
+        collection_id: Effective collection used by this sample, when known.
+        question: Golden question sent to RAG or AImodel.
+        golden_answer: Reference answer from the golden dataset.
+        generated_answer: RAG context package or final AImodel answer evaluated.
+        retrieved_contexts: Context texts supplied to Ragas.
+        context_chunk_ids: Ranked chunk IDs backing ``retrieved_contexts``.
+        query_trace_ids: RAG trace IDs linked to this sample.
+        metrics: Optional per-sample metric values or evaluator evidence.
+        error: Structured sample-level failure information when available.
+        created_at: Original diagnostic row creation timestamp.
+    """
+
+    id: str
+    run_id: str
+    sample_id: str
+    sample_index: int
+    collection_id: str | None
+    question: str
+    golden_answer: str
+    generated_answer: str
+    retrieved_contexts: tuple[str, ...] = field(default_factory=tuple)
+    context_chunk_ids: tuple[str, ...] = field(default_factory=tuple)
+    query_trace_ids: tuple[str, ...] = field(default_factory=tuple)
+    metrics: Mapping[str, Any] = field(default_factory=dict)
+    error: Mapping[str, Any] | None = None
+    created_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        """Freeze sample arrays and JSON objects for immutable diagnostics."""
+
+        object.__setattr__(
+            self,
+            "retrieved_contexts",
+            tuple(str(context) for context in self.retrieved_contexts),
+        )
+        object.__setattr__(
+            self,
+            "context_chunk_ids",
+            tuple(str(chunk_id) for chunk_id in self.context_chunk_ids),
+        )
+        object.__setattr__(
+            self,
+            "query_trace_ids",
+            tuple(str(trace_id) for trace_id in self.query_trace_ids),
+        )
+        object.__setattr__(self, "metrics", _freeze_mapping(self.metrics))
+        if self.error is not None:
+            object.__setattr__(self, "error", _freeze_mapping(self.error))
+
+
 class TraceRepository:
     """Persist Query and Ingestion traces for Dashboard history views."""
 
@@ -1656,6 +1719,105 @@ class EvaluationRepository:
                 stored.append(self._require_result(row))
         return stored
 
+    def upsert_sample_results(
+        self,
+        run_id: str,
+        results: list[EvaluationSampleResultRecord],
+    ) -> list[EvaluationSampleResultRecord]:
+        """Upsert per-sample diagnostics while preserving caller order.
+
+        Args:
+            run_id: Existing evaluation run receiving every diagnostic row.
+            results: Sample records to insert or update.
+
+        Returns:
+            Persisted sample records in input order.
+
+        Raises:
+            ValueError: If a record references another run, or duplicate sample
+                IDs/result IDs appear in the same batch.
+        """
+
+        persisted = list(results)
+        if not persisted:
+            return persisted
+        if any(result.run_id != run_id for result in persisted):
+            raise ValueError("Evaluation sample result run_id does not match batch run_id")
+        result_ids = [result.id for result in persisted]
+        sample_ids = [result.sample_id for result in persisted]
+        if len(set(result_ids)) != len(result_ids):
+            raise ValueError("Evaluation sample result batch contains duplicate IDs")
+        if len(set(sample_ids)) != len(sample_ids):
+            raise ValueError("Evaluation sample result batch contains duplicate sample IDs")
+
+        stored: list[EvaluationSampleResultRecord] = []
+        with self._pool.transaction() as connection:
+            for result in persisted:
+                row = connection.execute(
+                    """
+                    INSERT INTO rag_evaluation_sample_results (
+                        id,
+                        run_id,
+                        sample_id,
+                        sample_index,
+                        collection_id,
+                        question,
+                        golden_answer,
+                        generated_answer,
+                        retrieved_contexts,
+                        context_chunk_ids,
+                        query_trace_ids,
+                        metrics,
+                        error
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id, sample_id) DO UPDATE SET
+                        id = EXCLUDED.id,
+                        sample_index = EXCLUDED.sample_index,
+                        collection_id = EXCLUDED.collection_id,
+                        question = EXCLUDED.question,
+                        golden_answer = EXCLUDED.golden_answer,
+                        generated_answer = EXCLUDED.generated_answer,
+                        retrieved_contexts = EXCLUDED.retrieved_contexts,
+                        context_chunk_ids = EXCLUDED.context_chunk_ids,
+                        query_trace_ids = EXCLUDED.query_trace_ids,
+                        metrics = EXCLUDED.metrics,
+                        error = EXCLUDED.error
+                    RETURNING
+                        id,
+                        run_id,
+                        sample_id,
+                        sample_index,
+                        collection_id,
+                        question,
+                        golden_answer,
+                        generated_answer,
+                        retrieved_contexts,
+                        context_chunk_ids,
+                        query_trace_ids,
+                        metrics,
+                        error,
+                        created_at
+                    """,
+                    (
+                        result.id,
+                        run_id,
+                        result.sample_id,
+                        result.sample_index,
+                        result.collection_id,
+                        result.question,
+                        result.golden_answer,
+                        result.generated_answer,
+                        Jsonb(_json_compatible(result.retrieved_contexts)),
+                        Jsonb(_json_compatible(result.context_chunk_ids)),
+                        Jsonb(_json_compatible(result.query_trace_ids)),
+                        Jsonb(_json_compatible(result.metrics)),
+                        Jsonb(_json_compatible(result.error)) if result.error is not None else None,
+                    ),
+                ).fetchone()
+                stored.append(self._require_sample_result(row))
+        return stored
+
     def get_run(self, run_id: str) -> EvaluationRunRecord | None:
         """Load one evaluation run by stable ID.
 
@@ -1742,6 +1904,47 @@ class EvaluationRepository:
         )
         return [self._require_result(row) for row in rows]
 
+    def list_sample_results(self, run_id: str) -> list[EvaluationSampleResultRecord]:
+        """List one run's sample diagnostics in stable sample order.
+
+        Args:
+            run_id: Parent evaluation run identifier.
+
+        Returns:
+            Sample records ordered by sample index and stable sample ID.
+
+        Raises:
+            DatabaseError: If PostgreSQL connection or query execution fails.
+        """
+
+        rows = _read_rows(
+            self._pool,
+            operation="evaluation_sample_result_list",
+            query="""
+            SELECT
+                id,
+                run_id,
+                sample_id,
+                sample_index,
+                collection_id,
+                question,
+                golden_answer,
+                generated_answer,
+                retrieved_contexts,
+                context_chunk_ids,
+                query_trace_ids,
+                metrics,
+                error,
+                created_at
+            FROM rag_evaluation_sample_results
+            WHERE run_id = %s
+            ORDER BY sample_index ASC, sample_id ASC, id ASC
+            """,
+            params=(run_id,),
+            many=True,
+        )
+        return [self._require_sample_result(row) for row in rows]
+
     @staticmethod
     def _run_columns() -> str:
         """Return the canonical evaluation-run projection in dataclass order."""
@@ -1781,3 +1984,14 @@ class EvaluationRepository:
         if row is None:
             raise RuntimeError("Evaluation result operation returned no row")
         return EvaluationResultRecord(*row)
+
+
+    @staticmethod
+    def _require_sample_result(
+        row: tuple[Any, ...] | None,
+    ) -> EvaluationSampleResultRecord:
+        """Convert a mandatory row to an evaluation sample diagnostic record."""
+
+        if row is None:
+            raise RuntimeError("Evaluation sample result operation returned no row")
+        return EvaluationSampleResultRecord(*row)
