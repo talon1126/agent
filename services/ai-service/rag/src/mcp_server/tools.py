@@ -13,7 +13,7 @@ remain placeholders until E3.
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -23,16 +23,20 @@ import psycopg
 
 from src.core.config import DatabaseSettings, RagSettings, load_settings
 from src.core.errors import DatabaseError
+from src.core.query_engine import ParallelRetrievalController, ProcessedQuery
 from src.core.response import KnowledgeHubResponse
+from src.core.types import RetrievalResult
 from src.storage.postgres import PostgresPool, init_schema
 
 MAX_IMAGE_BASE64_BYTES = 1_000_000
+MAX_MCP_COLLECTIONS = 8
 
 
 class QueryExecutionLike(Protocol):
-    """Describe the query execution fields visible to the MCP tool."""
+    """Describe query execution fields consumed by the MCP tool."""
 
     response: KnowledgeHubResponse
+    final_results: Sequence[RetrievalResult]
 
 
 class QueryRuntimeLike(Protocol):
@@ -120,13 +124,15 @@ class QueryKnowledgeHubTool:
         no_rerank: bool = False,
         include_image_base64: bool = False,
         request_source: str | None = None,
+        collections: list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         """Query the knowledge hub and return public MCP-safe JSON.
 
         Args:
             query: User question passed by AImodel or another MCP client.
-            collection: Optional collection override. ``None`` uses the
-                configured default collection.
+            collection: Optional primary collection override. ``None`` uses
+                the configured default collection when ``collections`` is not
+                supplied.
             top_k: Optional final result count. ``None`` uses
                 ``settings.retrieval.final_top_k``.
             no_rerank: Whether to preserve filtered RRF order and skip rerank.
@@ -136,6 +142,10 @@ class QueryKnowledgeHubTool:
                 Omitted MCP calls default to ``mcp``; AImodel passes
                 ``aimodel`` so Dashboard filters can separate user chats from
                 direct CLI and evaluation traces.
+            collections: Optional ordered collection candidates selected by an
+                upstream intent router. When more than one unique value is
+                supplied, the tool executes each collection and returns an
+                aggregate response with child query trace IDs.
 
         Returns:
             ``ok=true`` public RAG response or ``ok=false`` structured business
@@ -154,16 +164,18 @@ class QueryKnowledgeHubTool:
             no_rerank=no_rerank,
             include_image_base64=include_image_base64,
             request_source=request_source,
+            collections=collections,
         )
         if validation_error is not None:
             return validation_error
 
         settings = self._settings_loader()
-        active_collection = (
-            collection.strip()
-            if isinstance(collection, str) and collection.strip()
-            else settings.retrieval.filters.default_collection
+        active_collections = self._resolve_collections(
+            collection=collection,
+            collections=collections,
+            default_collection=settings.retrieval.filters.default_collection,
         )
+        active_collection = active_collections[0]
         active_top_k = (
             settings.retrieval.final_top_k if top_k is None else top_k
         )
@@ -177,15 +189,25 @@ class QueryKnowledgeHubTool:
             pool.open()
             self._schema_initializer(pool)
             runtime = self._runtime_builder(settings, pool, no_rerank)
-            execution = runtime.execute(
-                query.strip(),
-                collection=active_collection,
-                top_k=active_top_k,
-                no_rerank=no_rerank,
-                trace_id=self._trace_id_factory(),
-                request_source=active_request_source,
-            )
-            payload = execution.response.model_dump(mode="json")
+            if len(active_collections) == 1:
+                execution = runtime.execute(
+                    query.strip(),
+                    collection=active_collection,
+                    top_k=active_top_k,
+                    no_rerank=no_rerank,
+                    trace_id=self._trace_id_factory(),
+                    request_source=active_request_source,
+                )
+                payload = execution.response.model_dump(mode="json")
+            else:
+                payload = self._execute_multi_collection(
+                    runtime=runtime,
+                    query=query.strip(),
+                    collections=active_collections,
+                    top_k=active_top_k,
+                    no_rerank=no_rerank,
+                    request_source=active_request_source,
+                )
             if include_image_base64:
                 self._attach_image_base64(payload)
             return payload
@@ -203,6 +225,7 @@ class QueryKnowledgeHubTool:
         no_rerank: bool,
         include_image_base64: bool,
         request_source: str | None,
+        collections: list[str] | tuple[str, ...] | None,
     ) -> dict[str, Any] | None:
         """Validate MCP request primitives before opening external resources."""
 
@@ -233,7 +256,109 @@ class QueryKnowledgeHubTool:
                 "invalid_request",
                 "request_source must be a non-blank string when provided",
             )
+        if collections is not None:
+            if isinstance(collections, str) or not isinstance(collections, list | tuple):
+                return _business_error(
+                    "invalid_request",
+                    "collections must be a list of non-blank strings when provided",
+                )
+            if len(collections) > MAX_MCP_COLLECTIONS:
+                return _business_error(
+                    "invalid_request",
+                    f"collections must contain at most {MAX_MCP_COLLECTIONS} values",
+                )
+            for value in collections:
+                if not isinstance(value, str) or not value.strip():
+                    return _business_error(
+                        "invalid_request",
+                        "collections must contain only non-blank strings",
+                    )
         return None
+
+    @staticmethod
+    def _resolve_collections(
+        *,
+        collection: str | None,
+        collections: list[str] | tuple[str, ...] | None,
+        default_collection: str,
+    ) -> list[str]:
+        """Resolve the active single or multi-collection request target."""
+
+        raw_values = collections if collections is not None else (collection,)
+        resolved: list[str] = []
+        for value in raw_values:
+            if isinstance(value, str) and value.strip():
+                selected = value.strip()
+            else:
+                selected = default_collection
+            if selected not in resolved:
+                resolved.append(selected)
+        return resolved or [default_collection]
+
+    def _execute_multi_collection(
+        self,
+        *,
+        runtime: QueryRuntimeLike,
+        query: str,
+        collections: list[str],
+        top_k: int,
+        no_rerank: bool,
+        request_source: str,
+    ) -> dict[str, Any]:
+        """Run the existing single-collection runtime for each collection.
+
+        Args:
+            runtime: Query runtime created for this MCP request.
+            query: Validated and stripped user query.
+            collections: Ordered unique collection IDs selected by the caller.
+            top_k: Result count propagated to each collection.
+            no_rerank: Whether each child retrieval should skip rerank.
+            request_source: Caller label written to each child query trace.
+
+        Returns:
+            Aggregated public MCP response with child trace IDs and
+            per-collection execution summaries.
+        """
+
+        parallel_runtime = _McpParallelRuntime(
+            runtime=runtime,
+            query=query,
+            request_source=request_source,
+        )
+        processed = ProcessedQuery(
+            raw_query=query,
+            normalized_query=query,
+            keywords=(),
+            collection=collections[0],
+            top_k=top_k,
+        )
+        result = ParallelRetrievalController(
+            runtime=parallel_runtime,
+            max_collections=MAX_MCP_COLLECTIONS,
+        ).search(
+            processed,
+            collections=collections,
+            top_k=top_k,
+            no_rerank=no_rerank,
+            trace_id_factory=lambda _collection: self._trace_id_factory(),
+        )
+        if not parallel_runtime.payloads:
+            errors = [
+                str(row.get("error", ""))
+                for row in result.collection_results
+                if row.get("status") == "failed"
+            ]
+            return _business_error(
+                "invalid_request",
+                "; ".join(error for error in errors if error)
+                or "multi-collection query returned no results",
+            )
+        return _merge_parallel_payloads(
+            results=result.results,
+            payloads=parallel_runtime.payloads,
+            collection_results=result.collection_results,
+            query_trace_ids=result.query_trace_ids,
+        )
 
     def _attach_image_base64(self, payload: dict[str, Any]) -> None:
         """Attach bounded image bytes to an already public response payload."""
@@ -248,6 +373,126 @@ class QueryKnowledgeHubTool:
             if not path.is_file() or path.stat().st_size > self._max_image_base64_bytes:
                 continue
             image["base64_content"] = base64.b64encode(path.read_bytes()).decode("ascii")
+
+
+class _McpParallelRuntime:
+    """Adapt the MCP QueryRuntime boundary to ParallelRetrievalController."""
+
+    def __init__(
+        self,
+        *,
+        runtime: QueryRuntimeLike,
+        query: str,
+        request_source: str,
+    ) -> None:
+        """Store one runtime and the original query for child collection runs.
+
+        Args:
+            runtime: Existing single-collection query runtime.
+            query: Original caller query. The adapter deliberately keeps this
+                unchanged so AImodel retrieval does not rewrite tool arguments.
+            request_source: Caller label written to child query traces.
+        """
+
+        self._runtime = runtime
+        self._query = query
+        self._request_source = request_source
+        self.payloads: list[dict[str, Any]] = []
+
+    def execute_collection(
+        self,
+        *,
+        query: ProcessedQuery,
+        collection: str,
+        top_k: int,
+        no_rerank: bool,
+        trace_id: str,
+    ) -> list[RetrievalResult]:
+        """Execute one child collection and return its final candidates."""
+
+        execution = self._runtime.execute(
+            self._query or query.raw_query,
+            collection=collection,
+            top_k=top_k,
+            no_rerank=no_rerank,
+            trace_id=trace_id,
+            request_source=self._request_source,
+        )
+        self.payloads.append(execution.response.model_dump(mode="json"))
+        return list(execution.final_results)
+
+
+def _merge_parallel_payloads(
+    *,
+    results: list[RetrievalResult],
+    payloads: list[dict[str, Any]],
+    collection_results: list[dict[str, Any]],
+    query_trace_ids: list[str],
+) -> dict[str, Any]:
+    """Build one public MCP response from globally merged collection results."""
+
+    citation_by_chunk = {
+        citation.get("chunk_id"): citation
+        for payload in payloads
+        for citation in payload.get("citations", [])
+        if isinstance(citation, dict) and citation.get("chunk_id")
+    }
+    citations = [
+        citation_by_chunk[result.chunk_id]
+        for result in results
+        if result.chunk_id in citation_by_chunk
+    ]
+    images = _dedupe_images(
+        image for payload in payloads for image in payload.get("images", [])
+    )
+    return {
+        "ok": True,
+        "content": "\n\n".join(
+            f"[{index}] {result.text.strip()}"
+            for index, result in enumerate(results, start=1)
+        ),
+        "citations": citations,
+        "images": images,
+        "trace_id": query_trace_ids[0] if query_trace_ids else "multi-collection",
+        "query_trace_ids": query_trace_ids,
+        "collection_results": _public_collection_results(collection_results),
+        "is_empty": not results,
+    }
+
+
+def _public_collection_results(
+    collection_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project internal collection diagnostics onto the MCP public contract."""
+
+    public_rows: list[dict[str, Any]] = []
+    for row in collection_results:
+        public_row = {
+            "collection": row.get("collection"),
+            "trace_id": row.get("trace_id"),
+            "candidate_count": row.get("candidate_count", 0),
+            "status": row.get("status", "unknown"),
+        }
+        if row.get("error"):
+            public_row["error"] = row["error"]
+        public_rows.append(public_row)
+    return public_rows
+
+
+def _dedupe_images(images: Any) -> list[dict[str, Any]]:
+    """Return images in first-seen order by image_id."""
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        image_id = image.get("image_id")
+        if not isinstance(image_id, str) or image_id in seen:
+            continue
+        seen.add(image_id)
+        deduped.append(image)
+    return deduped
 
 
 def _business_error(code: str, message: str) -> dict[str, Any]:

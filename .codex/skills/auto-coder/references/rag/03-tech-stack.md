@@ -175,6 +175,7 @@ MCP 工具一：`query_knowledge_hub`
 {
   "query": "如何挑选高性价比无线耳机？",
   "collection": "shopping_guides",
+  "collections": ["shopping_guides", "faq"],
   "top_k": 5,
   "no_rerank": false,
   "include_image_base64": false
@@ -212,6 +213,15 @@ MCP 工具一：`query_knowledge_hub`
     }
   ],
   "trace_id": "query_20260604_xxx",
+  "query_trace_ids": ["query_20260604_xxx"],
+  "collection_results": [
+    {
+      "collection": "shopping_guides",
+      "trace_id": "query_20260604_xxx",
+      "candidate_count": 5,
+      "status": "success"
+    }
+  ],
   "is_empty": false
 }
 ```
@@ -223,7 +233,7 @@ chunk 文本按 `[1]`、`[2]` 编号生成证据块，再按 `response.evidence_
 过滤报告或内部 tool result。`citations` 和 `images` 使用独立公共契约；默认只返回图片
 metadata 与受管 `file_path`，不默认返回 base64，避免 stdio tool payload 过大。若调用方
 明确传入 `include_image_base64=true`，后续工具实现可以附加受限大小的
-`base64_content` 字段。没有检索命中时返回 `ok=true`、`is_empty=true`、空
+`base64_content` 字段。`collection` 保留单 collection 兼容；`collections` 用于多 collection 查询，若两者同时传入，以去重后的 `collections` 为准，并把 `collection` 作为 `primary_collection` 兼容字段写入 trace。MCP 层不实现并行检索逻辑，只校验 query、collection/collections、top_k、no_rerank 和 include_image_base64，然后调用 D3 的并行检索编排能力。没有检索命中时返回 `ok=true`、`is_empty=true`、空
 `content`、空引用和空图片列表。
 
 业务可恢复错误不直接抛出给 Agent，而是返回结构化错误：
@@ -898,7 +908,10 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `trace_type` | 固定为 `query` |
 | `started_at` | 查询开始时间 |
 | `raw_query` | 用户原始询问 |
-| `collection` | 查询目标知识集合 |
+| `collection` | 查询目标知识集合；单 collection 查询时等于目标 collection，多 collection 查询时为 primary collection 或兼容字段 |
+| `collections` | 多 collection 查询目标列表，按调用方或 Intent Router 选择顺序记录，单 collection 查询时可为空或只包含 `collection` |
+| `primary_collection` | 多 collection 查询的主 collection，用于兼容旧调用方和 Dashboard 默认过滤 |
+| `multi_collection` | 是否启用多 collection 并行检索 |
 | `request_source` | 调用来源，例如 AImodel、MCP tool、Dashboard |
 
 各阶段详情：
@@ -907,6 +920,7 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | --- | --- |
 | `query_processing` | 原始 query、改写 query（若有）、query normalize 方法、关键词数量、collection/top_k 参数、耗时 |
 | `intent_routing` | 输入 query 摘要、候选 collection、domain intent、问题复杂度、检索策略、置信度、命中原因、fallback 状态、耗时 |
+| `parallel_retrieval` | 多 collection 检索计划、selected_collections、dropped_collections、每个 collection 的候选数量/耗时/状态、partial failure、child_trace_ids 或 per-collection stage summary、合并后候选数量 |
 | `dense` | Query Embedding 模型、向量库 Provider、命中的 chunk ID 列表、候选数量、耗时 |
 | `sparse` | BM25 方法、倒排索引命中词、命中的 chunk ID 列表、候选数量、缺失 chunk ID、耗时 |
 | `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果、耗时 |
@@ -914,7 +928,7 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `rerank` | Reranker Provider、过滤后 rerank 前候选快照、rerank 后候选快照、fallback 原因（若有）、耗时 |
 | `self_rag` | 证据分档、极低分候选裁剪数量、单次 LLM judge 输入摘要、relevance/evidence sufficiency 判断、最终通过候选快照、empty fallback 原因、耗时 |
 
-候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化和证据决策结果，用于后续 Hit Rate、MRR、NDCG、rerank delta、evidence sufficiency 与空结果原因分析。
+候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化和证据决策结果；多 collection 查询时 `parallel_retrieval` 阶段只记录 collection 级摘要和最终合并快照，不重复保存每个 collection 的完整正文，用于后续 Hit Rate、MRR、NDCG、rerank delta、evidence sufficiency、跨 collection precision 与空结果原因分析。
 
 查询结果：
 

@@ -356,6 +356,7 @@ MCP 工具一：`query_knowledge_hub`
 {
   "query": "如何挑选高性价比无线耳机？",
   "collection": "shopping_guides",
+  "collections": ["shopping_guides", "faq"],
   "top_k": 5,
   "no_rerank": false,
   "include_image_base64": false
@@ -393,6 +394,15 @@ MCP 工具一：`query_knowledge_hub`
     }
   ],
   "trace_id": "query_20260604_xxx",
+  "query_trace_ids": ["query_20260604_xxx"],
+  "collection_results": [
+    {
+      "collection": "shopping_guides",
+      "trace_id": "query_20260604_xxx",
+      "candidate_count": 5,
+      "status": "success"
+    }
+  ],
   "is_empty": false
 }
 ```
@@ -404,7 +414,7 @@ chunk 文本按 `[1]`、`[2]` 编号生成证据块，再按 `response.evidence_
 过滤报告或内部 tool result。`citations` 和 `images` 使用独立公共契约；默认只返回图片
 metadata 与受管 `file_path`，不默认返回 base64，避免 stdio tool payload 过大。若调用方
 明确传入 `include_image_base64=true`，后续工具实现可以附加受限大小的
-`base64_content` 字段。没有检索命中时返回 `ok=true`、`is_empty=true`、空
+`base64_content` 字段。`collection` 保留单 collection 兼容；`collections` 用于多 collection 查询，若两者同时传入，以去重后的 `collections` 为准，并把 `collection` 作为 `primary_collection` 兼容字段写入 trace。MCP 层不实现并行检索逻辑，只校验 query、collection/collections、top_k、no_rerank 和 include_image_base64，然后调用 D3 的并行检索编排能力。没有检索命中时返回 `ok=true`、`is_empty=true`、空
 `content`、空引用和空图片列表。
 
 业务可恢复错误不直接抛出给 Agent，而是返回结构化错误：
@@ -1079,7 +1089,10 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `trace_type` | 固定为 `query` |
 | `started_at` | 查询开始时间 |
 | `raw_query` | 用户原始询问 |
-| `collection` | 查询目标知识集合 |
+| `collection` | 查询目标知识集合；单 collection 查询时等于目标 collection，多 collection 查询时为 primary collection 或兼容字段 |
+| `collections` | 多 collection 查询目标列表，按调用方或 Intent Router 选择顺序记录，单 collection 查询时可为空或只包含 `collection` |
+| `primary_collection` | 多 collection 查询的主 collection，用于兼容旧调用方和 Dashboard 默认过滤 |
+| `multi_collection` | 是否启用多 collection 并行检索 |
 | `request_source` | 调用来源，例如 AImodel、MCP tool、Dashboard |
 
 各阶段详情：
@@ -1088,6 +1101,7 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | --- | --- |
 | `query_processing` | 原始 query、改写 query（若有）、query normalize 方法、关键词数量、collection/top_k 参数、耗时 |
 | `intent_routing` | 输入 query 摘要、候选 collection、domain intent、问题复杂度、检索策略、置信度、命中原因、fallback 状态、耗时 |
+| `parallel_retrieval` | 多 collection 检索计划、selected_collections、dropped_collections、每个 collection 的候选数量/耗时/状态、partial failure、child_trace_ids 或 per-collection stage summary、合并后候选数量 |
 | `dense` | Query Embedding 模型、向量库 Provider、命中的 chunk ID 列表、候选数量、耗时 |
 | `sparse` | BM25 方法、倒排索引命中词、命中的 chunk ID 列表、候选数量、缺失 chunk ID、耗时 |
 | `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果、耗时 |
@@ -1095,7 +1109,7 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `rerank` | Reranker Provider、过滤后 rerank 前候选快照、rerank 后候选快照、fallback 原因（若有）、耗时 |
 | `self_rag` | 证据分档、极低分候选裁剪数量、单次 LLM judge 输入摘要、relevance/evidence sufficiency 判断、最终通过候选快照、empty fallback 原因、耗时 |
 
-候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化和证据决策结果，用于后续 Hit Rate、MRR、NDCG、rerank delta、evidence sufficiency 与空结果原因分析。
+候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化和证据决策结果；多 collection 查询时 `parallel_retrieval` 阶段只记录 collection 级摘要和最终合并快照，不重复保存每个 collection 的完整正文，用于后续 Hit Rate、MRR、NDCG、rerank delta、evidence sufficiency、跨 collection precision 与空结果原因分析。
 
 查询结果：
 
@@ -1640,6 +1654,7 @@ services/ai-service/rag/
 | `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用同一个 analyzer；英文/数字保持 normalize，中文使用 jieba 精确模式分词，避免分析漂移和 ingestion/storage 循环依赖 |
 | `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、关键词提取；不承担业务意图识别 |
 | `src/core/query_engine/intent_router.py` | 执行查询意图识别与路由 | `IntentRouter` 在 Query Processor 之后运行；先按 `intent_routes.yaml` 执行规则路由，再按 `collection_profiles.yaml` 与 `rag_collection_profiles` 执行语义画像路由，最后按配置进入 LLM fallback；输出候选 collection、domain intent、复杂度、检索策略、置信度、命中原因和降级状态，并写入 `intent_routing` trace stage |
+| `src/core/query_engine/parallel_retrieval.py` | 编排多 collection 并行检索 | `ParallelRetrievalController` 消费 Intent Router 或 MCP 传入的 collections，按 collection 并发执行单 collection 检索链路，汇总 per-collection trace、部分失败和最终合并候选，不替代 Dense/Sparse/Hybrid/Rerank 内部逻辑 |
 | `src/core/query_engine/hybrid_engine.py` | 编排混合检索主流程 | `HybridSearch`、Intent Router 结果消费、Dense/BM25 双路召回、RRF Fusion、候选去重、保留过滤前 fusion 快照、rerank 前 metadata 过滤、单路失败降级 |
 | `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
 | `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，直接复用 Chunk.metadata 中的来源字段供 CitationBuilder 使用 |
@@ -2011,7 +2026,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase A | 配置与项目骨架 | 独立模块基础文件、uv 依赖锁定、Docker 部署骨架、pytest 冒烟测试、配置模板、prompt 配置、核心类型和配置加载 | [✔] |
 | Phase B | 数据持久化与可插拔组件 | PostgreSQL/pgvector schema、repository、文档生命周期管理和 libs 可插拔实现 | [✔] |
 | Phase C | Ingestion & Indexing Pipeline | 先去重的数据摄取、Loader、PDF -> Markdown、Markdown section-aware Splitter、包含 ImageCaptioner 的 Transform Pipeline、content_hash 差量、Dense/BM25Indexer 双路索引、pgvector upsert、统一 Pipeline MVP 和 `ingest.py` 脚本入口 | [✔] |
-| Phase D | Retrieval | Query Processor、Intent Router、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Self-RAG Controller、Response Builder 和 query.py 脚本入口 | [✔] |
+| Phase D | Retrieval | Query Processor、Intent Router、并行检索编排、Dense Route、Sparse Route、RRF Fusion、HybridSearch、Rerank 前候选过滤、Rerank、Self-RAG Controller、Response Builder 和 query.py 脚本入口 | [✔] |
 | Phase E | MCP 工具服务 | MCP Server 和 `query_knowledge_hub`、`list_collections`、`get_document_summary` tools 暴露 | [✔] |
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [✔] |
 | Phase G | 质量评估体系 | 黄金测试集、检索指标、配置驱动 Ragas 生成指标、评估脚本进度日志、真实 Query Pipeline 评估入口、AImodel message answer 评估、策略对比和评估趋势 | [✔] |
@@ -2055,8 +2070,8 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase A | 配置与项目骨架 | 独立 RAG 模块骨架、uv 锁定环境、运行配置、Prompt 和共享数据契约已就绪，可进入持久化与可插拔组件开发 | `uv.lock`、项目 `.venv`、独立 CLI、frozen Docker 构建、类型化配置加载、活动环境变量校验、英文 Prompt、核心领域类型和统一异常 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\test_smoke.py services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_types.py -q` | 2026-06-06 |
 | Phase B | 数据持久化与可插拔组件 | 持久化、可插拔组件契约和首批真实 Provider 已就绪，可进入 Ingestion Pipeline 开发 | PostgreSQL/pgvector schema、Repository、文档生命周期、Loader/Splitter/LLM/Embedding/VectorStore/Reranker/Evaluator Factory、BaseTransform、DeepSeek、DashScope Embedding、PgVectorStore 与 fake 测试实现 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q` | 2026-06-06 |
 | Phase C | Ingestion & Indexing Pipeline | 离线摄取与索引主链路可通过 CLI 将 Markdown/PDF 文件或目录写入 PostgreSQL、pgvector、BM25 和图片索引 | SHA256 去重、Loader、Markdown section-aware 智能分块、Transform、图片 caption 降级、差量 Dense 编码、BM25、事务 upsert、生命周期管理和 `ingest.py` CLI | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.ingest --help` | 2026-06-07 |
-| Phase D | Retrieval | 在线查询主链路可基于已摄取知识库执行 Query Processor、Intent Router、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Self-RAG 证据决策、Response Builder 和 CLI 查询 | QueryProcessor、IntentRouter、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、SelfRagController、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
-| Phase E | MCP 工具服务 | MCP stdio 工具服务可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、`query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
+| Phase D | Retrieval | 在线查询主链路已可基于已摄取知识库执行 Query Processor、Intent Router、Dense/Sparse 双路召回、RRF 融合、metadata filter、Rerank、Self-RAG 证据决策、Response Builder 和 CLI 查询；多 collection 并行检索编排已具备核心合并能力 | QueryProcessor、IntentRouter、ParallelRetrievalController、DenseRoute、SparseRoute、HybridSearch、RerankController、RerankOutcome、SelfRagController、KnowledgeHubResponseBuilder、`query.py` CLI、PostgreSQL/pgvector/BM25 集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests -q`；`uv run --project services/ai-service/rag python -m src.scripts.query --help` | 2026-06-07 |
+| Phase E | MCP 工具服务 | MCP stdio 工具服务可被 AImodel 或其他 MCP client 发现工具 schema 并调用查询、collection 列表和文档摘要能力 | FastMCP stdio server、`.env` 加载、app.log 文件日志、支持单/多 collection 的 `query_knowledge_hub`、`list_collections`、`get_document_summary`、结构化业务错误、schema/contract 测试 | `uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_mcp_tools.py -v`；`uv run --project services/ai-service/rag python -m src.mcp_server.server --help` | 2026-06-08 |
 | Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作可用 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
 | Phase G | 质量评估体系 | 质量评估体系支持黄金测试集、检索指标、Ragas 生成质量适配、真实评估进度日志、真实 Query Pipeline 评估入口、策略对比 runner 和评估趋势持久化 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、配置驱动 Ragas generation metrics、`faithfulness`、`answer_relevancy`、`context_precision`、`context_recall`、可选 `answer_correctness`、`run_evaluation.py`、`EvaluationReporter`、`src/logs/evaluation.log.jsonl`、hybrid/dense_only/sparse_only/rerank 策略对比、evaluation run/results 持久化、Agent-ready final context 评估输入、AImodel message answer 评估输入 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -q`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests` | 2026-06-27 |
 | Phase H | AImodel 联调集成 | RAG 独立模块已通过集成前验收，shopping guide RAG 工具已接入 AImodel Agent 工具集合，推荐、链接对比、选购指南和政策 FAQ 场景规则已写入 Agent system prompt，流式前端输出具备 tool result 和内部 ID 防泄漏门禁，AImodel RAG MCP client 可长期复用 stdio 子进程 | Dashboard 六大页面 service-backed 渲染测试、离线摄取到 Hybrid Query 的全链路 E2E、MCP stdio 子进程工具发现、`search_shopping_guides` 工具适配、Agent tool list 接入、商品事实/API 与知识补充/RAG 边界、推荐/对比/指南/FAQ 场景覆盖、message-query-trace 逻辑关联、SSE tool JSON 过滤、chunk id/trace id 可见输出过滤、Persistent MCP client 长期复用子进程、FastAPI shutdown 释放 MCP client | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_agent.py -v` | 2026-06-12 |
@@ -2169,7 +2184,7 @@ RAG 提供可独立运行的在线检索能力。查询入口从用户 query 开
 
 下一阶段入口：
 
-阶段 E 直接复用 `QueryRuntime`、`SelfRagDecision`、`KnowledgeHubResponse`、citation 和 collection 查询能力，把在线检索链路封装为 MCP tools，提供给 AImodel Agent 调用。
+阶段 E 直接复用 `QueryRuntime`、`ParallelRetrievalController`、`SelfRagDecision`、`KnowledgeHubResponse`、citation 和 collection 查询能力，把单/多 collection 在线检索链路封装为 MCP tools，提供给 AImodel Agent 调用。
 
 #### 阶段 E 交付里程碑：MCP 工具服务
 
@@ -2183,7 +2198,7 @@ RAG 提供可被 MCP client 调用的 stdio 工具服务。AImodel 或其他外�
 
 - 通过 `python -m src.mcp_server.server --transport stdio` 启动 FastMCP stdio server，stdout/stdin 只承载 MCP 协议帧，业务日志写入 `src/logs/app.log`。
 - 通过 `.env` 加载 `DATABASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`RAG_SETTINGS_PATH`、`RAG_DEFAULT_COLLECTION` 等运行变量。
-- 通过 `query_knowledge_hub` 查询 RAG 知识库，支持 `query`、`collection`、`top_k`、`no_rerank`、`include_image_base64` 参数，并默认不返回图片 base64。
+- 通过 `query_knowledge_hub` 查询 RAG 知识库，支持 `query`、`collection`、`collections`、`top_k`、`no_rerank`、`include_image_base64` 参数，并默认不返回图片 base64。
 - 通过 `list_collections` 查看已摄取 collection 的文档、chunk 和更新时间摘要。
 - 通过 `get_document_summary` 按 `document_id` 或 `source_uri` 查询文档摘要、章节 outline 和基础索引信息。
 - 通过结构化业务错误 envelope 返回可恢复错误：`{"ok": false, "error": {"code": "...", "message": "..."}}`。
@@ -2285,27 +2300,28 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | --- | --- | --- | --- | --- |
 | D1 | 实现 Query Processor | [✔] | 2026-06-07 | 不可变 ProcessedQuery 和 keywords 快照、Unicode/空白标准化、关键词提取、collection/top_k 类型校验与默认覆盖、可注入 QueryRewriter 和异常/空结果 fallback；Query Processor 不承载业务意图识别 |
 | D2 | 实现 Intent Router | [✔] | 2026-06-28 | 独立 Intent Router 已接入 QueryRuntime；规则配置、collection profile 配置、profile embedding cache、`intent_routing` trace stage、评估 message 模式真实对话路径已完成；150 个相关单元测试、36 个集成测试和 ruff 通过 |
-| D3 | 实现 Dense Route 向量检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、Query Embedding、配置驱动 dense_top_k、VectorStore 语义召回、RetrievalResult 校验、embedding/vector search 错误边界和低侵入 Trace；8 个 D3 单元测试通过 |
-| D4 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D4 单元测试通过 |
-| D5 | 实现 RRF Fusion | [✔] | 2026-06-07 | Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D5 单元测试通过 |
-| D6 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | ProcessedQuery 与 Intent Router 输出输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D6 单元测试通过 |
-| D7 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D7 单元测试通过 |
-| D8 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D8 单元测试通过 |
-| D9 | 实现 LLM Rerank 适配 | [✔] | 2026-06-11 | LLMReranker、PromptTemplate 加载、BaseLLM 注入和结构化 JSON 排名解析；Prompt 强制只返回 JSON object array，禁止 ID-only array、Markdown fence 和解释文字；真实 DeepSeek 查询验证 rerank 成功且未触发 fallback |
-| D10 | 实现 rerank fallback | [✔] | 2026-06-07 | RerankController、RerankOutcome、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、显式 fallback 状态、低侵入 rerank trace 和 trace sink 失败隔离；28 个 Reranker 单元测试通过 |
-| D11 | 实现 Self-RAG Controller | [✔] | 2026-06-28 | Rerank 后证据决策层；Top2/Top3 高置信直接通过；中置信先剔除极低分 chunk，再一次性调用 LLM judge 返回 relevance 与 evidence sufficiency；低置信或 judge 不通过时暂时 empty fallback，不直接调用 Web/Tavily |
-| D12 | 实现引用构造 | [✔] | 2026-06-07 | 共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 metadata 来源字段传播、顶层 metadata 读取、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；Citation、核心类型、来源 metadata 和 pgvector 回归测试通过 |
-| D13 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号证据块、配置驱动 EvidenceContextOptimizer、优化失败 fallback、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；Response Builder 单元测试和真实 PostgreSQL 图片查询集成测试通过 |
-| D14 | 实现 `query.py` 脚本入口 | [✔] | 2026-06-07 | 配置驱动完整查询链路、PostgreSQL BM25 collection 查询、过滤前 Fusion 快照、RerankOutcome 显式 fallback 状态、安全 verbose 输出、no-rerank 跳过和连接池释放；63 个 Retrieval 单元测试通过 |
-| D15 | 实现 Retrieval 单元测试矩阵 | [✔] | 2026-06-07 | 120 个 Retrieval/Reranker/Response/Self-RAG 单元测试，补齐 Fusion 失败、PostgreSQL BM25 边界、QueryRuntime rerank、Self-RAG 分档和 empty fallback、Citation 来源 metadata 和图片 resolver 脏契约；目标模块覆盖率 91% |
-| D16 | 实现 Retrieval 集成测试 | [✔] | 2026-06-07 | PostgreSQL/pgvector 集成测试，覆盖 QueryProcessor、DenseRoute、SparseRoute、HybridSearch、metadata filter、RerankController、SelfRagController、Response Builder、`query.py` verbose 输出、Dense 失败时 Sparse fallback；2 个 D16 集成测试通过 |
+| D3 | 实现并行检索编排 | [✔] | 2026-06-29 | ParallelRetrievalController、MCP collections 参数、跨 collection routing_score + reciprocal_rank 合并、per-collection trace_id/状态汇总、部分失败降级和公共 collection_results 输出；103 个 Retrieval/MCP 单元测试通过 |
+| D4 | 实现 Dense Route 向量检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、Query Embedding、配置驱动 dense_top_k、VectorStore 语义召回、RetrievalResult 校验、embedding/vector search 错误边界和低侵入 Trace；8 个 D4 单元测试通过 |
+| D5 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D5 单元测试通过 |
+| D6 | 实现 RRF Fusion | [✔] | 2026-06-07 | Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D6 单元测试通过 |
+| D7 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | ProcessedQuery 与 Intent Router 输出输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D7 单元测试通过 |
+| D8 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D8 单元测试通过 |
+| D9 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D9 单元测试通过 |
+| D10 | 实现 LLM Rerank 适配 | [✔] | 2026-06-11 | LLMReranker、PromptTemplate 加载、BaseLLM 注入和结构化 JSON 排名解析；Prompt 强制只返回 JSON object array，禁止 ID-only array、Markdown fence 和解释文字；真实 DeepSeek 查询验证 rerank 成功且未触发 fallback |
+| D11 | 实现 rerank fallback | [✔] | 2026-06-07 | RerankController、RerankOutcome、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、显式 fallback 状态、低侵入 rerank trace 和 trace sink 失败隔离；28 个 Reranker 单元测试通过 |
+| D12 | 实现 Self-RAG Controller | [✔] | 2026-06-28 | Rerank 后证据决策层；Top2/Top3 高置信直接通过；中置信先剔除极低分 chunk，再一次性调用 LLM judge 返回 relevance 与 evidence sufficiency；低置信或 judge 不通过时暂时 empty fallback，不直接调用 Web/Tavily |
+| D13 | 实现引用构造 | [✔] | 2026-06-07 | 共享不可变 Citation 契约、CitationBuilder、Dense/Sparse/Fake 检索 metadata 来源字段传播、顶层 metadata 读取、排序保持、URI 文件名解码标题回退、section_path 归一化、JSON 输出、trace_id 关联、脏类型/缺失来源 fail fast 和输入 metadata 不变性；Citation、核心类型、来源 metadata 和 pgvector 回归测试通过 |
+| D14 | 实现多模态 Response Builder | [✔] | 2026-06-07 | 不可变 KnowledgeHubResponse/ResponseImage 公共契约、排名编号证据块、配置驱动 EvidenceContextOptimizer、优化失败 fallback、CitationBuilder 复用、image_refs 有序去重和关联 chunk 聚合、ImageResolver 最小接口、ImageStorage 批量 ID 查询、缺失图片安全跳过、显式空结果以及内部 route/tool metadata 隔离；Response Builder 单元测试和真实 PostgreSQL 图片查询集成测试通过 |
+| D15 | 实现 `query.py` 脚本入口 | [✔] | 2026-06-07 | 配置驱动完整查询链路、PostgreSQL BM25 collection 查询、过滤前 Fusion 快照、RerankOutcome 显式 fallback 状态、安全 verbose 输出、no-rerank 跳过和连接池释放；63 个 Retrieval 单元测试通过 |
+| D16 | 实现 Retrieval 单元测试矩阵 | [✔] | 2026-06-07 | 120 个 Retrieval/Reranker/Response/Self-RAG 单元测试，补齐 Fusion 失败、PostgreSQL BM25 边界、QueryRuntime rerank、Self-RAG 分档和 empty fallback、Citation 来源 metadata 和图片 resolver 脏契约；目标模块覆盖率 91% |
+| D17 | 实现 Retrieval 集成测试 | [✔] | 2026-06-07 | PostgreSQL/pgvector 集成测试，覆盖 QueryProcessor、DenseRoute、SparseRoute、HybridSearch、metadata filter、RerankController、SelfRagController、Response Builder、`query.py` verbose 输出、Dense 失败时 Sparse fallback；2 个 D17 集成测试通过 |
 
 #### 阶段 E：MCP 工具服务
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | E1 | 搭建 MCP Server | [✔] | 2026-06-07 | FastMCP server 工厂、stdio 启动入口、`.env` 加载、app.log 文件日志、配置驱动 tool 注册、未知工具 fail fast、E1 placeholder tool 错误边界和 SDK ToolError 包装契约；5 个 MCP 单元测试通过 |
-| E2 | 暴露 `query_knowledge_hub` | [✔] | 2026-06-08 | QueryKnowledgeHubTool、QueryRuntime 适配、请求原语校验先于 settings 加载、默认 collection/top_k、no_rerank、结构化业务错误、默认不返回图片 base64、显式 include_image_base64 支持、PostgreSQL pool 打开失败也能释放资源和 FastMCP 真实 query tool 注册；12 个 MCP 单元测试通过 |
+| E2 | 暴露 `query_knowledge_hub` | [✔] | 2026-06-08 | QueryKnowledgeHubTool、QueryRuntime/ParallelRetrievalController 适配、请求原语校验先于 settings 加载、默认 collection/top_k、单/多 collection 参数、no_rerank、结构化业务错误、默认不返回图片 base64、显式 include_image_base64 支持、PostgreSQL pool 打开失败也能释放资源和 FastMCP 真实 query tool 注册；MCP 层只透传并行检索请求，不实现检索业务逻辑 |
 | E3 | 暴露 `list_collections` 和 `get_document_summary` | [✔] | 2026-06-08 | MetadataTool、PostgresMetadataReader、真实 FastMCP collection/summary handler 注册、空 collection 可读业务错误、document_id/source_uri 参数校验、文档摘要与章节 outline 返回；17 个 MCP 单元测试通过 |
 | E4 | 完成 MCP tools 测试 | [✔] | 2026-06-08 | 官方 FastMCP schema 精确断言、成功输出安全字段扫描和结构化业务错误 envelope 契约测试；20 个 MCP 单元测试通过 |
 
@@ -2357,12 +2373,12 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | Phase A | 7 | 7 | 100% |
 | Phase B | 11 | 11 | 100% |
 | Phase C | 12 | 12 | 100% |
-| Phase D | 16 | 16 | 100% |
+| Phase D | 17 | 17 | 100% |
 | Phase E | 4 | 4 | 100% |
 | Phase F | 12 | 12 | 100% |
 | Phase G | 6 | 6 | 100% |
 | Phase H | 7 | 7 | 100% |
-| **总计** | **73** | **73** | **100%** |
+| **总计** | **74** | **74** | **100%** |
 
 ### 6.5 阶段实施明细
 
@@ -3027,7 +3043,27 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/unit/test_retrieval.py services/ai-service/rag/tests/unit/test_trace_context.py -v`
 
-##### D3：实现 Dense Route 向量检索
+
+##### D3：实现并行检索编排
+
+目标：在 Intent Router 输出多个候选 collection 或 MCP 显式传入 `collections` 时，提供统一的多 collection 并行检索入口；该层只负责任务拆分、并发执行、结果合并和 trace 汇总，不替代 Dense/Sparse/Hybrid/Rerank 的单 collection 责任边界。
+
+修改文件：`src/core/query_engine/__init__.py`、`src/core/query_engine/parallel_retrieval.py`、`src/core/query_engine/runtime.py`、`src/core/trace/trace_context.py`、`tests/unit/test_retrieval.py`、`tests/unit/test_trace_context.py`
+
+实现类/函数：
+
+- `ParallelRetrievalRequest`：保存原始 query、ProcessedQuery、候选 collections、top_k、no_rerank、metadata filter 和 request_source 等并行检索输入
+- `CollectionRetrievalTask`：表示单个 collection 的检索任务，包含 collection、per_collection_top_k、routing_score、routing_reason 和超时配置
+- `ParallelRetrievalResult`：保存合并后的最终候选、每个 collection 的结果摘要、失败摘要、trace IDs 和是否使用部分降级
+- `ParallelRetrievalController.search()`：按 collection 拆分检索任务，并发调用单 collection `QueryRuntime` 或 `HybridSearch` 路径，再合并结果
+- `ParallelRetrievalController._merge_collection_results()`：跨 collection 合并候选；优先保留同一 reranker 产生的可比较 rerank score，分数不可比时使用 `routing_score + reciprocal_rank` 稳定融合，使高置信 collection 的强结果优先，同时允许低置信 collection 的高排名结果进入最终上下文
+- `ParallelRetrievalController._record_trace()`：向 Query Trace 写入 `parallel_retrieval` stage，并记录每个 collection 的候选数量、耗时、状态、失败原因和最终保留结果
+
+验收标准：当调用方只传入单个 `collection` 时必须保持现有单 collection 查询行为；当传入 `collections` 或 Intent Router 输出多个候选 collection 时，必须去重、保序并限制最大并行 collection 数；每个 collection 内部仍执行 D4-D13 的 Dense/Sparse、RRF、filter、rerank 和 Self-RAG 流程，不允许在并行层重写业务检索逻辑；并行层必须支持 per-collection timeout、部分失败降级和空结果汇总，单个 collection 失败不得吞掉其他 collection 的可用结果；跨 collection merge 默认策略为：若所有 collection 使用同一个 reranker 且分数可比较，则按 rerank score 全局排序；若 rerank 不可用、部分 collection rerank fallback 或分数不可比，则使用 `routing_score + reciprocal_rank` 融合；最终结果必须统一执行 `top_k` 稳定截断；每条结果 metadata 必须保留 `collection`、`collection_rank`、`routing_score`、`merge_score` 和 `merge_reason`，其中 `merge_reason` 需要说明本条结果来自 rerank score 还是 routing/RRF fallback 融合；Query Trace 基础信息必须记录 `collection`、`collections`、`primary_collection` 和 `multi_collection=true/false`，阶段详情必须新增 `parallel_retrieval`，记录 `collection_runs`、`merged_candidate_count`、`partial_failure_count`、`selected_collections`、`dropped_collections`、`child_trace_ids` 或 per-collection stage summary；单元测试必须覆盖单 collection 兼容、多 collection 并行成功、部分失败、全部空结果、重复 collection 去重、最大并发限制和 trace sink 失败隔离。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py services\ai-service\rag\tests\unit\test_trace_context.py -v`
+
+##### D4：实现 Dense Route 向量检索
 
 目标：输入用户 query 或 `ProcessedQuery`，完成 Query Embedding、pgvector 向量检索，并返回统一的 `RetrievalResult(chunk_id,text,score,metadata)`。
 
@@ -3038,11 +3074,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `DenseTraceContext.record_stage()`：定义 Dense Route 使用的最小 Trace 注入接口
 - `DenseRoute.search()`：处理 raw query 或 ProcessedQuery，执行 Query Embedding 和 VectorStore 语义召回
 
-验收标准：raw query 必须先通过 QueryProcessor，ProcessedQuery 可直接复用；调用 `EmbeddingClient.embed(processed_query.normalized_query)`；默认使用 `retrieval.dense_top_k` 作为 Dense 粗召回数量，并允许调用方显式覆盖；调用 VectorStore 完成 Top-k 向量检索，但不在 D3 提前执行 D7 的 metadata 过滤；所有候选统一校验为 `RetrievalResult(chunk_id,text,score,metadata)`；空 query、非法 top_k、embedding 失败、vector search 失败和空结果都有可测试分支；可选 Trace 记录 `route=dense`、provider-independent `method=vector_search`、top_k、候选数量、状态和耗时；Trace sink 异常不得覆盖检索结果或原始 RetrievalError。
+验收标准：raw query 必须先通过 QueryProcessor，ProcessedQuery 可直接复用；调用 `EmbeddingClient.embed(processed_query.normalized_query)`；默认使用 `retrieval.dense_top_k` 作为 Dense 粗召回数量，并允许调用方显式覆盖；调用 VectorStore 完成 Top-k 向量检索，但不在 D4 提前执行 D8 的 metadata 过滤；所有候选统一校验为 `RetrievalResult(chunk_id,text,score,metadata)`；空 query、非法 top_k、embedding 失败、vector search 失败和空结果都有可测试分支；可选 Trace 记录 `route=dense`、provider-independent `method=vector_search`、top_k、候选数量、状态和耗时；Trace sink 异常不得覆盖检索结果或原始 RetrievalError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
-##### D4：实现 Sparse Route BM25 回表检索
+##### D5：实现 Sparse Route BM25 回表检索
 
 目标：使用 `QueryProcessor.process()` 生成的 `ProcessedQuery.keywords` 进行 BM25 检索，再通过 chunk_id 回表读取 chunk 正文和 metadata。
 
@@ -3061,7 +3097,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
-##### D5：实现 RRF Fusion
+##### D6：实现 RRF Fusion
 
 目标：融合 Dense/BM25 两路候选，避免直接比较不同分数。
 
@@ -3079,7 +3115,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
-##### D6：实现 HybridSearch 编排
+##### D7：实现 HybridSearch 编排
 
 目标：编排 Dense Route、Sparse Route 和 RRF Fusion，完成候选去重、双路召回融合和单路失败降级。
 
@@ -3092,11 +3128,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `HybridSearch.search()`：编排双路召回、候选去重和 RRF 融合
 - `HybridSearch._record_trace()`：记录 hybrid 阶段候选数量、失败路线和降级原因
 
-验收标准：前置依赖为 D1、D2、D3、D4、D5；输入 `ProcessedQuery` 和 Intent Router 输出；分别执行 Dense/BM25 两路检索；调用 RRF Fusion 生成融合排序，按 `chunk_id` 去重并保留 `dense_rank`、`sparse_rank`、`dense_score`、`sparse_score`；使用 `retrieval.fusion_top_k` 和 `retrieval.rrf_k`；返回结果必须同时保留 dense 原始候选、sparse 原始候选、融合候选、fallback 状态和 fallback 原因；单路失败时允许降级为另一条路线并写入 trace details；双路均失败时抛出 `RetrievalError`；Trace sink 异常不得覆盖检索结果或原始 RetrievalError。
+验收标准：前置依赖为 D1、D2、D4、D5、D6；输入 `ProcessedQuery` 和 Intent Router 输出；分别执行 Dense/BM25 两路检索；调用 RRF Fusion 生成融合排序，按 `chunk_id` 去重并保留 `dense_rank`、`sparse_rank`、`dense_score`、`sparse_score`；使用 `retrieval.fusion_top_k` 和 `retrieval.rrf_k`；返回结果必须同时保留 dense 原始候选、sparse 原始候选、融合候选、fallback 状态和 fallback 原因；单路失败时允许降级为另一条路线并写入 trace details；双路均失败时抛出 `RetrievalError`；Trace sink 异常不得覆盖检索结果或原始 RetrievalError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
-##### D7：实现 Rerank 前候选过滤
+##### D8：实现 Rerank 前候选过滤
 
 目标：在 RRF Fusion 之后、Reranker 之前，根据调用参数过滤候选，避免把不符合限定条件的 chunk 送入重排阶段。
 
@@ -3116,7 +3152,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
-##### D8：实现 Cross-Encoder Reranker
+##### D9：实现 Cross-Encoder Reranker
 
 目标：支持 Cross-Encoder 对过滤后的候选进行精排。
 
@@ -3135,7 +3171,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 
-##### D9：实现 LLM Rerank
+##### D10：实现 LLM Rerank
 
 目标：支持 LLM 对过滤后的候选进行重排。
 
@@ -3154,7 +3190,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 
-##### D10：实现 rerank fallback
+##### D11：实现 rerank fallback
 
 目标：在 reranker 不可用、超时或异常时回退到过滤后的 RRF 结果。
 
@@ -3175,7 +3211,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_reranker.py -v`
 
-##### D11：实现 Self-RAG Controller
+##### D12：实现 Self-RAG Controller
 
 目标：在 rerank 之后、引用和响应构造之前判断证据是否相关且足够，避免低质量候选进入最终上下文。
 
@@ -3197,7 +3233,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 验收标准：Self-RAG Controller 必须位于 `RerankController` 之后、`KnowledgeHubResponseBuilder` 之前；TopN 数量和阈值必须来自 settings，不允许硬编码；当 Top2/Top3 分数均达到高置信阈值时直接通过，不调用 LLM judge；当 Top1 达到中置信阈值但 TopN 不满足高置信时，必须先按 `judge_min_candidate_score` 剔除极低分 chunk，再通过一次 LLM 调用同时返回 relevance 与 evidence sufficiency，不允许为两个 judge 分别调用 LLM；低置信、裁剪后无候选、judge 返回非法 JSON、LLM 失败、relevance 未通过或 evidence sufficiency 未通过时，fallback action 暂时只允许 `empty`，不得在 RAG 内部直接调用 Web/Tavily；empty fallback 必须保留 trace reason，并让 Response Builder 输出 `is_empty=true`、空 content/citations/images；Self-RAG 不得修改输入 `RetrievalResult`；trace 必须记录 score_band、top_scores、trimmed_count、judge_called、judge_result、selected_chunk_ids、fallback_action 和 reason；单元测试必须覆盖 high direct pass、medium judged pass、medium judged empty、low empty、judge JSON 非法和 trace sink 失败隔离。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py services\ai-service\rag\tests\unit\test_config.py -v`
-##### D12：实现引用构造
+##### D13：实现引用构造
 
 目标：为最终上下文构建可展示的引用来源。
 
@@ -3219,10 +3255,10 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`
 
-##### D13：实现多模态响应组装
+##### D14：实现多模态响应组装
 
 目标：把最终排序 chunk 转换为可直接交给 MCP、AImodel、CLI 和 Dashboard 的
-公开知识响应；响应包含 Agent-ready final context、D12 引用、命中图片和 trace_id，但不
+公开知识响应；响应包含 Agent-ready final context、D13 引用、命中图片和 trace_id，但不
 暴露 Dense/Sparse 中间结果、向量、Provider payload、过滤报告或内部 tool JSON。
 
 修改文件：`config/prompts/evidence_context_prompt.yaml`、`src/core/response/__init__.py`、
@@ -3247,7 +3283,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 不可变 `KnowledgeHubResponse`；`content` 是 AImodel 可直接使用的最终上下文，
 由按 `[1]`、`[2]` 排名编号的原始证据块优化得到；优化结果必须保留证据编号，
 不得生成最终答案、不得编造价格/库存/链接，且不包含 retrieval metadata；优化器不可用、
-Provider 失败或返回空内容时按配置 fallback 到原始编号证据块；citations 复用 D12 的 grounded citation；
+Provider 失败或返回空内容时按配置 fallback 到原始编号证据块；citations 复用 D13 的 grounded citation；
 图片引用从 `metadata.image_refs` 读取，必须是非空字符串列表，跨 chunk 去重并
 保持首次引用顺序，同一图片记录所有关联 chunk IDs；图片索引采用一次批量查询，
 解析结果不依赖数据库返回顺序；缺失图片索引安全跳过且不影响文本响应；公开图片
@@ -3258,7 +3294,7 @@ metadata；空候选返回 `ok=true`、`is_empty=true`、空 content/citations/i
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_response_builder.py -v`；使用 Docker PostgreSQL 设置 `DATABASE_URL` 后执行 `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_repositories.py::test_image_storage_saves_files_and_queries_upserted_indexes -v`
 
-##### D14：实现 query.py 脚本入口
+##### D15：实现 query.py 脚本入口
 
 目标：提供本地命令行入口，完整调用 `hybridsearch + filter + rerank` 查询链路，方便调试和验收。
 
@@ -3293,7 +3329,7 @@ payload；支持 `--no-rerank` 直接跳过 RerankController 并保持过滤后 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
-##### D15：建立 Retrieval 单元测试矩阵
+##### D16：建立 Retrieval 单元测试矩阵
 
 目标：集中覆盖 Retrieval 链路的核心单元行为。
 
@@ -3312,7 +3348,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit -v`
 
-##### D16：实现 Retrieval 集成测试
+##### D17：实现 Retrieval 集成测试
 
 目标：验证完整查询链路可串联运行。
 
@@ -3365,13 +3401,14 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 实现类/函数：
 
 - `QueryKnowledgeHubTool.query_knowledge_hub()`：执行 MCP 查询工具入口，返回公共 RAG response 或结构化业务错误
-- `QueryKnowledgeHubTool._validate_request()`：在打开数据库前校验 query、collection、top_k、no_rerank 和 include_image_base64
+- `QueryKnowledgeHubTool._validate_request()`：在打开数据库前校验 query、collection/collections、top_k、no_rerank 和 include_image_base64
+- `QueryKnowledgeHubTool._normalize_collections()`：兼容单 `collection` 和多 `collections`，去重、保序并限制最大 collection 数
 - `QueryKnowledgeHubTool._attach_image_base64()`：仅在显式请求时为受管图片附加受限大小的 base64 内容
 - `_business_error()`：构建 `ok=false` 的可恢复业务错误 envelope
 - `_default_runtime_builder()`：复用阶段 D QueryRuntime 组合路径
 - `create_mcp_server(query_knowledge_hub=...)`：把 E2 的真实 query tool 注册到 FastMCP，E3 工具继续保持 placeholder
 
-验收标准：返回 content、citations、trace_id；默认返回图片 metadata 和受管 file_path，不默认返回 base64；可预留 `include_image_base64=false` 参数，仅在显式请求时附加受限大小的 `base64_content`；业务可恢复错误返回 `{"ok": false, "error": {"code": "...", "message": "..."}}`，不直接把内部异常或 tool result 暴露给 Agent。
+验收标准：返回 content、citations、trace_id 和 query_trace_ids；默认返回图片 metadata 和受管 file_path，不默认返回 base64；可预留 `include_image_base64=false` 参数，仅在显式请求时附加受限大小的 `base64_content`；`collection` 保持单 collection 兼容，`collections` 支持多 collection 查询，两者同时传入时以 `collections` 为准并把首个有效 collection 作为 primary collection；MCP 层只做参数校验和公共响应投影，不实现并行检索业务逻辑，必须调用阶段 D3 的并行检索编排能力；多 collection 响应必须包含 `collection_results`，记录每个 collection 的 trace_id、候选数量、状态和失败原因；业务可恢复错误返回 `{"ok": false, "error": {"code": "...", "message": "..."}}`，不直接把内部异常或 tool result 暴露给 Agent。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 

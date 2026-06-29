@@ -23,6 +23,10 @@ from src.core.query_engine.intent_router import (
     load_collection_profiles,
     load_intent_rules,
 )
+from src.core.query_engine.parallel_retrieval import (
+    ParallelRetrievalController,
+    ParallelRetrievalResult,
+)
 from src.core.query_engine.query_processor import (
     ProcessedQuery,
     QueryProcessor,
@@ -55,6 +59,8 @@ __all__ = (
     "IntentRule",
     "load_collection_profiles",
     "load_intent_rules",
+    "ParallelRetrievalController",
+    "ParallelRetrievalResult",
     "ProcessedQuery",
     "QueryProcessor",
     "QueryRewriter",

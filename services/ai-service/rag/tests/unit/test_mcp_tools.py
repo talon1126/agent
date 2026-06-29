@@ -19,7 +19,7 @@ import src.mcp_server.server as mcp_server_module
 from src.core.config import load_settings
 from src.core.errors import McpError
 from src.core.response import KnowledgeHubResponse, ResponseImage
-from src.core.types import Citation
+from src.core.types import Citation, RetrievalResult
 from src.mcp_server.server import create_mcp_server, parse_args, run_stdio_server
 from src.mcp_server.tools import MetadataTool, PostgresMetadataReader, QueryKnowledgeHubTool
 
@@ -41,9 +41,10 @@ FORBIDDEN_MCP_OUTPUT_KEYS = {
 
 @dataclass
 class FakeQueryExecution:
-    """Minimal execution result containing only MCP-visible response data."""
+    """Minimal execution result containing MCP-visible response data."""
 
     response: KnowledgeHubResponse
+    final_results: tuple[RetrievalResult, ...] = ()
 
 
 class FakePool:
@@ -107,7 +108,17 @@ class FakeRuntime:
                 "request_source": request_source,
             }
         )
-        return FakeQueryExecution(response=self.response)
+        return FakeQueryExecution(
+            response=self.response,
+            final_results=(
+                RetrievalResult(
+                    chunk_id="chunk-wireless-earbuds",
+                    text="Check connection stability, battery life, and comfort.",
+                    score=0.82,
+                    metadata={"collection": collection},
+                ),
+            ) if not self.response.is_empty else (),
+        )
 
 
 class FakeMetadataReader:
@@ -322,6 +333,7 @@ async def test_mcp_tool_schemas_match_documented_contract() -> None:
         "no_rerank",
         "include_image_base64",
         "request_source",
+        "collections",
     }
     assert query_schema["properties"]["query"]["type"] == "string"
     assert query_schema["properties"]["top_k"]["default"] is None
@@ -526,6 +538,52 @@ async def test_query_knowledge_hub_uses_defaults_and_preserves_empty_success() -
     assert runtime.calls[0]["top_k"] == 5
     assert runtime.calls[0]["no_rerank"] is False
     assert runtime.calls[0]["request_source"] == "mcp"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_query_knowledge_hub_executes_each_requested_collection() -> None:
+    """Expose multi-collection RAG calls as one MCP response with child traces."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    pool = FakePool()
+    runtime = FakeRuntime(_knowledge_response())
+    trace_ids = iter(["trace-faq", "trace-policies"])
+    tool = QueryKnowledgeHubTool(
+        settings_loader=lambda: settings,
+        pool_factory=lambda _database_settings: pool,
+        schema_initializer=lambda _pool: None,
+        runtime_builder=lambda _settings, _pool, _no_rerank: runtime,
+        trace_id_factory=lambda: next(trace_ids),
+    )
+
+    payload = await tool.query_knowledge_hub(
+        "退货后多久退款",
+        collection="shopping_guides",
+        collections=["faq", "policies", "faq"],
+        top_k=2,
+        request_source="aimodel",
+    )
+
+    assert payload["ok"] is True
+    assert payload["trace_id"] == "trace-faq"
+    assert payload["query_trace_ids"] == ["trace-faq", "trace-policies"]
+    assert payload["collection_results"] == [
+        {
+            "collection": "faq",
+            "trace_id": "trace-faq",
+            "candidate_count": 1,
+            "status": "success",
+        },
+        {
+            "collection": "policies",
+            "trace_id": "trace-policies",
+            "candidate_count": 1,
+            "status": "success",
+        },
+    ]
+    assert [call["collection"] for call in runtime.calls] == ["faq", "policies"]
+    assert all(call["request_source"] == "aimodel" for call in runtime.calls)
 
 
 @pytest.mark.unit

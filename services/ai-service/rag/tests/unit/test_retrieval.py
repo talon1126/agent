@@ -20,6 +20,10 @@ from src.core.errors import DatabaseError, RetrievalError
 from src.core.query_engine.dense_route import DenseRoute
 from src.core.query_engine.fusion import reciprocal_rank_fusion
 from src.core.query_engine.hybrid_engine import CandidateFilter, HybridSearch
+from src.core.query_engine.parallel_retrieval import (
+    ParallelRetrievalController,
+    ParallelRetrievalResult,
+)
 from src.core.query_engine.query_processor import (
     ProcessedQuery,
     QueryProcessor,
@@ -102,6 +106,62 @@ def _result(
         },
     )
 
+
+
+class FakeParallelRuntime:
+    """Serve deterministic per-collection retrieval results to D3 tests."""
+
+    def __init__(
+        self,
+        results_by_collection: dict[str, list[RetrievalResult]],
+    ) -> None:
+        """Store collection fixtures and initialize the call log.
+
+        Args:
+            results_by_collection: Mapping from collection ID to the final
+                retrieval results that a single-collection runtime would return.
+        """
+
+        self.results_by_collection = results_by_collection
+        self.calls: list[dict[str, object]] = []
+
+    def execute_collection(
+        self,
+        *,
+        query: ProcessedQuery,
+        collection: str,
+        top_k: int,
+        no_rerank: bool,
+        trace_id: str,
+    ) -> list[RetrievalResult]:
+        """Return configured collection results and record execution inputs."""
+
+        self.calls.append(
+            {
+                "query": query.normalized_query,
+                "collection": collection,
+                "top_k": top_k,
+                "no_rerank": no_rerank,
+                "trace_id": trace_id,
+            }
+        )
+        if collection == "broken":
+            raise RetrievalError("collection failed")
+        return list(self.results_by_collection.get(collection, []))
+
+
+class FakeParallelTrace:
+    """Collect parallel retrieval trace stages for assertions."""
+
+    def __init__(self) -> None:
+        """Initialize an empty trace stage list."""
+
+        self.stages: list[dict[str, object]] = []
+
+    def record_stage(self, **payload: object) -> None:
+        """Append one trace stage payload."""
+
+        self.stages.append(payload)
 
 
 class _FakeJudgeLLM:
@@ -2023,3 +2083,113 @@ def test_build_runtime_does_not_construct_reranker_when_explicitly_disabled(
     vector_store_create.assert_called_once_with(settings=settings, pool=pool)
     reranker_create.assert_not_called()
     llm_create.assert_not_called()
+
+
+def test_parallel_retrieval_merges_multi_collection_results_with_metadata() -> None:
+    """Merge routed collection candidates while preserving routing diagnostics."""
+
+    processed = _processed_query().model_copy(update={"top_k": 2})
+    runtime = FakeParallelRuntime(
+        {
+            "faq": [
+                _result("faq-a", score=0.91, metadata={"collection": "faq"}),
+                _result("faq-b", score=0.72, metadata={"collection": "faq"}),
+            ],
+            "policies": [
+                _result("policy-a", score=0.88, metadata={"collection": "policies"}),
+            ],
+        }
+    )
+    trace = FakeParallelTrace()
+    controller = ParallelRetrievalController(runtime=runtime, max_collections=3)
+
+    result = controller.search(
+        processed,
+        collections=("faq", "policies"),
+        routing_scores={"faq": 0.91, "policies": 0.86},
+        routing_reasons={"faq": "semantic_profile", "policies": "rule_match"},
+        top_k=2,
+        no_rerank=False,
+        trace_id_factory=lambda collection: f"trace-{collection}",
+        trace_context=trace,
+    )
+
+    assert isinstance(result, ParallelRetrievalResult)
+    assert [candidate.chunk_id for candidate in result.results] == ["faq-a", "faq-b"]
+    assert result.query_trace_ids == ["trace-faq", "trace-policies"]
+    assert result.partial_failure_count == 0
+    assert result.collection_results == [
+        {
+            "collection": "faq",
+            "trace_id": "trace-faq",
+            "candidate_count": 2,
+            "status": "success",
+            "routing_score": 0.91,
+        },
+        {
+            "collection": "policies",
+            "trace_id": "trace-policies",
+            "candidate_count": 1,
+            "status": "success",
+            "routing_score": 0.86,
+        },
+    ]
+    assert runtime.calls == [
+        {
+            "query": "无线耳机推荐",
+            "collection": "faq",
+            "top_k": 2,
+            "no_rerank": False,
+            "trace_id": "trace-faq",
+        },
+        {
+            "query": "无线耳机推荐",
+            "collection": "policies",
+            "top_k": 2,
+            "no_rerank": False,
+            "trace_id": "trace-policies",
+        },
+    ]
+    first_metadata = result.results[0].metadata
+    assert first_metadata["collection"] == "faq"
+    assert first_metadata["collection_rank"] == 1
+    assert first_metadata["routing_score"] == 0.91
+    assert first_metadata["merge_reason"] == "routing_score_rrf_fallback"
+    assert isinstance(first_metadata["merge_score"], float)
+    assert trace.stages[0]["stage"] == "parallel_retrieval"
+    assert trace.stages[0]["details"]["selected_collections"] == ["faq", "policies"]
+    assert trace.stages[0]["details"]["merged_candidate_count"] == 3
+
+
+def test_parallel_retrieval_keeps_successful_collections_when_one_fails() -> None:
+    """Allow one routed collection failure without discarding successful results."""
+
+    runtime = FakeParallelRuntime(
+        {"faq": [_result("faq-a", score=0.82, metadata={"collection": "faq"})]}
+    )
+    trace = FakeParallelTrace()
+    controller = ParallelRetrievalController(runtime=runtime, max_collections=3)
+
+    result = controller.search(
+        _processed_query(),
+        collections=("broken", "faq"),
+        routing_scores={"broken": 0.94, "faq": 0.83},
+        top_k=3,
+        no_rerank=True,
+        trace_id_factory=lambda collection: f"trace-{collection}",
+        trace_context=trace,
+    )
+
+    assert [candidate.chunk_id for candidate in result.results] == ["faq-a"]
+    assert result.query_trace_ids == ["trace-broken", "trace-faq"]
+    assert result.partial_failure_count == 1
+    assert result.collection_results[0] == {
+        "collection": "broken",
+        "trace_id": "trace-broken",
+        "candidate_count": 0,
+        "status": "failed",
+        "routing_score": 0.94,
+        "error": "collection failed",
+    }
+    assert result.collection_results[1]["status"] == "success"
+    assert trace.stages[0]["status"] == "partial_success"
