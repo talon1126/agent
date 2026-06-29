@@ -72,7 +72,10 @@ class AImodelIntentRoute:
     Args:
         action: Selected execution path: ``rag``, ``product_api``, ``web``,
             ``direct``, or ``refuse``.
-        collection: Target RAG collection for ``rag`` actions.
+        collection: Primary target RAG collection for ``rag`` actions.
+        collections: Ordered RAG collections selected from high-confidence
+            candidates. Multi-collection routes let RAG execute parallel
+            retrieval without hardcoding cross-domain YAML routes.
         domain: Top-level configured intent domain.
         category: Domain-local category.
         intent: Leaf intent name.
@@ -92,6 +95,7 @@ class AImodelIntentRoute:
     intent: str | None
     confidence: float
     reason: str
+    collections: tuple[str, ...] = ()
     matched_rule: str | None = None
     matched_terms: tuple[str, ...] = ()
     matched_regex: tuple[str, ...] = ()
@@ -200,15 +204,24 @@ class AImodelIntentRouter:
         winner = ranked_matches[0]
         if winner.score < self._rule_threshold:
             return self._default_route("rule_score_below_threshold"), candidates
-        return self._route_from_match(winner), candidates
+        return self._route_from_match(winner, candidates), candidates
 
-    def _route_from_match(self, match: _RuleMatch) -> AImodelIntentRoute:
+    def _route_from_match(
+        self,
+        match: _RuleMatch,
+        candidates: Sequence[dict[str, Any]],
+    ) -> AImodelIntentRoute:
         """Convert a winning rule match into a public route object."""
 
         rule = match.rule
+        selected_collections = select_rag_collections_by_score(candidates)
+        primary_collection = rule.collection if rule.action == "rag" else None
+        if primary_collection and primary_collection not in selected_collections:
+            selected_collections = (primary_collection, *selected_collections)
         return AImodelIntentRoute(
             action=rule.action,
-            collection=rule.collection if rule.action == "rag" else None,
+            collection=primary_collection,
+            collections=selected_collections if rule.action == "rag" else (),
             domain=rule.domain,
             category=rule.category,
             intent=rule.intent,
@@ -261,6 +274,7 @@ class AImodelIntentRouter:
         return AImodelIntentRoute(
             action="rag",
             collection=self._default_collection,
+            collections=(self._default_collection,),
             domain=None,
             category=None,
             intent=None,
@@ -374,6 +388,62 @@ def _intent_rule_from_tree_node(
         regex_patterns=_string_tuple(match.get("regex")),
         rag_enabled=_validate_bool(payload.get("rag_enabled", action == "rag"), "route.rag_enabled"),
     )
+
+
+def select_rag_collections_by_score(
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    min_score: float = 0.75,
+    delta: float = 0.08,
+    max_collections: int = 3,
+) -> tuple[str, ...]:
+    """Select RAG collections from scored intent candidates.
+
+    Args:
+        candidates: Score-sorted candidate summaries returned by
+            ``route_with_candidates``.
+        min_score: Absolute lower bound for accepting a collection.
+        delta: Relative window below the winning candidate score.
+        max_collections: Maximum number of unique collections to return.
+
+    Returns:
+        Ordered unique collection names. The winning high-confidence collection
+        stays first, while close secondary RAG candidates can trigger RAG-side
+        parallel retrieval.
+    """
+
+    if max_collections <= 0:
+        return ()
+    rag_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate.get("action") == "rag"
+        and isinstance(candidate.get("collection"), str)
+        and str(candidate.get("collection")).strip()
+    ]
+    if not rag_candidates:
+        return ()
+    winner_score = _candidate_score(rag_candidates[0])
+    threshold = max(float(min_score), winner_score - float(delta))
+    selected: list[str] = []
+    for candidate in rag_candidates:
+        if _candidate_score(candidate) < threshold:
+            continue
+        collection = str(candidate.get("collection") or "").strip()
+        if collection and collection not in selected:
+            selected.append(collection)
+        if len(selected) >= max_collections:
+            break
+    return tuple(selected)
+
+
+def _candidate_score(candidate: Mapping[str, Any]) -> float:
+    """Return a numeric candidate score with invalid values treated as zero."""
+
+    try:
+        return float(candidate.get("score") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _top_candidate_summaries(

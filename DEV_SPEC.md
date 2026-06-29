@@ -140,6 +140,7 @@ AImodel Agent
 - 商品事实优先调用 `mock-api`，RAG 只提供知识上下文。
 - AImodel Intent Router 采用 `routers -> domain -> categories -> intents` 树状配置，输出 `action`、`collection`、`domain`、`category`、`intent`、`confidence` 和 `reason`。
 - AImodel Intent Router 按规则优先、语义补充、LLM fallback 的顺序决策；首版可复用 RAG Intent Router 的规则字段、阈值、priority/confidence 语义和 trace-safe 输出结构。
+- AImodel 多 collection 路由不要求在 YAML 中为每个跨域场景单独配置 collections；应基于 intent candidate score 阈值从 top candidates 中选择多个 RAG collection，并把候选 collection 发送给 RAG 并行检索。
 - AImodel 可以决定是否调用 RAG，并在调用 RAG 时显式传入 collection；但不能把用户问题自由改写为 RAG 检索 query，`rag_tool` 暴露给 LangChain Agent 时应为无参数工具，实际查询内容绑定当前 turn 的原始用户问题。
 - 同一用户 turn 内多次触发 `rag_tool` 时应复用本轮首次 RAG 结果，避免产生多个语义漂移的 query trace；需要 query rewrite、query expansion 或多跳检索时应交由 RAG 子系统内部实现并写入 RAG query trace。
 - Agent Trace 采用 LangChain Middleware 采集模型执行过程中的 tool call 事件，同时由 AImodel 自身记录 middleware 无法覆盖的前置意图识别、工具授权列表、message_id、conversation_id 和 RAG query_trace_id。
@@ -539,7 +540,7 @@ agent/                                                      # 项目根目录
 | AI 服务 | `services/ai-service/app/main.py` | FastAPI 入口 | 路由注册、启动初始化、shutdown 释放资源 |
 | AI 服务 | `services/ai-service/app/routers/AImodel/router.py` | AImodel HTTP 路由 | chat、conversation、message、memory |
 | AI 服务 | `services/ai-service/app/routers/AImodel/service.py` | Agent 编排 | LangChain message、Intent Router 调用、工具调用、流式响应 |
-| AI 服务 | `services/ai-service/app/routers/AImodel/intent_router.py` | AImodel 意图路由 | 树状规则配置、action/collection 决策、confidence、fallback |
+| AI 服务 | `services/ai-service/app/routers/AImodel/intent_router.py` | AImodel 意图路由 | 树状规则配置、action/collection 决策、candidate score、score 阈值过滤、多 collection 候选、fallback |
 | AI 服务 | `services/ai-service/app/routers/AImodel/tools.py` | 工具适配 | 商品 API、RAG MCP client、Tavily 联网搜索、长连接复用 |
 | AI 服务 | `services/ai-service/app/routers/AImodel/memory.py` | 会话记忆 | conversation、message、user_memory、message_query_trace |
 | AI 服务 | `services/ai-service/app/routers/AImodel/agent_trace.py` | Agent Trace | LangChain Middleware trace、intent route、tool call、RAG trace 关联、错误摘要 |
@@ -1897,7 +1898,7 @@ mock-api / PostgreSQL 业务事实
 
 ##### G10：实现 AImodel Intent Router
 
-目标：将面向用户问题的工具编排意图识别前置到 AImodel 层，采用 RAG 当前树状意图配置设计，先决定 action 和 collection，再进入 LangChain Agent 或直接工具路径。
+目标：将面向用户问题的工具编排意图识别前置到 AImodel 层，采用 RAG 当前树状意图配置设计，先决定 action 和 collection，再进入 LangChain Agent 或直接工具路径；对跨知识库问题，基于 intent candidate score 阈值动态选择多个 RAG collection，不通过 YAML 为每个跨域场景硬编码 collections。
 
 修改文件：
 
@@ -1910,19 +1911,27 @@ mock-api / PostgreSQL 业务事实
 实现类/函数：
 
 - `AImodelIntentRule`：表示树状配置中的一个 domain/category/intent 叶子节点。
-- `AImodelIntentRoute`：输出 action、collection、domain、category、intent、confidence、reason、matched_rule、matched_terms 和 fallback_used。
+- `AImodelIntentRoute`：输出 action、collection、collections、domain、category、intent、confidence、reason、matched_rule、matched_terms 和 fallback_used。
 - `load_aimodel_intent_routes()`：加载 `routers -> domain -> categories -> intents` 配置并预编译 regex。
-- `AImodelIntentRouter.route()`：按 rules -> semantic profile -> LLM fallback -> default 的顺序选择工具动作和知识库。
-- `stream_chat_events()` / `_run_langchain_agent_stream()`：消费 AImodel 意图结果，必要时把 collection 传给 `rag_tool`，并保留原始用户 query。
+- `AImodelIntentRouter.route()`：按 rules -> semantic profile -> LLM fallback -> default 的顺序选择工具动作和主 collection。
+- `AImodelIntentRouter.route_with_candidates()`：返回 winner 与 top candidates，每个 candidate 包含 collection、score、domain、category、intent 和 matched_rule。
+- `select_rag_collections_by_score()`：根据 candidate score、winner score、collection 去重和最小阈值动态选择多 collection，例如保留 `score >= max(min_score, winner_score - delta)` 的 RAG candidates。
+- `stream_chat_events()` / `_run_langchain_agent_stream()`：消费 AImodel 意图结果，必要时把 collection 或 collections 传给 `rag_tool`，并保留原始用户 query。
 
 验收标准：
 
 - AImodel Intent Router 配置结构与 RAG Intent Router 保持同类设计，支持 domain、category、intent、priority、confidence、match.any、match.all、match.regex、action 和 collection。
 - action 至少支持 `rag`、`product_api`、`web`、`direct`、`refuse`，其中 `rag` 必须携带目标 collection。
-- 选购指南、FAQ、政策、客服话术等内部知识问题由 AImodel 选择 collection 后调用 RAG；RAG query 仍使用用户原始问题。
+- AImodel 不通过新增 YAML `collections` 字段来解决每个跨域问题，而是基于已有 intent candidate score 阈值动态选择多个 collection。
+- 当 top candidates 中多个 RAG collection 的分数接近 winner 且超过阈值时，AImodel 应把多个 collection 发送给 RAG；例如 `manual + policies`、`shopping_guides + faq`。
+- 多 collection 查询应并行执行；任一 collection 成功返回 evidence 时，最终 Agent 可使用所有成功 evidence；失败或 empty 的 collection 应记录但不得阻断其他 collection。
+- 选购指南、FAQ、政策、客服话术等内部知识问题由 AImodel 选择 collection 或 collections 后调用 RAG；RAG query 仍使用用户原始问题。
 - 商品价格、库存、优惠、可购买链接仍走商品 API；外部公开信息走 Tavily；寒暄和明显越界问题不调用 RAG。
 - message_query_trace 只在实际调用 RAG 后写入；需要 RAG 但未产生 trace 时必须触发 Gate 检查。
-- 单元测试覆盖规则命中、collection 选择、direct/refuse 不调用 RAG、RAG 调用保留原始 query、低置信度 fallback。
+- 一个 assistant message 可以关联多个 RAG query_trace_id；多 collection 查询必须把所有实际 RAG trace 写入 message_query_trace。
+- Agent Trace 必须记录 winner、top3 candidate score、selected collections、score 阈值、被过滤候选、每个 collection 的 query_trace_id、状态和 evidence 数量。
+- 若所有 collection 均 empty，最终回答仍按现有空证据策略处理，不使用 LLM 常识补写内部规则。
+- 单元测试覆盖规则命中、collection 选择、direct/refuse 不调用 RAG、RAG 调用保留原始 query、低置信度 fallback、多 collection 选择、score 低于阈值被过滤、并行查询部分失败和多个 query_trace_id 持久化。
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
 

@@ -9,6 +9,7 @@ from app.routers.AImodel.schemas import AiModelChatRequest, AiModelToolResult
 from app.routers.AImodel.intent_router import (
     AImodelIntentRoute,
     AImodelIntentRouter,
+    select_rag_collections_by_score,
     load_aimodel_intent_routes,
     load_default_aimodel_intent_router,
     load_aimodel_intent_rules,
@@ -42,6 +43,7 @@ class FakeRagKnowledgeClient:
         *,
         query: str,
         collection: str | None,
+        collections: list[str] | None = None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -50,6 +52,7 @@ class FakeRagKnowledgeClient:
             {
                 "query": query,
                 "collection": collection,
+                "collections": collections,
                 "top_k": top_k,
                 "no_rerank": no_rerank,
                 "include_image_base64": include_image_base64,
@@ -97,6 +100,8 @@ def test_search_shopping_guides_returns_public_rag_tool_result() -> None:
     assert result.input == "无线耳机怎么选"
     assert result.data == {
         "trace_id": "query-trace-1",
+        "query_trace_ids": [],
+        "collection_results": [],
         "content": "[1] 无线耳机选购时应关注佩戴舒适度。",
         "citations": [
             {
@@ -121,6 +126,7 @@ def test_search_shopping_guides_returns_public_rag_tool_result() -> None:
         {
             "query": "无线耳机怎么选",
             "collection": None,
+            "collections": None,
             "top_k": 3,
             "no_rerank": True,
             "include_image_base64": False,
@@ -233,6 +239,7 @@ def test_persistent_mcp_rag_client_reuses_session_until_close(tmp_path) -> None:
         {
             "query": "无线耳机怎么选",
             "collection": "shopping_guides",
+            "collections": None,
             "top_k": 5,
             "no_rerank": False,
             "include_image_base64": False,
@@ -241,6 +248,7 @@ def test_persistent_mcp_rag_client_reuses_session_until_close(tmp_path) -> None:
         {
             "query": "办公室安静解压玩具",
             "collection": "shopping_guides",
+            "collections": None,
             "top_k": 3,
             "no_rerank": True,
             "include_image_base64": False,
@@ -249,6 +257,7 @@ def test_persistent_mcp_rag_client_reuses_session_until_close(tmp_path) -> None:
         {
             "query": "人体工学键盘怎么选",
             "collection": "shopping_guides",
+            "collections": None,
             "top_k": 2,
             "no_rerank": False,
             "include_image_base64": False,
@@ -364,6 +373,7 @@ def test_build_rag_tool_binds_original_query_and_reuses_turn_result() -> None:
         {
             "query": "空调开机有异味一般是什么原因？",
             "collection": None,
+            "collections": None,
             "top_k": 5,
             "no_rerank": False,
             "include_image_base64": False,
@@ -411,6 +421,23 @@ def test_aimodel_intent_router_exposes_top_three_candidate_scores() -> None:
     assert candidates[0]["score"] >= candidates[1]["score"] >= candidates[2]["score"]
     assert candidates[0]["intent"] == route.intent
     assert all("domain_intent" in candidate for candidate in candidates)
+
+
+def test_select_rag_collections_by_score_keeps_close_high_confidence_candidates() -> None:
+    """Multi-collection routing should come from scored candidates, not YAML lists."""
+
+    selected = select_rag_collections_by_score(
+        [
+            {"action": "rag", "collection": "faq", "score": 0.93},
+            {"action": "rag", "collection": "policies", "score": 0.88},
+            {"action": "rag", "collection": "manual", "score": 0.74},
+            {"action": "web", "collection": None, "score": 0.99},
+        ],
+        min_score=0.75,
+        delta=0.08,
+    )
+
+    assert selected == ("faq", "policies")
 
 
 def test_aimodel_intent_route_loader_alias_and_default_router_cache() -> None:
@@ -471,11 +498,63 @@ def test_build_rag_tool_uses_intent_selected_collection() -> None:
         {
             "query": "延迟发货了怎么处理？",
             "collection": "policies",
+            "collections": None,
             "top_k": 5,
             "no_rerank": False,
             "include_image_base64": False,
         }
     ]
+
+def test_build_rag_tool_passes_intent_selected_collections() -> None:
+    """AImodel should pass multi-collection routing without changing raw query."""
+
+    tool_results: list[AiModelToolResult] = []
+    client = FakeRagKnowledgeClient(
+        {
+            "ok": True,
+            "trace_id": "query-primary",
+            "query_trace_ids": ["query-faq", "query-policies"],
+            "content": "[1] FAQ 证据\n[2] 政策证据",
+            "citations": [],
+            "images": [],
+            "collection_results": [
+                {"collection": "faq", "trace_id": "query-faq", "status": "success"},
+                {
+                    "collection": "policies",
+                    "trace_id": "query-policies",
+                    "status": "success",
+                },
+            ],
+            "is_empty": False,
+        }
+    )
+
+    rag_tool = build_rag_tool(
+        tool_results,
+        rag_client=client,
+        original_query="空调有异味还能退货吗？",
+        collections=["faq", "policies"],
+    )
+    first_payload = rag_tool.invoke({})
+    second_payload = rag_tool.invoke({"query": "空调异味 退货 政策"})
+
+    assert first_payload == second_payload
+    assert client.calls == [
+        {
+            "query": "空调有异味还能退货吗？",
+            "collection": None,
+            "collections": ["faq", "policies"],
+            "top_k": 5,
+            "no_rerank": False,
+            "include_image_base64": False,
+        }
+    ]
+    assert first_payload["data"]["query_trace_ids"] == ["query-faq", "query-policies"]
+    assert _query_trace_ids_from_tool_results(tool_results) == [
+        "query-faq",
+        "query-policies",
+    ]
+
 
 class NamedTool:
     """Small test double that exposes the LangChain tool name contract."""

@@ -126,6 +126,7 @@ class RagKnowledgeClient(Protocol):
         *,
         query: str,
         collection: str | None,
+        collections: list[str] | None = None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -188,6 +189,7 @@ class StdioMcpRagKnowledgeClient:
         *,
         query: str,
         collection: str | None,
+        collections: list[str] | None = None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -198,6 +200,7 @@ class StdioMcpRagKnowledgeClient:
             self._query_knowledge_hub_async(
                 query=query,
                 collection=collection,
+                collections=collections,
                 top_k=top_k,
                 no_rerank=no_rerank,
                 include_image_base64=include_image_base64,
@@ -209,6 +212,7 @@ class StdioMcpRagKnowledgeClient:
         *,
         query: str,
         collection: str | None,
+        collections: list[str] | None = None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -237,6 +241,7 @@ class StdioMcpRagKnowledgeClient:
                     {
                         "query": query,
                         "collection": collection,
+                        "collections": collections,
                         "top_k": top_k,
                         "no_rerank": no_rerank,
                         "include_image_base64": include_image_base64,
@@ -309,6 +314,7 @@ class PersistentMcpRagKnowledgeClient:
         *,
         query: str,
         collection: str | None,
+        collections: list[str] | None = None,
         top_k: int,
         no_rerank: bool,
         include_image_base64: bool,
@@ -329,6 +335,7 @@ class PersistentMcpRagKnowledgeClient:
         payload = {
             "query": query,
             "collection": collection,
+            "collections": collections,
             "top_k": top_k,
             "no_rerank": no_rerank,
             "include_image_base64": include_image_base64,
@@ -605,6 +612,7 @@ def rag_tool(
     *,
     rag_client: RagKnowledgeClient | None = None,
     collection: str | None = None,
+    collections: list[str] | tuple[str, ...] | None = None,
     top_k: int = DEFAULT_RAG_TOP_K,
     no_rerank: bool = False,
     include_image_base64: bool = False,
@@ -617,6 +625,8 @@ def rag_tool(
             process-wide MCP stdio adapter.
         collection: Optional RAG collection override. ``None`` lets the RAG
             intent router choose the most suitable collection.
+        collections: Optional ordered collection list selected by AImodel.
+            When provided, it takes precedence over the single collection.
         top_k: Final number of knowledge snippets requested from RAG.
         no_rerank: Whether to skip reranker inside the RAG query pipeline.
         include_image_base64: Explicitly request image bytes. AImodel keeps this
@@ -646,11 +656,13 @@ def rag_tool(
     active_collection = (
         collection.strip() if isinstance(collection, str) and collection.strip() else None
     )
+    active_collections = _normalize_collections(collections)
     client = rag_client or get_rag_knowledge_client()
     try:
         payload = client.query_knowledge_hub(
             query=normalized_query,
             collection=active_collection,
+            collections=active_collections,
             top_k=top_k,
             no_rerank=no_rerank,
             include_image_base64=include_image_base64,
@@ -685,6 +697,7 @@ def search_shopping_guides(
     *,
     rag_client: RagKnowledgeClient | None = None,
     collection: str | None = None,
+    collections: list[str] | tuple[str, ...] | None = None,
     top_k: int = DEFAULT_RAG_TOP_K,
     no_rerank: bool = False,
     include_image_base64: bool = False,
@@ -695,6 +708,7 @@ def search_shopping_guides(
         query,
         rag_client=rag_client,
         collection=collection,
+        collections=collections,
         top_k=top_k,
         no_rerank=no_rerank,
         include_image_base64=include_image_base64,
@@ -811,11 +825,42 @@ def _public_rag_tool_data(payload: dict[str, Any]) -> dict[str, Any]:
     content = payload.get("content")
     return {
         "trace_id": payload.get("trace_id"),
+        "query_trace_ids": _string_list(payload.get("query_trace_ids")),
+        "collection_results": _list_of_dicts(payload.get("collection_results")),
         "content": content if isinstance(content, str) else "",
         "citations": _list_of_dicts(payload.get("citations")),
         "images": _list_of_dicts(payload.get("images")),
         "is_empty": bool(payload.get("is_empty", not bool(content))),
     }
+
+
+def _normalize_collections(
+    value: list[str] | tuple[str, ...] | None,
+) -> list[str] | None:
+    """Return an ordered unique collection list or ``None``."""
+
+    if value is None:
+        return None
+    selected: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        collection = item.strip()
+        if collection and collection not in selected:
+            selected.append(collection)
+    return selected or None
+
+
+def _string_list(value: Any) -> list[str]:
+    """Return non-empty strings from a JSON list."""
+
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip() and item.strip() not in result:
+            result.append(item.strip())
+    return result
 
 
 def _list_of_dicts(value: Any) -> list[dict[str, Any]]:

@@ -304,6 +304,7 @@ def _run_langchain_agent(
         tool_results,
         original_query=request.message,
         collection=intent_route.collection if intent_route.action == "rag" else None,
+        collections=list(intent_route.collections) if intent_route.action == "rag" else None,
     )
     web_search_tool = build_web_search_tool(tool_results)
     agent_tools = _agent_tools_for_intent_route(
@@ -379,6 +380,7 @@ def _run_langchain_agent_stream(
         tool_results,
         original_query=request.message,
         collection=intent_route.collection if intent_route.action == "rag" else None,
+        collections=list(intent_route.collections) if intent_route.action == "rag" else None,
     )
     web_search_tool = build_web_search_tool(tool_results)
     agent_tools = _agent_tools_for_intent_route(
@@ -559,6 +561,7 @@ def build_rag_tool(
     *,
     original_query: str,
     collection: str | None = None,
+    collections: list[str] | tuple[str, ...] | None = None,
     rag_client: RagKnowledgeClient | None = None,
 ) -> Any:
     """Build the argument-free RAG tool exposed to the shopping Agent.
@@ -580,6 +583,9 @@ def build_rag_tool(
         collection: Optional collection selected by AImodel Intent Router. RAG
             still receives the original query, but collection filtering is decided
             by the caller-side orchestration layer when available.
+        collections: Optional ordered collection list selected by AImodel from
+            scored intent candidates. When present, RAG executes multi-collection
+            retrieval behind its MCP boundary.
         rag_client: Optional injectable client used by tests. Production leaves
             this as ``None`` so the H2 MCP stdio client is used.
 
@@ -601,6 +607,7 @@ def build_rag_tool(
                 tool_results=tool_results,
                 rag_client=rag_client,
                 collection=collection,
+                collections=collections,
             )
         return cached_payload
 
@@ -693,6 +700,7 @@ def _run_rag_tool(
     tool_results: list[AiModelToolResult],
     rag_client: RagKnowledgeClient | None,
     collection: str | None = None,
+    collections: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Execute ``rag_tool`` and record its result for memory.
 
@@ -701,6 +709,7 @@ def _run_rag_tool(
         tool_results: Per-request mutable tool result buffer.
         rag_client: Optional injectable RAG client.
         collection: Optional AImodel-selected RAG collection.
+        collections: Optional AImodel-selected RAG collection list.
 
     Returns:
         Serializable AImodel tool result dictionary returned to the Agent.
@@ -710,6 +719,7 @@ def _run_rag_tool(
         query,
         rag_client=rag_client,
         collection=collection,
+        collections=collections,
     )
     tool_results.append(result)
     return result.model_dump()
@@ -730,9 +740,15 @@ def _query_trace_ids_from_tool_results(
     for result in tool_results:
         if result.tool not in {"rag_tool", "search_shopping_guides"}:
             continue
-        trace_id = (
-            result.data.get("trace_id") if isinstance(result.data, dict) else None
-        )
+        if not isinstance(result.data, dict):
+            continue
+        query_trace_ids = result.data.get("query_trace_ids")
+        if isinstance(query_trace_ids, list) and query_trace_ids:
+            for trace_id in query_trace_ids:
+                if isinstance(trace_id, str) and trace_id.strip() not in trace_ids:
+                    trace_ids.append(trace_id.strip())
+            continue
+        trace_id = result.data.get("trace_id")
         if (
             isinstance(trace_id, str)
             and trace_id.strip()

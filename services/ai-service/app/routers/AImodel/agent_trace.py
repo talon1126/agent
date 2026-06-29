@@ -302,6 +302,7 @@ def record_intent_route(
     final_result = {
         "action": route.action,
         "collection": route.collection,
+        "collections": list(route.collections),
         "domain": route.domain,
         "category": route.category,
         "intent": route.intent,

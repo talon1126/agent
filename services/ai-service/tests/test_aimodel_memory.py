@@ -230,6 +230,7 @@ def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payl
     assert payload["intent_route"] == {
         "action": "rag",
         "collection": "faq",
+        "collections": [],
         "domain": "support",
         "category": "usage",
         "intent": "operation_guide",

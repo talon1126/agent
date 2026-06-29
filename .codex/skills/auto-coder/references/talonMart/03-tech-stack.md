@@ -71,6 +71,7 @@ AImodel Agent
 - 商品事实优先调用 `mock-api`，RAG 只提供知识上下文。
 - AImodel Intent Router 采用 `routers -> domain -> categories -> intents` 树状配置，输出 `action`、`collection`、`domain`、`category`、`intent`、`confidence` 和 `reason`。
 - AImodel Intent Router 按规则优先、语义补充、LLM fallback 的顺序决策；首版可复用 RAG Intent Router 的规则字段、阈值、priority/confidence 语义和 trace-safe 输出结构。
+- AImodel 多 collection 路由不要求在 YAML 中为每个跨域场景单独配置 collections；应基于 intent candidate score 阈值从 top candidates 中选择多个 RAG collection，并把候选 collection 发送给 RAG 并行检索。
 - AImodel 可以决定是否调用 RAG，并在调用 RAG 时显式传入 collection；但不能把用户问题自由改写为 RAG 检索 query，`rag_tool` 暴露给 LangChain Agent 时应为无参数工具，实际查询内容绑定当前 turn 的原始用户问题。
 - 同一用户 turn 内多次触发 `rag_tool` 时应复用本轮首次 RAG 结果，避免产生多个语义漂移的 query trace；需要 query rewrite、query expansion 或多跳检索时应交由 RAG 子系统内部实现并写入 RAG query trace。
 - Agent Trace 采用 LangChain Middleware 采集模型执行过程中的 tool call 事件，同时由 AImodel 自身记录 middleware 无法覆盖的前置意图识别、工具授权列表、message_id、conversation_id 和 RAG query_trace_id。
