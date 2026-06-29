@@ -31,6 +31,7 @@ services:
   ai-service:
     build:
       context: ./services/ai-service
+    gpus: all
     environment:
       AI_MODE: fake
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -45,6 +46,8 @@ services:
       TAVILY_MAX_RESULTS: ${TAVILY_MAX_RESULTS:-5}
       RAG_PROJECT_DIR: /app/rag
       RAG_MCP_COMMAND: python
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:5173}
       POLICY_PATH: /app/fixtures/policies/after_sales_policy.md
       MOCK_API_URL: http://mock-api:8000
