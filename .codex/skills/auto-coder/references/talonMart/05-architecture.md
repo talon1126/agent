@@ -144,6 +144,8 @@ agent/                                                      # 项目根目录
 │   │   │           ├── __init__.py                         # AImodel 包标记
 │   │   │           ├── router.py                           # AImodel HTTP 路由
 │   │   │           ├── service.py                          # AImodel 编排服务
+│   │   │           ├── intent_router.py                    # AImodel 意图路由
+│   │   │           ├── intent_routes.yaml                  # AImodel 意图配置
 │   │   │           ├── schemas.py                          # AImodel 数据模型
 │   │   │           ├── memory.py                           # AImodel 记忆存储
 │   │   │           └── tools.py                            # AImodel 工具适配
@@ -296,7 +298,8 @@ agent/                                                      # 项目根目录
 | 前端 | `apps/talonmart-web/src/services/categoryRankingApi.ts` | 分类排行榜 API client | 首页热门、分类榜单、详情页 Top 标签 |
 | AI 服务 | `services/ai-service/app/main.py` | FastAPI 入口 | 路由注册、启动初始化、shutdown 释放资源 |
 | AI 服务 | `services/ai-service/app/routers/AImodel/router.py` | AImodel HTTP 路由 | chat、conversation、message、memory |
-| AI 服务 | `services/ai-service/app/routers/AImodel/service.py` | Agent 编排 | LangChain message、工具调用、流式响应 |
+| AI 服务 | `services/ai-service/app/routers/AImodel/service.py` | Agent 编排 | LangChain message、Intent Router 调用、工具调用、流式响应 |
+| AI 服务 | `services/ai-service/app/routers/AImodel/intent_router.py` | AImodel 意图路由 | 树状规则配置、action/collection 决策、confidence、fallback |
 | AI 服务 | `services/ai-service/app/routers/AImodel/tools.py` | 工具适配 | 商品 API、RAG MCP client、Tavily 联网搜索、长连接复用 |
 | AI 服务 | `services/ai-service/app/routers/AImodel/memory.py` | 会话记忆 | conversation、message、user_memory、message_query_trace |
 | 业务 API | `services/mock-api/app/main.py` | mock-api 入口 | 路由注册、health、政策搜索、run log |
@@ -417,11 +420,14 @@ aiModelApi.ts 发起 SSE 请求
 ai-service AImodel router
     |
     v
-AImodel service 读取记忆并调用工具
+AImodel service 读取记忆
+    |
+    v
+AImodel Intent Router 选择 action / collection
     |
     +--> mock-api 商品事实工具
     |
-    +--> 无参数 rag_tool 绑定原始用户问题
+    +--> 无参数 rag_tool 绑定原始用户问题和目标 collection
            |
            v
         RAG MCP 知识工具

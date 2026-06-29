@@ -50,6 +50,9 @@ TalonMart AI 模式
 ai-service /AImodel/chat
     |
     v
+AImodel Intent Router
+    |
+    v
 AImodel Agent
     |
     +--> mock-api 商品搜索 / 商品详情 / 购物车工具
@@ -66,7 +69,9 @@ AImodel Agent
 - `request_source` 必须区分 `aimodel`、`mcp`、`query_cli`，便于后续 trace 分析。
 - 前端输出必须过滤原始 tool result、chunk id、trace id 等内部细节。
 - 商品事实优先调用 `mock-api`，RAG 只提供知识上下文。
-- AImodel 可以决定是否调用 RAG，但不能把用户问题自由改写为 RAG 检索 query；`rag_tool` 暴露给 LangChain Agent 时应为无参数工具，实际查询内容绑定当前 turn 的原始用户问题。
+- AImodel Intent Router 采用 `routers -> domain -> categories -> intents` 树状配置，输出 `action`、`collection`、`domain`、`category`、`intent`、`confidence` 和 `reason`。
+- AImodel Intent Router 按规则优先、语义补充、LLM fallback 的顺序决策；首版可复用 RAG Intent Router 的规则字段、阈值、priority/confidence 语义和 trace-safe 输出结构。
+- AImodel 可以决定是否调用 RAG，并在调用 RAG 时显式传入 collection；但不能把用户问题自由改写为 RAG 检索 query，`rag_tool` 暴露给 LangChain Agent 时应为无参数工具，实际查询内容绑定当前 turn 的原始用户问题。
 - 同一用户 turn 内多次触发 `rag_tool` 时应复用本轮首次 RAG 结果，避免产生多个语义漂移的 query trace；需要 query rewrite、query expansion 或多跳检索时应交由 RAG 子系统内部实现并写入 RAG query trace。
 - 联网搜索只作为外部公开网页信息补充工具，必须通过 Tavily 受控 API 调用，不允许 Agent 直接访问任意内部 HTTP API。
 - Tavily 工具必须读取 `TAVILY_API_KEY` 和可选 `TAVILY_SEARCH_URL` / `TAVILY_MAX_RESULTS` 配置；未配置 key 时工具应优雅返回不可用结果，不影响商品工具和 RAG 工具。

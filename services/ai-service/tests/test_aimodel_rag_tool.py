@@ -6,8 +6,16 @@ import pytest
 
 from app.routers.AImodel.memory import NoopAiModelMemoryStore
 from app.routers.AImodel.schemas import AiModelChatRequest, AiModelToolResult
+from app.routers.AImodel.intent_router import (
+    AImodelIntentRoute,
+    AImodelIntentRouter,
+    load_aimodel_intent_routes,
+    load_default_aimodel_intent_router,
+    load_aimodel_intent_rules,
+)
 from app.routers.AImodel.service import (
     SYSTEM_PROMPT,
+    _agent_tools_for_intent_route,
     _query_trace_ids_from_tool_results,
     build_rag_tool,
     stream_chat_events,
@@ -364,6 +372,151 @@ def test_build_rag_tool_binds_original_query_and_reuses_turn_result() -> None:
     assert [result.tool for result in tool_results] == ["rag_tool"]
     assert _query_trace_ids_from_tool_results(tool_results) == ["query-trace-agent"]
 
+
+def test_aimodel_intent_router_routes_internal_policy_to_rag_collection() -> None:
+    """Protect AImodel-side collection selection before RAG MCP is called."""
+
+    router = AImodelIntentRouter(
+        rules=load_aimodel_intent_rules(
+            "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+        ),
+        default_collection="shopping_guides",
+    )
+
+    route = router.route("延迟发货了怎么处理？")
+
+    assert route.action == "rag"
+    assert route.collection == "policies"
+    assert route.domain == "support"
+    assert route.category == "aftersales"
+    assert route.intent == "shipping_policy"
+    assert route.confidence >= 0.9
+    assert route.matched_rule
+
+
+def test_aimodel_intent_route_loader_alias_and_default_router_cache() -> None:
+    """The public spec name should load rules and the default router should be reused."""
+
+    rules = load_aimodel_intent_routes(
+        "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+    )
+    first_router = load_default_aimodel_intent_router()
+    second_router = load_default_aimodel_intent_router()
+
+    assert rules
+    assert first_router is second_router
+
+def test_aimodel_intent_router_routes_greeting_to_direct_without_rag() -> None:
+    """Greeting messages should stay in AImodel and avoid RAG trace creation."""
+
+    router = AImodelIntentRouter(
+        rules=load_aimodel_intent_rules(
+            "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+        ),
+        default_collection="shopping_guides",
+    )
+
+    route = router.route("你好")
+
+    assert route.action == "direct"
+    assert route.collection is None
+    assert route.rag_enabled is False
+    assert route.domain == "chat"
+
+
+def test_build_rag_tool_uses_intent_selected_collection() -> None:
+    """AImodel must pass its selected collection while preserving the raw query."""
+
+    tool_results: list[AiModelToolResult] = []
+    client = FakeRagKnowledgeClient(
+        {
+            "ok": True,
+            "trace_id": "query-policy",
+            "content": "[1] 延迟发货可联系平台客服处理。",
+            "citations": [],
+            "images": [],
+            "is_empty": False,
+        }
+    )
+
+    rag_tool = build_rag_tool(
+        tool_results,
+        rag_client=client,
+        original_query="延迟发货了怎么处理？",
+        collection="policies",
+    )
+    payload = rag_tool.invoke({})
+
+    assert payload["ok"] is True
+    assert client.calls == [
+        {
+            "query": "延迟发货了怎么处理？",
+            "collection": "policies",
+            "top_k": 5,
+            "no_rerank": False,
+            "include_image_base64": False,
+        }
+    ]
+
+class NamedTool:
+    """Small test double that exposes the LangChain tool name contract."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def _tool_names(tools: list[Any]) -> list[str]:
+    """Return tool names from the service helper under test."""
+
+    return [tool.name for tool in tools]
+
+
+def test_agent_tools_for_intent_route_only_exposes_selected_action_tools() -> None:
+    """The caller-side router must gate tools before the Agent can choose one."""
+
+    tool_kwargs = {
+        "product_detail_tool": NamedTool("get_product_detail_from_link"),
+        "product_search_tool": NamedTool("search_product_catalog"),
+        "rag_tool": NamedTool("rag_tool"),
+        "web_search_tool": NamedTool("search_web_with_tavily"),
+    }
+    rag_route = AImodelIntentRoute(
+        action="rag",
+        collection="policies",
+        domain="support",
+        category="aftersales",
+        intent="shipping_policy",
+        confidence=0.99,
+        reason="matched rule",
+    )
+    direct_route = AImodelIntentRoute(
+        action="direct",
+        collection=None,
+        domain="chat",
+        category="chat_all",
+        intent="greeting",
+        confidence=0.9,
+        reason="matched rule",
+        rag_enabled=False,
+    )
+    refuse_route = AImodelIntentRoute(
+        action="refuse",
+        collection=None,
+        domain="chat",
+        category="chat_all",
+        intent="out_of_scope",
+        confidence=0.9,
+        reason="matched rule",
+        rag_enabled=False,
+    )
+
+    assert _tool_names(_agent_tools_for_intent_route(rag_route, **tool_kwargs)) == [
+        "rag_tool"
+    ]
+    assert "rag_tool" not in _tool_names(
+        _agent_tools_for_intent_route(direct_route, **tool_kwargs)
+    )
+    assert _tool_names(_agent_tools_for_intent_route(refuse_route, **tool_kwargs)) == []
 
 def test_query_trace_ids_from_tool_results_deduplicates_rag_traces() -> None:
     tool_results = [

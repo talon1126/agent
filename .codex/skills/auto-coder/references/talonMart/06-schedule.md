@@ -15,7 +15,7 @@
 | 阶段 D | Delivery Workflow | 完成物流查询、异常和 case 闭环 | [✔] |
 | 阶段 E | Operations Workflow | 完成跨领域只读摘要和运营建议闭环 | [✔] |
 | 阶段 F | 电商项目 | 完成 TalonMart 商品、Departments 导购、购物车、秒杀、排行榜和前端体验 | [✔] |
-| 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆、受控联网搜索和 RAG MCP 集成 | [✔] |
+| 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆、AImodel Intent Router、受控联网搜索和 RAG MCP 集成 | [✔] |
 | 阶段 H | 飞书应用与协作后台 | 完成 feishu-adapter、多维表格 read model、主动通知和飞书应用搭建 | [~] |
 | 阶段 I | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
 
@@ -29,7 +29,7 @@
 | 阶段 D | 物流主链路可演示 | 物流状态、异常查询、case 创建 | `uv run --project services/mock-api pytest services\mock-api\tests\test_delivery_router_structure.py -q` | Operations Workflow |  |
 | 阶段 E | 运营只读汇总可用 | 异常摘要、风险汇总、后续动作建议 | `uv run --project services/mock-api pytest tests\test_department_workflows.py -q` | 电商项目 |  |
 | 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
-| 阶段 G | AImodel 持续增强 | 流式聊天、工具调用、会话记忆、受控联网搜索、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 | 2026-06-23 |
+| 阶段 G | AImodel 持续增强 | 流式聊天、工具调用、会话记忆、AImodel Intent Router、受控联网搜索、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 | 2026-06-29 |
 | 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、业务操作页、订单明细、商品、秒杀 read model 分页同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
 | 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
 
@@ -113,6 +113,7 @@
 | G7 | 实现 message_query_trace 关联 | [✔] |  | trace id mapping |
 | G8 | 实现 Tavily 联网搜索工具 | [✔] | 2026-06-23 | web search tool、TAVILY_API_KEY |
 | G9 | 实现 AImodel 测试与回归门禁 | [✔] |  | ai-service tests |
+| G10 | 实现 AImodel Intent Router | [✔] | 2026-06-29 | 树状意图配置、action/collection 路由 |
 
 #### 阶段 H：飞书应用与协作后台
 
@@ -154,10 +155,10 @@
 | 阶段 D | 6 | 6 | 100% |
 | 阶段 E | 5 | 5 | 100% |
 | 阶段 F | 8 | 8 | 100% |
-| 阶段 G | 9 | 9 | 100% |
+| 阶段 G | 10 | 10 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| **总计** | **64** | **58** | **91%** |
+| **总计** | **65** | **59** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -1071,7 +1072,7 @@
 
 ##### G5：实现 LangChain Agent 编排
 
-目标：根据用户意图选择商品工具或 RAG 工具。
+目标：根据用户意图选择商品工具、RAG 工具、联网搜索工具或直接回复路径。
 
 修改文件：
 
@@ -1088,11 +1089,11 @@
 
 验收标准：
 
-- 简单咨询、商品推荐、链接对比和知识问答都能走正确工具。
-- LangChain Agent 只能决定是否调用 `rag_tool`，不能通过工具参数自由生成或改写 RAG 检索 query。
+- 简单咨询、商品推荐、链接对比、知识问答、公开信息和直接回复都能走正确路径。
+- LangChain Agent 只能决定是否调用 `rag_tool` 或其他已授权工具，不能通过工具参数自由生成或改写 RAG 检索 query。
 - `rag_tool` 工具 schema 不暴露 `query` 参数；实际传给 RAG MCP 的 query 必须等于当前用户原始问题。
 - 同一用户 turn 内重复调用 `rag_tool` 时应复用首次 RAG 结果，不重复触发 RAG MCP 查询，也不新增额外 query trace。
-- 需要改写、扩展、多跳或关键词化检索时，由 RAG 子系统内部 QueryProcessor/IntentRouter/Query Planner 负责，并写入 RAG query trace。
+- 需要改写、扩展、多跳或关键词化检索时，由 RAG 子系统内部 QueryProcessor、Query Planner 或检索链路负责，并写入 RAG query trace。
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
 
@@ -1191,6 +1192,38 @@
 - 未配置联网搜索 key 时测试仍可离线执行，不访问 Tavily 真实服务。
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
+
+##### G10：实现 AImodel Intent Router
+
+目标：将面向用户问题的工具编排意图识别前置到 AImodel 层，采用 RAG 当前树状意图配置设计，先决定 action 和 collection，再进入 LangChain Agent 或直接工具路径。
+
+修改文件：
+
+- `services/ai-service/app/routers/AImodel/intent_router.py`
+- `services/ai-service/app/routers/AImodel/intent_routes.yaml`
+- `services/ai-service/app/routers/AImodel/service.py`
+- `services/ai-service/tests/test_aimodel_agent.py`
+- `services/ai-service/tests/test_aimodel_rag_tool.py`
+
+实现类/函数：
+
+- `AImodelIntentRule`：表示树状配置中的一个 domain/category/intent 叶子节点。
+- `AImodelIntentRoute`：输出 action、collection、domain、category、intent、confidence、reason、matched_rule、matched_terms 和 fallback_used。
+- `load_aimodel_intent_routes()`：加载 `routers -> domain -> categories -> intents` 配置并预编译 regex。
+- `AImodelIntentRouter.route()`：按 rules -> semantic profile -> LLM fallback -> default 的顺序选择工具动作和知识库。
+- `stream_chat_events()` / `_run_langchain_agent_stream()`：消费 AImodel 意图结果，必要时把 collection 传给 `rag_tool`，并保留原始用户 query。
+
+验收标准：
+
+- AImodel Intent Router 配置结构与 RAG Intent Router 保持同类设计，支持 domain、category、intent、priority、confidence、match.any、match.all、match.regex、action 和 collection。
+- action 至少支持 `rag`、`product_api`、`web`、`direct`、`refuse`，其中 `rag` 必须携带目标 collection。
+- 选购指南、FAQ、政策、客服话术等内部知识问题由 AImodel 选择 collection 后调用 RAG；RAG query 仍使用用户原始问题。
+- 商品价格、库存、优惠、可购买链接仍走商品 API；外部公开信息走 Tavily；寒暄和明显越界问题不调用 RAG。
+- message_query_trace 只在实际调用 RAG 后写入；需要 RAG 但未产生 trace 时必须触发 Gate 检查。
+- 单元测试覆盖规则命中、collection 选择、direct/refuse 不调用 RAG、RAG 调用保留原始 query、低置信度 fallback。
+
+测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
+
 #### 阶段 H：飞书应用与协作后台
 
 ##### H1：建立 feishu-adapter 基础能力

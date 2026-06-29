@@ -17,7 +17,7 @@ Agent 不直接修改业务事实。库存、采购单、订单、物流、商�
 
 ### 2.4 AImodel + RAG MCP
 
-AImodel 负责用户购物咨询和商品对比，商品事实由 `mock-api` 提供，选购指南和文档知识由 RAG MCP 服务提供。RAG MCP 通过 stdio 子进程复用，避免每次查询重复启动。
+AImodel 负责用户购物咨询、商品对比和工具编排，商品事实由 `mock-api` 提供，选购指南、FAQ、平台政策和客服话术由 RAG MCP 服务提供。AImodel 侧新增独立 Intent Router，采用 RAG 当前的树状意图配置思想，先判断 `action` 和目标 `collection`，再决定调用商品 API、RAG、Tavily、直接回复或拒答。RAG MCP 通过 stdio 子进程复用，避免每次查询重复启动。
 
 ### 2.5 飞书应用企业管理后台
 

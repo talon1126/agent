@@ -25,6 +25,10 @@ except ModuleNotFoundError:
             self.content = content
 
 
+from app.routers.AImodel.intent_router import (
+    AImodelIntentRoute,
+    load_default_aimodel_intent_router,
+)
 from app.routers.AImodel.memory import (
     AiModelMemoryMessage,
     AiModelMemoryStore,
@@ -274,7 +278,12 @@ def _run_langchain_agent(
         tool_results.append(result)
         return result.model_dump()
 
-    rag_tool = build_rag_tool(tool_results, original_query=request.message)
+    intent_route = route_aimodel_intent(request.message)
+    rag_tool = build_rag_tool(
+        tool_results,
+        original_query=request.message,
+        collection=intent_route.collection if intent_route.action == "rag" else None,
+    )
     web_search_tool = build_web_search_tool(tool_results)
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
@@ -287,12 +296,13 @@ def _run_langchain_agent(
     )
     agent = create_agent(
         model=model,
-        tools=[
-            get_product_detail_from_link,
-            search_product_catalog,
-            rag_tool,
-            web_search_tool,
-        ],
+        tools=_agent_tools_for_intent_route(
+            intent_route,
+            product_detail_tool=get_product_detail_from_link,
+            product_search_tool=search_product_catalog,
+            rag_tool=rag_tool,
+            web_search_tool=web_search_tool,
+        ),
         system_prompt=SYSTEM_PROMPT,
     )
     result = agent.invoke({"messages": _build_langchain_messages(request)})
@@ -334,7 +344,12 @@ def _run_langchain_agent_stream(
         tool_results.append(result)
         return result.model_dump()
 
-    rag_tool = build_rag_tool(tool_results, original_query=request.message)
+    intent_route = route_aimodel_intent(request.message)
+    rag_tool = build_rag_tool(
+        tool_results,
+        original_query=request.message,
+        collection=intent_route.collection if intent_route.action == "rag" else None,
+    )
     web_search_tool = build_web_search_tool(tool_results)
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
@@ -348,12 +363,13 @@ def _run_langchain_agent_stream(
     )
     agent = create_agent(
         model=model,
-        tools=[
-            get_product_detail_from_link,
-            search_product_catalog,
-            rag_tool,
-            web_search_tool,
-        ],
+        tools=_agent_tools_for_intent_route(
+            intent_route,
+            product_detail_tool=get_product_detail_from_link,
+            product_search_tool=search_product_catalog,
+            rag_tool=rag_tool,
+            web_search_tool=web_search_tool,
+        ),
         system_prompt=SYSTEM_PROMPT,
     )
     # 中文注释：这里只向前端流式输出可见回答文本，不暴露模型内部隐藏推理链路。
@@ -368,6 +384,53 @@ def _run_langchain_agent_stream(
         chunk = _extract_stream_token(update)
         if chunk:
             yield chunk
+
+
+def _agent_tools_for_intent_route(
+    intent_route: AImodelIntentRoute,
+    *,
+    product_detail_tool: Any,
+    product_search_tool: Any,
+    rag_tool: Any,
+    web_search_tool: Any,
+) -> list[Any]:
+    """Return only the tools allowed by the caller-side intent route.
+
+    Args:
+        intent_route: Routing decision produced before Agent execution.
+        product_detail_tool: Tool for resolving product detail links.
+        product_search_tool: Tool for searching the internal product catalog.
+        rag_tool: Tool for querying the internal RAG MCP knowledge service.
+        web_search_tool: Tool for public web search.
+
+    Returns:
+        A LangChain tool list scoped to the selected action. Direct answers and
+        refusal paths deliberately receive no tools so they cannot create RAG
+        traces or leak into product/web side effects.
+    """
+
+    if intent_route.action == "rag":
+        return [rag_tool]
+    if intent_route.action == "product_api":
+        return [product_detail_tool, product_search_tool]
+    if intent_route.action == "web":
+        return [web_search_tool]
+    if intent_route.action in {"direct", "refuse"}:
+        return []
+    return []
+
+
+def route_aimodel_intent(message: str) -> AImodelIntentRoute:
+    """Route one AImodel user turn before building Agent tools.
+
+    Args:
+        message: Current user-visible question from ``AiModelChatRequest``.
+
+    Returns:
+        A deterministic route selected from the bundled AImodel intent rules.
+    """
+
+    return load_default_aimodel_intent_router().route(message)
 
 
 def build_web_search_tool(
@@ -418,6 +481,7 @@ def build_rag_tool(
     tool_results: list[AiModelToolResult],
     *,
     original_query: str,
+    collection: str | None = None,
     rag_client: RagKnowledgeClient | None = None,
 ) -> Any:
     """Build the argument-free RAG tool exposed to the shopping Agent.
@@ -436,6 +500,9 @@ def build_rag_tool(
         original_query: User's current-turn question from ``AiModelChatRequest``.
             This exact text is sent to RAG MCP regardless of the Agent's hidden
             planning text.
+        collection: Optional collection selected by AImodel Intent Router. RAG
+            still receives the original query, but collection filtering is decided
+            by the caller-side orchestration layer when available.
         rag_client: Optional injectable client used by tests. Production leaves
             this as ``None`` so the H2 MCP stdio client is used.
 
@@ -456,6 +523,7 @@ def build_rag_tool(
                 original_query,
                 tool_results=tool_results,
                 rag_client=rag_client,
+                collection=collection,
             )
         return cached_payload
 
@@ -547,6 +615,7 @@ def _run_rag_tool(
     *,
     tool_results: list[AiModelToolResult],
     rag_client: RagKnowledgeClient | None,
+    collection: str | None = None,
 ) -> dict[str, Any]:
     """Execute ``rag_tool`` and record its result for memory.
 
@@ -554,6 +623,7 @@ def _run_rag_tool(
         query: User query passed by the Agent.
         tool_results: Per-request mutable tool result buffer.
         rag_client: Optional injectable RAG client.
+        collection: Optional AImodel-selected RAG collection.
 
     Returns:
         Serializable AImodel tool result dictionary returned to the Agent.
@@ -562,6 +632,7 @@ def _run_rag_tool(
     result = run_rag_tool(
         query,
         rag_client=rag_client,
+        collection=collection,
     )
     tool_results.append(result)
     return result.model_dump()

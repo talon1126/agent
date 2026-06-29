@@ -22,6 +22,7 @@ dependencies = [
     { name = "mcp" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -44,6 +45,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = "==3.2.9" },
     { name = "pydantic", specifier = "==2.11.4" },
     { name = "pytest", marker = "extra == 'test'", specifier = "==8.3.5" },
+    { name = "pyyaml", specifier = ">=6.0,<7.0" },
     { name = "ruff", marker = "extra == 'test'", specifier = "==0.11.10" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.34.2" },
 ]
