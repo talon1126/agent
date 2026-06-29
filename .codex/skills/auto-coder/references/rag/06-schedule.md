@@ -17,7 +17,7 @@
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [✔] |
 | Phase G | 质量评估体系 | 黄金测试集、检索指标、配置驱动 Ragas 生成指标、评估脚本进度日志、真实 Query Pipeline 评估入口、AImodel message answer 评估、策略对比和评估趋势 | [✔] |
 | Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调、端到端测试和 MCP 长连接优化 | [✔] |
-| Phase I | Async Query Runtime | 在线 Query/MCP/Evaluation async 化、provider 原生 async、multi-collection 真并发、merge 后单次 Self-RAG 和 Response Builder；暂不改 ingestion async | [ ] |
+| Phase I | Async Query Runtime | 在线 Query/MCP/Evaluation async 化、provider 原生 async、multi-collection 真并发、merge 后单次 Self-RAG 和 Response Builder；暂不改 ingestion async | [~] |
 
 ### 6.2 交付里程碑
 
@@ -388,7 +388,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | I1 | 定义 async provider 契约与兼容适配层 | [✔] | 2026-06-29 | 为 LLM、Embedding、VectorStore 和 Reranker 补充默认 async 最小接口；新增 SyncToAsync adapters，支持 timeout 与 cancellation；同步 retrieval/evaluation async 配置；158 个相关单元测试和 ruff 通过 |
 | I2 | 实现 provider 原生 async 化 | [✔] | 2026-06-29 | OpenAI-compatible/DeepSeek/CCSwitch/Embedding provider 使用原生 async SDK client；pgvector/BM25 在线查询提供 async 方法；LLM Reranker 使用 async LLM；Cross-Encoder 通过 worker thread 避免阻塞事件循环；142 个相关单元测试和 ruff 通过 |
 | I3 | 实现 AsyncQueryRuntime | [✔] | 2026-06-29 | 新增在线查询 `AsyncQueryRuntime`，覆盖 query processing、intent routing、hybrid retrieval、rerank、Self-RAG 和 Response Builder；`run_query_cli()` 支持同步/async runtime 兼容执行；8 个 async runtime 单元测试、2 个 query pipeline 集成测试和 ruff 通过 |
-| I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [ ] |  | 每个 collection 并发执行 retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断；只执行一次 Self-RAG judge 和一次 Response Builder；支持 max concurrency、per-collection timeout、partial failure 和 trace 汇总 |
+| I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [✔] | 2026-06-29 | 新增 `AsyncParallelRetrievalController`，使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断并保留 collection/routing/merge metadata；Self-RAG judge 和 Response Builder 在 merge 后只执行一次；支持 max concurrency、per-collection timeout、partial failure、全部 empty 和全部失败；111 个 I4 指定单元测试和 ruff 通过 |
 | I5 | 接入 MCP 与 evaluation async 路径 | [ ] |  | `query_knowledge_hub` await async runtime；evaluation 支持 async sample concurrency 和 metric concurrency；保留限流、timeout、取消和失败样本记录 |
 | I6 | 完成 async 查询验收与性能对比 | [ ] |  | 单元、集成和 MCP contract 测试覆盖 async 路径；用 first10/last10 golden set 对比同步链路与 async 链路的 query latency、trace 数量、Self-RAG judge 次数和评估指标变化 |
 
@@ -404,8 +404,8 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | Phase F | 12 | 12 | 100% |
 | Phase G | 6 | 6 | 100% |
 | Phase H | 7 | 7 | 100% |
-| Phase I | 6 | 3 | 50.0% |
-| **总计** | **80** | **75** | **93.8%** |
+| Phase I | 6 | 4 | 66.7% |
+| **总计** | **80** | **76** | **95.0%** |
 
 ### 6.5 阶段实施明细
 

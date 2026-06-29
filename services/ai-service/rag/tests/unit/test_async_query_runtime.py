@@ -372,11 +372,11 @@ async def test_async_query_runtime_executes_single_collection_pipeline_and_trace
         top_k=1,
         trace_context=ANY,
     )
-    self_rag_controller.evaluate.assert_called_once_with(
-        processed.normalized_query,
-        reranked,
-        trace_context=ANY,
-    )
+    self_rag_controller.evaluate.assert_called_once()
+    assert self_rag_controller.evaluate.call_args.args[0] == processed.normalized_query
+    assert [candidate.chunk_id for candidate in self_rag_controller.evaluate.call_args.args[1]] == [
+        "chunk-b"
+    ]
     response_builder.build.assert_called_once_with(
         selected,
         trace_id="query-async-1",
@@ -396,6 +396,132 @@ async def test_async_query_runtime_executes_single_collection_pipeline_and_trace
     ]
 
 
+
+@pytest.mark.asyncio
+async def test_async_query_runtime_merges_collections_before_single_self_rag_and_response() -> None:
+    """Require I4 runtime to run multi-collection retrieval before final gates."""
+
+    from src.core.query_engine.async_runtime import AsyncQueryRuntime
+    from src.core.query_engine.intent_router import IntentRoute
+    from src.core.query_engine.query_processor import ProcessedQuery
+    from src.core.response import KnowledgeHubResponse
+
+    processed = ProcessedQuery(
+        raw_query="退货和发货规则",
+        normalized_query="退货和发货规则",
+        keywords=("退货", "发货"),
+        collection="shopping_guides",
+        top_k=2,
+    )
+    route = IntentRoute(
+        collection="policies",
+        collections=("policies", "faq"),
+        domain_intent="support_policy",
+        complexity="medium",
+        retrieval_strategy="hybrid",
+        confidence=0.82,
+        method="rules",
+        provider="IntentRouter",
+        reason="multi collection",
+    )
+    policy = RetrievalResult(
+        chunk_id="policy-a",
+        text="policy text",
+        score=0.7,
+        metadata={"collection": "policies", "document_id": "doc-policy"},
+    )
+    faq = RetrievalResult(
+        chunk_id="faq-a",
+        text="faq text",
+        score=0.6,
+        metadata={"collection": "faq", "document_id": "doc-faq"},
+    )
+    query_processor = Mock()
+    query_processor.process.return_value = processed
+    intent_router = Mock()
+    intent_router.route.return_value = route
+    hybrid_search = Mock()
+
+    async def _collection_runner(
+        query, *, collection, top_k, no_rerank, routing_score, routing_reason
+    ):
+        from src.core.query_engine.parallel_retrieval import AsyncCollectionRetrievalResult
+
+        result = policy if collection == "policies" else faq
+        return AsyncCollectionRetrievalResult(
+            collection=collection,
+            results=[result],
+            dense_results=[result],
+            sparse_results=[],
+            fused_results=[result],
+            filtered_results=[result],
+            rerank_results=[result],
+            fallback_used=False,
+            rerank_applied=True,
+            duration_ms=1.0,
+        )
+
+    self_rag_controller = Mock()
+    self_rag_controller.evaluate.return_value = SelfRagDecision(
+        decision="accepted",
+        score_band="medium_confidence",
+        selected_results=[policy, faq],
+        fallback_action=None,
+        judge_result=None,
+        reason="judge_passed",
+    )
+    response = KnowledgeHubResponse(
+        content="[1] policy\n[2] faq",
+        citations=(),
+        images=(),
+        trace_id="query-async-multi",
+        is_empty=False,
+    )
+    response_builder = Mock()
+    response_builder.build.return_value = response
+    traces: list[dict[str, object]] = []
+    runtime = AsyncQueryRuntime(
+        query_processor=query_processor,
+        intent_router=intent_router,
+        hybrid_search=hybrid_search,
+        rerank_controller=Mock(),
+        self_rag_controller=self_rag_controller,
+        response_builder=response_builder,
+        collection_runner=_collection_runner,
+        max_collection_concurrency=2,
+        per_collection_timeout_seconds=1,
+        trace_sink=traces.append,
+    )
+
+    execution = await runtime.execute(
+        "退货和发货规则",
+        collection="shopping_guides",
+        top_k=2,
+        no_rerank=False,
+        trace_id="query-async-multi",
+    )
+
+    hybrid_search.search.assert_not_called()
+    self_rag_controller.evaluate.assert_called_once()
+    assert self_rag_controller.evaluate.call_args.args[0] == processed.normalized_query
+    assert [candidate.chunk_id for candidate in self_rag_controller.evaluate.call_args.args[1]] == [
+        "policy-a",
+        "faq-a",
+    ]
+    response_builder.build.assert_called_once_with(
+        [policy, faq],
+        trace_id="query-async-multi",
+        query=processed.normalized_query,
+    )
+    assert [result.chunk_id for result in execution.final_results] == ["policy-a", "faq-a"]
+    assert execution.fallback_used is False
+    stage_by_name = {stage["stage"]: stage for stage in traces[0]["stages"]}
+    assert stage_by_name["fusion"]["details"]["selected_collections"] == ["policies", "faq"]
+    assert traces[0]["summary_metrics"]["candidate_count_by_stage"]["self_rag"] == 2
+    assert traces[0]["query_result"]["contexts"] == [
+        {"chunk_id": "policy-a", "score": 0.7, "rank": 1},
+        {"chunk_id": "faq-a", "score": 0.6, "rank": 2},
+    ]
 def test_run_query_cli_selects_async_runtime_from_settings() -> None:
     """Require CLI to use async runtime when retrieval.async_enabled is true."""
 

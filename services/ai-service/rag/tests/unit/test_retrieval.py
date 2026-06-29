@@ -8,6 +8,7 @@ fallback without invoking an external LLM.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, Mock
@@ -21,7 +22,8 @@ from src.core.query_engine.dense_route import DenseRoute
 from src.core.query_engine.fusion import reciprocal_rank_fusion
 from src.core.query_engine.hybrid_engine import CandidateFilter, HybridSearch
 from src.core.query_engine.parallel_retrieval import (
-    ParallelRetrievalController,
+    AsyncCollectionRetrievalResult,
+    AsyncParallelRetrievalController,
     ParallelRetrievalResult,
 )
 from src.core.query_engine.query_processor import (
@@ -2085,11 +2087,72 @@ def test_build_runtime_does_not_construct_reranker_when_explicitly_disabled(
     llm_create.assert_not_called()
 
 
-def test_parallel_retrieval_merges_multi_collection_results_with_metadata() -> None:
-    """Merge routed collection candidates while preserving routing diagnostics."""
+
+class FakeAsyncCollectionRunner:
+    """Serve deterministic async per-collection retrieval fixtures to I4 tests."""
+
+    def __init__(
+        self,
+        results_by_collection: dict[str, list[RetrievalResult]],
+        *,
+        delays: dict[str, float] | None = None,
+        failures: set[str] | None = None,
+    ) -> None:
+        """Store async fixtures and initialize the call log."""
+
+        self.results_by_collection = results_by_collection
+        self.delays = dict(delays or {})
+        self.failures = set(failures or set())
+        self.calls: list[dict[str, object]] = []
+        self.started: list[str] = []
+        self.completed: list[str] = []
+
+    async def run_collection(
+        self,
+        query: ProcessedQuery,
+        *,
+        collection: str,
+        top_k: int,
+        no_rerank: bool,
+        routing_score: float,
+        routing_reason: str | None,
+    ) -> AsyncCollectionRetrievalResult:
+        """Return configured collection results after an optional async delay."""
+
+        self.started.append(collection)
+        self.calls.append(
+            {
+                "query": query.normalized_query,
+                "collection": collection,
+                "top_k": top_k,
+                "no_rerank": no_rerank,
+                "routing_score": routing_score,
+                "routing_reason": routing_reason,
+            }
+        )
+        await asyncio.sleep(self.delays.get(collection, 0.0))
+        if collection in self.failures:
+            raise RetrievalError("collection failed")
+        self.completed.append(collection)
+        candidates = list(self.results_by_collection.get(collection, []))[:top_k]
+        return AsyncCollectionRetrievalResult(
+            collection=collection,
+            results=candidates,
+            dense_results=candidates[:1],
+            sparse_results=candidates[-1:] if candidates else [],
+            fused_results=candidates,
+            filtered_results=candidates,
+            rerank_results=candidates,
+            fallback_used=False,
+            rerank_applied=not no_rerank,
+            duration_ms=1.0,
+        )
+@pytest.mark.asyncio
+async def test_parallel_retrieval_runs_collections_concurrently_and_merges_metadata() -> None:
+    """Require I4 controller to run routed collections concurrently and merge once."""
 
     processed = _processed_query().model_copy(update={"top_k": 2})
-    runtime = FakeParallelRuntime(
+    runner = FakeAsyncCollectionRunner(
         {
             "faq": [
                 _result("faq-a", score=0.91, metadata={"collection": "faq"}),
@@ -2098,57 +2161,40 @@ def test_parallel_retrieval_merges_multi_collection_results_with_metadata() -> N
             "policies": [
                 _result("policy-a", score=0.88, metadata={"collection": "policies"}),
             ],
-        }
+        },
+        delays={"faq": 0.05, "policies": 0.05},
     )
     trace = FakeParallelTrace()
-    controller = ParallelRetrievalController(runtime=runtime, max_collections=3)
+    controller = AsyncParallelRetrievalController(
+        collection_runner=runner.run_collection,
+        max_collections=3,
+        max_concurrency=2,
+        per_collection_timeout_seconds=1,
+    )
 
-    result = controller.search(
+    started = asyncio.get_running_loop().time()
+    result = await controller.search(
         processed,
         collections=("faq", "policies"),
         routing_scores={"faq": 0.91, "policies": 0.86},
         routing_reasons={"faq": "semantic_profile", "policies": "rule_match"},
         top_k=2,
         no_rerank=False,
-        trace_id_factory=lambda collection: f"trace-{collection}",
         trace_context=trace,
     )
+    elapsed = asyncio.get_running_loop().time() - started
 
     assert isinstance(result, ParallelRetrievalResult)
+    assert elapsed < 0.09
+    assert set(runner.started) == {"faq", "policies"}
     assert [candidate.chunk_id for candidate in result.results] == ["faq-a", "faq-b"]
-    assert result.query_trace_ids == ["trace-faq", "trace-policies"]
     assert result.partial_failure_count == 0
-    assert result.collection_results == [
-        {
-            "collection": "faq",
-            "trace_id": "trace-faq",
-            "candidate_count": 2,
-            "status": "success",
-            "routing_score": 0.91,
-        },
-        {
-            "collection": "policies",
-            "trace_id": "trace-policies",
-            "candidate_count": 1,
-            "status": "success",
-            "routing_score": 0.86,
-        },
-    ]
-    assert runtime.calls == [
-        {
-            "query": "无线耳机推荐",
-            "collection": "faq",
-            "top_k": 2,
-            "no_rerank": False,
-            "trace_id": "trace-faq",
-        },
-        {
-            "query": "无线耳机推荐",
-            "collection": "policies",
-            "top_k": 2,
-            "no_rerank": False,
-            "trace_id": "trace-policies",
-        },
+    assert [row["collection"] for row in result.collection_results] == ["faq", "policies"]
+    assert [row["status"] for row in result.collection_results] == ["success", "success"]
+    assert [row["candidate_count"] for row in result.collection_results] == [2, 1]
+    assert [row["routing_reason"] for row in result.collection_results] == [
+        "semantic_profile",
+        "rule_match",
     ]
     first_metadata = result.results[0].metadata
     assert first_metadata["collection"] == "faq"
@@ -2156,40 +2202,95 @@ def test_parallel_retrieval_merges_multi_collection_results_with_metadata() -> N
     assert first_metadata["routing_score"] == 0.91
     assert first_metadata["merge_reason"] == "routing_score_rrf_fallback"
     assert isinstance(first_metadata["merge_score"], float)
-    assert trace.stages[0]["stage"] == "parallel_retrieval"
+    assert trace.stages[0]["stage"] == "fusion"
     assert trace.stages[0]["details"]["selected_collections"] == ["faq", "policies"]
     assert trace.stages[0]["details"]["merged_candidate_count"] == 3
 
 
-def test_parallel_retrieval_keeps_successful_collections_when_one_fails() -> None:
-    """Allow one routed collection failure without discarding successful results."""
+@pytest.mark.asyncio
+async def test_parallel_retrieval_keeps_successes_and_reports_timeout_failures() -> None:
+    """Allow partial collection failures and timeouts without losing successes."""
 
-    runtime = FakeParallelRuntime(
-        {"faq": [_result("faq-a", score=0.82, metadata={"collection": "faq"})]}
+    runner = FakeAsyncCollectionRunner(
+        {"faq": [_result("faq-a", score=0.82, metadata={"collection": "faq"})]},
+        delays={"slow": 0.2},
+        failures={"broken"},
     )
     trace = FakeParallelTrace()
-    controller = ParallelRetrievalController(runtime=runtime, max_collections=3)
+    controller = AsyncParallelRetrievalController(
+        collection_runner=runner.run_collection,
+        max_collections=3,
+        max_concurrency=3,
+        per_collection_timeout_seconds=0.05,
+    )
 
-    result = controller.search(
+    result = await controller.search(
         _processed_query(),
-        collections=("broken", "faq"),
-        routing_scores={"broken": 0.94, "faq": 0.83},
+        collections=("broken", "slow", "faq"),
+        routing_scores={"broken": 0.94, "slow": 0.9, "faq": 0.83},
         top_k=3,
         no_rerank=True,
-        trace_id_factory=lambda collection: f"trace-{collection}",
         trace_context=trace,
     )
 
     assert [candidate.chunk_id for candidate in result.results] == ["faq-a"]
-    assert result.query_trace_ids == ["trace-broken", "trace-faq"]
+    assert result.partial_failure_count == 2
+    assert result.collection_results[0]["status"] == "failed"
+    assert result.collection_results[0]["error_type"] == "RetrievalError"
+    assert result.collection_results[1]["status"] == "timeout"
+    assert result.collection_results[1]["error_type"] == "TimeoutError"
+    assert result.collection_results[2]["status"] == "success"
+    assert trace.stages[0]["status"] == "degraded"
+    assert trace.stages[0]["details"]["partial_failure_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_parallel_retrieval_trace_failure_does_not_break_results() -> None:
+    """Keep retrieval low-intrusion when aggregate trace recording fails."""
+
+    runner = FakeAsyncCollectionRunner(
+        {"faq": [_result("faq-a", score=0.82, metadata={"collection": "faq"})]}
+    )
+    controller = AsyncParallelRetrievalController(
+        collection_runner=runner.run_collection,
+        max_collections=1,
+        max_concurrency=1,
+        per_collection_timeout_seconds=1,
+    )
+
+    result = await controller.search(
+        _processed_query(),
+        collections=("faq",),
+        routing_scores={"faq": 0.83},
+        top_k=3,
+        no_rerank=True,
+        trace_context=_FailingTraceSink(),
+    )
+
+    assert [candidate.chunk_id for candidate in result.results] == ["faq-a"]
+    assert result.partial_failure_count == 0
+
+
+@pytest.mark.asyncio
+async def test_parallel_retrieval_reports_all_failed_without_results() -> None:
+    """Return an empty merged list when every collection fails or times out."""
+
+    runner = FakeAsyncCollectionRunner({}, failures={"broken"})
+    controller = AsyncParallelRetrievalController(
+        collection_runner=runner.run_collection,
+        max_collections=2,
+        max_concurrency=2,
+        per_collection_timeout_seconds=1,
+    )
+
+    result = await controller.search(
+        _processed_query(),
+        collections=("broken",),
+        routing_scores={"broken": 0.94},
+        top_k=3,
+        no_rerank=True,
+    )
+
+    assert result.results == []
     assert result.partial_failure_count == 1
-    assert result.collection_results[0] == {
-        "collection": "broken",
-        "trace_id": "trace-broken",
-        "candidate_count": 0,
-        "status": "failed",
-        "routing_score": 0.94,
-        "error": "collection failed",
-    }
-    assert result.collection_results[1]["status"] == "success"
-    assert trace.stages[0]["status"] == "partial_success"
+    assert result.collection_results[0]["status"] == "failed"

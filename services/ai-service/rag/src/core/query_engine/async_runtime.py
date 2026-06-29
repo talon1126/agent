@@ -11,7 +11,7 @@ retrieval internals with true multi-collection concurrency.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -26,11 +26,15 @@ from src.core.query_engine.intent_router import (
     load_collection_profiles,
     load_intent_rules,
 )
+from src.core.query_engine.parallel_retrieval import (
+    AsyncCollectionRetrievalResult,
+    AsyncParallelRetrievalController,
+    ParallelRetrievalResult,
+)
 from src.core.query_engine.query_processor import ProcessedQuery, QueryProcessor
 from src.core.query_engine.reranker import RerankController, RerankOutcome
 from src.core.query_engine.self_rag_controller import SelfRagController, SelfRagDecision
 from src.core.query_engine.sparse_route import SparseRoute
-from src.core.query_engine.trace_snapshots import candidate_snapshots
 from src.core.response import (
     EvidenceContextOptimizer,
     KnowledgeHubResponse,
@@ -86,6 +90,9 @@ class AsyncQueryRuntime:
         self_rag_controller: SelfRagController | None = None,
         intent_router: IntentRouter | None = None,
         trace_sink: TraceSink | None = None,
+        collection_runner: Callable[..., Awaitable[AsyncCollectionRetrievalResult]] | None = None,
+        max_collection_concurrency: int = 3,
+        per_collection_timeout_seconds: float = 60,
     ) -> None:
         """Configure already-created async-query collaborators.
 
@@ -98,6 +105,11 @@ class AsyncQueryRuntime:
             intent_router: Optional collection router executed after query
                 preprocessing.
             trace_sink: Optional finished-trace sink.
+            collection_runner: Optional custom runner for one collection.
+            max_collection_concurrency: Maximum collection sub-chains that may
+                run simultaneously in multi-collection mode.
+            per_collection_timeout_seconds: Per-collection timeout used by the
+                async parallel retrieval controller.
         """
 
         self._query_processor = query_processor
@@ -107,6 +119,9 @@ class AsyncQueryRuntime:
         self._response_builder = response_builder
         self._self_rag_controller = self_rag_controller
         self._trace_sink = trace_sink
+        self._collection_runner = collection_runner or self._run_collection_subchain
+        self._max_collection_concurrency = max_collection_concurrency
+        self._per_collection_timeout_seconds = per_collection_timeout_seconds
 
     async def execute(
         self,
@@ -165,81 +180,34 @@ class AsyncQueryRuntime:
                 processed = processed.model_copy(update={"collection": intent_route.collection})
                 trace_controller.context.collection = intent_route.collection
 
-            hybrid = await self._search_single_collection(
+            parallel = await self._retrieve_collections(
                 processed,
+                intent_route=intent_route,
+                top_k=top_k,
+                no_rerank=no_rerank,
                 trace_controller=trace_controller,
             )
-            rerank_applied = not no_rerank and self._rerank_controller is not None
-            rerank_fallback = False
-            if rerank_applied:
-                outcome = await self._rerank(
-                    processed.normalized_query,
-                    hybrid.results,
-                    top_k=top_k,
-                    trace_controller=trace_controller,
-                )
-                final_results = outcome.results
-                rerank_fallback = outcome.fallback_used
-            else:
-                final_results = [
-                    candidate.model_copy(deep=True)
-                    for candidate in hybrid.results[:top_k]
-                ]
-                trace_controller.record_stage(
-                    "rerank",
-                    duration_ms=0,
-                    method="rerank_or_fallback",
-                    provider="none",
-                    candidate_count=len(final_results),
-                    status="skipped",
-                    details={
-                        "top_k": top_k,
-                        "reason": "disabled_by_request"
-                        if no_rerank
-                        else "reranker_unavailable",
-                        "before_candidates": candidate_snapshots(hybrid.results),
-                        "after_candidates": candidate_snapshots(final_results),
-                    },
-                )
+            hybrid = parallel
+            rerank_applied = any(
+                bool(row.get("rerank_applied"))
+                for row in parallel.collection_results
+                if row.get("status") == "success"
+            )
+            final_results = [candidate.model_copy(deep=True) for candidate in parallel.results]
 
-            if (
-                self._self_rag_controller is not None
-                and rerank_applied
-                and not rerank_fallback
-            ):
-                self_rag_decision = await self._apply_self_rag(
-                    processed.normalized_query,
-                    final_results,
-                    trace_controller=trace_controller,
-                )
-                final_results = self_rag_decision.selected_results
-            elif self._self_rag_controller is not None:
-                trace_controller.record_stage(
-                    "self_rag",
-                    duration_ms=0,
-                    method="score_gate_or_llm_judge",
-                    provider="SelfRagController",
-                    candidate_count=len(final_results),
-                    status="skipped",
-                    details={
-                        "reason": "rerank_scores_unavailable",
-                        "selected_chunk_ids": [
-                            candidate.chunk_id for candidate in final_results
-                        ],
-                    },
-                )
-
-            response = await self._build_response(
+            final_results, self_rag_decision, response = await self._finalize_merged_results(
+                processed.normalized_query,
                 final_results,
                 trace_id=trace_id,
-                query=processed.normalized_query,
                 trace_controller=trace_controller,
+                rerank_applied=rerank_applied,
+                rerank_fallback=parallel.rerank_fallback_used,
             )
             self_rag_fallback = (
                 self_rag_decision is not None
                 and self_rag_decision.fallback_action is not None
             )
-            fallback_used = hybrid.fallback_used or rerank_fallback or self_rag_fallback
+            fallback_used = parallel.fallback_used or self_rag_fallback
             trace_controller.flush_query(
                 status="degraded" if fallback_used else "success",
                 query_result=_query_result_snapshot(response, final_results),
@@ -248,8 +216,8 @@ class AsyncQueryRuntime:
                     dense_results=hybrid.dense_results,
                     sparse_results=hybrid.sparse_results,
                     fused_results=hybrid.fused_results,
-                    filtered_results=hybrid.results,
-                    rerank_results=outcome.results if rerank_applied else final_results,
+                    filtered_results=hybrid.filtered_results,
+                    rerank_results=hybrid.rerank_results if rerank_applied else final_results,
                     self_rag_results=final_results if self_rag_decision is not None else None,
                     final_results=final_results,
                 ),
@@ -262,7 +230,7 @@ class AsyncQueryRuntime:
                 dense_results=tuple(hybrid.dense_results),
                 sparse_results=tuple(hybrid.sparse_results),
                 fused_results=tuple(hybrid.fused_results),
-                filtered_results=tuple(hybrid.results),
+                filtered_results=tuple(hybrid.filtered_results),
                 final_results=tuple(final_results),
                 self_rag_decision=self_rag_decision,
                 response=response,
@@ -279,7 +247,7 @@ class AsyncQueryRuntime:
                         dense_results=hybrid.dense_results if hybrid else [],
                         sparse_results=hybrid.sparse_results if hybrid else [],
                         fused_results=hybrid.fused_results if hybrid else [],
-                        filtered_results=hybrid.results if hybrid else [],
+                        filtered_results=hybrid.filtered_results if hybrid else [],
                         rerank_results=final_results,
                         self_rag_results=final_results
                         if self_rag_decision is not None
@@ -390,11 +358,91 @@ class AsyncQueryRuntime:
         )
         return intent_route
 
+    async def _retrieve_collections(
+        self,
+        query: ProcessedQuery,
+        *,
+        intent_route: IntentRoute,
+        top_k: int,
+        no_rerank: bool,
+        trace_controller: TraceController,
+    ) -> ParallelRetrievalResult:
+        """Run single or routed multi-collection retrieval before final gates."""
+
+        collections = tuple(intent_route.collections or (query.collection,))
+        routing_scores = {collection: intent_route.confidence for collection in collections}
+        routing_reasons = {collection: intent_route.reason for collection in collections}
+        controller = AsyncParallelRetrievalController(
+            collection_runner=self._collection_runner,
+            max_collections=max(1, len(collections)),
+            max_concurrency=self._max_collection_concurrency,
+            per_collection_timeout_seconds=self._per_collection_timeout_seconds,
+        )
+        return await controller.search(
+            query,
+            collections=collections,
+            routing_scores=routing_scores,
+            routing_reasons=routing_reasons,
+            top_k=top_k,
+            no_rerank=no_rerank,
+            trace_context=trace_controller.context if trace_controller is not None else None,
+        )
+
+    async def _run_collection_subchain(
+        self,
+        query: ProcessedQuery,
+        *,
+        collection: str,
+        top_k: int,
+        no_rerank: bool,
+        routing_score: float,
+        routing_reason: str | None,
+    ) -> AsyncCollectionRetrievalResult:
+        """Run retrieval and optional rerank for one collection only."""
+
+        started = perf_counter()
+        collection_query = query.model_copy(update={"collection": collection})
+        hybrid = await self._search_single_collection(
+            collection_query,
+            trace_controller=None,
+        )
+        rerank_applied = not no_rerank and self._rerank_controller is not None
+        if rerank_applied:
+            outcome = await self._rerank(
+                collection_query.normalized_query,
+                hybrid.results,
+                top_k=top_k,
+                trace_controller=None,
+            )
+            rerank_results = outcome.results
+            fallback_used = hybrid.fallback_used or outcome.fallback_used
+            rerank_fallback_used = outcome.fallback_used
+        else:
+            rerank_results = [
+                candidate.model_copy(deep=True)
+                for candidate in hybrid.results[:top_k]
+            ]
+            fallback_used = hybrid.fallback_used
+            rerank_fallback_used = False
+        return AsyncCollectionRetrievalResult(
+            collection=collection,
+            results=rerank_results,
+            dense_results=list(hybrid.dense_results),
+            sparse_results=list(hybrid.sparse_results),
+            fused_results=list(hybrid.fused_results),
+            filtered_results=list(hybrid.results),
+            rerank_results=list(rerank_results),
+            fallback_used=fallback_used,
+            rerank_applied=rerank_applied,
+            duration_ms=(perf_counter() - started) * 1000,
+            rerank_fallback_used=rerank_fallback_used,
+        )
+
     async def _search_single_collection(
         self,
         query: ProcessedQuery,
         *,
-        trace_controller: TraceController,
+        trace_controller: TraceController | None,
     ) -> Any:
         """Run one collection's hybrid retrieval boundary asynchronously."""
 
@@ -402,7 +450,7 @@ class AsyncQueryRuntime:
             self._hybrid_search.search,
             query,
             filters={"collection": query.collection},
-            trace_context=trace_controller.context,
+            trace_context=trace_controller.context if trace_controller is not None else None,
         )
 
     async def _rerank(
@@ -411,7 +459,7 @@ class AsyncQueryRuntime:
         candidates: Sequence[RetrievalResult],
         *,
         top_k: int,
-        trace_controller: TraceController,
+        trace_controller: TraceController | None,
     ) -> RerankOutcome:
         """Run rerank orchestration without blocking async callers."""
 
@@ -422,7 +470,7 @@ class AsyncQueryRuntime:
             query,
             candidates,
             top_k=top_k,
-            trace_context=trace_controller.context,
+            trace_context=trace_controller.context if trace_controller is not None else None,
         )
 
     async def _apply_self_rag(
@@ -440,8 +488,50 @@ class AsyncQueryRuntime:
             self._self_rag_controller.evaluate,
             query,
             candidates,
-            trace_context=trace_controller.context,
+            trace_context=trace_controller.context if trace_controller is not None else None,
         )
+
+    async def _finalize_merged_results(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalResult],
+        *,
+        trace_id: str,
+        trace_controller: TraceController,
+        rerank_applied: bool,
+        rerank_fallback: bool,
+    ) -> tuple[list[RetrievalResult], SelfRagDecision | None, KnowledgeHubResponse]:
+        """Run the global Self-RAG gate and Response Builder exactly once."""
+
+        final_results = [candidate.model_copy(deep=True) for candidate in candidates]
+        self_rag_decision: SelfRagDecision | None = None
+        if self._self_rag_controller is not None and rerank_applied and not rerank_fallback:
+            self_rag_decision = await self._apply_self_rag(
+                query,
+                final_results,
+                trace_controller=trace_controller,
+            )
+            final_results = list(self_rag_decision.selected_results)
+        elif self._self_rag_controller is not None:
+            trace_controller.record_stage(
+                "self_rag",
+                duration_ms=0,
+                method="score_gate_or_llm_judge",
+                provider="SelfRagController",
+                candidate_count=len(final_results),
+                status="skipped",
+                details={
+                    "reason": "rerank_scores_unavailable",
+                    "selected_chunk_ids": [candidate.chunk_id for candidate in final_results],
+                },
+            )
+        response = await self._build_response(
+            final_results,
+            trace_id=trace_id,
+            query=query,
+            trace_controller=trace_controller,
+        )
+        return final_results, self_rag_decision, response
 
     async def _build_response(
         self,

@@ -1,15 +1,20 @@
-"""Coordinate routed retrieval across more than one knowledge collection.
+"""Coordinate async retrieval across one or more knowledge collections.
 
-The controller belongs to the core query layer. It does not decide which
-collections are relevant, create storage clients, or build public responses.
-It receives an already processed query plus caller-selected collections, runs
-the single-collection retrieval boundary for each collection, and merges the
-returned candidates with routing-aware metadata for trace and evaluation.
+The controller belongs to the core query layer. It receives an already processed
+query plus routed collections from ``IntentRouter`` or MCP callers, runs one
+per-collection retrieval/rerank sub-chain concurrently, and merges the resulting
+candidates before any final Self-RAG or Response Builder work happens.
+
+This module deliberately does not decide which collections are relevant, create
+provider clients, run Self-RAG judges, or build public responses. Those remain
+runtime/composition concerns so multi-collection retrieval can be reused by CLI,
+MCP, and evaluation paths without duplicating final post-processing.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Protocol
@@ -19,28 +24,44 @@ from src.core.types import RetrievalResult
 
 
 class ParallelTraceContext(Protocol):
-    """Describe the optional trace sink used by parallel retrieval."""
+    """Describe the optional trace sink used by async parallel retrieval."""
 
-    def record_stage(self, **payload: object) -> None:
+    def record_stage(self, *args: Any, **kwargs: Any) -> Any:
         """Record one structured trace stage."""
 
 
-class CollectionRetrievalRuntime(Protocol):
-    """Describe the per-collection retrieval boundary used by the controller."""
+@dataclass(frozen=True, slots=True)
+class AsyncCollectionRetrievalResult:
+    """Capture one collection sub-chain output before global merge.
 
-    def execute_collection(
-        self,
-        *,
-        query: ProcessedQuery,
-        collection: str,
-        top_k: int,
-        no_rerank: bool,
-        trace_id: str,
-    ) -> list[RetrievalResult]:
-        """Return final candidates for one collection."""
+    Args:
+        collection: Collection ID searched by this sub-chain.
+        results: Final per-collection candidates after optional rerank.
+        dense_results: Dense route candidates for trace counts.
+        sparse_results: BM25 route candidates for trace counts.
+        fused_results: RRF candidates before metadata filter.
+        filtered_results: Candidates after metadata filter and before rerank.
+        rerank_results: Candidates after rerank, or filtered candidates when
+            rerank is disabled or unavailable.
+        fallback_used: Whether the sub-chain degraded, for example by using one
+            retrieval route or rerank fallback.
+        rerank_applied: Whether a reranker was actually invoked.
+        rerank_fallback_used: Whether rerank specifically fell back to the
+            pre-rerank candidate order.
+        duration_ms: End-to-end sub-chain duration in milliseconds.
+    """
 
-
-TraceIdFactory = Callable[[str], str]
+    collection: str
+    results: list[RetrievalResult]
+    dense_results: list[RetrievalResult]
+    sparse_results: list[RetrievalResult]
+    fused_results: list[RetrievalResult]
+    filtered_results: list[RetrievalResult]
+    rerank_results: list[RetrievalResult]
+    fallback_used: bool
+    rerank_applied: bool
+    duration_ms: float
+    rerank_fallback_used: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,42 +70,67 @@ class ParallelRetrievalResult:
 
     results: list[RetrievalResult]
     collection_results: list[dict[str, Any]]
-    query_trace_ids: list[str]
     partial_failure_count: int
+    dense_results: list[RetrievalResult]
+    sparse_results: list[RetrievalResult]
+    fused_results: list[RetrievalResult]
+    filtered_results: list[RetrievalResult]
+    rerank_results: list[RetrievalResult]
+    fallback_used: bool
+    rerank_fallback_used: bool
 
 
-class ParallelRetrievalController:
-    """Run retrieval across routed collections and merge candidates."""
+CollectionRunner = Callable[
+    [ProcessedQuery],
+    Awaitable[AsyncCollectionRetrievalResult],
+]
+
+
+class AsyncParallelRetrievalController:
+    """Run routed collection sub-chains concurrently and merge candidates."""
 
     def __init__(
         self,
         *,
-        runtime: CollectionRetrievalRuntime,
+        collection_runner: Callable[..., Awaitable[AsyncCollectionRetrievalResult]],
         max_collections: int = 3,
+        max_concurrency: int = 3,
+        per_collection_timeout_seconds: float = 60,
         rrf_k: int = 60,
     ) -> None:
-        """Configure the per-collection runtime and merge behavior.
+        """Configure concurrency limits and merge behavior.
 
         Args:
-            runtime: Adapter that executes the existing single-collection query
-                path for one collection at a time.
-            max_collections: Upper bound for routed collections accepted by one
-                query. Extra collections are dropped in caller-provided order.
-            rrf_k: Rank dampening constant used by the fallback merge score.
+            collection_runner: Awaitable callable that executes retrieval and
+                optional rerank for one collection. It must not run Self-RAG or
+                Response Builder.
+            max_collections: Maximum routed collections accepted by one query.
+            max_concurrency: Maximum collection sub-chains running at once.
+            per_collection_timeout_seconds: Timeout applied to each collection
+                task independently so one slow collection cannot block the whole
+                query indefinitely.
+            rrf_k: Rank dampening constant used by the routing-aware fallback
+                merge score.
 
         Raises:
-            ValueError: If collection or merge limits are invalid.
+            ValueError: If limits are not positive.
         """
 
         if max_collections <= 0:
             raise ValueError("max_collections must be greater than zero")
+        if max_concurrency <= 0:
+            raise ValueError("max_concurrency must be greater than zero")
+        if per_collection_timeout_seconds <= 0:
+            raise ValueError("per_collection_timeout_seconds must be greater than zero")
         if rrf_k <= 0:
             raise ValueError("rrf_k must be greater than zero")
-        self._runtime = runtime
+        self._collection_runner = collection_runner
         self._max_collections = max_collections
+        self._max_concurrency = max_concurrency
+        self._per_collection_timeout_seconds = per_collection_timeout_seconds
         self._rrf_k = rrf_k
 
-    def search(
+    async def search(
         self,
         query: ProcessedQuery,
         *,
@@ -93,28 +139,24 @@ class ParallelRetrievalController:
         routing_reasons: Mapping[str, str] | None = None,
         top_k: int | None = None,
         no_rerank: bool = False,
-        trace_id_factory: TraceIdFactory | None = None,
         trace_context: ParallelTraceContext | None = None,
     ) -> ParallelRetrievalResult:
-        """Execute routed retrieval and return one merged candidate list.
+        """Execute routed collections concurrently and return merged candidates.
 
         Args:
-            query: Validated query produced by ``QueryProcessor``.
-            collections: Ordered routed collections. ``None`` falls back to
+            query: Query object produced by ``QueryProcessor``.
+            collections: Ordered routed collection IDs. ``None`` falls back to
                 ``query.collection``.
-            routing_scores: Optional intent/router scores keyed by collection.
-                Higher scores bias the final merge but do not fully exclude
-                strong candidates from lower-confidence collections.
-            routing_reasons: Optional human-readable route reasons keyed by
-                collection for trace diagnostics.
-            top_k: Final merged candidate count. ``None`` uses ``query.top_k``.
-            no_rerank: Propagated single-collection runtime flag.
-            trace_id_factory: Creates child query trace IDs per collection.
-            trace_context: Optional trace sink for the aggregate stage.
+            routing_scores: Optional route confidence keyed by collection.
+            routing_reasons: Optional route explanation keyed by collection.
+            top_k: Final merged result count. ``None`` uses ``query.top_k``.
+            no_rerank: Whether per-collection rerank should be skipped.
+            trace_context: Optional query trace context. The controller records
+                a single aggregate ``fusion`` stage containing collection runs,
+                partial failures, and merge snapshots.
 
         Returns:
-            ``ParallelRetrievalResult`` containing merged results, child trace
-            IDs, and per-collection status rows.
+            Merged retrieval result plus diagnostic per-collection rows.
         """
 
         started = perf_counter()
@@ -126,70 +168,145 @@ class ParallelRetrievalController:
         if limit <= 0:
             raise ValueError("top_k must be greater than zero")
 
-        score_map = dict(routing_scores or {})
+        score_map = {key: _coerce_score(value) for key, value in (routing_scores or {}).items()}
         reason_map = dict(routing_reasons or {})
-        trace_factory = trace_id_factory or (lambda collection: f"{collection}-query")
-        merged: list[RetrievalResult] = []
-        collection_results: list[dict[str, Any]] = []
-        trace_ids: list[str] = []
-        partial_failure_count = 0
+        semaphore = asyncio.Semaphore(self._max_concurrency)
 
-        for collection in selected:
-            trace_id = trace_factory(collection)
-            trace_ids.append(trace_id)
-            route_score = _coerce_score(score_map.get(collection, 0.0))
-            try:
-                candidates = self._runtime.execute_collection(
-                    query=query,
+        async def _bounded_run(collection: str) -> _CollectionRun:
+            async with semaphore:
+                return await self._run_collection(
+                    query,
                     collection=collection,
                     top_k=limit,
                     no_rerank=no_rerank,
-                    trace_id=trace_id,
+                    routing_score=score_map.get(collection, 0.0),
+                    routing_reason=reason_map.get(collection),
                 )
-            except Exception as error:
-                partial_failure_count += 1
-                collection_results.append(
-                    {
-                        "collection": collection,
-                        "trace_id": trace_id,
-                        "candidate_count": 0,
-                        "status": "failed",
-                        "routing_score": route_score,
-                        "error": str(error),
-                    }
-                )
-                continue
 
-            collection_results.append(
-                {
-                    "collection": collection,
-                    "trace_id": trace_id,
-                    "candidate_count": len(candidates),
-                    "status": "success",
-                    "routing_score": route_score,
-                }
+        runs = await asyncio.gather(*[_bounded_run(collection) for collection in selected])
+        result = self._merge_collection_results(
+            runs,
+            selected=selected,
+            dropped=dropped,
+            top_k=limit,
+            started=started,
+            trace_context=trace_context,
+        )
+        return result
+
+    async def _run_collection(
+        self,
+        query: ProcessedQuery,
+        *,
+        collection: str,
+        top_k: int,
+        no_rerank: bool,
+        routing_score: float,
+        routing_reason: str | None,
+    ) -> _CollectionRun:
+        """Run one collection with timeout isolation and diagnostic wrapping."""
+
+        started = perf_counter()
+        try:
+            result = await asyncio.wait_for(
+                self._collection_runner(
+                    query,
+                    collection=collection,
+                    top_k=top_k,
+                    no_rerank=no_rerank,
+                    routing_score=routing_score,
+                    routing_reason=routing_reason,
+                ),
+                timeout=self._per_collection_timeout_seconds,
             )
-            for rank, candidate in enumerate(candidates, start=1):
-                merge_score = route_score + (1.0 / (self._rrf_k + rank))
+        except TimeoutError as error:
+            return _CollectionRun.failure(
+                collection=collection,
+                routing_score=routing_score,
+                routing_reason=routing_reason,
+                status="timeout",
+                error=error,
+                duration_ms=(perf_counter() - started) * 1000,
+            )
+        except Exception as error:
+            return _CollectionRun.failure(
+                collection=collection,
+                routing_score=routing_score,
+                routing_reason=routing_reason,
+                status="failed",
+                error=error,
+                duration_ms=(perf_counter() - started) * 1000,
+            )
+        return _CollectionRun.success(
+            result=result,
+            routing_score=routing_score,
+            routing_reason=routing_reason,
+        )
+
+    def _merge_collection_results(
+        self,
+        runs: Sequence[_CollectionRun],
+        *,
+        selected: list[str],
+        dropped: list[str],
+        top_k: int,
+        started: float,
+        trace_context: ParallelTraceContext | None,
+    ) -> ParallelRetrievalResult:
+        """Merge successful collection runs and record aggregate trace details."""
+
+        merged: list[RetrievalResult] = []
+        collection_results: list[dict[str, Any]] = []
+        dense_results: list[RetrievalResult] = []
+        sparse_results: list[RetrievalResult] = []
+        fused_results: list[RetrievalResult] = []
+        filtered_results: list[RetrievalResult] = []
+        rerank_results: list[RetrievalResult] = []
+        fallback_used = False
+        rerank_fallback_used = False
+        partial_failure_count = 0
+
+        collection_order = {collection: index for index, collection in enumerate(selected)}
+        for run in runs:
+            collection_results.append(run.to_trace_row())
+            if not run.successful:
+                partial_failure_count += 1
+                fallback_used = True
+                continue
+            result = run.result
+            if result is None:
+                continue
+            dense_results.extend(result.dense_results)
+            sparse_results.extend(result.sparse_results)
+            fused_results.extend(result.fused_results)
+            filtered_results.extend(result.filtered_results)
+            rerank_results.extend(result.rerank_results)
+            fallback_used = fallback_used or result.fallback_used
+            rerank_fallback_used = rerank_fallback_used or result.rerank_fallback_used
+            for rank, candidate in enumerate(result.results, start=1):
+                merge_score = run.routing_score + (1.0 / (self._rrf_k + rank))
                 metadata = {
                     **candidate.metadata,
-                    "collection": collection,
+                    "collection": run.collection,
                     "collection_rank": rank,
-                    "routing_score": route_score,
-                    "routing_reason": reason_map.get(collection),
+                    "routing_score": run.routing_score,
+                    "routing_reason": run.routing_reason,
                     "merge_score": merge_score,
                     "merge_reason": "routing_score_rrf_fallback",
+                    "_collection_order": collection_order.get(run.collection, len(selected)),
                 }
-                merged.append(candidate.model_copy(update={"metadata": metadata}))
+                merged.append(candidate.model_copy(update={"metadata": metadata}, deep=True))
 
         merged.sort(
             key=lambda candidate: (
                 -float(candidate.metadata.get("merge_score", 0.0)),
                 int(candidate.metadata.get("collection_rank", 0)),
+                int(candidate.metadata.get("_collection_order", len(selected))),
                 candidate.chunk_id,
             )
         )
-        results = merged[:limit]
+        merged = [_without_internal_merge_keys(candidate) for candidate in merged]
+        results = merged[:top_k]
         self._record_trace(
             trace_context,
             started=started,
@@ -199,13 +316,18 @@ class ParallelRetrievalController:
             merged_candidate_count=len(merged),
             partial_failure_count=partial_failure_count,
             result_count=len(results),
-            trace_ids=trace_ids,
         )
         return ParallelRetrievalResult(
             results=results,
             collection_results=collection_results,
-            query_trace_ids=trace_ids,
             partial_failure_count=partial_failure_count,
+            dense_results=dense_results,
+            sparse_results=sparse_results,
+            fused_results=merged,
+            filtered_results=merged,
+            rerank_results=rerank_results if rerank_results else merged,
+            fallback_used=fallback_used,
+            rerank_fallback_used=rerank_fallback_used,
         )
 
     @staticmethod
@@ -219,19 +341,19 @@ class ParallelRetrievalController:
         merged_candidate_count: int,
         partial_failure_count: int,
         result_count: int,
-        trace_ids: list[str],
     ) -> None:
-        """Write aggregate trace details without coupling retrieval to logging."""
+        """Write aggregate collection-run diagnostics into query trace."""
 
         if trace_context is None:
             return
+        status = "degraded" if partial_failure_count else "success"
         try:
             trace_context.record_stage(
-                stage="parallel_retrieval",
-                method="multi_collection_merge",
-                provider="ParallelRetrievalController",
-                status="partial_success" if partial_failure_count else "success",
-                duration_ms=round((perf_counter() - started) * 1000),
+                stage="fusion",
+                method="async_multi_collection_merge",
+                provider="AsyncParallelRetrievalController",
+                status=status,
+                duration_ms=round((perf_counter() - started) * 1000, 3),
                 candidate_count=result_count,
                 details={
                     "selected_collections": selected,
@@ -239,12 +361,103 @@ class ParallelRetrievalController:
                     "collection_results": collection_results,
                     "merged_candidate_count": merged_candidate_count,
                     "partial_failure_count": partial_failure_count,
-                    "query_trace_ids": trace_ids,
                 },
             )
         except Exception:
             return
 
+
+@dataclass(frozen=True, slots=True)
+class _CollectionRun:
+    """Internal normalized success/failure row for one collection task."""
+
+    collection: str
+    routing_score: float
+    routing_reason: str | None
+    status: str
+    duration_ms: float
+    result: AsyncCollectionRetrievalResult | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+
+    @property
+    def successful(self) -> bool:
+        """Return whether this run produced a usable collection result."""
+
+        return self.status == "success" and self.result is not None
+
+    @classmethod
+    def success(
+        cls,
+        *,
+        result: AsyncCollectionRetrievalResult,
+        routing_score: float,
+        routing_reason: str | None,
+    ) -> _CollectionRun:
+        """Build a successful normalized run row."""
+
+        return cls(
+            collection=result.collection,
+            routing_score=routing_score,
+            routing_reason=routing_reason,
+            status="success",
+            duration_ms=result.duration_ms,
+            result=result,
+        )
+
+    @classmethod
+    def failure(
+        cls,
+        *,
+        collection: str,
+        routing_score: float,
+        routing_reason: str | None,
+        status: str,
+        error: BaseException,
+        duration_ms: float,
+    ) -> _CollectionRun:
+        """Build a failed or timed-out normalized run row."""
+
+        return cls(
+            collection=collection,
+            routing_score=routing_score,
+            routing_reason=routing_reason,
+            status=status,
+            duration_ms=duration_ms,
+            error_type=type(error).__name__,
+            error_message=str(error),
+        )
+
+    def to_trace_row(self) -> dict[str, Any]:
+        """Return the compact per-collection row stored in trace details."""
+
+        row: dict[str, Any] = {
+            "collection": self.collection,
+            "candidate_count": len(self.result.results) if self.result else 0,
+            "status": self.status,
+            "routing_score": self.routing_score,
+            "duration_ms": self.duration_ms,
+        }
+        if self.routing_reason is not None:
+            row["routing_reason"] = self.routing_reason
+        if self.result is not None:
+            row["fallback_used"] = self.result.fallback_used
+            row["rerank_applied"] = self.result.rerank_applied
+        if self.error_type is not None:
+            row["error_type"] = self.error_type
+            row["error"] = self.error_message
+        return row
+
+
+
+def _without_internal_merge_keys(candidate: RetrievalResult) -> RetrievalResult:
+    """Remove private merge tie-break fields before returning candidates."""
+
+    if "_collection_order" not in candidate.metadata:
+        return candidate
+    metadata = dict(candidate.metadata)
+    metadata.pop("_collection_order", None)
+    return candidate.model_copy(update={"metadata": metadata}, deep=True)
 
 def _normalize_collections(
     collections: Sequence[str],
