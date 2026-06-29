@@ -32,8 +32,11 @@ Run this workflow when the user wants one-shot automation from specification to 
   trapped in conversation context. Then re-sync references before continuing
   implementation.
 - Match existing code style and architecture patterns.
-- When changes affect a running Docker service, automatically rebuild and restart
-  the affected service with `docker compose -p after-sales-implementation up -d
+- When changes affect a running Docker service, first check whether that service
+  is already source-mounted for live code updates. If source mounting is active,
+  do not rebuild; verify the service is running and rely on local tests or a
+  targeted runtime probe. If source mounting is not active, automatically rebuild
+  and restart the affected service with `docker compose -p after-sales-implementation up -d
   --build <service>` during verification. Import changed n8n workflow files into
   the running n8n instance when the user expects live workflow behavior.
 - Use values from `config/settings.yaml`; do not hardcode project configuration.
