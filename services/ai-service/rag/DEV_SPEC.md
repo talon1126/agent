@@ -2413,7 +2413,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | I1 | 定义 async provider 契约与兼容适配层 | [✔] | 2026-06-29 | 为 LLM、Embedding、VectorStore 和 Reranker 补充默认 async 最小接口；新增 SyncToAsync adapters，支持 timeout 与 cancellation；同步 retrieval/evaluation async 配置；158 个相关单元测试和 ruff 通过 |
-| I2 | 实现 provider 原生 async 化 | [ ] |  | OpenAI-compatible/DeepSeek/CCSwitch/DashScope 相关在线查询 provider 使用原生 async HTTP client；PostgreSQL/pgvector/BM25 查询路径提供 async 方法；Cross-Encoder 采用受限 executor 或专用推理队列，不阻塞事件循环 |
+| I2 | 实现 provider 原生 async 化 | [✔] | 2026-06-29 | OpenAI-compatible/DeepSeek/CCSwitch/Embedding provider 使用原生 async SDK client；pgvector/BM25 在线查询提供 async 方法；LLM Reranker 使用 async LLM；Cross-Encoder 通过 worker thread 避免阻塞事件循环；142 个相关单元测试和 ruff 通过 |
 | I3 | 实现 AsyncQueryRuntime | [ ] |  | 新增在线查询 async runtime，串联 query processing、intent routing、hybrid retrieval、rerank、Self-RAG 和 Response Builder；保留同步 `QueryRuntime` 兼容包装，CLI/MCP 可通过配置选择 async 路径 |
 | I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [ ] |  | 每个 collection 并发执行 retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断；只执行一次 Self-RAG judge 和一次 Response Builder；支持 max concurrency、per-collection timeout、partial failure 和 trace 汇总 |
 | I5 | 接入 MCP 与 evaluation async 路径 | [ ] |  | `query_knowledge_hub` await async runtime；evaluation 支持 async sample concurrency 和 metric concurrency；保留限流、timeout、取消和失败样本记录 |
@@ -2431,7 +2431,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | Phase F | 12 | 12 | 100% |
 | Phase G | 6 | 6 | 100% |
 | Phase H | 7 | 7 | 100% |
-| Phase I | 6 | 1 | 16.7% |
+| Phase I | 6 | 2 | 33.3% |
 | **总计** | **80** | **75** | **93.8%** |
 
 ### 6.5 阶段实施明细

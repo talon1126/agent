@@ -9,6 +9,7 @@ keeping SQL and PostgreSQL-specific vector syntax outside the query engine.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from math import isfinite
@@ -250,6 +251,38 @@ class PgVectorStore(BaseVectorStore):
                 )
             )
         return results
+
+    async def async_search(
+        self,
+        vector: Sequence[float],
+        *,
+        filters: Mapping[str, Any] | None = None,
+        top_k: int = 10,
+    ) -> list[RetrievalResult]:
+        """Search pgvector without blocking the event-loop caller.
+
+        Args:
+            vector: Dense query vector matching configured dimensions.
+            filters: Optional exact metadata subset matched with JSONB
+                containment.
+            top_k: Positive maximum number of results.
+
+        Returns:
+            Retrieval results ordered by nearest cosine distance.
+
+        Notes:
+            The current ``PostgresPool`` is synchronous, so this method isolates
+            the blocking psycopg work in a worker thread. Phase I keeps the
+            public async provider contract stable while a later storage task can
+            replace this internals with a native psycopg async pool.
+        """
+
+        return await asyncio.to_thread(
+            self.search,
+            vector,
+            filters=filters,
+            top_k=top_k,
+        )
 
     def get_by_ids(self, chunk_ids: Sequence[str]) -> list[Chunk]:
         """Load existing chunks in caller-provided order.

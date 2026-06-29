@@ -8,6 +8,7 @@ chunks from remaining searchable.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections import defaultdict
 from contextlib import nullcontext
@@ -324,3 +325,32 @@ class BM25Storage:
             key=lambda candidate: (-candidate.score, candidate.chunk_id),
         )
         return ranked[:top_k]
+
+    async def async_query(
+        self,
+        keywords: list[str] | str,
+        *,
+        top_k: int,
+        collection: str | None = None,
+    ) -> list[BM25Candidate]:
+        """Rank persisted BM25 postings without blocking event-loop callers.
+
+        Args:
+            keywords: Processed query keywords or raw text.
+            top_k: Positive maximum number of sparse candidates.
+            collection: Required collection identifier.
+
+        Returns:
+            BM25 candidates ordered exactly like ``query()``.
+
+        Raises:
+            ValueError: If ``top_k`` or collection is invalid.
+            DatabaseError: If PostgreSQL cannot read the inverted index.
+        """
+
+        return await asyncio.to_thread(
+            self.query,
+            keywords,
+            top_k=top_k,
+            collection=collection,
+        )

@@ -136,6 +136,70 @@ class LLMReranker(BaseReranker):
         )
         return results if top_k is None else results[:top_k]
 
+    async def async_rerank(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalResult],
+        *,
+        top_k: int | None = None,
+    ) -> list[RetrievalResult]:
+        """Ask the LLM to rerank candidates through the async chat contract.
+
+        Args:
+            query: Original or rewritten user query.
+            candidates: Already metadata-filtered retrieval results, usually in
+                RRF order.
+            top_k: Optional positive result limit.
+
+        Returns:
+            Candidate copies ordered by the LLM's returned ranking, with omitted
+            candidates appended in input order to preserve recall.
+
+        Raises:
+            ValueError: If query or ``top_k`` is invalid.
+            ProviderError: If no LLM client is available, the async provider
+                call fails, or returned JSON ranking is malformed.
+        """
+
+        if not query.strip():
+            raise ValueError("Rerank query must not be blank")
+        if top_k is not None and top_k <= 0:
+            raise ValueError("top_k must be greater than zero")
+        if not candidates:
+            return []
+        if self._llm_client is None:
+            raise ProviderError(
+                "LLM rerank client is not configured",
+                context={
+                    "provider": "llm",
+                    "model": self._model,
+                    "candidate_count": len(candidates),
+                },
+            )
+
+        messages = self._build_messages(query=query, candidates=candidates)
+        try:
+            response = await self._llm_client.async_chat(messages)
+            ranking = self._parse_ranking(response=response, candidates=candidates)
+        except ProviderError:
+            raise
+        except Exception as error:
+            raise ProviderError(
+                "LLM rerank failed",
+                context={
+                    "provider": "llm",
+                    "model": self._model,
+                    "candidate_count": len(candidates),
+                },
+                cause=error,
+            ) from error
+
+        results = self._apply_ranking(
+            candidates=candidates,
+            ranking=ranking,
+            response=response,
+        )
+        return results if top_k is None else results[:top_k]
     def _build_messages(
         self,
         *,

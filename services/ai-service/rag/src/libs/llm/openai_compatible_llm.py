@@ -13,7 +13,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from src.core.errors import ConfigurationError, ProviderError
 from src.libs.llm.base_llm import BaseLLM, ChatMessage, LLMResponse
@@ -40,10 +40,11 @@ class OpenAICompatibleLLM(BaseLLM):
         base_url_env: str | None = None,
         timeout_seconds: int = 60,
         client: Any | None = None,
+        async_client: Any | None = None,
         environ: Mapping[str, str] | None = None,
         **_: Any,
     ) -> None:
-        """Configure the SDK client without exposing secret values.
+        """Configure sync and async SDK clients without exposing secrets.
 
         Args:
             model: Provider model identifier sent to ``chat.completions``.
@@ -52,7 +53,10 @@ class OpenAICompatibleLLM(BaseLLM):
             base_url: Optional literal OpenAI-compatible endpoint.
             base_url_env: Optional environment variable containing the endpoint.
             timeout_seconds: SDK request timeout in seconds.
-            client: Optional OpenAI-compatible client injected by tests.
+            client: Optional synchronous OpenAI-compatible client injected by
+                tests or runtime composition.
+            async_client: Optional asynchronous OpenAI-compatible client used by
+                online async query paths.
             environ: Optional isolated environment mapping for tests.
             **_: Forward-compatible provider settings ignored by this adapter.
 
@@ -61,8 +65,8 @@ class OpenAICompatibleLLM(BaseLLM):
                 configuration is invalid.
 
         Side Effects:
-            Creates an OpenAI SDK client when ``client`` is not supplied. Client
-            construction performs no model request.
+            Creates OpenAI SDK clients when explicit clients are not supplied.
+            Client construction performs no model request.
         """
 
         if not model.strip():
@@ -73,6 +77,7 @@ class OpenAICompatibleLLM(BaseLLM):
         self._model = model
         if client is not None:
             self._client = client
+            self._async_client = async_client
             return
 
         environment = os.environ if environ is None else environ
@@ -95,6 +100,11 @@ class OpenAICompatibleLLM(BaseLLM):
                 base_url=resolved_base_url,
                 timeout=timeout_seconds,
             )
+            self._async_client = async_client or AsyncOpenAI(
+                api_key=resolved_api_key,
+                base_url=resolved_base_url,
+                timeout=timeout_seconds,
+            )
         except Exception as error:
             raise ConfigurationError(
                 f"Unable to initialize {self.display_name} SDK client",
@@ -103,7 +113,7 @@ class OpenAICompatibleLLM(BaseLLM):
             ) from error
 
     def chat(self, messages: list[ChatMessage]) -> LLMResponse:
-        """Generate one normalized response through the configured provider.
+        """Generate one normalized response through the sync provider client.
 
         Args:
             messages: Ordered local chat messages. At least one message is
@@ -118,6 +128,64 @@ class OpenAICompatibleLLM(BaseLLM):
                 or the provider returns no usable text.
         """
 
+        payload = self._build_payload(messages)
+        try:
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=payload,
+            )
+        except Exception as error:
+            raise ProviderError(
+                f"{self.display_name} chat request failed",
+                context={"provider": self.provider_name, "model": self._model},
+                cause=error,
+            ) from error
+        return self._normalize_response(response)
+
+    async def async_chat(self, messages: list[ChatMessage]) -> LLMResponse:
+        """Generate one response through the native async SDK client.
+
+        Args:
+            messages: Ordered local chat messages. At least one message is
+                required and the list is not mutated.
+
+        Returns:
+            Provider-independent response matching ``chat()`` semantics.
+
+        Raises:
+            ProviderError: If no async client is available, the async SDK request
+                fails, or the provider returns no usable text.
+        """
+
+        payload = self._build_payload(messages)
+        if self._async_client is None:
+            return await super().async_chat(messages)
+        try:
+            response = await self._async_client.chat.completions.create(
+                model=self._model,
+                messages=payload,
+            )
+        except Exception as error:
+            raise ProviderError(
+                f"{self.display_name} async chat request failed",
+                context={"provider": self.provider_name, "model": self._model},
+                cause=error,
+            ) from error
+        return self._normalize_response(response)
+
+    def _build_payload(self, messages: list[ChatMessage]) -> list[dict[str, str]]:
+        """Convert local chat messages into OpenAI-compatible payload items.
+
+        Args:
+            messages: Validated chat messages supplied by callers.
+
+        Returns:
+            JSON-serializable message dictionaries.
+
+        Raises:
+            ProviderError: If the caller supplies an empty message list.
+        """
+
         if not messages:
             raise ProviderError(
                 f"{self.display_name} chat requires at least one message",
@@ -130,18 +198,20 @@ class OpenAICompatibleLLM(BaseLLM):
             if message.name is not None:
                 item["name"] = message.name
             payload.append(item)
+        return payload
 
-        try:
-            response = self._client.chat.completions.create(
-                model=self._model,
-                messages=payload,
-            )
-        except Exception as error:
-            raise ProviderError(
-                f"{self.display_name} chat request failed",
-                context={"provider": self.provider_name, "model": self._model},
-                cause=error,
-            ) from error
+    def _normalize_response(self, response: Any) -> LLMResponse:
+        """Normalize an SDK response into the local LLM contract.
+
+        Args:
+            response: OpenAI-compatible chat-completions response object.
+
+        Returns:
+            Provider-independent response with trace-safe raw metadata.
+
+        Raises:
+            ProviderError: If the response has no usable text content.
+        """
 
         choices = getattr(response, "choices", None)
         content = (

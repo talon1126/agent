@@ -10,6 +10,7 @@ scoring.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import Sequence
 from typing import Protocol
@@ -118,6 +119,37 @@ class CrossEncoderReranker(BaseReranker):
         indexed_results.sort(key=lambda item: (-item[1].score, item[0]))
         results = [result for _, result in indexed_results]
         return results if top_k is None else results[:top_k]
+
+    async def async_rerank(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalResult],
+        *,
+        top_k: int | None = None,
+    ) -> list[RetrievalResult]:
+        """Run Cross-Encoder scoring in a worker thread.
+
+        Args:
+            query: Original or rewritten user query used for pair scoring.
+            candidates: Metadata-filtered candidates in current RRF order.
+            top_k: Optional positive result limit.
+
+        Returns:
+            Ranked candidates matching ``rerank()`` output semantics.
+
+        Notes:
+            ``sentence_transformers`` prediction is CPU/GPU-bound synchronous
+            Python code. Running it through ``asyncio.to_thread`` prevents the
+            event loop from being blocked while other collection retrieval work
+            continues in Phase I async orchestration.
+        """
+
+        return await asyncio.to_thread(
+            self.rerank,
+            query,
+            candidates,
+            top_k=top_k,
+        )
 
     def _get_scorer(self) -> CrossEncoderScorer:
         """Return an injected scorer or lazily load ``sentence_transformers``.

@@ -9,6 +9,7 @@ by later tasks.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections import Counter, defaultdict
 
@@ -157,6 +158,32 @@ class BM25Indexer:
             key=lambda candidate: (-candidate.score, candidate.chunk_id),
         )
         return ranked[:top_k]
+
+    async def async_query(
+        self,
+        keywords: list[str] | str,
+        *,
+        top_k: int,
+        collection: str | None = None,
+    ) -> list[BM25Candidate]:
+        """Return BM25 candidates without blocking the event-loop caller.
+
+        Args:
+            keywords: Query terms from ``ProcessedQuery.keywords`` or raw text.
+            top_k: Maximum number of candidates to return.
+            collection: Compatibility argument retained for persistent sparse
+                indexes; the in-memory index ignores it like ``query()``.
+
+        Returns:
+            Ranked sparse candidates produced by the synchronous scorer.
+        """
+
+        return await asyncio.to_thread(
+            self.query,
+            keywords,
+            top_k=top_k,
+            collection=collection,
+        )
 
     def _idf(self, term: str) -> float:
         """Compute BM25 inverse document frequency for one term.
