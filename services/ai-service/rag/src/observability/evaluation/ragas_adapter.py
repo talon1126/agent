@@ -18,6 +18,7 @@ metric values.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -185,6 +186,76 @@ class RagasEvaluator:
 
         result = self.evaluate_with_samples(dataset, predictions)
         return dict(result["metrics"])
+
+    async def async_evaluate_with_samples(
+        self,
+        dataset: Sequence[EvaluationRecord],
+        predictions: Sequence[EvaluationRecord],
+        *,
+        max_metric_concurrency: int | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate Ragas metrics without blocking the caller event loop.
+
+        Args:
+            dataset: Golden records containing question and reference text.
+            predictions: Aligned generated answer records.
+            max_metric_concurrency: Optional override for the Ragas worker
+                count. When omitted, the adapter uses its runtime config.
+
+        Returns:
+            The same mapping contract as ``evaluate_with_samples``.
+
+        Raises:
+            ValueError: If inputs are misaligned or the override is invalid.
+            ProviderError: If the backend evaluation fails.
+        """
+
+        rows = _build_ragas_rows(dataset, predictions)
+        worker_count = (
+            self.runtime_config.max_workers
+            if max_metric_concurrency is None
+            else max_metric_concurrency
+        )
+        runtime_config = RagasRuntimeConfig(
+            timeout_seconds=self.runtime_config.timeout_seconds,
+            max_workers=worker_count,
+        )
+        backend = self.evaluate_fn or _load_ragas_backend(
+            llm_client=self.llm_client,
+            embedding_client=self.embedding_client,
+            runtime_config=runtime_config,
+            observer=self.model_call_observer,
+        )
+        try:
+            if inspect.iscoroutinefunction(backend):
+                raw_result = await backend(
+                    rows,
+                    metrics=self.metric_names,
+                    run_config=runtime_config.as_mapping(),
+                )
+            else:
+                raw_result = await asyncio.to_thread(
+                    backend,
+                    rows,
+                    metrics=self.metric_names,
+                    run_config=runtime_config.as_mapping(),
+                )
+                if inspect.isawaitable(raw_result):
+                    raw_result = await raw_result
+        except Exception as error:
+            raise ProviderError(
+                "Ragas evaluation failed",
+                context={"metrics": list(self.metric_names), "sample_count": len(rows)},
+                cause=error,
+            ) from error
+        return {
+            "metrics": _normalize_ragas_result(raw_result, self.metric_names),
+            "sample_metrics": _sample_metrics_from_ragas_result(
+                raw_result,
+                self.metric_names,
+                expected_count=len(rows),
+            ),
+        }
 
     def evaluate_with_samples(
         self,

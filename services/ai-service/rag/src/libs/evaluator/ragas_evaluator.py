@@ -42,6 +42,7 @@ class RagasEvaluatorClient(BaseEvaluator):
         evaluate_fn: RagasEvaluateFn | None = None,
         settings: RagSettings | None = None,
         ragas_observer: RagasModelCallObserver | None = None,
+        max_metric_concurrency: int | None = None,
     ) -> None:
         """Create the underlying adapter while preserving lazy Ragas imports.
 
@@ -51,6 +52,8 @@ class RagasEvaluatorClient(BaseEvaluator):
             settings: Optional RAG settings used to create project model clients.
             ragas_observer: Optional trace-safe callback for model calls made
                 inside the real Ragas backend.
+            max_metric_concurrency: Optional evaluator-level override for
+                Ragas worker concurrency.
         """
 
         llm_client = None
@@ -66,6 +69,11 @@ class RagasEvaluatorClient(BaseEvaluator):
             )
 
         runtime_settings = settings.evaluation.ragas if settings is not None else None
+        runtime_max_workers = (
+            runtime_settings.max_workers if runtime_settings is not None else 8
+        )
+        if max_metric_concurrency is not None:
+            runtime_max_workers = max_metric_concurrency
         self._adapter = RagasEvaluator(
             metric_names=metric_names,
             evaluate_fn=evaluate_fn,
@@ -75,7 +83,7 @@ class RagasEvaluatorClient(BaseEvaluator):
             timeout_seconds=(
                 runtime_settings.timeout_seconds if runtime_settings is not None else 300
             ),
-            max_workers=runtime_settings.max_workers if runtime_settings is not None else 8,
+            max_workers=runtime_max_workers,
         )
 
     def evaluate(
@@ -94,6 +102,31 @@ class RagasEvaluatorClient(BaseEvaluator):
         """
 
         return self._adapter.evaluate(dataset, predictions)
+
+    async def async_evaluate_with_samples(
+        self,
+        dataset: Sequence[Mapping[str, Any]],
+        predictions: Sequence[Mapping[str, Any]],
+        *,
+        max_metric_concurrency: int | None = None,
+    ) -> Mapping[str, Any]:
+        """Evaluate aggregate and per-sample metrics through an async boundary.
+
+        Args:
+            dataset: Golden records with question and reference answer fields.
+            predictions: Generated answer records with retrieved text contexts.
+            max_metric_concurrency: Optional worker-count override used by
+                Ragas runtime configuration.
+
+        Returns:
+            Mapping containing ``metrics`` and optional ``sample_metrics``.
+        """
+
+        return await self._adapter.async_evaluate_with_samples(
+            dataset,
+            predictions,
+            max_metric_concurrency=max_metric_concurrency,
+        )
 
     def evaluate_with_samples(
         self,

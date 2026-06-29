@@ -24,6 +24,7 @@ import src.scripts.run_evaluation as run_evaluation_module
 from src.core.types import Chunk
 from src.libs.evaluator import EvaluatorFactory
 from src.libs.evaluator import ragas_evaluator as ragas_evaluator_module
+from src.libs.evaluator.ragas_evaluator import RagasEvaluatorClient
 from src.observability.evaluation import RetrievalStrategy as ExportedRetrievalStrategy
 from src.observability.evaluation import ragas_adapter as ragas_adapter_module
 from src.observability.evaluation.metrics import HitRateMetric, MRRMetric, NDCGMetric
@@ -644,7 +645,11 @@ def test_run_evaluation_cli_passes_configured_ragas_metrics(
     monkeypatch.setattr(run_evaluation_module, "load_settings", lambda: settings)
     monkeypatch.setattr(run_evaluation_module, "_create_pool", lambda database: FakePool())
     monkeypatch.setattr(run_evaluation_module, "init_schema", lambda pool: None)
-    monkeypatch.setattr(run_evaluation_module, "_build_runtime", lambda *args: FakeRuntime())
+    monkeypatch.setattr(
+        run_evaluation_module,
+        "_build_evaluation_runtime",
+        lambda *args: FakeRuntime(),
+    )
     monkeypatch.setattr(
         run_evaluation_module.VectorStoreFactory,
         "create",
@@ -1850,7 +1855,11 @@ def _patch_evaluation_cli_dependencies(
     monkeypatch.setattr(run_evaluation_module, "load_settings", lambda: settings)
     monkeypatch.setattr(run_evaluation_module, "_create_pool", lambda database: FakePool())
     monkeypatch.setattr(run_evaluation_module, "init_schema", lambda pool: None)
-    monkeypatch.setattr(run_evaluation_module, "_build_runtime", lambda *args: FakeRuntime())
+    monkeypatch.setattr(
+        run_evaluation_module,
+        "_build_evaluation_runtime",
+        lambda *args: FakeRuntime(),
+    )
     monkeypatch.setattr(
         run_evaluation_module,
         "uuid4",
@@ -1881,6 +1890,137 @@ def _patch_evaluation_cli_dependencies(
         raising=False,
     )
 
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_run_evaluation_async_builds_predictions_and_records_sample_errors() -> None:
+    """Build async predictions without letting one sample failure abort the batch."""
+
+    dataset = [
+        {
+            "id": "sample-ok",
+            "collection": "shopping_guides",
+            "question": "如何挑选微波炉？",
+            "golden_answer": "关注容量和加热方式。",
+            "expected_doc_ids": ["shopping_guides/microwave.md"],
+        },
+        {
+            "id": "sample-failed",
+            "collection": "faq",
+            "question": "触发失败样本",
+            "golden_answer": "应记录失败。",
+            "expected_doc_ids": ["faq/failure.md"],
+        },
+    ]
+
+    class AsyncRuntime:
+        """Return one async execution and fail one selected sample."""
+
+        async def execute(self, query: str, **kwargs: Any) -> Any:
+            """Emulate the async query runtime used by evaluation."""
+
+            if "失败" in query:
+                raise RuntimeError("query runtime failed")
+            return SimpleNamespace(
+                final_results=[SimpleNamespace(chunk_id="chunk-1", score=0.91)],
+                response=SimpleNamespace(
+                    content="[1] 微波炉应关注容量。",
+                    citations=[],
+                    images=[],
+                ),
+            )
+
+    class FakeChunkLookup:
+        """Resolve one chunk for the successful prediction."""
+
+        def get_by_ids(self, chunk_ids: list[str]) -> list[Chunk]:
+            """Return deterministic chunk text for Ragas contexts."""
+
+            assert chunk_ids == ["chunk-1"]
+            return [
+                Chunk(
+                    id="chunk-1",
+                    text="微波炉选购应关注容量、加热方式和售后。",
+                    chunk_index=1,
+                    start_offset=0,
+                    end_offset=20,
+                    metadata={},
+                )
+            ]
+
+    predictions = await run_evaluation_module.run_evaluation_async(
+        dataset,
+        runtime=AsyncRuntime(),
+        chunk_lookup=FakeChunkLookup(),
+        collection_override=None,
+        top_k=1,
+        no_rerank=False,
+        answer_source=run_evaluation_module.EvaluationAnswerSource.RAG,
+        aimodel_client=None,
+        message_repository=None,
+        query_trace_repository=None,
+        max_sample_concurrency=2,
+        reporter=None,
+    )
+
+    assert [prediction["sample_id"] for prediction in predictions] == [
+        "sample-ok",
+        "sample-failed",
+    ]
+    assert predictions[0].get("error") is None
+    assert predictions[0]["query_trace_id"].startswith("query-eval-")
+    assert predictions[1]["error"] == {
+        "type": "RuntimeError",
+        "message": "query runtime failed",
+    }
+    assert predictions[1]["answer_source"] == "rag"
+    assert predictions[1]["contexts"] == ["Evaluation sample failed before retrieval completed."]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_ragas_evaluator_client_async_evaluate_uses_metric_concurrency() -> None:
+    """Expose an async Ragas client path while preserving run_config observability."""
+
+    captured: dict[str, Any] = {}
+
+    def fake_evaluate(
+        rows: list[dict[str, Any]],
+        *,
+        metrics: tuple[str, ...],
+        run_config: Mapping[str, int] | None = None,
+    ) -> dict[str, float]:
+        """Capture the async wrapper's backend call."""
+
+        captured["rows"] = rows
+        captured["metrics"] = metrics
+        captured["run_config"] = run_config
+        return {"faithfulness": 1.0}
+
+    client = RagasEvaluatorClient(
+        metric_names=("faithfulness",),
+        evaluate_fn=fake_evaluate,
+    )
+
+    result = await client.async_evaluate_with_samples(
+        [
+            {
+                "question": "如何挑选微波炉？",
+                "golden_answer": "关注容量。",
+            }
+        ],
+        [
+            {
+                "answer": "关注容量。",
+                "contexts": ["微波炉选购关注容量。"],
+            }
+        ],
+        max_metric_concurrency=1,
+    )
+
+    assert result["metrics"] == {"faithfulness": 1.0}
+    assert captured["metrics"] == ("faithfulness",)
+    assert captured["run_config"] == {"timeout_seconds": 300, "max_workers": 1}
 
 
 class _ObservedFakeLLM:

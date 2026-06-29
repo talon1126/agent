@@ -14,6 +14,7 @@ script or service layer that owns infrastructure resources.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,43 @@ from src.storage.repositories import EvaluationResultRecord, EvaluationRunRecord
 
 EvaluationRecord = Mapping[str, Any]
 RetrievedCandidate = str | Mapping[str, Any]
+
+
+class EvaluationAsyncLimiter:
+    """Own sample and metric semaphores for async evaluation orchestration.
+
+    The runner keeps the two limits separate because building predictions is
+    mostly query/AImodel I/O, while Ragas metrics can fan out into LLM and
+    embedding calls. Scripts can pass these semaphores to different layers
+    without coupling sample count to provider concurrency.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_sample_concurrency: int = 1,
+        max_metric_concurrency: int = 1,
+    ) -> None:
+        """Create bounded semaphores from validated positive limits.
+
+        Args:
+            max_sample_concurrency: Maximum golden samples building
+                predictions at the same time.
+            max_metric_concurrency: Maximum concurrent metric jobs allowed for
+                evaluator backends that expose such a control.
+
+        Raises:
+            ValueError: If either concurrency limit is not positive.
+        """
+
+        if max_sample_concurrency <= 0:
+            raise ValueError("max_sample_concurrency must be greater than zero")
+        if max_metric_concurrency <= 0:
+            raise ValueError("max_metric_concurrency must be greater than zero")
+        self.max_sample_concurrency = max_sample_concurrency
+        self.max_metric_concurrency = max_metric_concurrency
+        self.sample_semaphore = asyncio.Semaphore(max_sample_concurrency)
+        self.metric_semaphore = asyncio.Semaphore(max_metric_concurrency)
 
 
 @dataclass(frozen=True, slots=True)

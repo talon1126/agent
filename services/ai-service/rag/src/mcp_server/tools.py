@@ -12,10 +12,13 @@ remain placeholders until E3.
 
 from __future__ import annotations
 
+import asyncio
 import base64
-from collections.abc import Callable, Sequence
+import inspect
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -23,7 +26,6 @@ import psycopg
 
 from src.core.config import DatabaseSettings, RagSettings, load_settings
 from src.core.errors import DatabaseError
-from src.core.query_engine import ParallelRetrievalController, ProcessedQuery
 from src.core.response import KnowledgeHubResponse
 from src.core.types import RetrievalResult
 from src.storage.postgres import PostgresPool, init_schema
@@ -51,7 +53,7 @@ class QueryRuntimeLike(Protocol):
         no_rerank: bool,
         trace_id: str,
         request_source: str = "query_cli",
-    ) -> QueryExecutionLike:
+    ) -> QueryExecutionLike | Awaitable[QueryExecutionLike]:
         """Execute one query and return a public response wrapper."""
 
 
@@ -190,17 +192,19 @@ class QueryKnowledgeHubTool:
             self._schema_initializer(pool)
             runtime = self._runtime_builder(settings, pool, no_rerank)
             if len(active_collections) == 1:
-                execution = runtime.execute(
-                    query.strip(),
-                    collection=active_collection,
-                    top_k=active_top_k,
-                    no_rerank=no_rerank,
-                    trace_id=self._trace_id_factory(),
-                    request_source=active_request_source,
+                execution = await _resolve_runtime_execution(
+                    runtime.execute(
+                        query.strip(),
+                        collection=active_collection,
+                        top_k=active_top_k,
+                        no_rerank=no_rerank,
+                        trace_id=self._trace_id_factory(),
+                        request_source=active_request_source,
+                    )
                 )
                 payload = execution.response.model_dump(mode="json")
             else:
-                payload = self._execute_multi_collection(
+                payload = await self._execute_multi_collection(
                     runtime=runtime,
                     query=query.strip(),
                     collections=active_collections,
@@ -295,7 +299,7 @@ class QueryKnowledgeHubTool:
                 resolved.append(selected)
         return resolved or [default_collection]
 
-    def _execute_multi_collection(
+    async def _execute_multi_collection(
         self,
         *,
         runtime: QueryRuntimeLike,
@@ -305,7 +309,7 @@ class QueryKnowledgeHubTool:
         no_rerank: bool,
         request_source: str,
     ) -> dict[str, Any]:
-        """Run the existing single-collection runtime for each collection.
+        """Run collection-specific runtime calls concurrently for MCP clients.
 
         Args:
             runtime: Query runtime created for this MCP request.
@@ -320,44 +324,65 @@ class QueryKnowledgeHubTool:
             per-collection execution summaries.
         """
 
-        parallel_runtime = _McpParallelRuntime(
-            runtime=runtime,
-            query=query,
-            request_source=request_source,
-        )
-        processed = ProcessedQuery(
-            raw_query=query,
-            normalized_query=query,
-            keywords=(),
-            collection=collections[0],
-            top_k=top_k,
-        )
-        result = ParallelRetrievalController(
-            runtime=parallel_runtime,
-            max_collections=MAX_MCP_COLLECTIONS,
-        ).search(
-            processed,
-            collections=collections,
-            top_k=top_k,
-            no_rerank=no_rerank,
-            trace_id_factory=lambda _collection: self._trace_id_factory(),
-        )
-        if not parallel_runtime.payloads:
-            errors = [
-                str(row.get("error", ""))
-                for row in result.collection_results
-                if row.get("status") == "failed"
-            ]
+        async def run_collection(collection: str) -> dict[str, Any]:
+            started = perf_counter()
+            trace_id = self._trace_id_factory()
+            try:
+                execution = await _resolve_runtime_execution(
+                    runtime.execute(
+                        query,
+                        collection=collection,
+                        top_k=top_k,
+                        no_rerank=no_rerank,
+                        trace_id=trace_id,
+                        request_source=request_source,
+                    )
+                )
+            except Exception as error:  # noqa: BLE001 - multi-collection keeps partial successes.
+                return {
+                    "collection": collection,
+                    "trace_id": trace_id,
+                    "status": "failed",
+                    "candidate_count": 0,
+                    "duration_ms": (perf_counter() - started) * 1000,
+                    "error": str(error),
+                }
+            return {
+                "collection": collection,
+                "trace_id": trace_id,
+                "status": "success",
+                "candidate_count": len(execution.final_results),
+                "duration_ms": (perf_counter() - started) * 1000,
+                "execution": execution,
+                "payload": execution.response.model_dump(mode="json"),
+            }
+
+        rows = await asyncio.gather(*(run_collection(item) for item in collections))
+        successful_rows = [row for row in rows if row.get("status") == "success"]
+        if not successful_rows:
+            errors = [str(row.get("error", "")) for row in rows if row.get("error")]
             return _business_error(
                 "invalid_request",
                 "; ".join(error for error in errors if error)
                 or "multi-collection query returned no results",
             )
+        results = sorted(
+            (
+                result
+                for row in successful_rows
+                for result in row["execution"].final_results
+            ),
+            key=lambda result: result.score,
+            reverse=True,
+        )[:top_k]
         return _merge_parallel_payloads(
-            results=result.results,
-            payloads=parallel_runtime.payloads,
-            collection_results=result.collection_results,
-            query_trace_ids=result.query_trace_ids,
+            results=list(results),
+            payloads=[row["payload"] for row in successful_rows],
+            collection_results=[
+                {key: value for key, value in row.items() if key not in {"execution", "payload"}}
+                for row in rows
+            ],
+            query_trace_ids=[str(row["trace_id"]) for row in successful_rows],
         )
 
     def _attach_image_base64(self, payload: dict[str, Any]) -> None:
@@ -373,53 +398,6 @@ class QueryKnowledgeHubTool:
             if not path.is_file() or path.stat().st_size > self._max_image_base64_bytes:
                 continue
             image["base64_content"] = base64.b64encode(path.read_bytes()).decode("ascii")
-
-
-class _McpParallelRuntime:
-    """Adapt the MCP QueryRuntime boundary to ParallelRetrievalController."""
-
-    def __init__(
-        self,
-        *,
-        runtime: QueryRuntimeLike,
-        query: str,
-        request_source: str,
-    ) -> None:
-        """Store one runtime and the original query for child collection runs.
-
-        Args:
-            runtime: Existing single-collection query runtime.
-            query: Original caller query. The adapter deliberately keeps this
-                unchanged so AImodel retrieval does not rewrite tool arguments.
-            request_source: Caller label written to child query traces.
-        """
-
-        self._runtime = runtime
-        self._query = query
-        self._request_source = request_source
-        self.payloads: list[dict[str, Any]] = []
-
-    def execute_collection(
-        self,
-        *,
-        query: ProcessedQuery,
-        collection: str,
-        top_k: int,
-        no_rerank: bool,
-        trace_id: str,
-    ) -> list[RetrievalResult]:
-        """Execute one child collection and return its final candidates."""
-
-        execution = self._runtime.execute(
-            self._query or query.raw_query,
-            collection=collection,
-            top_k=top_k,
-            no_rerank=no_rerank,
-            trace_id=trace_id,
-            request_source=self._request_source,
-        )
-        self.payloads.append(execution.response.model_dump(mode="json"))
-        return list(execution.final_results)
 
 
 def _merge_parallel_payloads(
@@ -1009,12 +987,37 @@ def _isoformat(value: Any) -> str | None:
     return str(value)
 
 
+async def _resolve_runtime_execution(
+    execution: QueryExecutionLike | Awaitable[QueryExecutionLike],
+) -> QueryExecutionLike:
+    """Resolve sync or async runtime execution into one concrete result."""
+
+    if inspect.isawaitable(execution):
+        return await execution
+    return execution
+
+
+def _default_async_runtime_builder(
+    settings: RagSettings,
+    pool: PostgresPool,
+    no_rerank: bool,
+) -> QueryRuntimeLike:
+    """Create the production AsyncQueryRuntime for MCP and evaluation callers."""
+
+    from src.core.query_engine import build_async_query_runtime
+
+    return build_async_query_runtime(settings, pool, no_rerank)
+
+
 def _default_runtime_builder(
     settings: RagSettings,
     pool: PostgresPool,
     no_rerank: bool,
 ) -> QueryRuntimeLike:
-    """Create the production QueryRuntime using the Phase D composition path."""
+    """Create the configured production query runtime implementation."""
+
+    if getattr(settings.retrieval, "async_enabled", False):
+        return _default_async_runtime_builder(settings, pool, no_rerank)
 
     from src.scripts.query import _build_runtime
 

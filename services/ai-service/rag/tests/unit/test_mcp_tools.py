@@ -120,6 +120,30 @@ class FakeRuntime:
             ) if not self.response.is_empty else (),
         )
 
+class AsyncFakeRuntime(FakeRuntime):
+    """Return the same fake execution through an awaitable runtime boundary."""
+
+    async def execute(
+        self,
+        query: str,
+        *,
+        collection: str,
+        top_k: int,
+        no_rerank: bool,
+        trace_id: str,
+        request_source: str | None = None,
+    ) -> FakeQueryExecution:
+        """Capture arguments and return a fake execution after awaiting."""
+
+        return super().execute(
+            query,
+            collection=collection,
+            top_k=top_k,
+            no_rerank=no_rerank,
+            trace_id=trace_id,
+            request_source=request_source,
+        )
+
 
 class FakeMetadataReader:
     """Serve deterministic collection and document metadata to MCP tool tests."""
@@ -494,6 +518,33 @@ async def test_query_knowledge_hub_returns_public_response_and_closes_pool() -> 
             "collection": "shopping_guides",
             "top_k": 3,
             "no_rerank": True,
+            "trace_id": "trace-mcp-test",
+            "request_source": "mcp",
+        }
+    ]
+    assert pool.closed is True
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_query_knowledge_hub_awaits_async_runtime_contract() -> None:
+    """Require MCP query calls to consume the Phase I async runtime directly."""
+
+    runtime = AsyncFakeRuntime(_knowledge_response())
+    tool, pool, _runtime = _query_tool(runtime=runtime)
+
+    payload = await tool.query_knowledge_hub(
+        "无线耳机怎么选",
+        collection="shopping_guides",
+    )
+
+    assert payload["ok"] is True
+    assert payload["trace_id"] == "trace-mcp-test"
+    assert runtime.calls == [
+        {
+            "query": "无线耳机怎么选",
+            "collection": "shopping_guides",
+            "top_k": 5,
+            "no_rerank": False,
             "trace_id": "trace-mcp-test",
             "request_source": "mcp",
         }

@@ -10,6 +10,8 @@ assistant message because that is what users actually read. The explicit
 from __future__ import annotations
 
 import argparse
+import asyncio
+import inspect
 import json
 import sys
 import threading
@@ -34,11 +36,13 @@ from src.core.config import (
 )
 from src.core.types import Chunk
 from src.libs.vector_store import VectorStoreFactory
+from src.observability.evaluation.runner import EvaluationAsyncLimiter
 from src.observability.services import EvaluationService
 from src.scripts.query import (
     _build_runtime,
     _create_pool,
     _load_local_environment,
+    _select_runtime_builder,
 )
 from src.storage.postgres import PostgresPool, init_schema
 from src.storage.repositories import TraceRepository
@@ -870,7 +874,7 @@ def run_evaluation_cli(
         active_step = "runtime_setup"
         reporter.step_started(active_step)
         runtime = (
-            _build_runtime(settings, pool, args.no_rerank)
+            _build_evaluation_runtime(settings, pool, args.no_rerank)
             if answer_source is EvaluationAnswerSource.RAG
             else None
         )
@@ -893,31 +897,49 @@ def run_evaluation_cli(
         reporter.step_done(active_step)
         active_step = "build_predictions"
         reporter.step_started(active_step)
-        predictions = []
-        for sample_index, sample in enumerate(dataset, start=1):
-            active_sample = sample
-            active_sample_index = sample_index
-            reporter.sample_started(
-                sample_index=sample_index,
-                sample_count=len(dataset),
-                sample=sample,
-            )
-            predictions.append(
-                _prediction_for_sample(
-                    sample,
+        if settings.evaluation.async_enabled:
+            predictions = asyncio.run(
+                run_evaluation_async(
+                    dataset,
                     runtime=runtime,
                     chunk_lookup=chunk_lookup,
-                    collection=_collection_for_sample(sample, override=args.collection),
+                    collection_override=args.collection,
                     top_k=top_k,
                     no_rerank=args.no_rerank,
                     answer_source=answer_source,
                     aimodel_client=aimodel_client,
                     message_repository=message_repository,
                     query_trace_repository=query_trace_repository,
+                    max_sample_concurrency=settings.evaluation.max_sample_concurrency,
                     reporter=reporter,
-                    sample_index=sample_index,
                 )
             )
+        else:
+            predictions = []
+            for sample_index, sample in enumerate(dataset, start=1):
+                active_sample = sample
+                active_sample_index = sample_index
+                reporter.sample_started(
+                    sample_index=sample_index,
+                    sample_count=len(dataset),
+                    sample=sample,
+                )
+                predictions.append(
+                    _prediction_for_sample(
+                        sample,
+                        runtime=runtime,
+                        chunk_lookup=chunk_lookup,
+                        collection=_collection_for_sample(sample, override=args.collection),
+                        top_k=top_k,
+                        no_rerank=args.no_rerank,
+                        answer_source=answer_source,
+                        aimodel_client=aimodel_client,
+                        message_repository=message_repository,
+                        query_trace_repository=query_trace_repository,
+                        reporter=reporter,
+                        sample_index=sample_index,
+                    )
+                )
         active_sample = None
         active_sample_index = None
         reporter.step_done(active_step, details={"prediction_count": len(predictions)})
@@ -934,6 +956,7 @@ def run_evaluation_cli(
                 "settings": settings,
                 "metric_names": metric_names,
                 "ragas_observer": reporter.ragas_observer,
+                "max_metric_concurrency": settings.evaluation.max_metric_concurrency,
             },
             run_id=run_id,
             settings_snapshot={
@@ -948,6 +971,9 @@ def run_evaluation_cli(
                     settings.evaluation.embedding_provider
                 ),
                 "generation_metrics": metric_names,
+                "async_enabled": settings.evaluation.async_enabled,
+                "max_sample_concurrency": settings.evaluation.max_sample_concurrency,
+                "max_metric_concurrency": settings.evaluation.max_metric_concurrency,
                 "response_optimizer_enabled": (
                     settings.response.evidence_context_optimizer.enabled
                 ),
@@ -1110,6 +1136,212 @@ def main() -> int:
     """Run the evaluation CLI with process arguments."""
 
     return run_evaluation_cli()
+
+
+def _build_evaluation_runtime(
+    settings: RagSettings,
+    pool: PostgresPool,
+    no_rerank: bool,
+) -> Any:
+    """Build the runtime selected for evaluation query execution.
+
+    Evaluation uses the same retrieval async switch as online query callers so
+    latency and trace behavior match MCP/AImodel usage. The helper remains
+    injectable in tests to avoid constructing real providers.
+    """
+
+    if settings.evaluation.async_enabled and settings.retrieval.async_enabled:
+        return _select_runtime_builder(settings, pool, no_rerank)
+    return _build_runtime(settings, pool, no_rerank)
+
+
+async def run_evaluation_async(
+    dataset: Sequence[Mapping[str, Any]],
+    *,
+    runtime: Any | None,
+    chunk_lookup: ChunkLookup,
+    collection_override: str | None,
+    top_k: int,
+    no_rerank: bool,
+    answer_source: EvaluationAnswerSource,
+    aimodel_client: AImodelEvaluationClient | None,
+    message_repository: MessageAnswerRepository | None,
+    query_trace_repository: QueryTraceResultRepository | None,
+    max_sample_concurrency: int,
+    reporter: EvaluationReporter | None = None,
+) -> list[dict[str, Any]]:
+    """Build prediction rows concurrently while preserving dataset order.
+
+    Args:
+        dataset: Ordered golden samples loaded by the CLI.
+        runtime: Query runtime used when ``answer_source`` is ``rag``.
+        chunk_lookup: Store used to resolve retrieved chunk texts.
+        collection_override: Optional CLI-level collection override.
+        top_k: Final retrieval count requested for each sample.
+        no_rerank: Whether rerank is disabled for this run.
+        answer_source: ``rag`` or ``message`` answer source mode.
+        aimodel_client: Message-mode client for the AImodel chat endpoint.
+        message_repository: Message-mode repository for final answers.
+        query_trace_repository: Message-mode repository for linked query traces.
+        max_sample_concurrency: Maximum samples processed at the same time.
+        reporter: Optional progress reporter.
+
+    Returns:
+        Prediction rows aligned to ``dataset``. Failed samples are represented
+        as diagnostic prediction rows with an ``error`` object so completed
+        samples can still be persisted and inspected.
+    """
+
+    limiter = EvaluationAsyncLimiter(
+        max_sample_concurrency=max_sample_concurrency,
+        max_metric_concurrency=1,
+    )
+
+    async def build_one(sample_index: int, sample: Mapping[str, Any]) -> dict[str, Any]:
+        async with limiter.sample_semaphore:
+            if reporter is not None:
+                reporter.sample_started(
+                    sample_index=sample_index,
+                    sample_count=len(dataset),
+                    sample=sample,
+                )
+            collection = _collection_for_sample(sample, override=collection_override)
+            try:
+                return await _prediction_for_sample_async(
+                    sample,
+                    runtime=runtime,
+                    chunk_lookup=chunk_lookup,
+                    collection=collection,
+                    top_k=top_k,
+                    no_rerank=no_rerank,
+                    answer_source=answer_source,
+                    aimodel_client=aimodel_client,
+                    message_repository=message_repository,
+                    query_trace_repository=query_trace_repository,
+                    reporter=reporter,
+                    sample_index=sample_index,
+                )
+            except Exception as error:  # noqa: BLE001 - RAG-mode failures are persisted.
+                if answer_source is EvaluationAnswerSource.MESSAGE:
+                    raise
+                return _failed_prediction_for_sample(
+                    sample,
+                    collection=collection,
+                    answer_source=answer_source,
+                    error=error,
+                )
+
+    return list(
+        await asyncio.gather(
+            *(build_one(index, sample) for index, sample in enumerate(dataset, start=1))
+        )
+    )
+
+
+async def _prediction_for_sample_async(
+    sample: Mapping[str, Any],
+    *,
+    runtime: Any | None,
+    chunk_lookup: ChunkLookup,
+    collection: str,
+    top_k: int,
+    no_rerank: bool,
+    answer_source: EvaluationAnswerSource,
+    aimodel_client: AImodelEvaluationClient | None,
+    message_repository: MessageAnswerRepository | None,
+    query_trace_repository: QueryTraceResultRepository | None,
+    reporter: EvaluationReporter | None = None,
+    sample_index: int | None = None,
+) -> dict[str, Any]:
+    """Async counterpart to ``_prediction_for_sample`` for evaluation runs."""
+
+    if answer_source is not EvaluationAnswerSource.RAG:
+        return await asyncio.to_thread(
+            _prediction_for_sample,
+            sample,
+            runtime=runtime,
+            chunk_lookup=chunk_lookup,
+            collection=collection,
+            top_k=top_k,
+            no_rerank=no_rerank,
+            answer_source=answer_source,
+            aimodel_client=aimodel_client,
+            message_repository=message_repository,
+            query_trace_repository=query_trace_repository,
+            reporter=reporter,
+            sample_index=sample_index,
+        )
+    question = _required_text(sample.get("question"), field_name="question")
+    if runtime is None:
+        raise ValueError("rag answer source requires QueryRuntime")
+    trace_id = f"query-eval-{uuid4().hex}"
+    execute_kwargs = {
+        "collection": collection,
+        "top_k": top_k,
+        "no_rerank": no_rerank,
+        "trace_id": trace_id,
+    }
+    if inspect.iscoroutinefunction(runtime.execute):
+        execution = await runtime.execute(question, **execute_kwargs)
+    else:
+        execution = await asyncio.to_thread(runtime.execute, question, **execute_kwargs)
+        if inspect.isawaitable(execution):
+            execution = await execution
+    _report_sample_step(
+        reporter,
+        sample=sample,
+        sample_index=sample_index,
+        step="query_runtime",
+        details={"query_trace_id": trace_id},
+    )
+    prediction = build_prediction_from_query_result(
+        sample,
+        _query_result_from_execution(execution),
+        chunk_lookup=chunk_lookup,
+        query_trace_id=trace_id,
+        effective_collection=collection,
+    )
+    _report_sample_step(
+        reporter,
+        sample=sample,
+        sample_index=sample_index,
+        step="chunk_lookup",
+        details={"context_count": len(prediction["contexts"])},
+    )
+    _report_sample_step(
+        reporter,
+        sample=sample,
+        sample_index=sample_index,
+        step="prediction_ready",
+        details={"query_trace_id": prediction["query_trace_id"]},
+    )
+    return prediction
+
+
+def _failed_prediction_for_sample(
+    sample: Mapping[str, Any],
+    *,
+    collection: str,
+    answer_source: EvaluationAnswerSource,
+    error: Exception,
+) -> dict[str, Any]:
+    """Create a diagnostic prediction row for a failed golden sample."""
+
+    question = _required_text(sample.get("question"), field_name="question")
+    return {
+        "sample_id": str(sample.get("id") or question),
+        "question": question,
+        "answer": "Evaluation sample failed before answer generation.",
+        "answer_source": answer_source.value,
+        "contexts": ["Evaluation sample failed before retrieval completed."],
+        "retrieved_contexts": ["Evaluation sample failed before retrieval completed."],
+        "context_chunk_ids": [],
+        "query_trace_ids": [],
+        "sample_collection": sample.get("collection"),
+        "effective_collection": collection,
+        "error": {"type": type(error).__name__, "message": str(error)},
+        "metrics": {},
+    }
 
 
 def _prediction_for_sample(
