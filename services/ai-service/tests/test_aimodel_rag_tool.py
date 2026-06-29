@@ -483,6 +483,14 @@ def test_system_prompt_covers_recommendation_comparison_guide_and_policy_faq_sce
     assert "证据不足" in SYSTEM_PROMPT
 
 
+
+
+def test_system_prompt_forbids_source_process_phrases_in_final_answer() -> None:
+    assert "不要在最终回答中声明" in SYSTEM_PROMPT
+    assert "内部知识库" in SYSTEM_PROMPT
+    assert "RAG" in SYSTEM_PROMPT
+    assert "直接给出答案" in SYSTEM_PROMPT
+
 def test_stream_chat_hides_rag_tool_payload_and_internal_ids_from_frontend(
     monkeypatch,
 ) -> None:
