@@ -1076,17 +1076,25 @@
 修改文件：
 
 - `services/ai-service/app/routers/AImodel/service.py`
+- `services/ai-service/tests/test_aimodel_agent.py`
+- `services/ai-service/tests/test_aimodel_rag_tool.py`
 
 实现类/函数：
 
 - `AImodelAgentService.chat_stream()`：编排消息、工具和流式输出。
 - `build_agent_tools()`：构造 Agent 工具列表。
+- `build_rag_tool()`：构造无参数 RAG 工具，工具调用时使用当前 turn 的原始用户问题作为实际 RAG query。
+- `_run_rag_tool()`：执行 RAG MCP 查询并记录本轮工具结果。
 
 验收标准：
 
 - 简单咨询、商品推荐、链接对比和知识问答都能走正确工具。
+- LangChain Agent 只能决定是否调用 `rag_tool`，不能通过工具参数自由生成或改写 RAG 检索 query。
+- `rag_tool` 工具 schema 不暴露 `query` 参数；实际传给 RAG MCP 的 query 必须等于当前用户原始问题。
+- 同一用户 turn 内重复调用 `rag_tool` 时应复用首次 RAG 结果，不重复触发 RAG MCP 查询，也不新增额外 query trace。
+- 需要改写、扩展、多跳或关键词化检索时，由 RAG 子系统内部 QueryProcessor/IntentRouter/Query Planner 负责，并写入 RAG query trace。
 
-测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py -q`
+测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
 
 ##### G6：实现 SSE 流式响应和输出清洗
 
@@ -1120,10 +1128,13 @@
 实现类/函数：
 
 - `link_message_query_trace()`：记录 message_id 和 query_trace_id。
+- `_query_trace_ids_from_tool_results()`：从本轮 RAG 工具结果中提取去重后的 query trace id。
 
 验收标准：
 
 - AImodel 调用 RAG 后可从 message 追溯 query trace。
+- 单个用户 turn 内重复触发 `rag_tool` 时，message 默认只关联本轮复用后的一个 RAG query trace。
+- 关联的 RAG trace `raw_query` 应保持为用户原始问题，避免 Agent 自行生成多个关键词化 query 后导致评估和路由漂移。
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
 

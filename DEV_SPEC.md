@@ -135,6 +135,8 @@ AImodel Agent
 - `request_source` 必须区分 `aimodel`、`mcp`、`query_cli`，便于后续 trace 分析。
 - 前端输出必须过滤原始 tool result、chunk id、trace id 等内部细节。
 - 商品事实优先调用 `mock-api`，RAG 只提供知识上下文。
+- AImodel 可以决定是否调用 RAG，但不能把用户问题自由改写为 RAG 检索 query；`rag_tool` 暴露给 LangChain Agent 时应为无参数工具，实际查询内容绑定当前 turn 的原始用户问题。
+- 同一用户 turn 内多次触发 `rag_tool` 时应复用本轮首次 RAG 结果，避免产生多个语义漂移的 query trace；需要 query rewrite、query expansion 或多跳检索时应交由 RAG 子系统内部实现并写入 RAG query trace。
 - 联网搜索只作为外部公开网页信息补充工具，必须通过 Tavily 受控 API 调用，不允许 Agent 直接访问任意内部 HTTP API。
 - Tavily 工具必须读取 `TAVILY_API_KEY` 和可选 `TAVILY_SEARCH_URL` / `TAVILY_MAX_RESULTS` 配置；未配置 key 时工具应优雅返回不可用结果，不影响商品工具和 RAG 工具。
 
@@ -651,7 +653,10 @@ AImodel service 读取记忆并调用工具
     |
     +--> mock-api 商品事实工具
     |
-    +--> RAG MCP 知识工具
+    +--> 无参数 rag_tool 绑定原始用户问题
+           |
+           v
+        RAG MCP 知识工具
     |
     v
 清洗后的流式回答 + message 持久化
@@ -1757,17 +1762,25 @@ mock-api / PostgreSQL 业务事实
 修改文件：
 
 - `services/ai-service/app/routers/AImodel/service.py`
+- `services/ai-service/tests/test_aimodel_agent.py`
+- `services/ai-service/tests/test_aimodel_rag_tool.py`
 
 实现类/函数：
 
 - `AImodelAgentService.chat_stream()`：编排消息、工具和流式输出。
 - `build_agent_tools()`：构造 Agent 工具列表。
+- `build_rag_tool()`：构造无参数 RAG 工具，工具调用时使用当前 turn 的原始用户问题作为实际 RAG query。
+- `_run_rag_tool()`：执行 RAG MCP 查询并记录本轮工具结果。
 
 验收标准：
 
 - 简单咨询、商品推荐、链接对比和知识问答都能走正确工具。
+- LangChain Agent 只能决定是否调用 `rag_tool`，不能通过工具参数自由生成或改写 RAG 检索 query。
+- `rag_tool` 工具 schema 不暴露 `query` 参数；实际传给 RAG MCP 的 query 必须等于当前用户原始问题。
+- 同一用户 turn 内重复调用 `rag_tool` 时应复用首次 RAG 结果，不重复触发 RAG MCP 查询，也不新增额外 query trace。
+- 需要改写、扩展、多跳或关键词化检索时，由 RAG 子系统内部 QueryProcessor/IntentRouter/Query Planner 负责，并写入 RAG query trace。
 
-测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py -q`
+测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
 
 ##### G6：实现 SSE 流式响应和输出清洗
 
@@ -1801,10 +1814,13 @@ mock-api / PostgreSQL 业务事实
 实现类/函数：
 
 - `link_message_query_trace()`：记录 message_id 和 query_trace_id。
+- `_query_trace_ids_from_tool_results()`：从本轮 RAG 工具结果中提取去重后的 query trace id。
 
 验收标准：
 
 - AImodel 调用 RAG 后可从 message 追溯 query trace。
+- 单个用户 turn 内重复触发 `rag_tool` 时，message 默认只关联本轮复用后的一个 RAG query trace。
+- 关联的 RAG trace `raw_query` 应保持为用户原始问题，避免 Agent 自行生成多个关键词化 query 后导致评估和路由漂移。
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
 

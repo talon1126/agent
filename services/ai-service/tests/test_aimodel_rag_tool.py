@@ -317,7 +317,16 @@ def test_persistent_mcp_rag_client_cleans_loop_when_session_start_fails(tmp_path
     assert after_count == before_count
 
 
-def test_build_rag_tool_invokes_search_shopping_guides_and_tracks_trace() -> None:
+def test_build_rag_tool_binds_original_query_and_reuses_turn_result() -> None:
+    """Protect RAG evaluation from Agent-generated keyword query drift.
+
+    The LangChain-visible RAG tool is intentionally argument-free: the Agent can
+    decide whether to call it, but the actual RAG MCP query must remain the
+    current user turn's original question. A repeated tool call in the same turn
+    should reuse the first result so one assistant message links to one query
+    trace by default.
+    """
+
     tool_results: list[AiModelToolResult] = []
     client = FakeRagKnowledgeClient(
         {
@@ -330,13 +339,28 @@ def test_build_rag_tool_invokes_search_shopping_guides_and_tracks_trace() -> Non
         }
     )
 
-    rag_tool = build_rag_tool(tool_results, rag_client=client)
-    payload = rag_tool.invoke({"query": "降噪耳机怎么选"})
+    rag_tool = build_rag_tool(
+        tool_results,
+        rag_client=client,
+        original_query="空调开机有异味一般是什么原因？",
+    )
+    first_payload = rag_tool.invoke({})
+    second_payload = rag_tool.invoke({"query": "空调异味 霉味 清洗 过滤网"})
 
     assert rag_tool.name == "rag_tool"
-    assert payload["tool"] == "rag_tool"
-    assert payload["ok"] is True
-    assert payload["data"]["trace_id"] == "query-trace-agent"
+    assert first_payload == second_payload
+    assert first_payload["tool"] == "rag_tool"
+    assert first_payload["ok"] is True
+    assert first_payload["data"]["trace_id"] == "query-trace-agent"
+    assert client.calls == [
+        {
+            "query": "空调开机有异味一般是什么原因？",
+            "collection": None,
+            "top_k": 5,
+            "no_rerank": False,
+            "include_image_base64": False,
+        }
+    ]
     assert [result.tool for result in tool_results] == ["rag_tool"]
     assert _query_trace_ids_from_tool_results(tool_results) == ["query-trace-agent"]
 

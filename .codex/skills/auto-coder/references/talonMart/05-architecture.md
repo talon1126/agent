@@ -421,7 +421,10 @@ AImodel service 读取记忆并调用工具
     |
     +--> mock-api 商品事实工具
     |
-    +--> RAG MCP 知识工具
+    +--> 无参数 rag_tool 绑定原始用户问题
+           |
+           v
+        RAG MCP 知识工具
     |
     v
 清洗后的流式回答 + message 持久化

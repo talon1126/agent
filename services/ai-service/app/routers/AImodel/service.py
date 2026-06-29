@@ -273,7 +273,7 @@ def _run_langchain_agent(
         tool_results.append(result)
         return result.model_dump()
 
-    rag_tool = build_rag_tool(tool_results)
+    rag_tool = build_rag_tool(tool_results, original_query=request.message)
     web_search_tool = build_web_search_tool(tool_results)
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
@@ -333,7 +333,7 @@ def _run_langchain_agent_stream(
         tool_results.append(result)
         return result.model_dump()
 
-    rag_tool = build_rag_tool(tool_results)
+    rag_tool = build_rag_tool(tool_results, original_query=request.message)
     web_search_tool = build_web_search_tool(tool_results)
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
@@ -416,45 +416,62 @@ def build_web_search_tool(
 def build_rag_tool(
     tool_results: list[AiModelToolResult],
     *,
+    original_query: str,
     rag_client: RagKnowledgeClient | None = None,
 ) -> Any:
-    """Build the LangChain tool that exposes TalonMart internal RAG knowledge.
+    """Build the argument-free RAG tool exposed to the shopping Agent.
+
+    The Agent is allowed to decide whether internal knowledge is needed, but it
+    must not rewrite the user's question into ad-hoc keyword queries. This tool
+    therefore captures the current turn's original question in a closure and
+    exposes no ``query`` argument to LangChain. Repeated calls in one turn return
+    the first payload so the final assistant message links to one stable RAG
+    query trace by default.
 
     Args:
-        tool_results: Mutable per-request tool result buffer. The returned tool
-            appends its ``AiModelToolResult`` here so the final assistant
-            message can be associated with every consumed RAG query trace.
+        tool_results: Mutable per-request tool result buffer. The first real RAG
+            call appends one ``AiModelToolResult`` here so the final assistant
+            message can be associated with its consumed query trace.
+        original_query: User's current-turn question from ``AiModelChatRequest``.
+            This exact text is sent to RAG MCP regardless of the Agent's hidden
+            planning text.
         rag_client: Optional injectable client used by tests. Production leaves
             this as ``None`` so the H2 MCP stdio client is used.
 
     Returns:
-        A LangChain tool named ``rag_tool``. The tool returns the
-        same public dictionary shape as other AImodel tools, allowing the
-        existing stream filter and trace-id collector to work without special
-        cases.
+        A LangChain tool named ``rag_tool``. The public payload shape matches
+        other AImodel tools, while the schema intentionally exposes no query
+        parameter.
     """
+
+    cached_payload: dict[str, Any] | None = None
+
+    def invoke_rag_for_current_turn() -> dict[str, Any]:
+        """Run RAG once for this turn and reuse the payload on repeated calls."""
+
+        nonlocal cached_payload
+        if cached_payload is None:
+            cached_payload = _run_rag_tool(
+                original_query,
+                tool_results=tool_results,
+                rag_client=rag_client,
+            )
+        return cached_payload
 
     try:
         from langchain.tools import tool
     except ModuleNotFoundError:
         return _SimpleAImodelTool(
             name="rag_tool",
-            handler=lambda query: _run_rag_tool(
-                query,
-                tool_results=tool_results,
-                rag_client=rag_client,
-            ),
+            handler=invoke_rag_for_current_turn,
+            argumentless=True,
         )
 
     @tool("rag_tool")
-    def rag_tool_langchain(query: str) -> dict[str, Any]:
-        """Search TalonMart internal knowledge base and return grounded context."""
+    def rag_tool_langchain() -> dict[str, Any]:
+        """Search TalonMart internal knowledge for the current user question."""
 
-        return _run_rag_tool(
-            query,
-            tool_results=tool_results,
-            rag_client=rag_client,
-        )
+        return invoke_rag_for_current_turn()
 
     return rag_tool_langchain
 
@@ -469,17 +486,27 @@ class _SimpleAImodelTool:
     tool object.
     """
 
-    def __init__(self, *, name: str, handler: Callable[[str], dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        *,
+        name: str,
+        handler: Callable[..., dict[str, Any]],
+        argumentless: bool = False,
+    ) -> None:
         """Store the tool name and synchronous handler.
 
         Args:
             name: Public tool name exposed to the Agent.
-            handler: Function invoked with the user query and returning the
-                public tool payload.
+            handler: Function invoked by tests when LangChain is unavailable.
+                Argument-free tools receive no payload; query tools receive a
+                single string query.
+            argumentless: Whether this fallback tool should ignore invoke
+                payloads and call ``handler`` with no arguments.
         """
 
         self.name = name
         self._handler = handler
+        self._argumentless = argumentless
 
     def invoke(self, payload: dict[str, Any] | str) -> dict[str, Any]:
         """Invoke the fallback tool using LangChain-like arguments.
@@ -492,6 +519,8 @@ class _SimpleAImodelTool:
             Public AImodel tool-result dictionary.
         """
 
+        if self._argumentless:
+            return self._handler()
         query = payload.get("query", "") if isinstance(payload, dict) else payload
         return self._handler(str(query))
 
