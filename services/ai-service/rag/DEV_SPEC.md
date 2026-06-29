@@ -329,8 +329,9 @@ Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Quer
 | 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery` 和 Intent Router 的路由结果，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Intent Router、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
 | Rerank 前候选过滤 | 在精排前过滤候选 | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker |
 | 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
-| Self-RAG 证据决策 | 判断 rerank 后证据是否相关且足够 | **SelfRagController** 位于 rerank 之后、Response Builder 之前；Top2/Top3 分数稳定较高时直接通过；中等置信度时先剔除极低分 chunk，减少 judge 上下文拥挤，再通过一次 LLM 调用同时返回 relevance 与 evidence sufficiency 判断；极低置信度或 judge 不通过时暂时只返回 empty result，不直接调用 Web/Tavily；后续可扩展纠错、重试或外部搜索建议 |
-| 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 先基于 Self-RAG 通过的最终候选生成编号证据块，再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
+| Async Query Runtime | 提升在线查询并发和可控超时能力 | Phase I 新增 `AsyncQueryRuntime` 与 provider async 契约；在线 query、MCP 和 evaluation 可走 async 路径；ingestion 暂不 async 化；同步入口保留兼容包装 |
+| Self-RAG 证据决策 | 判断 rerank 后证据是否相关且足够 | **SelfRagController** 位于 rerank 之后、Response Builder 之前；单 collection 查询直接消费 rerank 结果；多 collection 查询必须先完成各 collection retrieval/rerank，再跨 collection merge，最后只执行一次 Self-RAG judge；Top2/Top3 分数稳定较高时直接通过；中等置信度时先剔除极低分 chunk，减少 judge 上下文拥挤，再通过一次 LLM 调用同时返回 relevance 与 evidence sufficiency 判断；极低置信度或 judge 不通过时暂时只返回 empty result，不直接调用 Web/Tavily；后续可扩展纠错、重试或外部搜索建议 |
+| 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 单 collection 查询基于 Self-RAG 通过的最终候选生成编号证据块；多 collection 查询在跨 collection merge 和单次 Self-RAG 后只执行一次 Response Builder；再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
 
 RRF 融合不直接比较 Dense 分数和 BM25 分数，因为两类分数的量纲不同。融合时基于候选在各自检索结果中的排名进行倒数加权，排名越靠前贡献越大，从而让语义召回和关键词召回都能公平参与最终排序。
 
@@ -693,6 +694,11 @@ retrieval:
   fusion_top_k: 12
   final_top_k: 5
   rrf_k: 60
+  async_enabled: true
+  max_collection_concurrency: 3
+  per_collection_timeout_seconds: 60
+  final_judge_timeout_seconds: 90
+  response_timeout_seconds: 90
   filters:
     include_deleted: false
     default_collection: shopping_guides
@@ -774,6 +780,9 @@ evaluation:
   golden_set_path: tests/fixtures/golden_set.json
   llm_provider: deepseek
   embedding_provider: dashscope
+  async_enabled: true
+  max_sample_concurrency: 2
+  max_metric_concurrency: 2
   metrics:
     retrieval:
       hit_rate_at_k: true
@@ -1457,6 +1466,8 @@ services/ai-service/rag/
 │   │   ├── bm25_analyzer.py                       # 摄取与在线查询共享的 BM25 分词和候选契约
 │   │   ├── query_engine/
 │   │   │   ├── query_processor.py                 # 查询预处理、query normalize 和可选 rewrite
+│   │   │   ├── async_runtime.py                   # 在线查询 async runtime，编排 async provider、并发 collection、单次 Self-RAG 和 Response
+│   │   │   ├── async_adapters.py                  # 将同步 provider 包装为 async 接口的兼容适配层
 │   │   │   ├── hybrid_engine.py                   # 编排 Dense Route、Sparse Route 和融合流程
 │   │   │   ├── dense_route.py                     # Query Embedding 和 pgvector 语义召回
 │   │   │   ├── sparse_route.py                    # BM25 和倒排索引关键词召回
@@ -1654,7 +1665,9 @@ services/ai-service/rag/
 | `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用同一个 analyzer；英文/数字保持 normalize，中文使用 jieba 精确模式分词，避免分析漂移和 ingestion/storage 循环依赖 |
 | `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、关键词提取；不承担业务意图识别 |
 | `src/core/query_engine/intent_router.py` | 执行查询意图识别与路由 | `IntentRouter` 在 Query Processor 之后运行；先按 `intent_routes.yaml` 执行规则路由，再按 `collection_profiles.yaml` 与 `rag_collection_profiles` 执行语义画像路由，最后按配置进入 LLM fallback；输出候选 collection、domain intent、复杂度、检索策略、置信度、命中原因和降级状态，并写入 `intent_routing` trace stage |
-| `src/core/query_engine/parallel_retrieval.py` | 编排多 collection 并行检索 | `ParallelRetrievalController` 消费 Intent Router 或 MCP 传入的 collections，按 collection 并发执行单 collection 检索链路，汇总 per-collection trace、部分失败和最终合并候选，不替代 Dense/Sparse/Hybrid/Rerank 内部逻辑 |
+| `src/core/query_engine/async_runtime.py` | 编排在线查询 async 主链路 | `AsyncQueryRuntime` 只覆盖 query/MCP/evaluation 在线路径；通过 async provider 契约执行 query processing、collection retrieval/rerank、跨 collection merge、单次 Self-RAG 和单次 Response Builder；同步 `QueryRuntime` 保持兼容入口 |
+| `src/core/query_engine/async_adapters.py` | 提供同步 provider 的 async 兼容层 | 使用 `asyncio.to_thread()` 包装尚未原生 async 化的 LLM、Embedding、VectorStore、BM25Indexer、Reranker 和 Response 优化器；统一 timeout、cancel 和错误转换边界 |
+| `src/core/query_engine/parallel_retrieval.py` | 编排多 collection 并行检索 | `ParallelRetrievalController` 消费 Intent Router 或 MCP 传入的 collections，按 collection 并发执行 retrieval/rerank 子链路，汇总 per-collection trace、部分失败和最终合并候选；多 collection 模式下 Self-RAG 和 Response Builder 必须在跨 collection merge 后只执行一次 |
 | `src/core/query_engine/hybrid_engine.py` | 编排混合检索主流程 | `HybridSearch`、Intent Router 结果消费、Dense/BM25 双路召回、RRF Fusion、候选去重、保留过滤前 fusion 快照、rerank 前 metadata 过滤、单路失败降级 |
 | `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
 | `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，直接复用 Chunk.metadata 中的来源字段供 CitationBuilder 使用 |
@@ -1678,8 +1691,8 @@ services/ai-service/rag/
 | `src/libs/loader/loader_factory.py` | 创建 Loader 实现 | 根据文件类型和配置选择 Markdown/PDF Loader |
 | `src/libs/loader/markdown_loader.py` | 加载 Markdown 文档 | 提取标题层级、metadata、图片引用 |
 | `src/libs/loader/pdf_loader.py` | 加载 PDF 文档 | PDF -> Markdown、图片提取、优先按 PyMuPDF 邻近文本锚点插入图片占位符，锚点不可用时再按页标记或稳定追加降级 |
-| `src/libs/llm/base_llm.py` | 定义 LLMClient 抽象接口 | `chat(messages) -> response` |
-| `src/libs/llm/base_vision_llm.py` | 定义 Vision LLM 抽象接口 | `caption_image(image_path, prompt) -> VisionCaptionResponse`，只暴露图片 caption 所需的最小接口 |
+| `src/libs/llm/base_llm.py` | 定义 LLMClient 抽象接口 | `chat(messages) -> response`；Phase I 增加 `async_chat(messages) -> response`，原生 async provider 直接实现，旧同步实现通过适配器兼容 |
+| `src/libs/llm/base_vision_llm.py` | 定义 Vision LLM 抽象接口 | `caption_image(image_path, prompt) -> VisionCaptionResponse`，只暴露图片 caption 所需的最小接口；ingestion 暂不纳入 Phase I async 改造 |
 | `src/libs/llm/llm_factory.py` | 创建 LLMClient | 根据 settings 选择 OpenAI/Azure/Ollama/DeepSeek |
 | `src/libs/llm/openai_client.py` | OpenAI Chat 实现 | OpenAI SDK、统一 messages 输入输出 |
 | `src/libs/llm/azure_openai_client.py` | Azure OpenAI Chat 实现 | Azure endpoint、deployment、api-version |
@@ -1691,15 +1704,15 @@ services/ai-service/rag/
 | `src/libs/splitter/recursive_character_splitter.py` | 包装 LangChain splitter | 只输出文本片段 `List[str]`，不创建业务 `Chunk`，不引入 LangChain RAG 链路 |
 | `src/libs/splitter/markdown_section_splitter.py` | Markdown 结构感知 splitter | 优先按 `###` 构建 section，短 section 合并，长 section 二次切分，表格按行分组并保留表头 |
 | `src/libs/transform/base_transform.py` | 定义 Transform 抽象接口 | `transform(chunks, context) -> chunks`；具体执行顺序由 ingestion pipeline 负责 |
-| `src/libs/embedding/base_embedding.py` | 定义 EmbeddingClient 抽象接口 | `embed(text)`、`embed_batch(texts)` |
+| `src/libs/embedding/base_embedding.py` | 定义 EmbeddingClient 抽象接口 | `embed(text)`、`embed_batch(texts)`；Phase I 增加 `async_embed()` 和 `async_embed_batch()`，用于 query embedding 与 evaluation embedding 并发调用 |
 | `src/libs/embedding/embedding_factory.py` | 创建 EmbeddingClient | 根据配置选择 OpenAI/fake embedding |
 | `src/libs/embedding/openai_embedding.py` | OpenAI 兼容 embedding 实现 | 百炼 `text-embedding-v4`、1536 维、批量调用和响应顺序恢复 |
 | `src/libs/embedding/fake_embedding.py` | 测试 embedding 实现 | 单元测试稳定向量，不访问外部 API |
-| `src/libs/vector_store/base_vector_store.py` | 定义 VectorStore 抽象接口 | `upsert(chunks)`、`search(vector, filters, top_k)` |
+| `src/libs/vector_store/base_vector_store.py` | 定义 VectorStore 抽象接口 | `upsert(chunks)`、`search(vector, filters, top_k)`；Phase I 增加 `async_search()`，upsert 所属 ingestion 路径暂不 async 化 |
 | `src/libs/vector_store/vector_store_factory.py` | 创建向量存储实现 | 首版创建 pgvector store，预留扩展 |
 | `src/libs/vector_store/pgvector_store.py` | pgvector 实现 | PostgreSQL vector(1536)、cosine search、metadata filter；Dense search 直接读取 metadata 并注入 RetrievalResult |
 | `src/libs/vector_store/fake_vector_store.py` | 内存 VectorStore 测试实现 | cosine search、metadata filter、ID 顺序恢复，并与 pgvector 保持 metadata 来源字段契约 |
-| `src/libs/reranker/base_reranker.py` | 定义 Reranker 抽象接口 | `rerank(query, candidates)` |
+| `src/libs/reranker/base_reranker.py` | 定义 Reranker 抽象接口 | `rerank(query, candidates)`；Phase I 增加 `async_rerank()`，LLM reranker 使用原生 async HTTP，Cross-Encoder 可使用受限 executor 或专用推理队列 |
 | `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、LLM Rerank、None/fallback |
 | `src/libs/reranker/cross_encoder_reranker.py` | Cross-Encoder 精排实现 | query-document pair 打分、排序 |
 | `src/libs/reranker/llm_reranker.py` | LLM Rerank 实现 | prompt 驱动排序、超时 fallback |
@@ -2031,6 +2044,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [✔] |
 | Phase G | 质量评估体系 | 黄金测试集、检索指标、配置驱动 Ragas 生成指标、评估脚本进度日志、真实 Query Pipeline 评估入口、AImodel message answer 评估、策略对比和评估趋势 | [✔] |
 | Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调、端到端测试和 MCP 长连接优化 | [✔] |
+| Phase I | Async Query Runtime | 在线 Query/MCP/Evaluation async 化、provider 原生 async、multi-collection 真并发、merge 后单次 Self-RAG 和 Response Builder；暂不改 ingestion async | [ ] |
 
 ### 6.2 交付里程碑
 
@@ -2075,6 +2089,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase F | 可观测与管理平台 | 可观测链路、结构化 trace、Dashboard services、六大页面和 Ingestion 管理页真实摄取操作可用 | TraceContext/TraceController、JSON Lines trace、ingestion/query 打点、Dashboard service DTO、六大 Streamlit 页面、Dashboard 启动脚本、IngestionOperationService 和页面集成测试 | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services/ai-service/rag/tests/integration/test_dashboard_pages.py -v`；`uv run --project services/ai-service/rag python -m src.scripts.run_dashboard --dry-run --port 8504` | 2026-06-09 |
 | Phase G | 质量评估体系 | 质量评估体系支持黄金测试集、检索指标、Ragas 生成质量适配、真实评估进度日志、真实 Query Pipeline 评估入口、策略对比 runner 和评估趋势持久化 | `tests/fixtures/golden_set.json`、黄金样本 schema 校验、Hit Rate@K、MRR、NDCG、配置驱动 Ragas generation metrics、`faithfulness`、`answer_relevancy`、`context_precision`、`context_recall`、可选 `answer_correctness`、`run_evaluation.py`、`EvaluationReporter`、`src/logs/evaluation.log.jsonl`、hybrid/dense_only/sparse_only/rerank 策略对比、evaluation run/results 持久化、Agent-ready final context 评估输入、AImodel message answer 评估输入 | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_evaluation.py -q`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests` | 2026-06-27 |
 | Phase H | AImodel 联调集成 | RAG 独立模块已通过集成前验收，shopping guide RAG 工具已接入 AImodel Agent 工具集合，推荐、链接对比、选购指南和政策 FAQ 场景规则已写入 Agent system prompt，流式前端输出具备 tool result 和内部 ID 防泄漏门禁，AImodel RAG MCP client 可长期复用 stdio 子进程 | Dashboard 六大页面 service-backed 渲染测试、离线摄取到 Hybrid Query 的全链路 E2E、MCP stdio 子进程工具发现、`search_shopping_guides` 工具适配、Agent tool list 接入、商品事实/API 与知识补充/RAG 边界、推荐/对比/指南/FAQ 场景覆盖、message-query-trace 逻辑关联、SSE tool JSON 过滤、chunk id/trace id 可见输出过滤、Persistent MCP client 长期复用子进程、FastAPI shutdown 释放 MCP client | `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_dashboard_pages.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_agent.py -v` | 2026-06-12 |
+| Phase I | Async Query Runtime | 在线查询链路具备 async runtime、provider 原生 async、multi-collection 真并发和统一后处理，保留同步入口兼容且不改 ingestion async | Async provider 契约、SyncToAsync adapters、AsyncQueryRuntime、async ParallelRetrievalController、MCP async tool path、evaluation async sample runner、merge 后单次 Self-RAG 和 Response Builder | `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_async_query_runtime.py services\ai-service\rag\tests\unit\test_mcp_tools.py services\ai-service\rag\tests\unit\test_evaluation.py -v`；真实评估对比 multi collection 平均 query latency |  |
 
 #### 阶段 A 交付里程碑：配置与项目骨架
 
@@ -2241,6 +2256,33 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 
 阶段 G 直接复用 PostgreSQL 中的 evaluation run/result 结构和 Dashboard 评估面板，已完成黄金测试集、自定义检索指标、Ragas adapter、策略对比、评估趋势输出、真实评估进度日志和 AImodel message answer 评估入口。
 
+#### 阶段 I 交付里程碑：Async Query Runtime
+
+完成日期：
+
+项目当前位置：
+
+RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async runtime 执行多 collection 查询。多 collection 查询以 collection 为并发单元执行 retrieval/rerank，跨 collection merge 后统一执行一次 Self-RAG judge 和一次 Response Builder。离线 ingestion 仍保持同步批处理架构。
+
+可用功能：
+
+- Async provider 契约和同步 provider 兼容适配层。
+- AsyncQueryRuntime 在线查询入口。
+- 多 collection 真并发检索与部分失败降级。
+- MCP `query_knowledge_hub` async 调用路径。
+- Evaluation async 样本并发和指标并发限流。
+- Query Trace 中可观察 async collection runs、timeout、partial failure、merge 后 Self-RAG 和 response 阶段。
+
+验证方式：
+
+- `uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_async_query_runtime.py services\ai-service\rag\tests\unit\test_mcp_tools.py services\ai-service\rag\tests\unit\test_evaluation.py -v`
+- `$env:DATABASE_URL='postgresql://agent:agent@localhost:5432/agent_ops'; uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
+- 使用 first10/last10 golden set 对比 async 前后的平均查询耗时、RAG trace 数量、Self-RAG judge 调用次数和 Ragas 指标。
+
+下一阶段入口：
+
+- 根据 async 查询链路效果决定是否继续对 ingestion 的 image caption、document summary 和 embedding batch 做 async/batch 优化。
+
 ### 6.3 阶段任务跟踪表
 
 任务拆分原则：
@@ -2366,6 +2408,17 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | H6 | 完成前后端联调和端到端测试 | [✔] | 2026-06-12 | AImodel SSE 输出过滤原始 RAG tool JSON，并移除普通文本和跨流片段形式的 `chunk_id`、`trace_id` 等内部标识；前端可见 delta、done answer 和持久化 assistant message 均使用清洗后的回答；25 个 AImodel 目标测试通过，ruff 通过 |
 | H7 | 优化 AImodel MCP 长连接 | [✔] | 2026-06-12 | `get_rag_knowledge_client()` 返回进程级 `PersistentMcpRagKnowledgeClient`，RAG stdio MCP 子进程和 `ClientSession` 在多次 RAG 查询间复用；FastAPI shutdown 调用 `close_rag_knowledge_client()` 释放资源，未创建过 client 时 shutdown 不会启动新 MCP 资源，session 启动失败会清理后台事件循环；AImodel 通过 MCP 调用 RAG 时 `request_source=aimodel`，直接 MCP 调用默认 `request_source=mcp`，CLI 保持 `request_source=query_cli`；ai-service Docker 镜像包含 RAG 子项目并可在 `/app/rag` 浅路径启动 MCP；H7 目标回归测试、MCP 工具测试、Query Runtime 测试和 AImodel RAG 工具测试通过，ruff 通过 |
 
+#### 阶段 I：Async Query Runtime
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| I1 | 定义 async provider 契约与兼容适配层 | [✔] | 2026-06-29 | 为 LLM、Embedding、VectorStore 和 Reranker 补充默认 async 最小接口；新增 SyncToAsync adapters，支持 timeout 与 cancellation；同步 retrieval/evaluation async 配置；158 个相关单元测试和 ruff 通过 |
+| I2 | 实现 provider 原生 async 化 | [ ] |  | OpenAI-compatible/DeepSeek/CCSwitch/DashScope 相关在线查询 provider 使用原生 async HTTP client；PostgreSQL/pgvector/BM25 查询路径提供 async 方法；Cross-Encoder 采用受限 executor 或专用推理队列，不阻塞事件循环 |
+| I3 | 实现 AsyncQueryRuntime | [ ] |  | 新增在线查询 async runtime，串联 query processing、intent routing、hybrid retrieval、rerank、Self-RAG 和 Response Builder；保留同步 `QueryRuntime` 兼容包装，CLI/MCP 可通过配置选择 async 路径 |
+| I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [ ] |  | 每个 collection 并发执行 retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断；只执行一次 Self-RAG judge 和一次 Response Builder；支持 max concurrency、per-collection timeout、partial failure 和 trace 汇总 |
+| I5 | 接入 MCP 与 evaluation async 路径 | [ ] |  | `query_knowledge_hub` await async runtime；evaluation 支持 async sample concurrency 和 metric concurrency；保留限流、timeout、取消和失败样本记录 |
+| I6 | 完成 async 查询验收与性能对比 | [ ] |  | 单元、集成和 MCP contract 测试覆盖 async 路径；用 first10/last10 golden set 对比同步链路与 async 链路的 query latency、trace 数量、Self-RAG judge 次数和评估指标变化 |
+
 ### 6.4 总体进度表
 
 | 阶段 | 总任务数 | 已完成 | 进度 |
@@ -2378,7 +2431,8 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 | Phase F | 12 | 12 | 100% |
 | Phase G | 6 | 6 | 100% |
 | Phase H | 7 | 7 | 100% |
-| **总计** | **74** | **74** | **100%** |
+| Phase I | 6 | 1 | 16.7% |
+| **总计** | **80** | **75** | **93.8%** |
 
 ### 6.5 阶段实施明细
 
@@ -3977,6 +4031,178 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 验收标准：同一个 client 连续两次 `query_knowledge_hub()` 只初始化一次 MCP session；调用 `close()` 后再次查询会重新创建 session；未创建过进程级 client 时 shutdown 不会创建新 MCP 资源；session 启动失败时不会残留后台事件循环线程；`search_shopping_guides()` 仍只返回公共 RAG 字段；AImodel 触发的 query trace 记录 `request_source=aimodel`，直接 MCP 工具调用记录 `request_source=mcp`，CLI 脚本记录 `request_source=query_cli`；单元测试不得启动真实 RAG 子进程；Docker 启动的 `ai-service` 容器内存在 `/app/rag`，并可通过 AImodel 前端代理请求触发 RAG query trace。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py -v`；`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py services\ai-service\rag\tests\unit\test_retrieval.py services\ai-service\tests\test_aimodel_rag_tool.py -q`；`uv run --project services/ai-service/rag ruff check services\ai-service\app\routers\AImodel\tools.py services\ai-service\app\main.py services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\rag\src\mcp_server\server.py services\ai-service\rag\src\mcp_server\tools.py services\ai-service\rag\src\scripts\query.py services\ai-service\rag\tests\unit\test_mcp_tools.py services\ai-service\rag\tests\unit\test_retrieval.py`
+
+#### 阶段 I：Async Query Runtime 实施明细
+
+##### I1：定义 async provider 契约与兼容适配层
+
+目标：为在线 query、MCP 和 evaluation 链路建立 async 调用边界，同时保留现有同步 provider 可用性。
+
+修改文件：
+
+- `config/settings.example.yaml`
+- `config/settings.yaml`
+- `src/core/config.py`
+- `src/core/query_engine/async_adapters.py`
+- `src/libs/llm/base_llm.py`
+- `src/libs/embedding/base_embedding.py`
+- `src/libs/vector_store/base_vector_store.py`
+- `src/libs/reranker/base_reranker.py`
+- `tests/unit/test_config.py`
+- `tests/unit/test_async_query_runtime.py`
+
+实现类/函数：
+
+- `AsyncProviderSettings`：读取 async 开关、并发数和 timeout。
+- `BaseLLM.async_chat()`：LLM async 最小接口，默认通过兼容适配层调用同步 `chat()`。
+- `BaseEmbedding.async_embed()`：query embedding async 最小接口。
+- `BaseEmbedding.async_embed_batch()`：evaluation embedding async 批量接口。
+- `BaseVectorStore.async_search()`：在线向量检索 async 最小接口。
+- `BaseReranker.async_rerank()`：在线 rerank async 最小接口。
+- `SyncToAsyncLLMAdapter`：用 `asyncio.to_thread()` 包装同步 LLM。
+- `SyncToAsyncEmbeddingAdapter`：用 `asyncio.to_thread()` 包装同步 embedding。
+- `SyncToAsyncVectorStoreAdapter`：用 `asyncio.to_thread()` 包装同步 vector store。
+- `SyncToAsyncRerankerAdapter`：用 `asyncio.to_thread()` 包装同步 reranker。
+
+验收标准：async 接口必须保持与同步接口一致的输入输出契约；旧 provider 不实现原生 async 时仍可通过 adapter 使用；adapter 必须支持 timeout、cancel 后错误转换和 trace-safe 错误消息；配置新增项必须同步 `settings.example.yaml` 与本地 `settings.yaml` 结构，不提交本地 secret；单元测试不得真实调用外部 API。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_config.py services\ai-service\rag\tests\unit\test_async_query_runtime.py -v`
+
+##### I2：实现 provider 原生 async 化
+
+目标：把在线查询使用的外部 I/O provider 改为原生 async，减少线程池依赖并提升并发查询吞吐。
+
+修改文件：
+
+- `src/libs/llm/openai_compatible_llm.py`
+- `src/libs/llm/deepseek_client.py`
+- `src/libs/llm/ccswitch_client.py`
+- `src/libs/embedding/openai_embedding.py`
+- `src/libs/vector_store/pgvector_store.py`
+- `src/storage/bm25_storage.py`
+- `src/ingestion/embedding/bm25_indexer.py`
+- `src/libs/reranker/llm_reranker.py`
+- `src/libs/reranker/cross_encoder_reranker.py`
+- `tests/unit/test_model_providers.py`
+- `tests/unit/test_retrieval.py`
+
+实现类/函数：
+
+- `OpenAICompatibleLLM.async_chat()`：使用 async HTTP client 调用 OpenAI-compatible chat endpoint。
+- `OpenAIEmbedding.async_embed()`：使用 async HTTP client 调用 embedding endpoint。
+- `OpenAIEmbedding.async_embed_batch()`：保持批量输入输出顺序。
+- `PgVectorStore.async_search()`：执行 async pgvector 查询并返回 `RetrievalResult`。
+- `BM25Storage.async_query()`：执行 async BM25 posting 查询。
+- `BM25Indexer.async_query()`：为在线 sparse route 暴露 async 查询入口。
+- `LLMReranker.async_rerank()`：使用 async LLM 调用执行 rerank。
+- `CrossEncoderReranker.async_rerank()`：使用受限 executor 或专用推理队列执行本地模型推理。
+
+验收标准：OpenAI-compatible、DeepSeek、CCSwitch 和 DashScope 相关在线 provider 应优先使用原生 async；PostgreSQL/pgvector/BM25 在线查询必须提供 async 方法；Cross-Encoder 不得阻塞事件循环；provider async 方法与同步方法在 fake input 下返回等价结构；外部 provider 真实调用继续使用 external marker 隔离。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_model_providers.py services\ai-service\rag\tests\unit\test_retrieval.py -v`
+
+##### I3：实现 AsyncQueryRuntime
+
+目标：新增在线查询 async runtime，作为 MCP、query.py 和 evaluation 的 async 主入口，同时保留同步 `QueryRuntime` 兼容路径。
+
+修改文件：
+
+- `src/core/query_engine/async_runtime.py`
+- `src/core/query_engine/__init__.py`
+- `src/scripts/query.py`
+- `src/core/trace/trace_controller.py`
+- `tests/unit/test_async_query_runtime.py`
+- `tests/integration/test_query_pipeline.py`
+
+实现类/函数：
+
+- `AsyncQueryRuntime.execute()`：async 查询主入口，返回与同步 runtime 等价的公开响应。
+- `AsyncQueryRuntime._process_query()`：执行 query normalize、rewrite 和 intent routing。
+- `AsyncQueryRuntime._search_single_collection()`：执行单 collection hybrid retrieval、filter 和 rerank。
+- `AsyncQueryRuntime._apply_self_rag()`：对最终候选执行一次证据决策。
+- `AsyncQueryRuntime._build_response()`：对最终候选执行一次 Response Builder。
+- `build_async_query_runtime()`：按 settings 构建 async runtime 依赖。
+- `run_query_cli()`：支持配置驱动选择 async runtime，输出契约保持兼容。
+
+验收标准：`AsyncQueryRuntime` 必须覆盖 query processing、intent routing、hybrid retrieval、rerank、Self-RAG 和 Response Builder；单 collection 结果与同步 runtime 在 fake provider 下等价；同步 `QueryRuntime` 不删除，旧测试继续通过；async runtime 的 trace stage 名称与现有 query trace 兼容；CLI 输出 JSON 和 verbose 字段保持稳定。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_async_query_runtime.py services\ai-service\rag\tests\integration\test_query_pipeline.py -v`
+
+##### I4：实现 multi-collection 真并发与 merge 后统一后处理
+
+目标：将多 collection 从顺序编排升级为真正并发执行，并把 Self-RAG judge 和 Response Builder 移到跨 collection merge 后只执行一次。
+
+修改文件：
+
+- `src/core/query_engine/parallel_retrieval.py`
+- `src/core/query_engine/async_runtime.py`
+- `src/core/query_engine/trace_snapshots.py`
+- `src/core/trace/trace_context.py`
+- `tests/unit/test_async_query_runtime.py`
+- `tests/unit/test_retrieval.py`
+- `tests/unit/test_trace_context.py`
+
+实现类/函数：
+
+- `AsyncParallelRetrievalController.search()`：使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子任务。
+- `AsyncParallelRetrievalController._run_collection()`：为单个 collection 执行 retrieval/rerank，不执行最终 Self-RAG 或 Response。
+- `AsyncParallelRetrievalController._merge_collection_results()`：跨 collection 合并结果并统一 top_k 截断。
+- `AsyncParallelRetrievalController._record_trace()`：记录 collection runs、timeout、partial failure、merge snapshot 和 child trace id。
+- `AsyncQueryRuntime._finalize_merged_results()`：对 merge 后候选执行一次 Self-RAG 和一次 Response Builder。
+
+验收标准：多 collection 查询必须用 `asyncio.gather()` 或等价任务编排并发执行 collection 子任务；每个 collection 只执行 retrieval/rerank 子链路；Self-RAG judge 和 Response Builder 对 merge 后最终候选只调用一次；支持 `retrieval.max_collection_concurrency`、`retrieval.per_collection_timeout_seconds`、partial failure、全部 empty 和全部失败；trace 中必须能看出 collection 级耗时和最终统一后处理耗时；单元测试必须验证两个中置信 collection 不会触发两次 Self-RAG LLM judge。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_async_query_runtime.py services\ai-service\rag\tests\unit\test_retrieval.py services\ai-service\rag\tests\unit\test_trace_context.py -v`
+
+##### I5：接入 MCP 与 evaluation async 路径
+
+目标：让外部 MCP 调用和评估脚本消费 async runtime，并为评估提供可控样本并发和指标并发。
+
+修改文件：
+
+- `src/mcp_server/tools.py`
+- `src/mcp_server/server.py`
+- `src/scripts/run_evaluation.py`
+- `src/observability/evaluation/runner.py`
+- `src/observability/evaluation/ragas_adapter.py`
+- `tests/unit/test_mcp_tools.py`
+- `tests/unit/test_evaluation.py`
+
+实现类/函数：
+
+- `QueryKnowledgeHubTool.query_knowledge_hub()`：await async runtime，并保留 MCP 公共输出契约。
+- `_default_async_runtime_builder()`：为 MCP 创建 async runtime。
+- `run_evaluation_async()`：按 golden samples 并发构造 predictions。
+- `EvaluationAsyncLimiter`：限制 sample concurrency 和 metric concurrency。
+- `RagasEvaluatorClient.async_evaluate_with_samples()`：在 Ragas 支持 async 时走 async 指标调用，否则受限降级到同步包装。
+
+验收标准：MCP `query_knowledge_hub` 保持 schema 和错误 envelope 不变；async path 必须写入与同步 path 等价的 query trace 和 query_result；evaluation 支持 `evaluation.async_enabled`、`max_sample_concurrency` 和 `max_metric_concurrency`；评估失败样本必须记录 error，不得因为单样本失败中断已完成样本持久化；Ragas 调用日志继续保留 provider/model/耗时观测。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py services\ai-service\rag\tests\unit\test_evaluation.py -v`
+
+##### I6：完成 async 查询验收与性能对比
+
+目标：验证 async 链路正确性、可观测性和性能收益，形成可复现的 before/after 对比。
+
+修改文件：
+
+- `tests/unit/test_async_query_runtime.py`
+- `tests/integration/test_query_pipeline.py`
+- `tests/e2e/test_full_rag_flow.py`
+- `data/resume/async_query_runtime.md`
+- `src/scripts/run_evaluation.py`
+
+实现类/函数：
+
+- `test_async_query_runtime_matches_sync_contract()`：验证 async 与 sync 输出契约一致。
+- `test_multi_collection_async_runs_collections_concurrently()`：验证 collection 并发而非顺序执行。
+- `test_multi_collection_runs_one_self_rag_and_one_response()`：验证 merge 后统一后处理。
+- `test_async_mcp_query_knowledge_hub_contract()`：验证 MCP async tool 输出安全字段。
+- `async_query_performance_report()`：汇总 first10/last10 latency、trace 数量、judge 次数和指标变化。
+
+验收标准：async 链路相关单元、集成和 MCP contract 测试通过；first10/last10 对比报告必须记录平均查询耗时、P95、RAG trace 数量、Self-RAG judge 次数、Response Builder 次数和 Ragas 指标变化；若 async 指标下降或超时增加，报告必须说明原因和下一步优化建议；`data/resume/async_query_runtime.md` 只记录可用于项目复盘的量化结果，不包含 secret、完整 prompt 或用户隐私数据。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_async_query_runtime.py services\ai-service\rag\tests\integration\test_query_pipeline.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ## 7. 开发规范
 

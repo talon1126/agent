@@ -94,6 +94,8 @@ services/ai-service/rag/
 │   │   ├── bm25_analyzer.py                       # 摄取与在线查询共享的 BM25 分词和候选契约
 │   │   ├── query_engine/
 │   │   │   ├── query_processor.py                 # 查询预处理、query normalize 和可选 rewrite
+│   │   │   ├── async_runtime.py                   # 在线查询 async runtime，编排 async provider、并发 collection、单次 Self-RAG 和 Response
+│   │   │   ├── async_adapters.py                  # 将同步 provider 包装为 async 接口的兼容适配层
 │   │   │   ├── hybrid_engine.py                   # 编排 Dense Route、Sparse Route 和融合流程
 │   │   │   ├── dense_route.py                     # Query Embedding 和 pgvector 语义召回
 │   │   │   ├── sparse_route.py                    # BM25 和倒排索引关键词召回
@@ -291,7 +293,9 @@ services/ai-service/rag/
 | `src/core/bm25_analyzer.py` | 统一 BM25 词法分析和候选契约 | 摄取与在线查询复用同一个 analyzer；英文/数字保持 normalize，中文使用 jieba 精确模式分词，避免分析漂移和 ingestion/storage 循环依赖 |
 | `src/core/query_engine/query_processor.py` | 处理用户 query | normalize、可选 rewrite、collection/top_k 解析、关键词提取；不承担业务意图识别 |
 | `src/core/query_engine/intent_router.py` | 执行查询意图识别与路由 | `IntentRouter` 在 Query Processor 之后运行；先按 `intent_routes.yaml` 执行规则路由，再按 `collection_profiles.yaml` 与 `rag_collection_profiles` 执行语义画像路由，最后按配置进入 LLM fallback；输出候选 collection、domain intent、复杂度、检索策略、置信度、命中原因和降级状态，并写入 `intent_routing` trace stage |
-| `src/core/query_engine/parallel_retrieval.py` | 编排多 collection 并行检索 | `ParallelRetrievalController` 消费 Intent Router 或 MCP 传入的 collections，按 collection 并发执行单 collection 检索链路，汇总 per-collection trace、部分失败和最终合并候选，不替代 Dense/Sparse/Hybrid/Rerank 内部逻辑 |
+| `src/core/query_engine/async_runtime.py` | 编排在线查询 async 主链路 | `AsyncQueryRuntime` 只覆盖 query/MCP/evaluation 在线路径；通过 async provider 契约执行 query processing、collection retrieval/rerank、跨 collection merge、单次 Self-RAG 和单次 Response Builder；同步 `QueryRuntime` 保持兼容入口 |
+| `src/core/query_engine/async_adapters.py` | 提供同步 provider 的 async 兼容层 | 使用 `asyncio.to_thread()` 包装尚未原生 async 化的 LLM、Embedding、VectorStore、BM25Indexer、Reranker 和 Response 优化器；统一 timeout、cancel 和错误转换边界 |
+| `src/core/query_engine/parallel_retrieval.py` | 编排多 collection 并行检索 | `ParallelRetrievalController` 消费 Intent Router 或 MCP 传入的 collections，按 collection 并发执行 retrieval/rerank 子链路，汇总 per-collection trace、部分失败和最终合并候选；多 collection 模式下 Self-RAG 和 Response Builder 必须在跨 collection merge 后只执行一次 |
 | `src/core/query_engine/hybrid_engine.py` | 编排混合检索主流程 | `HybridSearch`、Intent Router 结果消费、Dense/BM25 双路召回、RRF Fusion、候选去重、保留过滤前 fusion 快照、rerank 前 metadata 过滤、单路失败降级 |
 | `src/core/query_engine/dense_route.py` | 执行语义向量召回 | Query Embedding、pgvector search、返回 `RetrievalResult(chunk_id,text,score,metadata)` |
 | `src/core/query_engine/sparse_route.py` | 执行关键词召回 | `ProcessedQuery.keywords`、`bm25_indexer.query()`、`vector_store.get_by_ids()` 回表、返回 `RetrievalResult`，直接复用 Chunk.metadata 中的来源字段供 CitationBuilder 使用 |
@@ -315,8 +319,8 @@ services/ai-service/rag/
 | `src/libs/loader/loader_factory.py` | 创建 Loader 实现 | 根据文件类型和配置选择 Markdown/PDF Loader |
 | `src/libs/loader/markdown_loader.py` | 加载 Markdown 文档 | 提取标题层级、metadata、图片引用 |
 | `src/libs/loader/pdf_loader.py` | 加载 PDF 文档 | PDF -> Markdown、图片提取、优先按 PyMuPDF 邻近文本锚点插入图片占位符，锚点不可用时再按页标记或稳定追加降级 |
-| `src/libs/llm/base_llm.py` | 定义 LLMClient 抽象接口 | `chat(messages) -> response` |
-| `src/libs/llm/base_vision_llm.py` | 定义 Vision LLM 抽象接口 | `caption_image(image_path, prompt) -> VisionCaptionResponse`，只暴露图片 caption 所需的最小接口 |
+| `src/libs/llm/base_llm.py` | 定义 LLMClient 抽象接口 | `chat(messages) -> response`；Phase I 增加 `async_chat(messages) -> response`，原生 async provider 直接实现，旧同步实现通过适配器兼容 |
+| `src/libs/llm/base_vision_llm.py` | 定义 Vision LLM 抽象接口 | `caption_image(image_path, prompt) -> VisionCaptionResponse`，只暴露图片 caption 所需的最小接口；ingestion 暂不纳入 Phase I async 改造 |
 | `src/libs/llm/llm_factory.py` | 创建 LLMClient | 根据 settings 选择 OpenAI/Azure/Ollama/DeepSeek |
 | `src/libs/llm/openai_client.py` | OpenAI Chat 实现 | OpenAI SDK、统一 messages 输入输出 |
 | `src/libs/llm/azure_openai_client.py` | Azure OpenAI Chat 实现 | Azure endpoint、deployment、api-version |
@@ -328,15 +332,15 @@ services/ai-service/rag/
 | `src/libs/splitter/recursive_character_splitter.py` | 包装 LangChain splitter | 只输出文本片段 `List[str]`，不创建业务 `Chunk`，不引入 LangChain RAG 链路 |
 | `src/libs/splitter/markdown_section_splitter.py` | Markdown 结构感知 splitter | 优先按 `###` 构建 section，短 section 合并，长 section 二次切分，表格按行分组并保留表头 |
 | `src/libs/transform/base_transform.py` | 定义 Transform 抽象接口 | `transform(chunks, context) -> chunks`；具体执行顺序由 ingestion pipeline 负责 |
-| `src/libs/embedding/base_embedding.py` | 定义 EmbeddingClient 抽象接口 | `embed(text)`、`embed_batch(texts)` |
+| `src/libs/embedding/base_embedding.py` | 定义 EmbeddingClient 抽象接口 | `embed(text)`、`embed_batch(texts)`；Phase I 增加 `async_embed()` 和 `async_embed_batch()`，用于 query embedding 与 evaluation embedding 并发调用 |
 | `src/libs/embedding/embedding_factory.py` | 创建 EmbeddingClient | 根据配置选择 OpenAI/fake embedding |
 | `src/libs/embedding/openai_embedding.py` | OpenAI 兼容 embedding 实现 | 百炼 `text-embedding-v4`、1536 维、批量调用和响应顺序恢复 |
 | `src/libs/embedding/fake_embedding.py` | 测试 embedding 实现 | 单元测试稳定向量，不访问外部 API |
-| `src/libs/vector_store/base_vector_store.py` | 定义 VectorStore 抽象接口 | `upsert(chunks)`、`search(vector, filters, top_k)` |
+| `src/libs/vector_store/base_vector_store.py` | 定义 VectorStore 抽象接口 | `upsert(chunks)`、`search(vector, filters, top_k)`；Phase I 增加 `async_search()`，upsert 所属 ingestion 路径暂不 async 化 |
 | `src/libs/vector_store/vector_store_factory.py` | 创建向量存储实现 | 首版创建 pgvector store，预留扩展 |
 | `src/libs/vector_store/pgvector_store.py` | pgvector 实现 | PostgreSQL vector(1536)、cosine search、metadata filter；Dense search 直接读取 metadata 并注入 RetrievalResult |
 | `src/libs/vector_store/fake_vector_store.py` | 内存 VectorStore 测试实现 | cosine search、metadata filter、ID 顺序恢复，并与 pgvector 保持 metadata 来源字段契约 |
-| `src/libs/reranker/base_reranker.py` | 定义 Reranker 抽象接口 | `rerank(query, candidates)` |
+| `src/libs/reranker/base_reranker.py` | 定义 Reranker 抽象接口 | `rerank(query, candidates)`；Phase I 增加 `async_rerank()`，LLM reranker 使用原生 async HTTP，Cross-Encoder 可使用受限 executor 或专用推理队列 |
 | `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、LLM Rerank、None/fallback |
 | `src/libs/reranker/cross_encoder_reranker.py` | Cross-Encoder 精排实现 | query-document pair 打分、排序 |
 | `src/libs/reranker/llm_reranker.py` | LLM Rerank 实现 | prompt 驱动排序、超时 fallback |

@@ -235,7 +235,7 @@ class RetrievalFiltersSettings(ConfigSection):
 
 
 class RetrievalSettings(ConfigSection):
-    """Define candidate limits, RRF parameters, and default filters."""
+    """Define candidate limits, async runtime knobs, and default filters."""
 
     query_rewrite_enabled: bool = True
     dense_top_k: int = Field(gt=0)
@@ -243,6 +243,11 @@ class RetrievalSettings(ConfigSection):
     fusion_top_k: int = Field(gt=0)
     final_top_k: int = Field(gt=0)
     rrf_k: int = Field(gt=0)
+    async_enabled: bool = True
+    max_collection_concurrency: int = Field(default=3, gt=0)
+    per_collection_timeout_seconds: int = Field(default=60, gt=0)
+    final_judge_timeout_seconds: int = Field(default=90, gt=0)
+    response_timeout_seconds: int = Field(default=90, gt=0)
     filters: RetrievalFiltersSettings
 
     @model_validator(mode="after")
@@ -497,12 +502,15 @@ class EvaluationAImodelSettings(ConfigSection):
 
 
 class EvaluationSettings(ConfigSection):
-    """Describe the golden dataset and configured quality metrics."""
+    """Describe the golden dataset, metrics, and async evaluation limits."""
 
     golden_set_path: str
     answer_source: str = Field(default="message", pattern="^(message|rag)$")
     llm_provider: str = Field(min_length=1)
     embedding_provider: str = Field(min_length=1)
+    async_enabled: bool = True
+    max_sample_concurrency: int = Field(default=2, gt=0)
+    max_metric_concurrency: int = Field(default=2, gt=0)
     aimodel: EvaluationAImodelSettings = Field(default_factory=EvaluationAImodelSettings)
     ragas: EvaluationRagasSettings = Field(default_factory=EvaluationRagasSettings)
     metrics: EvaluationMetricsSettings = Field(default_factory=EvaluationMetricsSettings)

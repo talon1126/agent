@@ -5,13 +5,14 @@ storage engines. The interface accepts validated ``Chunk`` objects plus dense
 vectors, returns provider-independent ``RetrievalResult`` objects for semantic
 search, and supports ordered ID lookup for the BM25 sparse route.
 
-This module deliberately contains no PostgreSQL or pgvector code. The concrete
-adapter introduced in B12 owns SQL, connection management, distance operators,
-and metadata-filter translation.
+This module deliberately contains no PostgreSQL or pgvector code. Concrete
+adapters own SQL, connection management, distance operators, and
+metadata-filter translation.
 """
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -42,6 +43,35 @@ class BaseVectorStore(ABC):
             ProviderError: Concrete providers may raise this when persistence
                 fails.
         """
+
+    async def async_search(
+        self,
+        vector: Sequence[float],
+        *,
+        filters: Mapping[str, Any] | None = None,
+        top_k: int = 10,
+    ) -> list[RetrievalResult]:
+        """Return dense-search results without blocking the event-loop caller.
+
+        Args:
+            vector: Dense query vector using the store's configured dimensions.
+            filters: Optional exact-match metadata constraints.
+            top_k: Maximum number of results to return.
+
+        Returns:
+            Results ordered from highest to lowest provider-native similarity.
+
+        Raises:
+            ValueError: If the vector or result limit is invalid.
+            ProviderError: Concrete providers may raise this when search fails.
+        """
+
+        return await asyncio.to_thread(
+            self.search,
+            vector,
+            filters=filters,
+            top_k=top_k,
+        )
 
     @abstractmethod
     def search(

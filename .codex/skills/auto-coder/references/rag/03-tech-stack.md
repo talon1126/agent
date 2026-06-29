@@ -148,8 +148,9 @@ Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Quer
 | 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery` 和 Intent Router 的路由结果，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Intent Router、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
 | Rerank 前候选过滤 | 在精排前过滤候选 | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker |
 | 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
-| Self-RAG 证据决策 | 判断 rerank 后证据是否相关且足够 | **SelfRagController** 位于 rerank 之后、Response Builder 之前；Top2/Top3 分数稳定较高时直接通过；中等置信度时先剔除极低分 chunk，减少 judge 上下文拥挤，再通过一次 LLM 调用同时返回 relevance 与 evidence sufficiency 判断；极低置信度或 judge 不通过时暂时只返回 empty result，不直接调用 Web/Tavily；后续可扩展纠错、重试或外部搜索建议 |
-| 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 先基于 Self-RAG 通过的最终候选生成编号证据块，再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
+| Async Query Runtime | 提升在线查询并发和可控超时能力 | Phase I 新增 `AsyncQueryRuntime` 与 provider async 契约；在线 query、MCP 和 evaluation 可走 async 路径；ingestion 暂不 async 化；同步入口保留兼容包装 |
+| Self-RAG 证据决策 | 判断 rerank 后证据是否相关且足够 | **SelfRagController** 位于 rerank 之后、Response Builder 之前；单 collection 查询直接消费 rerank 结果；多 collection 查询必须先完成各 collection retrieval/rerank，再跨 collection merge，最后只执行一次 Self-RAG judge；Top2/Top3 分数稳定较高时直接通过；中等置信度时先剔除极低分 chunk，减少 judge 上下文拥挤，再通过一次 LLM 调用同时返回 relevance 与 evidence sufficiency 判断；极低置信度或 judge 不通过时暂时只返回 empty result，不直接调用 Web/Tavily；后续可扩展纠错、重试或外部搜索建议 |
+| 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 单 collection 查询基于 Self-RAG 通过的最终候选生成编号证据块；多 collection 查询在跨 collection merge 和单次 Self-RAG 后只执行一次 Response Builder；再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
 
 RRF 融合不直接比较 Dense 分数和 BM25 分数，因为两类分数的量纲不同。融合时基于候选在各自检索结果中的排名进行倒数加权，排名越靠前贡献越大，从而让语义召回和关键词召回都能公平参与最终排序。
 
@@ -512,6 +513,11 @@ retrieval:
   fusion_top_k: 12
   final_top_k: 5
   rrf_k: 60
+  async_enabled: true
+  max_collection_concurrency: 3
+  per_collection_timeout_seconds: 60
+  final_judge_timeout_seconds: 90
+  response_timeout_seconds: 90
   filters:
     include_deleted: false
     default_collection: shopping_guides
@@ -593,6 +599,9 @@ evaluation:
   golden_set_path: tests/fixtures/golden_set.json
   llm_provider: deepseek
   embedding_provider: dashscope
+  async_enabled: true
+  max_sample_concurrency: 2
+  max_metric_concurrency: 2
   metrics:
     retrieval:
       hit_rate_at_k: true

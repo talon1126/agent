@@ -123,6 +123,11 @@ retrieval:
   fusion_top_k: 12
   final_top_k: 5
   rrf_k: 60
+  async_enabled: true
+  max_collection_concurrency: 3
+  per_collection_timeout_seconds: 60
+  final_judge_timeout_seconds: 90
+  response_timeout_seconds: 90
   filters:
     include_deleted: false
     default_collection: shopping_guides
@@ -228,6 +233,9 @@ evaluation:
   answer_source: message
   llm_provider: deepseek
   embedding_provider: dashscope
+  async_enabled: true
+  max_sample_concurrency: 2
+  max_metric_concurrency: 2
   aimodel:
     chat_url: http://127.0.0.1:8001/AImodel/chat
     user_id: 1

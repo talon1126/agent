@@ -8,6 +8,7 @@ OpenAI, Azure, Ollama, DeepSeek, or DashScope SDK response objects.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Literal
 
@@ -92,6 +93,25 @@ class LLMResponse(ChatModel):
 
 class BaseLLM(ABC):
     """Provide the minimal unified chat interface for all LLM providers."""
+
+    async def async_chat(self, messages: list[ChatMessage]) -> LLMResponse:
+        """Generate one response without blocking the event-loop caller.
+
+        Args:
+            messages: Ordered messages already rendered by prompts or business
+                logic. Implementations should not mutate this list.
+
+        Returns:
+            Provider-independent response text and trace-safe metadata.
+
+        Raises:
+            ProviderError: Implementations raise this for provider timeouts,
+                invalid SDK responses, rate limits, or transport failures. The
+                default compatibility path delegates to ``chat()`` in a worker
+                thread until concrete providers add native async transports.
+        """
+
+        return await asyncio.to_thread(self.chat, messages)
 
     @abstractmethod
     def chat(self, messages: list[ChatMessage]) -> LLMResponse:
