@@ -369,6 +369,58 @@ def test_stream_chat_associates_rag_trace_ids_with_the_assistant_message(
     ]
 
 
+def test_stream_chat_persists_agent_trace_without_answer_summary(monkeypatch) -> None:
+    """Each streamed Agent turn should persist route/tool/RAG trace diagnostics."""
+
+    class RecordingMemoryStore(NoopAiModelMemoryStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_traces: list[dict] = []
+
+        def persist_agent_trace(self, trace_record: dict) -> None:
+            self.agent_traces.append(trace_record)
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    memory_store = RecordingMemoryStore()
+
+    def fake_streaming_agent_runner(
+        request: AiModelChatRequest,
+        tool_results: list[AiModelToolResult],
+    ) -> list[str]:
+        tool_results.append(
+            AiModelToolResult(
+                tool="rag_tool",
+                ok=True,
+                input=request.message,
+                data={"trace_id": "query-agent-1"},
+            )
+        )
+        return ["可以这样处理。"]
+
+    list(
+        stream_chat_events(
+            AiModelChatRequest(user_id=1, message="微波炉有异味怎么办？", links=[]),
+            mock_api_url="http://mock-api",
+            streaming_agent_runner=fake_streaming_agent_runner,
+            memory_store=memory_store,
+        )
+    )
+
+    assert len(memory_store.agent_traces) == 1
+    trace = memory_store.agent_traces[0]
+    assistant_message = memory_store.list_messages(1, user_id=1)[-1]
+    assert trace["conversation_id"] == 1
+    assert trace["message_id"] == assistant_message.id
+    assert trace["user_query"] == "微波炉有异味怎么办？"
+    assert trace["query_trace_ids"] == ["query-agent-1"]
+    assert "answer_summary" not in trace
+    assert any(
+        event["event_type"] == "rag_trace_link"
+        and event["summary_payload"] == {"query_trace_id": "query-agent-1"}
+        for event in trace["events"]
+    )
+
+
 def test_stream_chat_filters_tool_json_from_model_answer(monkeypatch) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
     leaked_tool_json = (

@@ -60,7 +60,7 @@ Agent 不直接修改业务事实。库存、采购单、订单、物流、商�
 
 ### 2.4 AImodel + RAG MCP
 
-AImodel 负责用户购物咨询、商品对比和工具编排，商品事实由 `mock-api` 提供，选购指南、FAQ、平台政策和客服话术由 RAG MCP 服务提供。AImodel 侧新增独立 Intent Router，采用 RAG 当前的树状意图配置思想，先判断 `action` 和目标 `collection`，再决定调用商品 API、RAG、Tavily、直接回复或拒答。RAG MCP 通过 stdio 子进程复用，避免每次查询重复启动。
+AImodel 负责用户购物咨询、商品对比和工具编排，商品事实由 `mock-api` 提供，选购指南、FAQ、平台政策和客服话术由 RAG MCP 服务提供。AImodel 侧使用独立 Intent Router，采用 RAG 当前的树状意图配置思想，先判断 `action` 和目标 `collection`，再决定调用商品 API、RAG、Tavily、直接回复或拒答。AImodel 侧通过 LangChain Middleware 建立 Agent Trace，记录意图识别、授权工具、LangChain 工具调用、RAG trace 关联和最终回答状态。RAG MCP 通过 stdio 子进程复用，避免每次查询重复启动。
 
 ### 2.5 飞书应用企业管理后台
 
@@ -142,6 +142,7 @@ AImodel Agent
 - AImodel Intent Router 按规则优先、语义补充、LLM fallback 的顺序决策；首版可复用 RAG Intent Router 的规则字段、阈值、priority/confidence 语义和 trace-safe 输出结构。
 - AImodel 可以决定是否调用 RAG，并在调用 RAG 时显式传入 collection；但不能把用户问题自由改写为 RAG 检索 query，`rag_tool` 暴露给 LangChain Agent 时应为无参数工具，实际查询内容绑定当前 turn 的原始用户问题。
 - 同一用户 turn 内多次触发 `rag_tool` 时应复用本轮首次 RAG 结果，避免产生多个语义漂移的 query trace；需要 query rewrite、query expansion 或多跳检索时应交由 RAG 子系统内部实现并写入 RAG query trace。
+- Agent Trace 采用 LangChain Middleware 采集模型执行过程中的 tool call 事件，同时由 AImodel 自身记录 middleware 无法覆盖的前置意图识别、工具授权列表、message_id、conversation_id 和 RAG query_trace_id。
 - 联网搜索只作为外部公开网页信息补充工具，必须通过 Tavily 受控 API 调用，不允许 Agent 直接访问任意内部 HTTP API。
 - Tavily 工具必须读取 `TAVILY_API_KEY` 和可选 `TAVILY_SEARCH_URL` / `TAVILY_MAX_RESULTS` 配置；未配置 key 时工具应优雅返回不可用结果，不影响商品工具和 RAG 工具。
 
@@ -202,6 +203,8 @@ n8n Workflow
 | `conversation` | AImodel 会话表，保存前端 AI 模式中的会话标题、用户和时间。 |
 | `message` | AImodel 消息表，保存用户与 assistant 消息、链接和推荐链接。 |
 | `message_query_trace` | AImodel 与 RAG Query Trace 关联表，用于从最终消息追溯一次 RAG 查询。 |
+| `agent_trace` | AImodel Agent Trace 主表，记录 agent_trace_id、conversation_id、message_id、user_query、intent_result、allowed_tools、error、started_at 和 completed_at。 |
+| `agent_trace_event` | AImodel Agent Trace 事件表，记录 intent、allowed_tools、tool_call、rag_trace_link、error 等阶段事件，包含 event_type、tool_name、status、duration_ms、summary_payload 和 created_at。 |
 | `user_memory` | AImodel 长期记忆表，保存用户偏好、证据和置信度。 |
 
 ## 4. 测试方案（TDD）
@@ -539,6 +542,7 @@ agent/                                                      # 项目根目录
 | AI 服务 | `services/ai-service/app/routers/AImodel/intent_router.py` | AImodel 意图路由 | 树状规则配置、action/collection 决策、confidence、fallback |
 | AI 服务 | `services/ai-service/app/routers/AImodel/tools.py` | 工具适配 | 商品 API、RAG MCP client、Tavily 联网搜索、长连接复用 |
 | AI 服务 | `services/ai-service/app/routers/AImodel/memory.py` | 会话记忆 | conversation、message、user_memory、message_query_trace |
+| AI 服务 | `services/ai-service/app/routers/AImodel/agent_trace.py` | Agent Trace | LangChain Middleware trace、intent route、tool call、RAG trace 关联、错误摘要 |
 | 业务 API | `services/mock-api/app/main.py` | mock-api 入口 | 路由注册、health、政策搜索、run log |
 | 业务 API | `services/mock-api/app/warehouse_store.py` | 仓储 repository | PostgreSQL 优先、fixtures fallback、库存事实 |
 | 业务 API | `services/mock-api/app/routers/category_rankings.py` | 分类排行榜路由 | PostgreSQL 事实/快照、Redis ZSET 缓存、Top 商品返回 |
@@ -811,6 +815,7 @@ mock-api / PostgreSQL 业务事实
 | G8 | 实现 Tavily 联网搜索工具 | [✔] | 2026-06-23 | web search tool、TAVILY_API_KEY |
 | G9 | 实现 AImodel 测试与回归门禁 | [✔] |  | ai-service tests |
 | G10 | 实现 AImodel Intent Router | [✔] | 2026-06-29 | 树状意图配置、action/collection 路由 |
+| G11 | 实现 LangChain Middleware Agent Trace | [✔] | 2026-06-29 | intent/tool/message trace |
 
 #### 阶段 H：飞书应用与协作后台
 
@@ -852,10 +857,10 @@ mock-api / PostgreSQL 业务事实
 | 阶段 D | 6 | 6 | 100% |
 | 阶段 E | 5 | 5 | 100% |
 | 阶段 F | 8 | 8 | 100% |
-| 阶段 G | 10 | 10 | 100% |
+| 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| **总计** | **65** | **59** | **91%** |
+| **总计** | **66** | **59** | **89%** |
 
 ### 6.5 阶段实施明细
 
@@ -1918,6 +1923,39 @@ mock-api / PostgreSQL 业务事实
 - 商品价格、库存、优惠、可购买链接仍走商品 API；外部公开信息走 Tavily；寒暄和明显越界问题不调用 RAG。
 - message_query_trace 只在实际调用 RAG 后写入；需要 RAG 但未产生 trace 时必须触发 Gate 检查。
 - 单元测试覆盖规则命中、collection 选择、direct/refuse 不调用 RAG、RAG 调用保留原始 query、低置信度 fallback。
+
+测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
+
+##### G11：实现 LangChain Middleware Agent Trace
+
+目标：通过 LangChain Middleware 建立 AImodel Agent Trace，记录一次用户 turn 从意图识别、工具授权、LangChain 工具调用、RAG trace 关联到最终回答状态的可观测链路，用于排查 Agent 为什么调用或没有调用某个工具。
+
+修改文件：
+
+- `services/ai-service/app/routers/AImodel/agent_trace.py`
+- `services/ai-service/app/routers/AImodel/service.py`
+- `services/ai-service/app/routers/AImodel/memory.py`
+- `services/ai-service/tests/test_aimodel_agent.py`
+- `services/ai-service/tests/test_aimodel_rag_tool.py`
+
+实现类/函数：
+
+- `AgentTraceContext`：保存 agent_trace_id、conversation_id、message_id、user_query、intent_result、intent_details、allowed_tools、tool_calls、query_trace_ids 和 error。
+- `LangChainAgentTraceMiddleware`：接入 LangChain Middleware，在工具调用前后记录 tool name、输入摘要、输出摘要、耗时和异常。
+- `record_intent_route()`：在进入 LangChain Agent 前将主表 intent 结果精简为 action、collection、domain、category、intent、confidence，并在 intent event 中记录 matched_rule、matched_terms、matched_regex、fallback 和 top3 candidate score。
+- `record_allowed_tools()`：记录 `_agent_tools_for_intent_route()` 输出的工具白名单，便于区分“Agent 没调用”和“工具未授权”。
+- `ensure_agent_trace_schema()`：创建 `agent_trace` 和 `agent_trace_event` 表及必要索引。
+- `persist_agent_trace()`：在用户 turn 结束时写入 PostgreSQL，关联 message_id、conversation_id 和 RAG query_trace_id。
+
+验收标准：
+
+- 每次 AImodel chat 都生成一个 agent_trace_id，并持久化到 `agent_trace` / `agent_trace_event`，可追溯用户原始问题、intent 结果、allowed_tools、tool_calls、最终回答完成状态和 error；intent 具体细节通过 intent event 展示 top3 candidate score。
+- LangChain 工具调用由 Middleware 采集，不在每个工具实现中重复写散落日志。
+- AImodel 前置意图识别和工具授权由 service 层显式写入 Agent Trace，因为这些步骤发生在 LangChain Agent 之前。
+- `rag_tool` 调用成功时，Agent Trace 必须记录对应 RAG query_trace_id；未调用 RAG 时应能从 allowed_tools 与 tool_calls 看出原因。
+- Trace 内容不得记录 API key、完整 prompt、完整 RAG context、完整工具 JSON、chunk 正文或用户隐私型大文本，只保留摘要、ID、计数、耗时和状态。
+- 数据库表必须支持按 conversation_id、message_id、agent_trace_id、query_trace_id 和 created_at 查询。
+- 单元测试覆盖 intent route 记录、allowed_tools 记录、Middleware tool call success/error 记录、RAG trace id 关联和敏感内容过滤。
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
 

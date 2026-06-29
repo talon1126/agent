@@ -158,18 +158,49 @@ class AImodelIntentRouter:
             A route object that AImodel service can use before invoking tools.
         """
 
+        route, _candidates = self.route_with_candidates(message)
+        return route
+
+    def route_with_candidates(
+        self,
+        message: str,
+        *,
+        limit: int = 3,
+    ) -> tuple[AImodelIntentRoute, list[dict[str, Any]]]:
+        """Return the selected route plus top candidate diagnostics.
+
+        Args:
+            message: Current user message from ``AiModelChatRequest``.
+            limit: Maximum number of candidate rows to return for trace events.
+
+        Returns:
+            A tuple containing the selected route and score-sorted candidate
+            summaries. Candidates are intended for observability events, while
+            the route itself remains the compact execution result.
+        """
+
         normalized_message = _normalize_for_matching(message)
         matches = [
             match
             for rule in self._rules
             if (match := self._score_rule_match(rule, normalized_message))
         ]
-        if not matches:
-            return self._default_route("no_rule_matched")
-        winner = max(matches, key=lambda match: (match.score, match.rule.priority, match.rule.name))
+        ranked_matches = sorted(
+            matches,
+            key=lambda match: (match.score, match.rule.priority, match.rule.name),
+            reverse=True,
+        )
+        candidates = _top_candidate_summaries(
+            ranked_matches,
+            rules=self._rules,
+            limit=limit,
+        )
+        if not ranked_matches:
+            return self._default_route("no_rule_matched"), []
+        winner = ranked_matches[0]
         if winner.score < self._rule_threshold:
-            return self._default_route("rule_score_below_threshold")
-        return self._route_from_match(winner)
+            return self._default_route("rule_score_below_threshold"), candidates
+        return self._route_from_match(winner), candidates
 
     def _route_from_match(self, match: _RuleMatch) -> AImodelIntentRoute:
         """Convert a winning rule match into a public route object."""
@@ -343,6 +374,69 @@ def _intent_rule_from_tree_node(
         regex_patterns=_string_tuple(match.get("regex")),
         rag_enabled=_validate_bool(payload.get("rag_enabled", action == "rag"), "route.rag_enabled"),
     )
+
+
+def _top_candidate_summaries(
+    ranked_matches: Sequence[_RuleMatch],
+    *,
+    rules: Sequence[AImodelIntentRule],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Return top intent candidates and fill missing rows with low scores."""
+
+    safe_limit = max(int(limit), 0)
+    summaries = [_candidate_summary(match) for match in ranked_matches[:safe_limit]]
+    if len(summaries) >= safe_limit:
+        return summaries
+    matched_rule_names = {match.rule.name for match in ranked_matches}
+    unmatched_rules = sorted(
+        (rule for rule in rules if rule.name not in matched_rule_names),
+        key=lambda rule: (rule.priority, rule.name),
+        reverse=True,
+    )
+    for rule in unmatched_rules[: safe_limit - len(summaries)]:
+        summaries.append(_unmatched_candidate_summary(rule))
+    return summaries
+
+
+
+def _candidate_summary(match: _RuleMatch) -> dict[str, Any]:
+    """Return a trace-safe summary for one matched intent candidate."""
+
+    rule = match.rule
+    return {
+        "domain": rule.domain,
+        "category": rule.category,
+        "intent": rule.intent,
+        "domain_intent": rule.domain_intent,
+        "action": rule.action,
+        "collection": rule.collection if rule.action == "rag" else None,
+        "score": round(min(0.99, match.score), 4),
+        "base_confidence": rule.confidence,
+        "priority": rule.priority,
+        "matched_rule": rule.name,
+        "matched_terms": list(match.matched_terms),
+        "matched_regex": list(match.matched_regex),
+    }
+
+
+def _unmatched_candidate_summary(rule: AImodelIntentRule) -> dict[str, Any]:
+    """Return a low-score candidate for non-matching rules."""
+
+    return {
+        "domain": rule.domain,
+        "category": rule.category,
+        "intent": rule.intent,
+        "domain_intent": rule.domain_intent,
+        "action": rule.action,
+        "collection": rule.collection if rule.action == "rag" else None,
+        "score": round(rule.priority / 10000, 4),
+        "base_confidence": rule.confidence,
+        "priority": rule.priority,
+        "matched_rule": rule.name,
+        "matched_terms": [],
+        "matched_regex": [],
+    }
 
 
 def _load_yaml_mapping(path: str | Path) -> Mapping[str, Any]:

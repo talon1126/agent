@@ -1,3 +1,10 @@
+from app.routers.AImodel.agent_trace import (
+    AgentTraceContext,
+    LangChainAgentTraceMiddleware,
+    record_allowed_tools,
+    record_intent_route,
+)
+from app.routers.AImodel.intent_router import AImodelIntentRoute
 from app.routers.AImodel.memory import (
     POSTGRES_AIMODEL_MEMORY_SCHEMA_SQL,
     AiModelMemoryMessage,
@@ -156,3 +163,125 @@ def test_noop_store_does_not_create_fake_query_trace_without_rag_tool() -> None:
     )
 
     assert store.list_message_query_traces(message_id) == []
+
+
+def test_agent_trace_schema_uses_postgres_tables_without_answer_summary() -> None:
+    """G11 requires database-backed Agent Trace without storing answer summaries."""
+
+    schema_sql = "\n".join(POSTGRES_AIMODEL_MEMORY_SCHEMA_SQL)
+    normalized_schema = " ".join(schema_sql.split())
+
+    assert "CREATE TABLE IF NOT EXISTS agent_trace" in schema_sql
+    assert "CREATE TABLE IF NOT EXISTS agent_trace_event" in schema_sql
+    assert "agent_trace_id TEXT NOT NULL" in schema_sql
+    assert "intent_route JSONB NOT NULL DEFAULT '{}'::jsonb" in schema_sql
+    assert "allowed_tools JSONB NOT NULL DEFAULT '[]'::jsonb" in schema_sql
+    assert "query_trace_ids JSONB NOT NULL DEFAULT '[]'::jsonb" in schema_sql
+    assert "answer_summary" not in schema_sql
+    assert "idx_agent_trace_conversation" in normalized_schema
+    assert "idx_agent_trace_message" in normalized_schema
+    assert "idx_agent_trace_query_trace_ids" in normalized_schema
+    assert "idx_agent_trace_event_trace_created" in normalized_schema
+
+
+def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payloads() -> None:
+    """Agent Trace should preserve routing diagnostics while avoiding raw payload storage."""
+
+    context = AgentTraceContext.start(
+        user_query="金属碗、锡纸或者带金边的盘子能放进微波炉吗？",
+        conversation_id=151,
+    )
+    route = AImodelIntentRoute(
+        action="rag",
+        collection="faq",
+        domain="support",
+        category="usage",
+        intent="operation_guide",
+        confidence=0.92,
+        reason="matched rule",
+        matched_rule="support_usage_operation_guide",
+        matched_terms=("能不能", "微波炉"),
+    )
+
+    record_intent_route(
+        context,
+        route,
+        candidates=[
+            {"intent": "operation_guide", "score": 0.92},
+            {"intent": "troubleshooting", "score": 0.87},
+            {"intent": "maintenance", "score": 0.79},
+            {"intent": "buying_recommendation", "score": 0.73},
+        ],
+    )
+    record_allowed_tools(context, [type("Tool", (), {"name": "rag_tool"})()])
+    context.record_tool_call(
+        tool_name="rag_tool",
+        input_payload={"query": "x" * 1000, "collection": "faq"},
+        output_payload={"trace_id": "mcp-query-1", "content": "y" * 1000},
+        duration_ms=12.5,
+        status="success",
+    )
+    context.complete(message_id=301, query_trace_ids=["mcp-query-1", "mcp-query-1"])
+
+    payload = context.to_record()
+
+    assert payload["conversation_id"] == 151
+    assert payload["message_id"] == 301
+    assert payload["intent_route"] == {
+        "action": "rag",
+        "collection": "faq",
+        "domain": "support",
+        "category": "usage",
+        "intent": "operation_guide",
+        "confidence": 0.92,
+    }
+    assert payload["allowed_tools"] == ["rag_tool"]
+    assert payload["query_trace_ids"] == ["mcp-query-1"]
+    assert "answer_summary" not in payload
+    intent_event = payload["events"][0]
+    assert intent_event["event_type"] == "intent"
+    assert [candidate["intent"] for candidate in intent_event["summary_payload"]["top_candidates"]] == [
+        "operation_guide",
+        "troubleshooting",
+        "maintenance",
+    ]
+    assert [candidate["score"] for candidate in intent_event["summary_payload"]["top_candidates"]] == [
+        0.92,
+        0.87,
+        0.79,
+    ]
+    assert payload["events"][2]["event_type"] == "tool_call"
+    assert payload["events"][2]["summary_payload"]["input_summary"]["query_chars"] == 1000
+    assert "x" * 20 not in str(payload["events"][2]["summary_payload"])
+    assert "y" * 20 not in str(payload["events"][2]["summary_payload"])
+
+
+def test_langchain_agent_trace_middleware_records_success_and_error_tool_calls() -> None:
+    """The middleware object should record LangChain tool success and failure events."""
+
+    context = AgentTraceContext.start(user_query="查 FAQ", conversation_id=1)
+    middleware = LangChainAgentTraceMiddleware(context)
+
+    success_response = middleware.record_tool_call_for_test(
+        tool_name="rag_tool",
+        input_payload={"collection": "faq"},
+        invoke=lambda: {"ok": True, "data": {"trace_id": "mcp-query-1"}},
+    )
+
+    assert success_response["ok"] is True
+    assert context.tool_calls[-1].tool_name == "rag_tool"
+    assert context.tool_calls[-1].status == "success"
+
+    try:
+        middleware.record_tool_call_for_test(
+            tool_name="rag_tool",
+            input_payload={"collection": "faq"},
+            invoke=lambda: (_ for _ in ()).throw(RuntimeError("tool failed")),
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("tool errors should be re-raised after trace recording")
+
+    assert context.tool_calls[-1].status == "error"
+    assert context.tool_calls[-1].error == "RuntimeError: tool failed"

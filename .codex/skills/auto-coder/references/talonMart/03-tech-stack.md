@@ -73,6 +73,7 @@ AImodel Agent
 - AImodel Intent Router 按规则优先、语义补充、LLM fallback 的顺序决策；首版可复用 RAG Intent Router 的规则字段、阈值、priority/confidence 语义和 trace-safe 输出结构。
 - AImodel 可以决定是否调用 RAG，并在调用 RAG 时显式传入 collection；但不能把用户问题自由改写为 RAG 检索 query，`rag_tool` 暴露给 LangChain Agent 时应为无参数工具，实际查询内容绑定当前 turn 的原始用户问题。
 - 同一用户 turn 内多次触发 `rag_tool` 时应复用本轮首次 RAG 结果，避免产生多个语义漂移的 query trace；需要 query rewrite、query expansion 或多跳检索时应交由 RAG 子系统内部实现并写入 RAG query trace。
+- Agent Trace 采用 LangChain Middleware 采集模型执行过程中的 tool call 事件，同时由 AImodel 自身记录 middleware 无法覆盖的前置意图识别、工具授权列表、message_id、conversation_id 和 RAG query_trace_id。
 - 联网搜索只作为外部公开网页信息补充工具，必须通过 Tavily 受控 API 调用，不允许 Agent 直接访问任意内部 HTTP API。
 - Tavily 工具必须读取 `TAVILY_API_KEY` 和可选 `TAVILY_SEARCH_URL` / `TAVILY_MAX_RESULTS` 配置；未配置 key 时工具应优雅返回不可用结果，不影响商品工具和 RAG 工具。
 
@@ -133,4 +134,6 @@ n8n Workflow
 | `conversation` | AImodel 会话表，保存前端 AI 模式中的会话标题、用户和时间。 |
 | `message` | AImodel 消息表，保存用户与 assistant 消息、链接和推荐链接。 |
 | `message_query_trace` | AImodel 与 RAG Query Trace 关联表，用于从最终消息追溯一次 RAG 查询。 |
+| `agent_trace` | AImodel Agent Trace 主表，记录 agent_trace_id、conversation_id、message_id、user_query、intent_result、allowed_tools、error、started_at 和 completed_at。 |
+| `agent_trace_event` | AImodel Agent Trace 事件表，记录 intent、allowed_tools、tool_call、rag_trace_link、error 等阶段事件，包含 event_type、tool_name、status、duration_ms、summary_payload 和 created_at。 |
 | `user_memory` | AImodel 长期记忆表，保存用户偏好、证据和置信度。 |

@@ -394,6 +394,25 @@ def test_aimodel_intent_router_routes_internal_policy_to_rag_collection() -> Non
     assert route.matched_rule
 
 
+def test_aimodel_intent_router_exposes_top_three_candidate_scores() -> None:
+    """Trace diagnostics need the top candidate scores, not only the winner."""
+
+    router = AImodelIntentRouter(
+        rules=load_aimodel_intent_routes(
+            "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+        ),
+        default_collection="shopping_guides",
+    )
+
+    route, candidates = router.route_with_candidates("微波炉有异味怎么办？")
+
+    assert route.collection == "faq"
+    assert len(candidates) == 3
+    assert candidates[0]["score"] >= candidates[1]["score"] >= candidates[2]["score"]
+    assert candidates[0]["intent"] == route.intent
+    assert all("domain_intent" in candidate for candidate in candidates)
+
+
 def test_aimodel_intent_route_loader_alias_and_default_router_cache() -> None:
     """The public spec name should load rules and the default router should be reused."""
 

@@ -29,6 +29,12 @@ from app.routers.AImodel.intent_router import (
     AImodelIntentRoute,
     load_default_aimodel_intent_router,
 )
+from app.routers.AImodel.agent_trace import (
+    AgentTraceContext,
+    LangChainAgentTraceMiddleware,
+    record_allowed_tools,
+    record_intent_route,
+)
 from app.routers.AImodel.memory import (
     AiModelMemoryMessage,
     AiModelMemoryStore,
@@ -158,6 +164,10 @@ def stream_chat_events(
             content=request.message,
             links=request.links,
         )
+        agent_trace_context = AgentTraceContext.start(
+            user_query=request.message,
+            conversation_id=conversation_id,
+        )
     except Exception as error:
         yield _format_sse("error", {"content": f"AImodel memory failed: {error}"})
         return
@@ -190,6 +200,7 @@ def stream_chat_events(
                 http_client,
                 history=history,
                 user_memories=user_memories,
+                agent_trace_context=agent_trace_context,
             )
         )
         for chunk in chunks:
@@ -209,19 +220,27 @@ def stream_chat_events(
     except HTTPException:
         raise
     except Exception as error:
+        agent_trace_context.fail(error)
+        _persist_agent_trace_safely(memory_store, agent_trace_context)
         yield _format_sse("error", {"content": f"AImodel generation failed: {error}"})
         return
 
     answer = "".join(answer_parts).strip()
     recommended_links = recommended_links_from_tool_results(tool_results)
+    query_trace_ids = _query_trace_ids_from_tool_results(tool_results)
     try:
-        memory_store.append_assistant_message(
+        message_id = memory_store.append_assistant_message(
             conversation_id,
             user_id=request.user_id,
             content=answer,
             recommended_links=recommended_links,
-            query_trace_ids=_query_trace_ids_from_tool_results(tool_results),
+            query_trace_ids=query_trace_ids,
         )
+        agent_trace_context.complete(
+            message_id=message_id,
+            query_trace_ids=query_trace_ids,
+        )
+        memory_store.persist_agent_trace(agent_trace_context.to_record())
         for memory in extract_user_memories_from_text(
             request.message, user_id=request.user_id
         ):
@@ -251,6 +270,8 @@ def _run_langchain_agent(
     tool_results: list[AiModelToolResult],
     mock_api_url: str,
     http_client: httpx.Client | None,
+    *,
+    agent_trace_context: AgentTraceContext | None = None,
 ) -> str:
     from langchain.agents import create_agent
     from langchain.tools import tool
@@ -278,13 +299,26 @@ def _run_langchain_agent(
         tool_results.append(result)
         return result.model_dump()
 
-    intent_route = route_aimodel_intent(request.message)
+    intent_route, intent_candidates = route_aimodel_intent_with_candidates(request.message)
     rag_tool = build_rag_tool(
         tool_results,
         original_query=request.message,
         collection=intent_route.collection if intent_route.action == "rag" else None,
     )
     web_search_tool = build_web_search_tool(tool_results)
+    agent_tools = _agent_tools_for_intent_route(
+        intent_route,
+        product_detail_tool=get_product_detail_from_link,
+        product_search_tool=search_product_catalog,
+        rag_tool=rag_tool,
+        web_search_tool=web_search_tool,
+    )
+    _record_agent_trace_routing(
+        agent_trace_context,
+        intent_route,
+        agent_tools,
+        candidates=intent_candidates,
+    )
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
         base_url=os.getenv(
@@ -296,14 +330,9 @@ def _run_langchain_agent(
     )
     agent = create_agent(
         model=model,
-        tools=_agent_tools_for_intent_route(
-            intent_route,
-            product_detail_tool=get_product_detail_from_link,
-            product_search_tool=search_product_catalog,
-            rag_tool=rag_tool,
-            web_search_tool=web_search_tool,
-        ),
+        tools=agent_tools,
         system_prompt=SYSTEM_PROMPT,
+        middleware=_agent_trace_middleware(agent_trace_context),
     )
     result = agent.invoke({"messages": _build_langchain_messages(request)})
     return _extract_answer(result) or str(result)
@@ -317,6 +346,7 @@ def _run_langchain_agent_stream(
     *,
     history: list[AiModelMemoryMessage] | None = None,
     user_memories: list[AiModelUserMemory] | None = None,
+    agent_trace_context: AgentTraceContext | None = None,
 ) -> Iterator[str]:
     from langchain.agents import create_agent
     from langchain.tools import tool
@@ -344,13 +374,26 @@ def _run_langchain_agent_stream(
         tool_results.append(result)
         return result.model_dump()
 
-    intent_route = route_aimodel_intent(request.message)
+    intent_route, intent_candidates = route_aimodel_intent_with_candidates(request.message)
     rag_tool = build_rag_tool(
         tool_results,
         original_query=request.message,
         collection=intent_route.collection if intent_route.action == "rag" else None,
     )
     web_search_tool = build_web_search_tool(tool_results)
+    agent_tools = _agent_tools_for_intent_route(
+        intent_route,
+        product_detail_tool=get_product_detail_from_link,
+        product_search_tool=search_product_catalog,
+        rag_tool=rag_tool,
+        web_search_tool=web_search_tool,
+    )
+    _record_agent_trace_routing(
+        agent_trace_context,
+        intent_route,
+        agent_tools,
+        candidates=intent_candidates,
+    )
     model = ChatOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
         base_url=os.getenv(
@@ -363,14 +406,9 @@ def _run_langchain_agent_stream(
     )
     agent = create_agent(
         model=model,
-        tools=_agent_tools_for_intent_route(
-            intent_route,
-            product_detail_tool=get_product_detail_from_link,
-            product_search_tool=search_product_catalog,
-            rag_tool=rag_tool,
-            web_search_tool=web_search_tool,
-        ),
+        tools=agent_tools,
         system_prompt=SYSTEM_PROMPT,
+        middleware=_agent_trace_middleware(agent_trace_context),
     )
     # 中文注释：这里只向前端流式输出可见回答文本，不暴露模型内部隐藏推理链路。
     for update in agent.stream(
@@ -384,6 +422,43 @@ def _run_langchain_agent_stream(
         chunk = _extract_stream_token(update)
         if chunk:
             yield chunk
+
+
+def _record_agent_trace_routing(
+    agent_trace_context: AgentTraceContext | None,
+    intent_route: AImodelIntentRoute,
+    agent_tools: list[Any],
+    *,
+    candidates: list[dict[str, Any]],
+) -> None:
+    """Attach caller-side routing diagnostics to the current Agent Trace."""
+
+    if agent_trace_context is None:
+        return
+    record_intent_route(agent_trace_context, intent_route, candidates=candidates)
+    record_allowed_tools(agent_trace_context, agent_tools)
+
+
+def _agent_trace_middleware(
+    agent_trace_context: AgentTraceContext | None,
+) -> list[Any]:
+    """Return LangChain middleware only when an Agent Trace exists."""
+
+    if agent_trace_context is None:
+        return []
+    return [LangChainAgentTraceMiddleware(agent_trace_context).as_middleware()]
+
+
+def _persist_agent_trace_safely(
+    memory_store: AiModelMemoryStore,
+    agent_trace_context: AgentTraceContext,
+) -> None:
+    """Persist trace diagnostics without changing the user-facing answer path."""
+
+    try:
+        memory_store.persist_agent_trace(agent_trace_context.to_record())
+    except Exception:
+        return None
 
 
 def _agent_tools_for_intent_route(
@@ -421,16 +496,18 @@ def _agent_tools_for_intent_route(
 
 
 def route_aimodel_intent(message: str) -> AImodelIntentRoute:
-    """Route one AImodel user turn before building Agent tools.
+    """Route one AImodel user turn before building Agent tools."""
 
-    Args:
-        message: Current user-visible question from ``AiModelChatRequest``.
+    route, _candidates = route_aimodel_intent_with_candidates(message)
+    return route
 
-    Returns:
-        A deterministic route selected from the bundled AImodel intent rules.
-    """
 
-    return load_default_aimodel_intent_router().route(message)
+def route_aimodel_intent_with_candidates(
+    message: str,
+) -> tuple[AImodelIntentRoute, list[dict[str, Any]]]:
+    """Return the selected route and top candidate scores for tracing."""
+
+    return load_default_aimodel_intent_router().route_with_candidates(message)
 
 
 def build_web_search_tool(

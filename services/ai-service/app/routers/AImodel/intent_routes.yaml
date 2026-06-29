@@ -102,6 +102,7 @@ routers:
               regex:
                 - ".*怎么.*使用.*"
                 - ".*能不能.*"
+                - ".*能.*吗.*"
           troubleshooting:
             action: rag
             collection: faq

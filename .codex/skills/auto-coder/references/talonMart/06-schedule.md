@@ -114,6 +114,7 @@
 | G8 | 实现 Tavily 联网搜索工具 | [✔] | 2026-06-23 | web search tool、TAVILY_API_KEY |
 | G9 | 实现 AImodel 测试与回归门禁 | [✔] |  | ai-service tests |
 | G10 | 实现 AImodel Intent Router | [✔] | 2026-06-29 | 树状意图配置、action/collection 路由 |
+| G11 | 实现 LangChain Middleware Agent Trace | [✔] | 2026-06-29 | intent/tool/message trace |
 
 #### 阶段 H：飞书应用与协作后台
 
@@ -155,10 +156,10 @@
 | 阶段 D | 6 | 6 | 100% |
 | 阶段 E | 5 | 5 | 100% |
 | 阶段 F | 8 | 8 | 100% |
-| 阶段 G | 10 | 10 | 100% |
+| 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| **总计** | **65** | **59** | **91%** |
+| **总计** | **66** | **59** | **89%** |
 
 ### 6.5 阶段实施明细
 
@@ -1221,6 +1222,39 @@
 - 商品价格、库存、优惠、可购买链接仍走商品 API；外部公开信息走 Tavily；寒暄和明显越界问题不调用 RAG。
 - message_query_trace 只在实际调用 RAG 后写入；需要 RAG 但未产生 trace 时必须触发 Gate 检查。
 - 单元测试覆盖规则命中、collection 选择、direct/refuse 不调用 RAG、RAG 调用保留原始 query、低置信度 fallback。
+
+测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
+
+##### G11：实现 LangChain Middleware Agent Trace
+
+目标：通过 LangChain Middleware 建立 AImodel Agent Trace，记录一次用户 turn 从意图识别、工具授权、LangChain 工具调用、RAG trace 关联到最终回答状态的可观测链路，用于排查 Agent 为什么调用或没有调用某个工具。
+
+修改文件：
+
+- `services/ai-service/app/routers/AImodel/agent_trace.py`
+- `services/ai-service/app/routers/AImodel/service.py`
+- `services/ai-service/app/routers/AImodel/memory.py`
+- `services/ai-service/tests/test_aimodel_agent.py`
+- `services/ai-service/tests/test_aimodel_rag_tool.py`
+
+实现类/函数：
+
+- `AgentTraceContext`：保存 agent_trace_id、conversation_id、message_id、user_query、intent_result、intent_details、allowed_tools、tool_calls、query_trace_ids 和 error。
+- `LangChainAgentTraceMiddleware`：接入 LangChain Middleware，在工具调用前后记录 tool name、输入摘要、输出摘要、耗时和异常。
+- `record_intent_route()`：在进入 LangChain Agent 前将主表 intent 结果精简为 action、collection、domain、category、intent、confidence，并在 intent event 中记录 matched_rule、matched_terms、matched_regex、fallback 和 top3 candidate score。
+- `record_allowed_tools()`：记录 `_agent_tools_for_intent_route()` 输出的工具白名单，便于区分“Agent 没调用”和“工具未授权”。
+- `ensure_agent_trace_schema()`：创建 `agent_trace` 和 `agent_trace_event` 表及必要索引。
+- `persist_agent_trace()`：在用户 turn 结束时写入 PostgreSQL，关联 message_id、conversation_id 和 RAG query_trace_id。
+
+验收标准：
+
+- 每次 AImodel chat 都生成一个 agent_trace_id，并持久化到 `agent_trace` / `agent_trace_event`，可追溯用户原始问题、intent 结果、allowed_tools、tool_calls、最终回答完成状态和 error；intent 具体细节通过 intent event 展示 top3 candidate score。
+- LangChain 工具调用由 Middleware 采集，不在每个工具实现中重复写散落日志。
+- AImodel 前置意图识别和工具授权由 service 层显式写入 Agent Trace，因为这些步骤发生在 LangChain Agent 之前。
+- `rag_tool` 调用成功时，Agent Trace 必须记录对应 RAG query_trace_id；未调用 RAG 时应能从 allowed_tools 与 tool_calls 看出原因。
+- Trace 内容不得记录 API key、完整 prompt、完整 RAG context、完整工具 JSON、chunk 正文或用户隐私型大文本，只保留摘要、ID、计数、耗时和状态。
+- 数据库表必须支持按 conversation_id、message_id、agent_trace_id、query_trace_id 和 created_at 查询。
+- 单元测试覆盖 intent route 记录、allowed_tools 记录、Middleware tool call success/error 记录、RAG trace id 关联和敏感内容过滤。
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py services\ai-service\tests\test_aimodel_rag_tool.py -q`
 
