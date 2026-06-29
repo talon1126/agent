@@ -15,6 +15,8 @@ ranked knowledge evidence for Agent summarization.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import inspect
 import json
 import sys
 from collections.abc import Callable, Sequence
@@ -46,6 +48,7 @@ from src.core.query_engine import (
     load_collection_profiles,
     load_intent_rules,
 )
+from src.core.query_engine.async_runtime import AsyncQueryRuntime, build_async_query_runtime
 from src.core.query_engine.trace_snapshots import candidate_snapshots
 from src.core.response import (
     EvidenceContextOptimizer,
@@ -69,7 +72,7 @@ from src.storage.trace_log_storage import build_trace_writer
 SettingsLoader = Callable[[], RagSettings]
 PoolFactory = Callable[[DatabaseSettings], PostgresPool]
 SchemaInitializer = Callable[[PostgresPool], None]
-RuntimeBuilder = Callable[[RagSettings, PostgresPool, bool], "QueryRuntime"]
+RuntimeBuilder = Callable[[RagSettings, PostgresPool, bool], "QueryRuntime | AsyncQueryRuntime"]
 TraceIdFactory = Callable[[], str]
 MessageWriter = Callable[[str], Any]
 
@@ -492,7 +495,7 @@ def run_query_cli(
     args = parse_args(argv)
     write_error = error_output or _print_error
     active_pool_factory = pool_factory or _create_pool
-    active_runtime_builder = runtime_builder or _build_runtime
+    active_runtime_builder = runtime_builder or _select_runtime_builder
     active_trace_id_factory = trace_id_factory or (
         lambda: f"query-{uuid4().hex}"
     )
@@ -508,13 +511,15 @@ def run_query_cli(
         pool.open()
         schema_initializer(pool)
         runtime = active_runtime_builder(settings, pool, args.no_rerank)
-        execution = runtime.execute(
-            args.query,
-            collection=collection,
-            top_k=args.top_k,
-            no_rerank=args.no_rerank,
-            trace_id=active_trace_id_factory(),
-            request_source="query_cli",
+        execution = _run_runtime_execution(
+            runtime.execute(
+                args.query,
+                collection=collection,
+                top_k=args.top_k,
+                no_rerank=args.no_rerank,
+                trace_id=active_trace_id_factory(),
+                request_source="query_cli",
+            )
         )
         payload: dict[str, Any] = {
             "query": args.query,
@@ -545,6 +550,43 @@ def main() -> int:
     return run_query_cli()
 
 
+
+def _run_runtime_execution(execution: Any) -> Any:
+    """Return a runtime result from either sync or async execution.
+
+    Args:
+        execution: Direct ``QueryExecutionResult`` or awaitable returned by an
+            async runtime.
+
+    Returns:
+        The resolved execution result consumed by CLI serialization.
+    """
+
+    if inspect.isawaitable(execution):
+        return asyncio.run(execution)
+    return execution
+
+
+def _select_runtime_builder(
+    settings: RagSettings,
+    pool: PostgresPool,
+    no_rerank: bool = False,
+) -> QueryRuntime | AsyncQueryRuntime:
+    """Build the configured runtime implementation for CLI execution.
+
+    Args:
+        settings: Validated runtime settings.
+        pool: Open PostgreSQL pool shared by query providers.
+        no_rerank: Whether reranker construction should be skipped.
+
+    Returns:
+        Async runtime when ``retrieval.async_enabled`` is true; otherwise the
+        legacy synchronous runtime.
+    """
+
+    if getattr(settings.retrieval, "async_enabled", False):
+        return build_async_query_runtime(settings, pool, no_rerank)
+    return _build_runtime(settings, pool, no_rerank)
 def _build_runtime(
     settings: RagSettings,
     pool: PostgresPool,

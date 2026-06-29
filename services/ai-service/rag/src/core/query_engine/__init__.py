@@ -6,6 +6,11 @@ public imports remain provider-independent so MCP, CLI, and AImodel adapters do
 not depend on concrete LLM or storage implementations.
 """
 
+from src.core.query_engine.async_runtime import (
+    AsyncQueryExecutionResult,
+    AsyncQueryRuntime,
+    build_async_query_runtime,
+)
 from src.core.query_engine.dense_route import DenseRoute, DenseTraceContext
 from src.core.query_engine.fusion import reciprocal_rank_fusion
 from src.core.query_engine.hybrid_engine import (
@@ -46,6 +51,9 @@ from src.core.query_engine.self_rag_controller import (
 from src.core.query_engine.sparse_route import SparseRoute, SparseTraceContext
 
 __all__ = (
+    "AsyncQueryExecutionResult",
+    "AsyncQueryRuntime",
+    "build_async_query_runtime",
     "DenseRoute",
     "DenseTraceContext",
     "CandidateFilter",

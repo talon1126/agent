@@ -10,7 +10,10 @@ runtime limits used by later async orchestration tasks.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping, Sequence
+from types import SimpleNamespace
+from unittest.mock import ANY, Mock
 
 import pytest
 
@@ -21,11 +24,13 @@ from src.core.query_engine.async_adapters import (
     SyncToAsyncRerankerAdapter,
     SyncToAsyncVectorStoreAdapter,
 )
+from src.core.query_engine.self_rag_controller import SelfRagDecision
 from src.core.types import Chunk, RetrievalResult
 from src.libs.embedding.base_embedding import BaseEmbedding
 from src.libs.llm.base_llm import BaseLLM, ChatMessage, LLMResponse
 from src.libs.reranker.base_reranker import BaseReranker
 from src.libs.vector_store.base_vector_store import BaseVectorStore
+from src.scripts import query as query_module
 from tests.unit.test_config import load_settings_document
 
 
@@ -255,3 +260,227 @@ def test_async_settings_are_loaded_from_example_configuration() -> None:
     assert settings.retrieval.max_collection_concurrency == 3
     assert settings.evaluation.async_enabled is True
     assert settings.evaluation.max_metric_concurrency == 2
+
+class _AsyncHybridReport:
+    """Simple hybrid search result fixture used by async runtime tests."""
+
+    def __init__(self, candidates: list[RetrievalResult]) -> None:
+        """Create route snapshots from one candidate list."""
+
+        self.dense_results = [candidates[0]] if candidates else []
+        self.sparse_results = [candidates[-1]] if candidates else []
+        self.fused_results = list(candidates)
+        self.results = list(candidates)
+        self.fallback_used = False
+
+
+@pytest.mark.asyncio
+async def test_async_query_runtime_executes_single_collection_pipeline_and_trace() -> None:
+    """Require I3 async runtime to preserve sync trace and response contracts."""
+
+    from src.core.query_engine.async_runtime import AsyncQueryRuntime
+    from src.core.query_engine.intent_router import IntentRoute
+    from src.core.query_engine.query_processor import ProcessedQuery
+    from src.core.query_engine.reranker import RerankOutcome
+    from src.core.response import KnowledgeHubResponse
+
+    processed = ProcessedQuery(
+        raw_query="无线耳机怎么选",
+        normalized_query="无线耳机怎么选",
+        keywords=("无线耳机", "怎么选"),
+        collection="shopping_guides",
+        top_k=2,
+    )
+    candidates = [
+        RetrievalResult(chunk_id="chunk-a", text="A", score=0.4, metadata={"document_id": "doc"}),
+        RetrievalResult(chunk_id="chunk-b", text="B", score=0.3, metadata={"document_id": "doc"}),
+    ]
+    reranked = [candidates[1].model_copy(update={"score": 0.9}, deep=True)]
+    selected = [reranked[0].model_copy(deep=True)]
+    query_processor = Mock()
+    query_processor.process.return_value = processed
+    intent_router = Mock()
+    intent_router.route.return_value = IntentRoute(
+        collection="faq",
+        collections=("faq",),
+        domain_intent="faq",
+        complexity="simple",
+        retrieval_strategy="hybrid",
+        confidence=0.91,
+        method="rules",
+        provider="IntentRouter",
+        reason="matched faq",
+    )
+    hybrid_search = Mock()
+    hybrid_search.search.return_value = _AsyncHybridReport(candidates)
+    rerank_controller = Mock()
+    rerank_controller.rerank_with_outcome.return_value = RerankOutcome(
+        results=reranked,
+        fallback_used=False,
+        fallback_reason=None,
+    )
+    self_rag_controller = Mock()
+    self_rag_controller.evaluate.return_value = SelfRagDecision(
+        decision="accepted",
+        score_band="medium_confidence",
+        selected_results=selected,
+        fallback_action=None,
+        judge_result=None,
+        reason="judge_passed",
+    )
+    response = KnowledgeHubResponse(
+        content="[1] B",
+        citations=(),
+        images=(),
+        trace_id="query-async-1",
+        is_empty=False,
+    )
+    response_builder = Mock()
+    response_builder.build.return_value = response
+    traces: list[dict[str, object]] = []
+    runtime = AsyncQueryRuntime(
+        query_processor=query_processor,
+        intent_router=intent_router,
+        hybrid_search=hybrid_search,
+        rerank_controller=rerank_controller,
+        self_rag_controller=self_rag_controller,
+        response_builder=response_builder,
+        trace_sink=traces.append,
+    )
+
+    execution = await runtime.execute(
+        "无线耳机怎么选",
+        collection="shopping_guides",
+        top_k=1,
+        no_rerank=False,
+        trace_id="query-async-1",
+    )
+
+    query_processor.process.assert_called_once_with(
+        "无线耳机怎么选",
+        collection="shopping_guides",
+        top_k=1,
+    )
+    hybrid_search.search.assert_called_once_with(
+        execution.processed_query,
+        filters={"collection": "faq"},
+        trace_context=ANY,
+    )
+    rerank_controller.rerank_with_outcome.assert_called_once_with(
+        processed.normalized_query,
+        candidates,
+        top_k=1,
+        trace_context=ANY,
+    )
+    self_rag_controller.evaluate.assert_called_once_with(
+        processed.normalized_query,
+        reranked,
+        trace_context=ANY,
+    )
+    response_builder.build.assert_called_once_with(
+        selected,
+        trace_id="query-async-1",
+        query=processed.normalized_query,
+    )
+    assert execution.response is response
+    assert execution.final_results == tuple(selected)
+    assert execution.rerank_applied is True
+    assert traces[0]["status"] == "success"
+    assert traces[0]["collection"] == "faq"
+    assert [stage["stage"] for stage in traces[0]["stages"]][:2] == [
+        "query_processing",
+        "intent_routing",
+    ]
+    assert traces[0]["query_result"]["contexts"] == [
+        {"chunk_id": "chunk-b", "score": 0.9, "rank": 1}
+    ]
+
+
+def test_run_query_cli_selects_async_runtime_from_settings() -> None:
+    """Require CLI to use async runtime when retrieval.async_enabled is true."""
+
+    from src.core.query_engine.intent_router import IntentRoute
+    from src.core.query_engine.query_processor import ProcessedQuery
+    from src.core.response import KnowledgeHubResponse
+
+    processed = ProcessedQuery(
+        raw_query="售后政策",
+        normalized_query="售后政策",
+        keywords=("售后", "政策"),
+        collection="policies",
+        top_k=1,
+    )
+    response = KnowledgeHubResponse(
+        content="[1] policy",
+        citations=(),
+        images=(),
+        trace_id="query-cli-async",
+        is_empty=False,
+    )
+    execution = query_module.QueryExecutionResult(
+        processed_query=processed,
+        intent_route=IntentRoute(
+            collection="policies",
+            collections=("policies",),
+            domain_intent="policy",
+            complexity="simple",
+            retrieval_strategy="hybrid",
+            confidence=0.9,
+            method="rules",
+            reason="test",
+        ),
+        dense_results=(),
+        sparse_results=(),
+        fused_results=(),
+        filtered_results=(),
+        final_results=(),
+        self_rag_decision=None,
+        response=response,
+        rerank_applied=False,
+        fallback_used=False,
+    )
+
+    class _AsyncRuntime:
+        """Fake async runtime returned by the CLI builder."""
+
+        async def execute(self, *_: object, **__: object) -> object:
+            """Return the prepared execution result."""
+
+            return execution
+
+    settings = SimpleNamespace(
+        database=SimpleNamespace(),
+        retrieval=SimpleNamespace(
+            async_enabled=True,
+            filters=SimpleNamespace(default_collection="policies"),
+        ),
+    )
+    pool = Mock()
+    output: list[str] = []
+
+    exit_code = query_module.run_query_cli(
+        ["--query", "售后政策", "--top-k", "1"],
+        settings_loader=lambda: settings,
+        pool_factory=lambda _: pool,
+        schema_initializer=lambda _: None,
+        runtime_builder=lambda *_: _AsyncRuntime(),
+        trace_id_factory=lambda: "query-cli-async",
+        output=output.append,
+    )
+
+    assert exit_code == 0
+    assert json.loads(output[0])["response"] == response.model_dump(mode="json")
+
+def test_select_runtime_builder_uses_async_runtime_when_enabled(monkeypatch) -> None:
+    """Require the default CLI runtime selector to honor retrieval.async_enabled."""
+
+    settings = SimpleNamespace(retrieval=SimpleNamespace(async_enabled=True))
+    pool = Mock()
+    async_runtime = Mock()
+    builder = Mock(return_value=async_runtime)
+    monkeypatch.setattr(query_module, "build_async_query_runtime", builder)
+
+    selected = query_module._select_runtime_builder(settings, pool, no_rerank=True)
+
+    assert selected is async_runtime
+    builder.assert_called_once_with(settings, pool, True)
