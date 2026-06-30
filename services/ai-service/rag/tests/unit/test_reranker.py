@@ -131,6 +131,30 @@ class RaisingReranker(BaseReranker):
         raise self.error
 
 
+class RecordingReranker(BaseReranker):
+    """Reranker fixture that records calls and returns reversed candidates."""
+
+    def __init__(self) -> None:
+        """Initialize an empty call log for skip-gate assertions."""
+
+        self.call_count = 0
+        self.received_chunk_ids: list[str] = []
+
+    def rerank(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalResult],
+        *,
+        top_k: int | None = None,
+    ) -> list[RetrievalResult]:
+        """Record candidates and return a deterministic reversed order."""
+
+        self.call_count += 1
+        self.received_chunk_ids = [candidate.chunk_id for candidate in candidates]
+        results = [candidate.model_copy(deep=True) for candidate in reversed(candidates)]
+        return results if top_k is None else results[:top_k]
+
+
 class ForeignCandidateReranker(BaseReranker):
     """Return a candidate that was not present in the filtered input."""
 
@@ -451,6 +475,69 @@ def test_reranker_factory_creates_llm_reranker_with_injected_client() -> None:
     assert results[0].score == 0.88
 
 
+def test_rerank_controller_skips_provider_for_high_confidence_fusion_candidates() -> None:
+    """Require high-confidence fused candidates to bypass expensive reranking."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    reranker = RecordingReranker()
+    trace = Mock()
+    controller = RerankController(settings=settings, reranker=reranker)
+    candidates = [
+        _candidate(
+            "chunk-a",
+            "Strong dense and sparse match.",
+            score=0.10,
+            metadata={
+                "fusion": {
+                    "dense_rank": 1,
+                    "sparse_rank": 1,
+                    "sources": ["dense", "sparse"],
+                }
+            },
+        ),
+        _candidate("chunk-b", "Weaker second match.", score=0.08),
+        _candidate("chunk-c", "Supporting third match.", score=0.07),
+    ]
+
+    outcome = controller.rerank_with_outcome(
+        "query",
+        candidates,
+        top_k=2,
+        trace_context=trace,
+    )
+
+    assert [result.chunk_id for result in outcome.results] == ["chunk-a", "chunk-b"]
+    assert outcome.fallback_used is False
+    assert outcome.fallback_reason is None
+    assert reranker.call_count == 0
+    assert trace.record_stage.call_args.kwargs["status"] == "skipped"
+    details = trace.record_stage.call_args.kwargs["details"]
+    assert details["skipped"] is True
+    assert details["skip_reason"] == "high_confidence_fusion"
+    assert details["confidence_features"]["dual_route_hits"] == 1
+
+
+def test_rerank_controller_calls_provider_when_skip_gate_is_not_confident() -> None:
+    """Require non-high-confidence candidates to keep the normal rerank path."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    reranker = RecordingReranker()
+    controller = RerankController(settings=settings, reranker=reranker)
+    candidates = [
+        _candidate("chunk-a", "First weak match.", score=0.10),
+        _candidate("chunk-b", "Close second weak match.", score=0.099),
+        _candidate("chunk-c", "Close third weak match.", score=0.098),
+    ]
+
+    outcome = controller.rerank_with_outcome("query", candidates, top_k=2)
+
+    assert reranker.call_count == 1
+    assert reranker.received_chunk_ids == ["chunk-a", "chunk-b", "chunk-c"]
+    assert [result.chunk_id for result in outcome.results] == ["chunk-c", "chunk-b"]
+    assert outcome.fallback_used is False
+    assert outcome.fallback_reason is None
+
+
 def test_rerank_controller_returns_provider_order_and_records_success() -> None:
     """Require successful reranking to preserve provider order and diagnostics."""
 
@@ -535,8 +622,7 @@ def test_rerank_controller_falls_back_when_reranker_is_unavailable() -> None:
     assert results[0] is not candidates[0]
     assert trace.record_stage.call_args.kwargs["status"] == "degraded"
     assert (
-        trace.record_stage.call_args.kwargs["details"]["fallback_reason"]
-        == "reranker_unavailable"
+        trace.record_stage.call_args.kwargs["details"]["fallback_reason"] == "reranker_unavailable"
     )
 
 
@@ -713,11 +799,14 @@ def test_rerank_controller_records_empty_candidates_as_skipped() -> None:
     trace = Mock()
     controller = RerankController(settings=settings, reranker=reranker)
 
-    assert controller.rerank_or_fallback(
-        "query",
-        [],
-        trace_context=trace,
-    ) == []
+    assert (
+        controller.rerank_or_fallback(
+            "query",
+            [],
+            trace_context=trace,
+        )
+        == []
+    )
 
     reranker.rerank.assert_not_called()
     assert trace.record_stage.call_args.kwargs["status"] == "skipped"

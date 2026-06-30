@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Protocol
 
-from src.core.config import RagSettings
+from src.core.config import RagSettings, RerankSkipGateSettings
 from src.core.errors import RagError
 from src.core.query_engine.trace_snapshots import candidate_snapshots
 from src.core.types import RetrievalResult
@@ -77,6 +77,89 @@ class RerankOutcome:
     fallback_reason: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class RerankSkipDecision:
+    """Describe whether filtered fusion candidates can bypass reranking."""
+
+    should_skip: bool
+    reason: str
+    confidence_features: dict[str, Any]
+
+
+class RerankSkipGate:
+    """Decide whether filtered RRF candidates are already high-confidence."""
+
+    def __init__(self, settings: RerankSkipGateSettings) -> None:
+        """Configure the gate from validated rerank settings.
+
+        Args:
+            settings: High-confidence thresholds and optional consistency
+                requirements loaded from ``settings.rerank.skip_gate``.
+        """
+
+        self._settings = settings
+
+    def evaluate(self, candidates: Sequence[RetrievalResult]) -> RerankSkipDecision:
+        """Return a binary skip decision for the whole candidate batch.
+
+        Args:
+            candidates: Filtered RRF candidates in fusion rank order.
+
+        Returns:
+            Decision containing a stable reason and trace-safe feature summary.
+        """
+
+        observed = list(candidates[: self._settings.max_candidates_for_skip])
+        features = self._confidence_features(observed, total_count=len(candidates))
+        if not self._settings.enabled:
+            return RerankSkipDecision(False, "skip_gate_disabled", features)
+        if len(candidates) < self._settings.min_candidates:
+            return RerankSkipDecision(False, "insufficient_candidates", features)
+        if features["dual_route_hits"] < self._settings.min_dual_route_hits:
+            return RerankSkipDecision(False, "insufficient_dual_route_hits", features)
+        if features["rrf_margin_ratio"] < self._settings.min_rrf_margin_ratio:
+            return RerankSkipDecision(False, "insufficient_rrf_margin", features)
+        if self._settings.require_document_consistency and not features["document_consistent"]:
+            return RerankSkipDecision(False, "document_inconsistent", features)
+        if self._settings.require_section_consistency and not features["section_consistent"]:
+            return RerankSkipDecision(False, "section_inconsistent", features)
+        return RerankSkipDecision(True, "high_confidence_fusion", features)
+
+    @staticmethod
+    def _confidence_features(
+        candidates: Sequence[RetrievalResult],
+        *,
+        total_count: int,
+    ) -> dict[str, Any]:
+        """Build trace-safe confidence features from fused candidates."""
+
+        top_score = candidates[0].score if candidates else 0.0
+        second_score = candidates[1].score if len(candidates) > 1 else 0.0
+        margin_ratio = (
+            (top_score - second_score) / top_score if top_score > 0 and len(candidates) > 1 else 0.0
+        )
+        document_ids = [
+            candidate.metadata.get("document_id")
+            for candidate in candidates
+            if candidate.metadata.get("document_id") is not None
+        ]
+        section_paths = [
+            tuple(candidate.metadata.get("section_path") or ())
+            for candidate in candidates
+            if candidate.metadata.get("section_path")
+        ]
+        return {
+            "candidate_count": total_count,
+            "observed_count": len(candidates),
+            "top_score": top_score,
+            "second_score": second_score,
+            "rrf_margin_ratio": margin_ratio,
+            "dual_route_hits": sum(1 for candidate in candidates if _is_dual_route_hit(candidate)),
+            "document_consistent": bool(document_ids) and len(set(document_ids)) == 1,
+            "section_consistent": bool(section_paths) and len(set(section_paths)) == 1,
+        }
+
+
 class RerankController:
     """Execute reranking while preserving filtered candidates as fallback."""
 
@@ -96,6 +179,7 @@ class RerankController:
 
         self._settings = settings
         self._reranker = reranker
+        self._skip_gate = RerankSkipGate(settings.rerank.skip_gate)
 
     def rerank_or_fallback(
         self,
@@ -174,9 +258,7 @@ class RerankController:
 
         started_at = perf_counter()
         provider = type(self._reranker).__name__ if self._reranker is not None else "none"
-        fallback_candidates = [
-            candidate.model_copy(deep=True) for candidate in candidates
-        ]
+        fallback_candidates = [candidate.model_copy(deep=True) for candidate in candidates]
         before_order = [candidate.chunk_id for candidate in fallback_candidates]
 
         if not fallback_candidates:
@@ -197,20 +279,42 @@ class RerankController:
                 fallback_reason=None,
             )
 
+        skip_decision = self._skip_gate.evaluate(fallback_candidates)
+        if skip_decision.should_skip:
+            results = [
+                candidate.model_copy(deep=True)
+                for candidate in fallback_candidates[:candidate_limit]
+            ]
+            self._record_trace(
+                trace_context,
+                started_at=started_at,
+                provider=provider,
+                status="skipped",
+                results=results,
+                before_candidates=fallback_candidates,
+                top_k=candidate_limit,
+                fallback_reason=None,
+                error=None,
+                skip_decision=skip_decision,
+            )
+            return RerankOutcome(
+                results=results,
+                fallback_used=False,
+                fallback_reason=None,
+            )
+
         if self._reranker is None:
             return self._fallback(
                 trace_context=trace_context,
                 started_at=started_at,
-            provider=provider,
-            candidates=fallback_candidates,
-            top_k=candidate_limit,
-            fallback_reason="reranker_unavailable",
-            error=None,
+                provider=provider,
+                candidates=fallback_candidates,
+                top_k=candidate_limit,
+                fallback_reason="reranker_unavailable",
+                error=None,
             )
 
-        provider_candidates = [
-            candidate.model_copy(deep=True) for candidate in fallback_candidates
-        ]
+        provider_candidates = [candidate.model_copy(deep=True) for candidate in fallback_candidates]
         try:
             provider_results = self._reranker.rerank(
                 query,
@@ -225,9 +329,7 @@ class RerankController:
                 candidates=fallback_candidates,
                 top_k=candidate_limit,
                 fallback_reason=(
-                    "reranker_timeout"
-                    if self._is_timeout_error(error)
-                    else "reranker_error"
+                    "reranker_timeout" if self._is_timeout_error(error) else "reranker_error"
                 ),
                 error=error,
             )
@@ -296,17 +398,13 @@ class RerankController:
         for result in results:
             candidate = RetrievalResult.model_validate(result).model_copy(deep=True)
             if candidate.chunk_id not in allowed_chunk_ids:
-                raise ValueError(
-                    "Reranker output contains a candidate outside the filtered input"
-                )
+                raise ValueError("Reranker output contains a candidate outside the filtered input")
             if candidate.chunk_id in seen:
                 raise ValueError("Reranker output contains duplicate candidate IDs")
             seen.add(candidate.chunk_id)
             validated.append(candidate)
         if len(validated) != expected_count:
-            raise ValueError(
-                "Reranker output count must match the filtered candidate limit"
-            )
+            raise ValueError("Reranker output count must match the filtered candidate limit")
         return validated
 
     @staticmethod
@@ -374,9 +472,7 @@ class RerankController:
             limited by ``top_k``, and the explicit fallback reason.
         """
 
-        results = [
-            candidate.model_copy(deep=True) for candidate in candidates[:top_k]
-        ]
+        results = [candidate.model_copy(deep=True) for candidate in candidates[:top_k]]
         self._record_trace(
             trace_context,
             started_at=started_at,
@@ -406,6 +502,7 @@ class RerankController:
         top_k: int,
         fallback_reason: str | None,
         error: Exception | None,
+        skip_decision: RerankSkipDecision | None = None,
     ) -> None:
         """Write one best-effort rerank trace stage.
 
@@ -430,6 +527,11 @@ class RerankController:
             "after_candidates": candidate_snapshots(results),
             "fallback_used": fallback_reason is not None,
             "fallback_reason": fallback_reason,
+            "skipped": skip_decision.should_skip if skip_decision else False,
+            "skip_reason": skip_decision.reason if skip_decision else None,
+            "confidence_features": (
+                dict(skip_decision.confidence_features) if skip_decision else {}
+            ),
         }
         if error is not None:
             details["error_type"] = type(error).__name__
@@ -449,3 +551,15 @@ class RerankController:
             # Trace output is diagnostic only. A broken trace sink must never
             # replace reranked or fallback query results.
             return
+
+
+def _is_dual_route_hit(candidate: RetrievalResult) -> bool:
+    """Return whether a fused candidate was found by Dense and Sparse routes."""
+
+    fusion = candidate.metadata.get("fusion")
+    if not isinstance(fusion, dict):
+        return False
+    sources = fusion.get("sources")
+    if isinstance(sources, (list, tuple, set, frozenset)):
+        return "dense" in sources and "sparse" in sources
+    return fusion.get("dense_rank") is not None and fusion.get("sparse_rank") is not None

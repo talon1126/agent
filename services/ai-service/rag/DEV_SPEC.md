@@ -327,8 +327,8 @@ Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Quer
 | 查询预处理 | 清洗和标准化用户问题 | 做 query normalize、关键词提取、可选 query rewrite，并解析 collection/top_k 等基础调用参数；不做业务意图识别 |
 | 意图识别与路由 | 判断查询所属知识域和检索策略 | **Intent Router**：输入 `raw_query` 和 `ProcessedQuery`，基于规则、轻量语义匹配和可选 LLM fallback 输出候选 collection、domain intent、问题复杂度、检索策略、置信度和原因；结果写入 query trace 的 `intent_routing` stage |
 | 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery` 和 Intent Router 的路由结果，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Intent Router、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
-| Rerank 前候选过滤 | 在精排前过滤候选 | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker |
-| 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
+| Rerank 前候选过滤与跳过决策 | 在精排前过滤候选并判断是否需要执行昂贵 rerank | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker；过滤后按整批候选执行 rerank skip gate，当 fusion 排序已满足高置信条件时直接使用过滤后的 RRF Top-k，否则将过滤后的 `fusion_top_k` 整批送入 Cross-Encoder 或 LLM Rerank |
+| 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只在 rerank skip gate 未通过时对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
 | Async Query Runtime | 提升在线查询并发和可控超时能力 | Phase I 新增 `AsyncQueryRuntime` 与 provider async 契约；在线 query、MCP 和 evaluation 可走 async 路径；ingestion 暂不 async 化；同步入口保留兼容包装 |
 | Self-RAG 证据决策 | 判断 rerank 后证据是否相关且足够 | **SelfRagController** 位于 rerank 之后、Response Builder 之前；单 collection 查询直接消费 rerank 结果；多 collection 查询必须先完成各 collection retrieval/rerank，再跨 collection merge，最后只执行一次 Self-RAG judge；Top2/Top3 分数稳定较高时直接通过；中等置信度时先剔除极低分 chunk，减少 judge 上下文拥挤，再通过一次 LLM 调用同时返回 relevance 与 evidence sufficiency 判断；极低置信度或 judge 不通过时暂时只返回 empty result，不直接调用 Web/Tavily；后续可扩展纠错、重试或外部搜索建议 |
 | 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 单 collection 查询基于 Self-RAG 通过的最终候选生成编号证据块；多 collection 查询在跨 collection merge 和单次 Self-RAG 后只执行一次 Response Builder；再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
@@ -703,11 +703,28 @@ retrieval:
     include_deleted: false
     default_collection: shopping_guides
 
+
 rerank:
   enabled: true
   default: llm
   fallback: rrf
   prompt_path: config/prompts/rerank_prompt.yaml
+  top_k: 5
+  skip_gate:
+    enabled: true
+    min_candidates: 3
+    max_candidates_for_skip: 5
+    min_dual_route_hits: 1
+    min_rrf_margin_ratio: 0.08
+    require_document_consistency: false
+    require_section_consistency: false
+  providers:
+    llm:
+      llm_provider: deepseek
+      timeout_seconds: 60
+    cross_encoder:
+      model: BAAI/bge-reranker-base
+      device: cpu
 
 self_rag:
   enabled: true
@@ -720,14 +737,6 @@ self_rag:
   fallback_action: empty
   judge_llm_provider: deepseek
   judge_prompt_path: config/prompts/self_rag_judge_prompt.yaml
-  top_k: 5
-  providers:
-    llm:
-      llm_provider: deepseek
-      timeout_seconds: 60
-    cross_encoder:
-      model: BAAI/bge-reranker-base
-      device: cpu
 
 response:
   evidence_context_optimizer:
@@ -1114,10 +1123,10 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | `sparse` | BM25 方法、倒排索引命中词、命中的 chunk ID 列表、候选数量、缺失 chunk ID、耗时 |
 | `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果和耗时；async 多 collection 查询仍只记录 fusion 语义，不能把 dense/sparse/filter/rerank 总耗时合并进 fusion |
 | `filter` | 过滤参数、过滤前候选快照、过滤后候选快照、被过滤候选与原因、耗时 |
-| `rerank` | Reranker Provider、过滤后 rerank 前候选快照、rerank 后候选快照、fallback 原因（若有）、耗时 |
+| `rerank` | Reranker Provider、过滤后 rerank 前候选快照、rerank 后候选快照、skip gate 决策、fallback 原因（若有）、耗时 |
 | `self_rag` | 证据分档、极低分候选裁剪数量、单次 LLM judge 输入摘要、relevance/evidence sufficiency 判断、最终通过候选快照、empty fallback 原因、耗时 |
 
-候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化和证据决策结果；async 多 collection 查询必须保持与同步链路一致的顶层 stage：`intent_routing`、`dense`、`sparse`、`fusion`、`filter`、`rerank`、`self_rag`、`response`。每个顶层 stage 可在 `details.collection_runs` 中记录 collection 级耗时、候选数量、状态和 fallback 原因，但不得把 dense/sparse/filter/rerank 的耗时合并记入 fusion。
+候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化、skip gate 决策和证据决策结果；async 多 collection 查询必须保持与同步链路一致的顶层 stage：`intent_routing`、`dense`、`sparse`、`fusion`、`filter`、`rerank`、`self_rag`、`response`。每个顶层 stage 可在 `details.collection_runs` 中记录 collection 级耗时、候选数量、状态和 fallback 原因，但不得把 dense/sparse/filter/rerank 的耗时合并记入 fusion。
 
 查询结果：
 
@@ -1944,6 +1953,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 - HybridSearch 负责集成 Dense/BM25、候选去重和 RRF Fusion。
 - RRF Fusion 基于排名融合，避免 Dense 分数和 BM25 分数量纲不同导致排序失真。
 - 候选过滤必须发生在 Rerank 前，避免不符合 `collection`、`doc_type`、权限或生命周期状态的内容进入重排阶段。
+- Rerank skip gate 只做整批跳过或整批进入 Reranker 的决策，避免混合不同量纲的 fusion score 与 rerank score。
 - Reranker 不可用时必须优雅降级，保证查询链路仍然可以返回可用结果。
 - Self-RAG Controller 负责判断 rerank 后证据是否相关且足够；证据不足时暂时只返回 empty result，不在 RAG 内部直接调用 Web/Tavily。
 - Response Builder 负责隐藏内部工具细节，只返回适合 Agent 使用的格式化内容、引用和多模态材料。
@@ -2346,7 +2356,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | D5 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D5 单元测试通过 |
 | D6 | 实现 RRF Fusion | [✔] | 2026-06-07 | Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D6 单元测试通过 |
 | D7 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | ProcessedQuery 与 Intent Router 输出输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D7 单元测试通过 |
-| D8 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D8 单元测试通过 |
+| D8 | 实现 Rerank 前候选过滤与跳过决策 | [✔] | 2026-06-07 | CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace、rerank skip gate 高置信整批跳过策略和未知过滤键错误边界；8 个 D8 单元测试通过 |
 | D9 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D9 单元测试通过 |
 | D10 | 实现 LLM Rerank 适配 | [✔] | 2026-06-11 | LLMReranker、PromptTemplate 加载、BaseLLM 注入和结构化 JSON 排名解析；Prompt 强制只返回 JSON object array，禁止 ID-only array、Markdown fence 和解释文字；真实 DeepSeek 查询验证 rerank 成功且未触发 fallback |
 | D11 | 实现 rerank fallback | [✔] | 2026-06-07 | RerankController、RerankOutcome、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、显式 fallback 状态、低侵入 rerank trace 和 trace sink 失败隔离；28 个 Reranker 单元测试通过 |
@@ -3185,11 +3195,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
-##### D8：实现 Rerank 前候选过滤
+##### D8：实现 Rerank 前候选过滤与跳过决策
 
-目标：在 RRF Fusion 之后、Reranker 之前，根据调用参数过滤候选，避免把不符合限定条件的 chunk 送入重排阶段。
+目标：在 RRF Fusion 之后、Reranker 之前，根据调用参数过滤候选，并在过滤后的候选已经满足高置信条件时跳过昂贵 rerank，降低在线查询延迟。
 
-修改文件：`src/core/query_engine/__init__.py`、`src/core/query_engine/hybrid_engine.py`、`tests/unit/test_retrieval.py`
+修改文件：`config/settings.example.yaml`、`src/core/config.py`、`src/core/query_engine/__init__.py`、`src/core/query_engine/hybrid_engine.py`、`src/core/query_engine/reranker.py`、`tests/unit/test_retrieval.py`、`tests/unit/test_reranker.py`
 
 实现类/函数：
 
@@ -3198,10 +3208,13 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `CandidateFilter._first_rejection_reason()`：返回候选被过滤的首个原因
 - `HybridSearch.apply_metadata_filter()`：在进入 rerank 前执行 metadata 过滤
 - `HybridSearch._record_filter_trace()`：记录 filter 阶段过滤参数、数量变化和过滤原因
+- `RerankSkipGate.evaluate()`：基于过滤后的 fusion 候选执行整批高置信判断
+- `RerankSkipDecision`：返回是否跳过 rerank、原因、置信特征和最终候选来源
+- `RerankController.rerank_with_outcome()`：在 skip gate 通过时直接返回过滤后的 RRF Top-k，并显式记录 skipped 状态
 - `_matches_filter()`：执行 metadata 精确匹配或多值匹配
 - `_has_permission()` / `_has_all_permissions()`：执行权限过滤
 
-验收标准：支持 `collection`、`doc_type`、`source_type`、`document_status`、`lifecycle_status`、`permission`、`permissions`、`include_deleted` 参数；默认排除 `lifecycle_status=deleted` 的候选，除非显式设置布尔值 `include_deleted=true`；`include_deleted` 必须是 boolean，不能用字符串隐式转换；过滤发生在 RRF Fusion 之后、Rerank 之前；`HybridSearch.search(filters=...)` 和 `HybridSearch.apply_metadata_filter()` 复用同一过滤逻辑，供后续 `--collection` 等脚本参数调用；过滤后保持原有候选顺序；过滤结果数量和过滤原因写入 trace details；未知过滤键必须抛出 `RetrievalError`，避免静默忽略调用方输入；Trace sink 异常不得覆盖过滤结果或原始 RetrievalError。
+验收标准：支持 `collection`、`doc_type`、`source_type`、`document_status`、`lifecycle_status`、`permission`、`permissions`、`include_deleted` 参数；默认排除 `lifecycle_status=deleted` 的候选，除非显式设置布尔值 `include_deleted=true`；`include_deleted` 必须是 boolean，不能用字符串隐式转换；过滤发生在 RRF Fusion 之后、Rerank 之前；`HybridSearch.search(filters=...)` 和 `HybridSearch.apply_metadata_filter()` 复用同一过滤逻辑，供后续 `--collection` 等脚本参数调用；过滤后保持原有候选顺序；过滤结果数量和过滤原因写入 trace details；未知过滤键必须抛出 `RetrievalError`，避免静默忽略调用方输入；rerank skip gate 必须在过滤后按整批候选决策，不允许混合使用“部分 fusion 结果 + 部分 rerank 结果”的 a+b 排序；高置信通过时直接返回过滤后的 RRF `final_top_k`，并在 rerank trace 中记录 `skipped=true`、`skip_reason`、`confidence_features`、`before_candidates` 和 `after_candidates`；未通过时过滤后的 `fusion_top_k` 整批进入 Reranker；gate 判断不得直接比较 Dense/BM25 原始分数，RRF margin 只能作为相对特征，并应结合 dense/sparse 双路命中、rank 稳定性、document/section 一致性和候选数量；skip gate 阈值必须来自 settings，不允许硬编码；Trace sink 异常不得覆盖过滤结果、skip 决策或原始 RetrievalError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 

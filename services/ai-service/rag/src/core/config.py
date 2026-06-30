@@ -276,8 +276,6 @@ class RetrievalSettings(ConfigSection):
         return self
 
 
-
-
 class IntentRouterSettings(ConfigSection):
     """Configure query intent routing before hybrid retrieval.
 
@@ -295,6 +293,38 @@ class IntentRouterSettings(ConfigSection):
     llm_provider: str | None = None
 
 
+class RerankSkipGateSettings(ConfigSection):
+    """Configure high-confidence rerank bypass decisions."""
+
+    enabled: bool = True
+    min_candidates: int = Field(default=3, gt=0)
+    max_candidates_for_skip: int = Field(default=5, gt=0)
+    min_dual_route_hits: int = Field(default=1, ge=0)
+    min_rrf_margin_ratio: float = Field(default=0.08, ge=0, le=1)
+    require_document_consistency: bool = False
+    require_section_consistency: bool = False
+
+    @model_validator(mode="after")
+    def validate_skip_gate_window(self) -> Self:
+        """Ensure the observed candidate window can satisfy gate conditions.
+
+        Returns:
+            The validated skip-gate settings.
+
+        Raises:
+            ValueError: If the observation window is smaller than the required
+                candidate count or dual-route hit count.
+        """
+
+        if self.max_candidates_for_skip < self.min_candidates:
+            raise ValueError(
+                "max_candidates_for_skip must be greater than or equal to min_candidates"
+            )
+        if self.min_dual_route_hits > self.max_candidates_for_skip:
+            raise ValueError("min_dual_route_hits must not exceed max_candidates_for_skip")
+        return self
+
+
 class RerankSettings(ConfigSection):
     """Describe reranker selection, fallback order, and Prompt location."""
 
@@ -303,6 +333,7 @@ class RerankSettings(ConfigSection):
     fallback: str = Field(min_length=1)
     prompt_path: str
     top_k: int = Field(gt=0)
+    skip_gate: RerankSkipGateSettings = Field(default_factory=RerankSkipGateSettings)
     providers: dict[str, ProviderSettings] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -631,13 +662,9 @@ class RagSettings(BaseModel):
         optimizer = self.response.evidence_context_optimizer
         if optimizer.enabled:
             required.update(self.llm.providers[optimizer.llm_provider].environment_references())
+        required.update(self.llm.providers[self.evaluation.llm_provider].environment_references())
         required.update(
-            self.llm.providers[self.evaluation.llm_provider].environment_references()
-        )
-        required.update(
-            self.embedding.providers[
-                self.evaluation.embedding_provider
-            ].environment_references()
+            self.embedding.providers[self.evaluation.embedding_provider].environment_references()
         )
         if self.intent_router.llm_fallback_enabled and self.intent_router.llm_provider:
             required.update(
@@ -814,7 +841,6 @@ def load_settings(
     return settings
 
 
-
 def enabled_generation_metrics(settings: RagSettings) -> list[str]:
     """Return enabled Ragas generation metrics in stable evaluation order.
 
@@ -843,6 +869,7 @@ def enabled_generation_metrics(settings: RagSettings) -> list[str]:
     if not enabled:
         raise ValueError("At least one Ragas generation metrics switch must be enabled")
     return enabled
+
 
 def load_prompt(path: str | Path) -> PromptTemplate:
     """Load and validate a versioned Prompt definition without rendering it.

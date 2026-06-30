@@ -320,7 +320,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | D5 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D5 单元测试通过 |
 | D6 | 实现 RRF Fusion | [✔] | 2026-06-07 | Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D6 单元测试通过 |
 | D7 | 实现 HybridSearch 编排 | [✔] | 2026-06-07 | ProcessedQuery 与 Intent Router 输出输入、Dense/Sparse 双路调用、RRF Fusion 编排、配置驱动 fusion_top_k/rrf_k、HybridSearchResult、单路失败降级、双路失败错误边界和低侵入 Trace；5 个 D7 单元测试通过 |
-| D8 | 实现 Rerank 前候选过滤 | [✔] | 2026-06-07 | CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace 和未知过滤键错误边界；8 个 D8 单元测试通过 |
+| D8 | 实现 Rerank 前候选过滤与跳过决策 | [✔] | 2026-06-07 | CandidateFilter、CandidateFilterReport、HybridSearch.search filters 参数、HybridSearch.apply_metadata_filter 可复用入口、collection/doc_type/source_type/document_status/lifecycle_status/permission 过滤、默认排除 deleted、include_deleted 布尔校验、过滤 trace、rerank skip gate 高置信整批跳过策略和未知过滤键错误边界；8 个 D8 单元测试通过 |
 | D9 | 实现 Cross-Encoder Reranker 适配 | [✔] | 2026-06-07 | CrossEncoderReranker、CrossEncoderScorer 协议、query-doc pair 打分、按模型分数稳定排序、top_k 截断、rerank metadata 诊断、sentence-transformers 惰性加载、ProviderError 错误边界和 RerankerFactory cross_encoder 注册；8 个 D9 单元测试通过 |
 | D10 | 实现 LLM Rerank 适配 | [✔] | 2026-06-11 | LLMReranker、PromptTemplate 加载、BaseLLM 注入和结构化 JSON 排名解析；Prompt 强制只返回 JSON object array，禁止 ID-only array、Markdown fence 和解释文字；真实 DeepSeek 查询验证 rerank 成功且未触发 fallback |
 | D11 | 实现 rerank fallback | [✔] | 2026-06-07 | RerankController、RerankOutcome、配置驱动 top_k、provider 调用前候选深拷贝、reranker 不可用/直接或 ProviderError 包装的 timeout/普通异常 fallback、非法/过滤集外/候选数量不符的 provider 输出防护、过滤后 RRF 顺序保留、显式 fallback 状态、低侵入 rerank trace 和 trace sink 失败隔离；28 个 Reranker 单元测试通过 |
@@ -388,7 +388,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | I1 | 定义 async provider 契约与兼容适配层 | [✔] | 2026-06-29 | 为 LLM、Embedding、VectorStore 和 Reranker 补充默认 async 最小接口；新增 SyncToAsync adapters，支持 timeout 与 cancellation；同步 retrieval/evaluation async 配置；158 个相关单元测试和 ruff 通过 |
 | I2 | 实现 provider 原生 async 化 | [✔] | 2026-06-29 | OpenAI-compatible/DeepSeek/CCSwitch/Embedding provider 使用原生 async SDK client；pgvector/BM25 在线查询提供 async 方法；LLM Reranker 使用 async LLM；Cross-Encoder 通过 worker thread 避免阻塞事件循环；142 个相关单元测试和 ruff 通过 |
 | I3 | 实现 AsyncQueryRuntime | [✔] | 2026-06-29 | 新增在线查询 `AsyncQueryRuntime`，覆盖 query processing、intent routing、hybrid retrieval、rerank、Self-RAG 和 Response Builder；`run_query_cli()` 支持同步/async runtime 兼容执行；8 个 async runtime 单元测试、2 个 query pipeline 集成测试和 ruff 通过 |
-| I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [✔] | 2026-06-29 | 新增 `AsyncParallelRetrievalController`，使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断并保留 collection/routing/merge metadata；Self-RAG judge 和 Response Builder 在 merge 后只执行一次；支持 max concurrency、per-collection timeout、partial failure、全部 empty 和全部失败；111 个 I4 指定单元测试和 ruff 通过 |
+| I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [✔] | 2026-06-29 | 新增 `AsyncParallelRetrievalController`，使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断并保留 collection/routing/merge metadata；async trace 必须保持与同步链路一致的顶层 stage，分别记录 dense/sparse/fusion/filter/rerank 耗时、候选数、状态和 fallback 原因；Self-RAG judge 和 Response Builder 在 merge 后只执行一次；支持 max concurrency、per-collection timeout、partial failure、全部 empty 和全部失败；111 个 I4 指定单元测试和 ruff 通过 |
 | I5 | 接入 MCP 与 evaluation async 路径 | [✔] | 2026-06-29 | `query_knowledge_hub` 可 await async runtime 且保留 MCP 公共响应和错误 envelope；MCP 默认按 `retrieval.async_enabled` 选择 async runtime，多 collection 工具调用使用 async gather 聚合公共结果；evaluation 在 `evaluation.async_enabled` 下并发构造 prediction，支持 `max_sample_concurrency`，Ragas client 支持 `max_metric_concurrency` 映射到 evaluator worker；RAG answer-source 单样本失败写入 prediction error，message answer-source 保持缺失 message/trace 时 fail fast；59 个 I5 目标测试通过，1 个外部 Ragas 测试按 marker 跳过 |
 | I6 | 完成 async 查询验收与性能对比 | [✔] | 2026-06-29 | async 链路相关单元、集成和 MCP stdio contract 测试通过；新增 `async_query_performance_report()` 汇总 first10/last10 风格的 sync/async avg latency、P95、RAG trace、Self-RAG judge、Response Builder、timeout 和 Ragas metric delta；新增 `data/resume/async_query_runtime.md` 记录 deterministic 验收 fixture 与已有本地 first10/last10 历史耗时，严格 live A/B benchmark 需在外部模型启用时单独运行；14 个 I6 目标测试和 ruff 通过 |
 
@@ -1159,11 +1159,11 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
-##### D8：实现 Rerank 前候选过滤
+##### D8：实现 Rerank 前候选过滤与跳过决策
 
-目标：在 RRF Fusion 之后、Reranker 之前，根据调用参数过滤候选，避免把不符合限定条件的 chunk 送入重排阶段。
+目标：在 RRF Fusion 之后、Reranker 之前，根据调用参数过滤候选，并在过滤后的候选已经满足高置信条件时跳过昂贵 rerank，降低在线查询延迟。
 
-修改文件：`src/core/query_engine/__init__.py`、`src/core/query_engine/hybrid_engine.py`、`tests/unit/test_retrieval.py`
+修改文件：`config/settings.example.yaml`、`src/core/config.py`、`src/core/query_engine/__init__.py`、`src/core/query_engine/hybrid_engine.py`、`src/core/query_engine/reranker.py`、`tests/unit/test_retrieval.py`、`tests/unit/test_reranker.py`
 
 实现类/函数：
 
@@ -1172,10 +1172,13 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `CandidateFilter._first_rejection_reason()`：返回候选被过滤的首个原因
 - `HybridSearch.apply_metadata_filter()`：在进入 rerank 前执行 metadata 过滤
 - `HybridSearch._record_filter_trace()`：记录 filter 阶段过滤参数、数量变化和过滤原因
+- `RerankSkipGate.evaluate()`：基于过滤后的 fusion 候选执行整批高置信判断
+- `RerankSkipDecision`：返回是否跳过 rerank、原因、置信特征和最终候选来源
+- `RerankController.rerank_with_outcome()`：在 skip gate 通过时直接返回过滤后的 RRF Top-k，并显式记录 skipped 状态
 - `_matches_filter()`：执行 metadata 精确匹配或多值匹配
 - `_has_permission()` / `_has_all_permissions()`：执行权限过滤
 
-验收标准：支持 `collection`、`doc_type`、`source_type`、`document_status`、`lifecycle_status`、`permission`、`permissions`、`include_deleted` 参数；默认排除 `lifecycle_status=deleted` 的候选，除非显式设置布尔值 `include_deleted=true`；`include_deleted` 必须是 boolean，不能用字符串隐式转换；过滤发生在 RRF Fusion 之后、Rerank 之前；`HybridSearch.search(filters=...)` 和 `HybridSearch.apply_metadata_filter()` 复用同一过滤逻辑，供后续 `--collection` 等脚本参数调用；过滤后保持原有候选顺序；过滤结果数量和过滤原因写入 trace details；未知过滤键必须抛出 `RetrievalError`，避免静默忽略调用方输入；Trace sink 异常不得覆盖过滤结果或原始 RetrievalError。
+验收标准：支持 `collection`、`doc_type`、`source_type`、`document_status`、`lifecycle_status`、`permission`、`permissions`、`include_deleted` 参数；默认排除 `lifecycle_status=deleted` 的候选，除非显式设置布尔值 `include_deleted=true`；`include_deleted` 必须是 boolean，不能用字符串隐式转换；过滤发生在 RRF Fusion 之后、Rerank 之前；`HybridSearch.search(filters=...)` 和 `HybridSearch.apply_metadata_filter()` 复用同一过滤逻辑，供后续 `--collection` 等脚本参数调用；过滤后保持原有候选顺序；过滤结果数量和过滤原因写入 trace details；未知过滤键必须抛出 `RetrievalError`，避免静默忽略调用方输入；rerank skip gate 必须在过滤后按整批候选决策，不允许混合使用“部分 fusion 结果 + 部分 rerank 结果”的 a+b 排序；高置信通过时直接返回过滤后的 RRF `final_top_k`，并在 rerank trace 中记录 `skipped=true`、`skip_reason`、`confidence_features`、`before_candidates` 和 `after_candidates`；未通过时过滤后的 `fusion_top_k` 整批进入 Reranker；gate 判断不得直接比较 Dense/BM25 原始分数，RRF margin 只能作为相对特征，并应结合 dense/sparse 双路命中、rank 稳定性、document/section 一致性和候选数量；skip gate 阈值必须来自 settings，不允许硬编码；Trace sink 异常不得覆盖过滤结果、skip 决策或原始 RetrievalError。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py -v`
 
@@ -2120,10 +2123,10 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `AsyncParallelRetrievalController.search()`：使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子任务。
 - `AsyncParallelRetrievalController._run_collection()`：为单个 collection 执行 retrieval/rerank，不执行最终 Self-RAG 或 Response。
 - `AsyncParallelRetrievalController._merge_collection_results()`：跨 collection 合并结果并统一 top_k 截断。
-- `AsyncParallelRetrievalController._record_trace()`：按同步链路一致的顶层 stage 语义记录 async 多 collection 查询，分别输出 dense、sparse、fusion、filter、rerank 的耗时、候选数量、状态、collection 明细和 fallback 原因。
+- `AsyncParallelRetrievalController._record_trace()`：记录 collection runs、timeout、partial failure、merge snapshot 和 child trace id。
 - `AsyncQueryRuntime._finalize_merged_results()`：对 merge 后候选执行一次 Self-RAG 和一次 Response Builder。
 
-验收标准：多 collection 查询必须用 `asyncio.gather()` 或等价任务编排并发执行 collection 子任务；每个 collection 只执行 retrieval/rerank 子链路；Self-RAG judge 和 Response Builder 对 merge 后最终候选只调用一次；支持 `retrieval.max_collection_concurrency`、`retrieval.per_collection_timeout_seconds`、partial failure、全部 empty 和全部失败；async trace 顶层 stage 必须与同步链路一致，保持 `intent_routing/dense/sparse/fusion/filter/rerank/self_rag/response` 语义，不能把 retrieval 和 rerank 总耗时合并进 `fusion`；每个顶层 stage 可在 `details.collection_runs` 中展示 collection 级耗时、候选数量、状态和 fallback 原因；单元测试必须验证两个中置信 collection 不会触发两次 Self-RAG LLM judge。
+验收标准：多 collection 查询必须用 `asyncio.gather()` 或等价任务编排并发执行 collection 子任务；每个 collection 只执行 retrieval/rerank 子链路；Self-RAG judge 和 Response Builder 对 merge 后最终候选只调用一次；支持 `retrieval.max_collection_concurrency`、`retrieval.per_collection_timeout_seconds`、partial failure、全部 empty 和全部失败；trace 中必须能看出 collection 级耗时和最终统一后处理耗时；单元测试必须验证两个中置信 collection 不会触发两次 Self-RAG LLM judge。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_async_query_runtime.py services\ai-service\rag\tests\unit\test_retrieval.py services\ai-service\rag\tests\unit\test_trace_context.py -v`
 

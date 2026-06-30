@@ -148,6 +148,14 @@ rerank:
   fallback: rrf
   prompt_path: config/prompts/rerank_prompt.yaml
   top_k: 5
+  skip_gate:
+    enabled: true
+    min_candidates: 3
+    max_candidates_for_skip: 5
+    min_dual_route_hits: 1
+    min_rrf_margin_ratio: 0.08
+    require_document_consistency: false
+    require_section_consistency: false
   providers:
     llm:
       llm_provider: deepseek

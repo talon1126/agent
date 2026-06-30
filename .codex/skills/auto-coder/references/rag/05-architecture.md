@@ -573,6 +573,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 - HybridSearch 负责集成 Dense/BM25、候选去重和 RRF Fusion。
 - RRF Fusion 基于排名融合，避免 Dense 分数和 BM25 分数量纲不同导致排序失真。
 - 候选过滤必须发生在 Rerank 前，避免不符合 `collection`、`doc_type`、权限或生命周期状态的内容进入重排阶段。
+- Rerank skip gate 只做整批跳过或整批进入 Reranker 的决策，避免混合不同量纲的 fusion score 与 rerank score。
 - Reranker 不可用时必须优雅降级，保证查询链路仍然可以返回可用结果。
 - Self-RAG Controller 负责判断 rerank 后证据是否相关且足够；证据不足时暂时只返回 empty result，不在 RAG 内部直接调用 Web/Tavily。
 - Response Builder 负责隐藏内部工具细节，只返回适合 Agent 使用的格式化内容、引用和多模态材料。

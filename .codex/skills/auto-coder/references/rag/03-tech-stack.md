@@ -146,8 +146,8 @@ Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Quer
 | 查询预处理 | 清洗和标准化用户问题 | 做 query normalize、关键词提取、可选 query rewrite，并解析 collection/top_k 等基础调用参数；不做业务意图识别 |
 | 意图识别与路由 | 判断查询所属知识域和检索策略 | **Intent Router**：输入 `raw_query` 和 `ProcessedQuery`，基于规则、轻量语义匹配和可选 LLM fallback 输出候选 collection、domain intent、问题复杂度、检索策略、置信度和原因；结果写入 query trace 的 `intent_routing` stage |
 | 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery` 和 Intent Router 的路由结果，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Intent Router、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
-| Rerank 前候选过滤 | 在精排前过滤候选 | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker |
-| 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
+| Rerank 前候选过滤与跳过决策 | 在精排前过滤候选并判断是否需要执行昂贵 rerank | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker；过滤后按整批候选执行 rerank skip gate，当 fusion 排序已满足高置信条件时直接使用过滤后的 RRF Top-k，否则将过滤后的 `fusion_top_k` 整批送入 Cross-Encoder 或 LLM Rerank |
+| 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只在 rerank skip gate 未通过时对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
 | Async Query Runtime | 提升在线查询并发和可控超时能力 | Phase I 新增 `AsyncQueryRuntime` 与 provider async 契约；在线 query、MCP 和 evaluation 可走 async 路径；ingestion 暂不 async 化；同步入口保留兼容包装 |
 | Self-RAG 证据决策 | 判断 rerank 后证据是否相关且足够 | **SelfRagController** 位于 rerank 之后、Response Builder 之前；单 collection 查询直接消费 rerank 结果；多 collection 查询必须先完成各 collection retrieval/rerank，再跨 collection merge，最后只执行一次 Self-RAG judge；Top2/Top3 分数稳定较高时直接通过；中等置信度时先剔除极低分 chunk，减少 judge 上下文拥挤，再通过一次 LLM 调用同时返回 relevance 与 evidence sufficiency 判断；极低置信度或 judge 不通过时暂时只返回 empty result，不直接调用 Web/Tavily；后续可扩展纠错、重试或外部搜索建议 |
 | 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 单 collection 查询基于 Self-RAG 通过的最终候选生成编号证据块；多 collection 查询在跨 collection merge 和单次 Self-RAG 后只执行一次 Response Builder；再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
@@ -522,11 +522,28 @@ retrieval:
     include_deleted: false
     default_collection: shopping_guides
 
+
 rerank:
   enabled: true
   default: llm
   fallback: rrf
   prompt_path: config/prompts/rerank_prompt.yaml
+  top_k: 5
+  skip_gate:
+    enabled: true
+    min_candidates: 3
+    max_candidates_for_skip: 5
+    min_dual_route_hits: 1
+    min_rrf_margin_ratio: 0.08
+    require_document_consistency: false
+    require_section_consistency: false
+  providers:
+    llm:
+      llm_provider: deepseek
+      timeout_seconds: 60
+    cross_encoder:
+      model: BAAI/bge-reranker-base
+      device: cpu
 
 self_rag:
   enabled: true
@@ -539,14 +556,6 @@ self_rag:
   fallback_action: empty
   judge_llm_provider: deepseek
   judge_prompt_path: config/prompts/self_rag_judge_prompt.yaml
-  top_k: 5
-  providers:
-    llm:
-      llm_provider: deepseek
-      timeout_seconds: 60
-    cross_encoder:
-      model: BAAI/bge-reranker-base
-      device: cpu
 
 response:
   evidence_context_optimizer:
@@ -929,15 +938,14 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | --- | --- |
 | `query_processing` | 原始 query、改写 query（若有）、query normalize 方法、关键词数量、collection/top_k 参数、耗时 |
 | `intent_routing` | 输入 query 摘要、候选 collection、domain intent、问题复杂度、检索策略、置信度、命中原因、fallback 状态、耗时 |
-| `parallel_retrieval` | 多 collection 检索计划、selected_collections、dropped_collections、每个 collection 的候选数量/耗时/状态、partial failure、child_trace_ids 或 per-collection stage summary、合并后候选数量 |
 | `dense` | Query Embedding 模型、向量库 Provider、命中的 chunk ID 列表、候选数量、耗时 |
 | `sparse` | BM25 方法、倒排索引命中词、命中的 chunk ID 列表、候选数量、缺失 chunk ID、耗时 |
-| `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果、耗时 |
+| `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果和耗时；async 多 collection 查询仍只记录 fusion 语义，不能把 dense/sparse/filter/rerank 总耗时合并进 fusion |
 | `filter` | 过滤参数、过滤前候选快照、过滤后候选快照、被过滤候选与原因、耗时 |
-| `rerank` | Reranker Provider、过滤后 rerank 前候选快照、rerank 后候选快照、fallback 原因（若有）、耗时 |
+| `rerank` | Reranker Provider、过滤后 rerank 前候选快照、rerank 后候选快照、skip gate 决策、fallback 原因（若有）、耗时 |
 | `self_rag` | 证据分档、极低分候选裁剪数量、单次 LLM judge 输入摘要、relevance/evidence sufficiency 判断、最终通过候选快照、empty fallback 原因、耗时 |
 
-候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化和证据决策结果；多 collection 查询时 `parallel_retrieval` 阶段只记录 collection 级摘要和最终合并快照，不重复保存每个 collection 的完整正文，用于后续 Hit Rate、MRR、NDCG、rerank delta、evidence sufficiency、跨 collection precision 与空结果原因分析。
+候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化、skip gate 决策和证据决策结果；async 多 collection 查询必须保持与同步链路一致的顶层 stage：`intent_routing`、`dense`、`sparse`、`fusion`、`filter`、`rerank`、`self_rag`、`response`。每个顶层 stage 可在 `details.collection_runs` 中记录 collection 级耗时、候选数量、状态和 fallback 原因，但不得把 dense/sparse/filter/rerank 的耗时合并记入 fusion。
 
 查询结果：
 

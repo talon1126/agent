@@ -147,9 +147,7 @@ def test_default_component_selection_matches_the_spec() -> None:
     assert settings["llm"]["providers"]["ccswitch"]["model"] == "gpt-5.5"
     assert settings["vision_llm"]["providers"]["qwen_vl_max"]["model"] == "qwen-vl-max"
     assert settings["embedding"]["default"] == "dashscope"
-    assert settings["embedding"]["providers"]["dashscope"]["model"] == (
-        "text-embedding-v4"
-    )
+    assert settings["embedding"]["providers"]["dashscope"]["model"] == ("text-embedding-v4")
     assert settings["embedding"]["providers"]["dashscope"]["dimensions"] == 1536
     assert settings["vector_store"]["provider"] == "pgvector"
     assert settings["splitter"]["default"] == "markdown_section"
@@ -169,6 +167,27 @@ def test_default_component_selection_matches_the_spec() -> None:
     }
 
 
+def test_rerank_skip_gate_settings_are_configurable() -> None:
+    """Require rerank skip gate thresholds to be explicit reviewed settings."""
+
+    document = load_settings_document()
+    settings = load_settings(SETTINGS_PATH, environ={}, validate_environment=False)
+    skip_gate = document["rerank"]["skip_gate"]
+
+    assert skip_gate == {
+        "enabled": True,
+        "min_candidates": 3,
+        "max_candidates_for_skip": 5,
+        "min_dual_route_hits": 1,
+        "min_rrf_margin_ratio": 0.08,
+        "require_document_consistency": False,
+        "require_section_consistency": False,
+    }
+    assert settings.rerank.skip_gate.enabled is True
+    assert settings.rerank.skip_gate.min_candidates == 3
+    assert settings.rerank.skip_gate.min_rrf_margin_ratio == 0.08
+
+
 def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:
     """Ensure checked-in configuration references secrets without storing them.
 
@@ -185,12 +204,8 @@ def test_sensitive_values_are_referenced_by_environment_variable_name() -> None:
     assert settings["llm"]["providers"]["deepseek"]["api_key_env"] == ("DASHSCOPE_API_KEY")
     assert settings["llm"]["providers"]["ccswitch"]["api_key"] == "ccswitch-local-key"
     assert settings["llm"]["providers"]["ccswitch"]["base_url"] == "http://127.0.0.1:5511/v1"
-    assert settings["embedding"]["providers"]["dashscope"]["api_key_env"] == (
-        "DASHSCOPE_API_KEY"
-    )
-    assert settings["embedding"]["providers"]["dashscope"]["base_url_env"] == (
-        "DASHSCOPE_BASE_URL"
-    )
+    assert settings["embedding"]["providers"]["dashscope"]["api_key_env"] == ("DASHSCOPE_API_KEY")
+    assert settings["embedding"]["providers"]["dashscope"]["base_url_env"] == ("DASHSCOPE_BASE_URL")
     assert "sk-" not in serialized
     assert "YOUR_API_KEY" not in serialized
 
@@ -297,7 +312,6 @@ def test_retrieval_and_transform_defaults_are_complete() -> None:
     assert all(step["enabled"] for step in transform_steps)
     assert all("provider" not in step for step in transform_steps)
     assert transform_steps[-1]["prompt_path"] == "config/prompts/image_caption_prompt.yaml"
-
 
 
 def test_self_rag_settings_define_score_gate_and_judge_prompt() -> None:
@@ -415,7 +429,6 @@ def test_rerank_prompt_requires_structured_ranking_output() -> None:
     assert prompt["input_variables"] == ["query", "candidates"]
     assert prompt["output_schema"]["type"] == "json"
     assert {"candidate_id", "score", "reason"} <= set(prompt["output_schema"]["item_fields"])
-
 
 
 def test_self_rag_prompt_requires_single_structured_judge_output() -> None:
@@ -606,7 +619,6 @@ def test_environment_validation_lists_only_active_requirements() -> None:
     assert message.count("DASHSCOPE_API_KEY") == 1
 
 
-
 def test_evaluation_generation_metrics_are_config_driven() -> None:
     """Verify Ragas generation metrics are selected from typed settings."""
 
@@ -639,6 +651,8 @@ def test_enabled_generation_metrics_fails_when_all_generation_metrics_are_disabl
 
     with pytest.raises(ValueError, match="generation metrics"):
         enabled_generation_metrics(settings)
+
+
 def test_load_prompt_returns_a_validated_template() -> None:
     """Verify Prompt loading produces a typed, render-ready configuration object.
 
