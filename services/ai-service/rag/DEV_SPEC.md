@@ -2335,7 +2335,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-10 | canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；PyMuPDF 图片矩形绑定邻近文本锚点，MarkItDown 无页标记时仍能将图片插入对应章节附近；真实购物指南 PDF 冒烟验证通过 |
 | C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-10 | 稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、来源 metadata、image_refs 和 SplitterStep；纯图片占位符片段合并到相邻正文 chunk，确保检索单元包含文本语义 |
-| C4 | 实现 MarkdownSectionSplitter | [✔] | 2026-06-23 | 按 `###` 构建 Markdown section，章节层级由 `DocumentChunker` 写入 `section_path`；短 section 合并，长 section 内部二次切分，长表格按行分组且每个分片保留表头；表格拆分时只有第一段可携带表格前正文，后续表格分片只保留表头和数据行；表格尾部 chunk 可与后续建议块在 `chunk_size` 内合并；chunk 正文不保留 `#`、`##`、`###` 标题行；41 个配置和 splitter 单元测试通过 |
+| C4 | 实现 MarkdownSectionSplitter | [✔] | 2026-06-23 | 按 `###` 构建 Markdown section，章节层级由 `DocumentChunker` 写入 `section_path`；短 section 合并，长 section 内部二次切分，长表格按行分组且每个分片保留表头；表格拆分时只有第一段可携带表格前正文，后续表格分片只保留表头和数据行；表格尾部 chunk 可与后续建议块在 `chunk_size` 内合并；chunk 正文移除文档级 `#` H1，但保留 `##`、`###`、`####` 局部标题，不额外注入重复 section context；splitter 单元测试通过 |
 | C5 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | BaseTransform、配置驱动 TransformPipeline、metadata enrich、chunk rewrite、semantic merge、denoise、英文 Prompt、噪声 fixture 和幂等测试；ChunkRewriter 仅使用文本节点与 Document.summary 调用 LLM，并按原顺序保留图片占位符；无效文本响应直接失败，纯图片占位符 chunk 跳过文本 rewrite |
 | C6 | 实现 ImageCaptioner | [✔] | 2026-06-11 | `image_captioner` transform step、`BaseVisionLLM`、`DashScopeVisionLLM`、正文 caption 注入和 Dense/BM25 索引；图片 caption/provenance 记录在 `transform.sub_stages` |
 | C7 | 实现 DenseEncoder | [✔] | 2026-06-06 | DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
@@ -2896,21 +2896,21 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 ##### C4：实现 MarkdownSectionSplitter
 
-目标：为 Markdown 文档提供结构感知分块策略，优先以 `###` section 作为业务分块单元，章节层级通过 `DocumentChunker` 的 `section_path` metadata 保留，chunk 正文不注入 Markdown 标题行，避免短标题独立成 chunk，并降低长表格被无语义切断的概率。
+目标：为 Markdown 文档提供结构感知分块策略，优先以 `###` section 作为业务分块单元；`DocumentChunker` 仍把章节层级写入 `section_path` metadata，Splitter 只移除文档级 H1 标题，保留 `##`、`###`、`####` 等局部标题作为原文结构进入 chunk 正文，但不得额外注入重复的 section context。
 
 修改文件：`config/settings.example.yaml`、`src/libs/splitter/markdown_section_splitter.py`、`src/libs/splitter/splitter_factory.py`、`src/ingestion/chunk/document_chunker.py`、`src/ingestion/chunk/splitter_step.py`、`tests/unit/test_splitter.py`、`tests/fixtures/markdown_documents/`
 
 实现类/函数：
 
 - `MarkdownSectionSplitter.split()`：按 Markdown 标题结构生成 section-aware 文本片段
-- `MarkdownSectionSplitter.build_sections()`：基于 `#`、`##`、`###` 标题构建 section，标题层级只用于确定切分边界和后续 `section_path` 映射，不直接写入 chunk 正文
+- `MarkdownSectionSplitter.build_sections()`：基于 `#`、`##`、`###` 标题构建 section；H1 用于文档级定位并从 chunk 正文移除，H2+ 标题既参与切分边界和 `section_path` 映射，也可作为原始 Markdown 结构保留在 chunk 正文中
 - `MarkdownSectionSplitter.merge_short_sections()`：将低于最小长度的相邻 sibling section 合并，避免生成只有标题或语义过薄的 chunk
-- `MarkdownSectionSplitter.split_long_section()`：当单个 `###` section 超过 `chunk_size` 时，在该 section 内部继续二次切分，并保持分片可定位到原始 heading offset
-- `MarkdownSectionSplitter.split_markdown_table()`：识别 Markdown 表格并按行分组；表格被拆成多个 chunk 时，每个分片都重复表头和分隔行，只有第一段表格可携带表格前正文，后续分片不重复前文
+- `MarkdownSectionSplitter.split_long_section()`：当单个 `###` section 超过 `chunk_size` 时，在该 section 内部继续二次切分；多个分片必须在不超过 `chunk_size` 的前提下尽量均衡分配正文块或表格行，避免前序分片接近上限而最后分片过短，并保持分片可定位到原始 heading offset
+- `MarkdownSectionSplitter.split_markdown_table()`：识别 Markdown 表格并按行分组；表格被拆成多个 chunk 时，每个分片都重复表头和分隔行，并在不超过 `chunk_size` 的前提下尽量均衡分配数据行；只有第一段表格可携带表格前正文，后续分片不重复前文
 - `DocumentChunker.chunk()`：根据 splitter 输出的文本片段和原文 offset 生成稳定 `Chunk`，并保留 `section_path`、`source_path`、offset 和 `image_refs`；`section_path` 是 chunk metadata 中唯一章节结构字段
 - `SplitterFactory.register_builtin_providers()`：注册 `markdown_section` splitter provider，允许通过配置切换 Markdown 分块策略
 
-验收标准：Markdown 文档优先按 `###` 构建 section；每个 section chunk metadata 包含从 `##` 开始的完整 `section_path`，可追溯 H2/H3/H4 层级，且不额外生成 `section`、`h2`、`h3` 或 `h4` metadata 字段；短 section 不得单独形成只有标题或极短正文的 chunk，应与后续同级 section 合并或并入相邻语义块；超过 `chunk_size` 的 `###` section 必须在 section 内部二次切分，后续分片通过 metadata 保留当前 H2+ `section_path`，chunk 正文不得保留非代码块内的 `#`、`##`、`###` 标题行；长表格必须按行分组切分，任意表格分片都必须保留原始表头和分隔行；表格被拆成多个 chunk 时，第一段可以携带表格前正文说明，后续表格分片不得重复携带表格前正文，避免重复 embedding 同一段说明；同一 `###` section 内表格尾部 chunk 与后续“选购建议/建议/总结”块合并后不超过 `chunk_size` 时应合并，避免参数尾行和建议形成两个过薄 chunk；图片占位符 `[[image:image_id]]` 不能因 section 合并或表格切分丢失，`image_refs` 仍按最终 chunk 正文分发；`libs.splitter` 仍保持纯文本切分职责，不直接创建业务 `Chunk`；PDF 转 Markdown 后仍可复用该策略，无法识别标题结构时优雅回退到递归字符切分。
+验收标准：Markdown 文档优先按 `###` 构建 section；每个 section chunk metadata 包含从 `##` 开始的完整 `section_path`，可追溯 H2/H3/H4 层级，且不额外生成 `section`、`h2`、`h3` 或 `h4` metadata 字段；短 section 不得单独形成只有标题或极短正文的 chunk，应与后续同级 section 合并或并入相邻语义块；超过 `chunk_size` 的 `###` section 必须在 section 内部二次切分，分片应在不超过 `chunk_size` 的前提下尽量均衡，避免最后一个分片形成极短尾块；后续分片通过 metadata 保留当前 H2+ `section_path`；chunk 正文不得保留文档级 `#` H1 标题行，但允许保留非代码块内的 `##`、`###`、`####` 等局部标题行；长表格必须按行分组切分，任意表格分片都必须保留原始表头和分隔行；表格被拆成多个 chunk 时，应在不超过 `chunk_size` 的前提下尽量均衡分配数据行，避免前一个分片过满而最后一个分片过短；第一段可以携带表格前正文说明，后续表格分片不得重复携带表格前正文，避免重复 embedding 同一段说明；同一 `###` section 内表格尾部 chunk 与后续“选购建议/建议/总结”块合并后不超过 `chunk_size` 时应合并，避免参数尾行和建议形成两个过薄 chunk；图片占位符 `[[image:image_id]]` 不能因 section 合并或表格切分丢失，`image_refs` 仍按最终 chunk 正文分发；`libs.splitter` 仍保持纯文本切分职责，不直接创建业务 `Chunk`；PDF 转 Markdown 后仍可复用该策略，无法识别标题结构时优雅回退到递归字符切分。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 

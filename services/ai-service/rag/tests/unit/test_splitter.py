@@ -504,8 +504,8 @@ def test_markdown_section_splitter_splits_long_table_with_repeated_header() -> N
         assert len(part) <= 360
 
 
-def test_markdown_section_splitter_splits_long_sections_without_heading_text() -> None:
-    """Require section overflow chunks to keep body text free of headings."""
+def test_markdown_section_splitter_splits_long_sections_without_h1_text() -> None:
+    """Require overflow chunks to remove only document H1 heading text."""
 
     markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
     splitter = markdown_module.MarkdownSectionSplitter(
@@ -522,7 +522,8 @@ def test_markdown_section_splitter_splits_long_sections_without_heading_text() -
     parts = splitter.split(text)
 
     assert len(parts) > 1
-    assert all("### Apple" not in part for part in parts)
+    assert all("# Phone Guide" not in part for part in parts)
+    assert any("### Apple" in part for part in parts)
     assert all(len(part) <= 220 for part in parts)
 
 
@@ -609,7 +610,7 @@ def test_markdown_section_splitter_pairs_final_table_rows_with_buying_advice() -
     assert "| Model | Positioning | Display | Storage | Audience |" in advice_parts[0]
     assert "| iPhone 16e | Entry iPhone for lower budgets" in advice_parts[0]
     assert "- Choose 16e when budget matters." in advice_parts[0]
-    assert all(not part.lstrip().startswith("#") for part in parts)
+    assert all("# Phone Guide" not in part for part in parts)
 
 
 def test_markdown_section_splitter_does_not_repeat_intro_after_table_split() -> None:
@@ -661,8 +662,8 @@ def test_markdown_section_splitter_does_not_repeat_intro_after_table_split() -> 
     assert intro not in table_parts[-1]
 
 
-def test_markdown_section_splitter_removes_heading_lines_from_all_chunks() -> None:
-    """Require every chunk body to omit Markdown ATX heading lines."""
+def test_markdown_section_splitter_removes_h1_but_keeps_h2_plus_headings() -> None:
+    """Require chunk text to preserve local Markdown headings but drop H1."""
 
     markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
     splitter = markdown_module.MarkdownSectionSplitter(
@@ -674,7 +675,7 @@ def test_markdown_section_splitter_removes_heading_lines_from_all_chunks() -> No
         "# Phone Guide\n\n"
         "Intro paragraph before the first target section.\n\n"
         "## Buying Basics\n\n"
-        "Basics paragraph that should remain without its heading.\n\n"
+        "Basics paragraph that should remain with its local heading.\n\n"
         "### Apple\n\n"
         "Short note.\n\n"
         "### Samsung\n\n"
@@ -684,11 +685,9 @@ def test_markdown_section_splitter_removes_heading_lines_from_all_chunks() -> No
     parts = splitter.split(text)
 
     assert parts
-    assert not any(
-        line.lstrip().startswith("#")
-        for part in parts
-        for line in part.splitlines()
-    )
+    assert all("# Phone Guide" not in part for part in parts)
+    assert any("## Buying Basics" in part for part in parts)
+    assert any("### Apple" in part and "### Samsung" in part for part in parts)
     assert any("Basics paragraph" in part for part in parts)
     assert any("Short note." in part and "Samsung paragraph" in part for part in parts)
 
@@ -706,11 +705,104 @@ def test_markdown_section_splitter_does_not_inject_heading_context_in_chunks() -
         "# Phone Guide\n\n"
         "## Brands\n\n"
         "### Apple\n\n"
-        "Apple buyers should compare storage, camera, battery, and ecosystem. " * 6
+        + "Apple buyers should compare storage, camera, battery, and ecosystem. " * 6
     )
 
     parts = splitter.split(text)
 
     assert len(parts) > 1
-    assert all(not part.lstrip().startswith("#") for part in parts)
-    assert all("### Apple" not in part for part in parts)
+    assert all("# Phone Guide" not in part for part in parts)
+    assert sum("### Apple" in part for part in parts) == 1
+
+def test_markdown_section_splitter_keeps_heading_with_first_split_table_chunk() -> None:
+    """Require heading-only table sections to keep headings with the first table chunk."""
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=260,
+        chunk_overlap=0,
+        min_section_chars=40,
+    )
+    rows = "\n".join(
+        f"| Brand {index} | Series {index} | Useful detail for buyer {index} |"
+        for index in range(1, 14)
+    )
+    text = (
+        "# Laptop Guide\n\n"
+        "## Brand Database\n\n"
+        "### Mainstream Brand Positioning\n\n"
+        "| Brand | Series | Notes |\n"
+        "| --- | --- | --- |\n"
+        f"{rows}"
+    )
+
+    parts = splitter.split(text)
+    table_parts = [part for part in parts if "| Brand | Series | Notes |" in part]
+
+    assert len(table_parts) >= 2
+    assert all(part.strip() != "### Mainstream Brand Positioning" for part in parts)
+    assert "### Mainstream Brand Positioning" in table_parts[0]
+    assert sum("### Mainstream Brand Positioning" in part for part in table_parts) == 1
+    for part in table_parts:
+        assert "| Brand | Series | Notes |" in part
+        assert "| --- | --- | --- |" in part
+        assert len(part) <= 260
+
+def test_markdown_section_splitter_balances_split_table_chunks() -> None:
+    """Require split table chunks to avoid an underfilled final tail chunk."""
+
+    markdown_module = importlib.import_module("src.libs.splitter.markdown_section_splitter")
+    splitter = markdown_module.MarkdownSectionSplitter(
+        chunk_size=900,
+        chunk_overlap=0,
+        min_section_chars=40,
+    )
+    header = "| 品牌 | 代表系列 | 定位 | 主要优势 | 主要注意点 |"
+    rows = [
+        "| Apple | MacBook Air、MacBook Pro | 高端轻薄/创作 | "
+        "续航、静音、屏幕、触控板、生态和视频工作流 | "
+        "内存存储升级贵，Windows 游戏和专业软件兼容需确认 |",
+        "| Lenovo 联想 | ThinkPad、Yoga、小新、拯救者 | 商务/轻薄/游戏全覆盖 | "
+        "产品线完整，键盘和售后覆盖强，拯救者游戏本口碑好 | "
+        "型号多，渠道配置差异大 |",
+        "| Dell 戴尔 | XPS、Latitude、Inspiron、Alienware | 商务/高端/游戏 | "
+        "商务部署、屏幕和高端设计线成熟 | 消费线性价比要逐代看 |",
+        "| HP 惠普 | Spectre、Envy、EliteBook、OMEN | 商务/创作/游戏 | "
+        "商务线和办公线稳定，会议体验好 | 不同系列定位差异大 |",
+        "| ASUS 华硕 | Zenbook、ROG、TUF、ProArt | 轻薄/游戏/创作 | "
+        "OLED 屏、ROG 游戏和 ProArt 创作线丰富 | "
+        "OLED 用户要注意静态界面使用习惯 |",
+        "| Acer 宏碁 | Swift、Aspire、Predator | 性价比/游戏 | "
+        "价格竞争力和游戏线覆盖 | 做工和售后因系列差异大 |",
+        "| Microsoft | Surface Laptop、Surface Pro | 轻办公/二合一 | "
+        "外观、屏幕、触控和 Windows 原生体验 | 接口少，维修和性价比需权衡 |",
+        "| MSI 微星 | Raider、Vector、Creator、Prestige | 游戏/创作 | "
+        "高性能游戏本和创作本丰富 | 便携和噪音不是强项 |",
+        "| Huawei 华为 | MateBook | 轻薄办公/生态 | "
+        "多屏协同、外观和办公体验 | 专业软件和扩展生态按需求确认 |",
+        "| Xiaomi 小米/Redmi | RedmiBook、小米笔记本 | 性价比轻薄 | "
+        "价格和生态联动 | 高端售后和商务部署能力不是主轴 |",
+    ]
+    text = "\n".join(
+        [
+            "# Laptop Guide",
+            "",
+            "## Brand Database",
+            "",
+            "### Mainstream Brand Positioning",
+            "",
+            header,
+            "| --- | --- | --- | --- | --- |",
+            *rows,
+        ]
+    )
+
+    parts = splitter.split(text)
+    table_parts = [part for part in parts if header in part]
+    lengths = [len(part) for part in table_parts]
+
+    assert len(table_parts) == 2
+    assert all(length <= 900 for length in lengths)
+    assert min(lengths) >= max(lengths) * 0.55
+    assert "### Mainstream Brand Positioning" in table_parts[0]
+    assert "### Mainstream Brand Positioning" not in table_parts[1]

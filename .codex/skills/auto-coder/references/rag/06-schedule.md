@@ -299,7 +299,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | C1 | 实现文档 SHA256 去重与 skipped 快速结束 | [✔] | 2026-06-06 | 流式 SHA256、success 文档去重查询、force 绕过、Loader 前短路和 skipped ingestion trace；5 个单元测试、1 个 PostgreSQL 集成测试通过 |
 | C2 | 实现文档加载、Markdown 标准化与图片引用提取 | [✔] | 2026-06-10 | canonical Markdown、fenced-code 感知标题与图片解析、安全本地 Markdown 图片引用、MarkItDown/PyMuPDF PDF 转换、xref 去重、失败写入清理、稳定图片占位符与 metadata；PyMuPDF 图片矩形绑定邻近文本锚点，MarkItDown 无页标记时仍能将图片插入对应章节附近；真实购物指南 PDF 冒烟验证通过 |
 | C3 | 实现 DocumentChunker、稳定 chunk_id 与引用保留验证 | [✔] | 2026-06-10 | 稳定 chunk ID、heading offset、section_path 分发、metadata 深拷贝、chunk_index、来源 metadata、image_refs 和 SplitterStep；纯图片占位符片段合并到相邻正文 chunk，确保检索单元包含文本语义 |
-| C4 | 实现 MarkdownSectionSplitter | [✔] | 2026-06-23 | 按 `###` 构建 Markdown section，章节层级由 `DocumentChunker` 写入 `section_path`；短 section 合并，长 section 内部二次切分，长表格按行分组且每个分片保留表头；表格拆分时只有第一段可携带表格前正文，后续表格分片只保留表头和数据行；表格尾部 chunk 可与后续建议块在 `chunk_size` 内合并；chunk 正文不保留 `#`、`##`、`###` 标题行；41 个配置和 splitter 单元测试通过 |
+| C4 | 实现 MarkdownSectionSplitter | [✔] | 2026-06-23 | 按 `###` 构建 Markdown section，章节层级由 `DocumentChunker` 写入 `section_path`；短 section 合并，长 section 内部二次切分，长表格按行分组且每个分片保留表头；表格拆分时只有第一段可携带表格前正文，后续表格分片只保留表头和数据行；表格尾部 chunk 可与后续建议块在 `chunk_size` 内合并；chunk 正文移除文档级 `#` H1，但保留 `##`、`###`、`####` 局部标题，不额外注入重复 section context；splitter 单元测试通过 |
 | C5 | 实现 Transform 抽象基类与具体实现 | [✔] | 2026-06-10 | BaseTransform、配置驱动 TransformPipeline、metadata enrich、chunk rewrite、semantic merge、denoise、英文 Prompt、噪声 fixture 和幂等测试；ChunkRewriter 仅使用文本节点与 Document.summary 调用 LLM，并按原顺序保留图片占位符；无效文本响应直接失败，纯图片占位符 chunk 跳过文本 rewrite |
 | C6 | 实现 ImageCaptioner | [✔] | 2026-06-11 | `image_captioner` transform step、`BaseVisionLLM`、`DashScopeVisionLLM`、正文 caption 注入和 Dense/BM25 索引；图片 caption/provenance 记录在 `transform.sub_stages` |
 | C7 | 实现 DenseEncoder | [✔] | 2026-06-06 | DenseEncodingResult、DenseEncoder、EmbeddingStep.run_dense、content_hash 差量跳过、当前运行去重、有限向量校验和单 chunk 向量生成；6 个相关测试、131 个全量测试通过，2 个 external smoke test 默认跳过 |
@@ -315,7 +315,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | --- | --- | --- | --- | --- |
 | D1 | 实现 Query Processor | [✔] | 2026-06-07 | 不可变 ProcessedQuery 和 keywords 快照、Unicode/空白标准化、关键词提取、collection/top_k 类型校验与默认覆盖、可注入 QueryRewriter 和异常/空结果 fallback；Query Processor 不承载业务意图识别 |
 | D2 | 实现 Intent Router | [✔] | 2026-06-28 | 独立 Intent Router 已接入 QueryRuntime；规则配置、collection profile 配置、profile embedding cache、`intent_routing` trace stage、评估 message 模式真实对话路径已完成；150 个相关单元测试、36 个集成测试和 ruff 通过 |
-| D3 | 实现并行检索编排 | [✔] | 2026-06-29 | ParallelRetrievalController、MCP collections 参数、跨 collection routing_score + reciprocal_rank 合并、per-collection 状态汇总、部分失败降级和公共 collection_results 输出；collection 子链路只执行 retrieval/rerank，Self-RAG 和 Response Builder 必须在跨 collection merge 后统一执行一次 |
+| D3 | 实现并行检索编排 | [✔] | 2026-06-29 | ParallelRetrievalController、MCP collections 参数、跨 collection routing_score + reciprocal_rank 合并、per-collection trace_id/状态汇总、部分失败降级和公共 collection_results 输出；103 个 Retrieval/MCP 单元测试通过 |
 | D4 | 实现 Dense Route 向量检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、Query Embedding、配置驱动 dense_top_k、VectorStore 语义召回、RetrievalResult 校验、embedding/vector search 错误边界和低侵入 Trace；8 个 D4 单元测试通过 |
 | D5 | 实现 Sparse Route BM25 回表检索 | [✔] | 2026-06-07 | raw query/ProcessedQuery 输入、配置驱动 sparse_top_k、BM25 关键词召回、VectorStore 按 ID 回表、BM25 顺序与分数保留、缺失 chunk 跳过、空 keywords skip、错误边界和低侵入 Trace；9 个 D5 单元测试通过 |
 | D6 | 实现 RRF Fusion | [✔] | 2026-06-07 | Dense/Sparse 双路 RRF 排名融合、top_k/rrf_k 参数校验、route 内重复 chunk 去重、跨 route 候选合并、RRF 分数输出、fusion metadata 诊断和稳定 tie-break；8 个 D6 单元测试通过 |
@@ -336,7 +336,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
 | E1 | 搭建 MCP Server | [✔] | 2026-06-07 | FastMCP server 工厂、stdio 启动入口、`.env` 加载、app.log 文件日志、配置驱动 tool 注册、未知工具 fail fast、E1 placeholder tool 错误边界和 SDK ToolError 包装契约；5 个 MCP 单元测试通过 |
-| E2 | 暴露 `query_knowledge_hub` | [✔] | 2026-06-08 | QueryKnowledgeHubTool、QueryRuntime/ParallelRetrievalController 适配、请求原语校验先于 settings 加载、默认 collection/top_k、单/多 collection 参数、no_rerank、结构化业务错误、默认不返回图片 base64、显式 include_image_base64 支持、PostgreSQL pool 打开失败也能释放资源和 FastMCP 真实 query tool 注册；MCP 层只透传并行检索请求，不为每个 collection 单独构造最终 response |
+| E2 | 暴露 `query_knowledge_hub` | [✔] | 2026-06-08 | QueryKnowledgeHubTool、QueryRuntime/ParallelRetrievalController 适配、请求原语校验先于 settings 加载、默认 collection/top_k、单/多 collection 参数、no_rerank、结构化业务错误、默认不返回图片 base64、显式 include_image_base64 支持、PostgreSQL pool 打开失败也能释放资源和 FastMCP 真实 query tool 注册；MCP 层只透传并行检索请求，不实现检索业务逻辑 |
 | E3 | 暴露 `list_collections` 和 `get_document_summary` | [✔] | 2026-06-08 | MetadataTool、PostgresMetadataReader、真实 FastMCP collection/summary handler 注册、空 collection 可读业务错误、document_id/source_uri 参数校验、文档摘要与章节 outline 返回；17 个 MCP 单元测试通过 |
 | E4 | 完成 MCP tools 测试 | [✔] | 2026-06-08 | 官方 FastMCP schema 精确断言、成功输出安全字段扫描和结构化业务错误 envelope 契约测试；20 个 MCP 单元测试通过 |
 
@@ -388,7 +388,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | I1 | 定义 async provider 契约与兼容适配层 | [✔] | 2026-06-29 | 为 LLM、Embedding、VectorStore 和 Reranker 补充默认 async 最小接口；新增 SyncToAsync adapters，支持 timeout 与 cancellation；同步 retrieval/evaluation async 配置；158 个相关单元测试和 ruff 通过 |
 | I2 | 实现 provider 原生 async 化 | [✔] | 2026-06-29 | OpenAI-compatible/DeepSeek/CCSwitch/Embedding provider 使用原生 async SDK client；pgvector/BM25 在线查询提供 async 方法；LLM Reranker 使用 async LLM；Cross-Encoder 通过 worker thread 避免阻塞事件循环；142 个相关单元测试和 ruff 通过 |
 | I3 | 实现 AsyncQueryRuntime | [✔] | 2026-06-29 | 新增在线查询 `AsyncQueryRuntime`，覆盖 query processing、intent routing、hybrid retrieval、rerank、Self-RAG 和 Response Builder；`run_query_cli()` 支持同步/async runtime 兼容执行；8 个 async runtime 单元测试、2 个 query pipeline 集成测试和 ruff 通过 |
-| I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [✔] | 2026-06-29 | 新增 `AsyncParallelRetrievalController`，使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断并保留 collection/routing/merge metadata；async trace 必须保持与同步链路一致的顶层 stage，分别记录 dense/sparse/fusion/filter/rerank 耗时、候选数、状态和 fallback 原因；Self-RAG judge 和 Response Builder 在 merge 后只执行一次；MCP 多 collection 调用不得产生多个完整后处理链路；支持 max concurrency、per-collection timeout、partial failure、全部 empty 和全部失败 |
+| I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [✔] | 2026-06-29 | 新增 `AsyncParallelRetrievalController`，使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断并保留 collection/routing/merge metadata；async trace 必须保持与同步链路一致的顶层 stage，分别记录 dense/sparse/fusion/filter/rerank 耗时、候选数、状态和 fallback 原因；Self-RAG judge 和 Response Builder 在 merge 后只执行一次；支持 max concurrency、per-collection timeout、partial failure、全部 empty 和全部失败；111 个 I4 指定单元测试和 ruff 通过 |
 | I5 | 接入 MCP 与 evaluation async 路径 | [✔] | 2026-06-29 | `query_knowledge_hub` 可 await async runtime 且保留 MCP 公共响应和错误 envelope；MCP 默认按 `retrieval.async_enabled` 选择 async runtime，多 collection 工具调用使用 async gather 聚合公共结果；evaluation 在 `evaluation.async_enabled` 下并发构造 prediction，支持 `max_sample_concurrency`，Ragas client 支持 `max_metric_concurrency` 映射到 evaluator worker；RAG answer-source 单样本失败写入 prediction error，message answer-source 保持缺失 message/trace 时 fail fast；59 个 I5 目标测试通过，1 个外部 Ragas 测试按 marker 跳过 |
 | I6 | 完成 async 查询验收与性能对比 | [✔] | 2026-06-29 | async 链路相关单元、集成和 MCP stdio contract 测试通过；新增 `async_query_performance_report()` 汇总 first10/last10 风格的 sync/async avg latency、P95、RAG trace、Self-RAG judge、Response Builder、timeout 和 Ragas metric delta；新增 `data/resume/async_query_runtime.md` 记录 deterministic 验收 fixture 与已有本地 first10/last10 历史耗时，严格 live A/B benchmark 需在外部模型启用时单独运行；14 个 I6 目标测试和 ruff 通过 |
 
@@ -860,21 +860,21 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 
 ##### C4：实现 MarkdownSectionSplitter
 
-目标：为 Markdown 文档提供结构感知分块策略，优先以 `###` section 作为业务分块单元，章节层级通过 `DocumentChunker` 的 `section_path` metadata 保留，chunk 正文不注入 Markdown 标题行，避免短标题独立成 chunk，并降低长表格被无语义切断的概率。
+目标：为 Markdown 文档提供结构感知分块策略，优先以 `###` section 作为业务分块单元；`DocumentChunker` 仍把章节层级写入 `section_path` metadata，Splitter 只移除文档级 H1 标题，保留 `##`、`###`、`####` 等局部标题作为原文结构进入 chunk 正文，但不得额外注入重复的 section context。
 
 修改文件：`config/settings.example.yaml`、`src/libs/splitter/markdown_section_splitter.py`、`src/libs/splitter/splitter_factory.py`、`src/ingestion/chunk/document_chunker.py`、`src/ingestion/chunk/splitter_step.py`、`tests/unit/test_splitter.py`、`tests/fixtures/markdown_documents/`
 
 实现类/函数：
 
 - `MarkdownSectionSplitter.split()`：按 Markdown 标题结构生成 section-aware 文本片段
-- `MarkdownSectionSplitter.build_sections()`：基于 `#`、`##`、`###` 标题构建 section，标题层级只用于确定切分边界和后续 `section_path` 映射，不直接写入 chunk 正文
+- `MarkdownSectionSplitter.build_sections()`：基于 `#`、`##`、`###` 标题构建 section；H1 用于文档级定位并从 chunk 正文移除，H2+ 标题既参与切分边界和 `section_path` 映射，也可作为原始 Markdown 结构保留在 chunk 正文中
 - `MarkdownSectionSplitter.merge_short_sections()`：将低于最小长度的相邻 sibling section 合并，避免生成只有标题或语义过薄的 chunk
-- `MarkdownSectionSplitter.split_long_section()`：当单个 `###` section 超过 `chunk_size` 时，在该 section 内部继续二次切分，并保持分片可定位到原始 heading offset
-- `MarkdownSectionSplitter.split_markdown_table()`：识别 Markdown 表格并按行分组；表格被拆成多个 chunk 时，每个分片都重复表头和分隔行，只有第一段表格可携带表格前正文，后续分片不重复前文
+- `MarkdownSectionSplitter.split_long_section()`：当单个 `###` section 超过 `chunk_size` 时，在该 section 内部继续二次切分；多个分片必须在不超过 `chunk_size` 的前提下尽量均衡分配正文块或表格行，避免前序分片接近上限而最后分片过短，并保持分片可定位到原始 heading offset
+- `MarkdownSectionSplitter.split_markdown_table()`：识别 Markdown 表格并按行分组；表格被拆成多个 chunk 时，每个分片都重复表头和分隔行，并在不超过 `chunk_size` 的前提下尽量均衡分配数据行；只有第一段表格可携带表格前正文，后续分片不重复前文
 - `DocumentChunker.chunk()`：根据 splitter 输出的文本片段和原文 offset 生成稳定 `Chunk`，并保留 `section_path`、`source_path`、offset 和 `image_refs`；`section_path` 是 chunk metadata 中唯一章节结构字段
 - `SplitterFactory.register_builtin_providers()`：注册 `markdown_section` splitter provider，允许通过配置切换 Markdown 分块策略
 
-验收标准：Markdown 文档优先按 `###` 构建 section；每个 section chunk metadata 包含从 `##` 开始的完整 `section_path`，可追溯 H2/H3/H4 层级，且不额外生成 `section`、`h2`、`h3` 或 `h4` metadata 字段；短 section 不得单独形成只有标题或极短正文的 chunk，应与后续同级 section 合并或并入相邻语义块；超过 `chunk_size` 的 `###` section 必须在 section 内部二次切分，后续分片通过 metadata 保留当前 H2+ `section_path`，chunk 正文不得保留非代码块内的 `#`、`##`、`###` 标题行；长表格必须按行分组切分，任意表格分片都必须保留原始表头和分隔行；表格被拆成多个 chunk 时，第一段可以携带表格前正文说明，后续表格分片不得重复携带表格前正文，避免重复 embedding 同一段说明；同一 `###` section 内表格尾部 chunk 与后续“选购建议/建议/总结”块合并后不超过 `chunk_size` 时应合并，避免参数尾行和建议形成两个过薄 chunk；图片占位符 `[[image:image_id]]` 不能因 section 合并或表格切分丢失，`image_refs` 仍按最终 chunk 正文分发；`libs.splitter` 仍保持纯文本切分职责，不直接创建业务 `Chunk`；PDF 转 Markdown 后仍可复用该策略，无法识别标题结构时优雅回退到递归字符切分。
+验收标准：Markdown 文档优先按 `###` 构建 section；每个 section chunk metadata 包含从 `##` 开始的完整 `section_path`，可追溯 H2/H3/H4 层级，且不额外生成 `section`、`h2`、`h3` 或 `h4` metadata 字段；短 section 不得单独形成只有标题或极短正文的 chunk，应与后续同级 section 合并或并入相邻语义块；超过 `chunk_size` 的 `###` section 必须在 section 内部二次切分，分片应在不超过 `chunk_size` 的前提下尽量均衡，避免最后一个分片形成极短尾块；后续分片通过 metadata 保留当前 H2+ `section_path`；chunk 正文不得保留文档级 `#` H1 标题行，但允许保留非代码块内的 `##`、`###`、`####` 等局部标题行；长表格必须按行分组切分，任意表格分片都必须保留原始表头和分隔行；表格被拆成多个 chunk 时，应在不超过 `chunk_size` 的前提下尽量均衡分配数据行，避免前一个分片过满而最后一个分片过短；第一段可以携带表格前正文说明，后续表格分片不得重复携带表格前正文，避免重复 embedding 同一段说明；同一 `###` section 内表格尾部 chunk 与后续“选购建议/建议/总结”块合并后不超过 `chunk_size` 时应合并，避免参数尾行和建议形成两个过薄 chunk；图片占位符 `[[image:image_id]]` 不能因 section 合并或表格切分丢失，`image_refs` 仍按最终 chunk 正文分发；`libs.splitter` 仍保持纯文本切分职责，不直接创建业务 `Chunk`；PDF 转 Markdown 后仍可复用该策略，无法识别标题结构时优雅回退到递归字符切分。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_splitter.py -v`
 
@@ -1086,7 +1086,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `ParallelRetrievalController._merge_collection_results()`：跨 collection 合并候选；优先保留同一 reranker 产生的可比较 rerank score，分数不可比时使用 `routing_score + reciprocal_rank` 稳定融合，使高置信 collection 的强结果优先，同时允许低置信 collection 的高排名结果进入最终上下文
 - `ParallelRetrievalController._record_trace()`：向 Query Trace 写入 `parallel_retrieval` stage，并记录每个 collection 的候选数量、耗时、状态、失败原因和最终保留结果
 
-验收标准：当调用方只传入单个 `collection` 时必须保持现有单 collection 查询行为；当传入 `collections` 或 Intent Router 输出多个候选 collection 时，必须去重、保序并限制最大并行 collection 数；每个 collection 内部仍执行 D4-D13 的 Dense/Sparse、RRF、filter、rerank 和 Self-RAG 流程，不允许在并行层重写业务检索逻辑；并行层必须支持 per-collection timeout、部分失败降级和空结果汇总，单个 collection 失败不得吞掉其他 collection 的可用结果；跨 collection merge 默认策略为：若所有 collection 使用同一个 reranker 且分数可比较，则按 rerank score 全局排序；若 rerank 不可用、部分 collection rerank fallback 或分数不可比，则使用 `routing_score + reciprocal_rank` 融合；最终结果必须统一执行 `top_k` 稳定截断；每条结果 metadata 必须保留 `collection`、`collection_rank`、`routing_score`、`merge_score` 和 `merge_reason`，其中 `merge_reason` 需要说明本条结果来自 rerank score 还是 routing/RRF fallback 融合；Query Trace 基础信息必须记录 `collection`、`collections`、`primary_collection` 和 `multi_collection=true/false`，阶段详情必须新增 `parallel_retrieval`，记录 `collection_runs`、`merged_candidate_count`、`partial_failure_count`、`selected_collections`、`dropped_collections`、`child_trace_ids` 或 per-collection stage summary；单元测试必须覆盖单 collection 兼容、多 collection 并行成功、部分失败、全部空结果、重复 collection 去重、最大并发限制和 trace sink 失败隔离。
+验收标准：当调用方只传入单个 `collection` 时必须保持现有单 collection 查询行为；当传入 `collections` 或 Intent Router 输出多个候选 collection 时，必须去重、保序并限制最大并行 collection 数；每个 collection 子链路只执行 D4-D11 的 Dense/Sparse、RRF、filter 和 rerank，不执行 Self-RAG Controller 或 Response Builder；并行层必须支持 per-collection timeout、部分失败降级和空结果汇总，单个 collection 失败不得吞掉其他 collection 的可用结果；跨 collection merge 默认策略为：若所有 collection 使用同一个 reranker 且分数可比较，则按 rerank score 全局排序；若 rerank 不可用、部分 collection rerank fallback 或分数不可比，则使用 `routing_score + reciprocal_rank` 融合；最终结果必须统一执行 `top_k` 稳定截断；每条结果 metadata 必须保留 `collection`、`collection_rank`、`routing_score`、`merge_score` 和 `merge_reason`，其中 `merge_reason` 需要说明本条结果来自 rerank score 还是 routing/RRF fallback 融合；merge 后必须只执行一次 D12 Self-RAG Controller 和一次 D14 Response Builder，避免同一轮 query 因多个 collection 重复调用 LLM judge 或重复构造 response；Query Trace 基础信息必须记录 `collection`、`collections`、`primary_collection` 和 `multi_collection=true/false`，阶段详情必须新增 `parallel_retrieval` 或等价 collection run summary，记录 `collection_runs`、`merged_candidate_count`、`partial_failure_count`、`selected_collections`、`dropped_collections` 和 per-collection stage summary；单元测试必须覆盖单 collection 兼容、多 collection 并行成功、部分失败、全部空结果、重复 collection 去重、最大并发限制、trace sink 失败隔离，以及两个中置信 collection 只触发一次 Self-RAG judge。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_retrieval.py services\ai-service\rag\tests\unit\test_trace_context.py -v`
 
@@ -1438,7 +1438,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `_default_runtime_builder()`：复用阶段 D QueryRuntime 组合路径
 - `create_mcp_server(query_knowledge_hub=...)`：把 E2 的真实 query tool 注册到 FastMCP，E3 工具继续保持 placeholder
 
-验收标准：返回 content、citations、trace_id 和 query_trace_ids；默认返回图片 metadata 和受管 file_path，不默认返回 base64；可预留 `include_image_base64=false` 参数，仅在显式请求时附加受限大小的 `base64_content`；`collection` 保持单 collection 兼容，`collections` 支持多 collection 查询，两者同时传入时以 `collections` 为准并把首个有效 collection 作为 primary collection；MCP 层只做参数校验和公共响应投影，不实现并行检索业务逻辑，必须调用阶段 D3 的并行检索编排能力；多 collection 响应必须包含 `collection_results`，记录每个 collection 的 trace_id、候选数量、状态和失败原因；业务可恢复错误返回 `{"ok": false, "error": {"code": "...", "message": "..."}}`，不直接把内部异常或 tool result 暴露给 Agent。
+验收标准：返回 content、citations、trace_id 和 query_trace_ids；默认返回图片 metadata 和受管 file_path，不默认返回 base64；可预留 `include_image_base64=false` 参数，仅在显式请求时附加受限大小的 `base64_content`；`collection` 保持单 collection 兼容，`collections` 支持多 collection 查询，两者同时传入时以 `collections` 为准并把首个有效 collection 作为 primary collection；MCP 层只做参数校验和公共响应投影，不实现并行检索业务逻辑，必须调用阶段 D3/I4 的并行检索编排能力；多 collection 响应必须包含 `collection_results`，记录每个 collection 的候选数量、状态、耗时和失败原因；同一次 MCP 查询的多 collection 子链路不得各自生成最终 response，必须在跨 collection merge 后统一返回一个 content/citations/images 结果；业务可恢复错误返回 `{"ok": false, "error": {"code": "...", "message": "..."}}`，不直接把内部异常或 tool result 暴露给 Agent。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py -v`
 

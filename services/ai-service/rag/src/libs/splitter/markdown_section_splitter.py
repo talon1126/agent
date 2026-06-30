@@ -54,9 +54,10 @@ class MarkdownSectionSplitter(BaseSplitter):
         fallback_options: Extra options forwarded to the recursive fallback.
 
     Notes:
-        Returned chunks omit Markdown heading lines. Section context is carried
-        later by ``DocumentChunker`` through metadata rather
-        than duplicated in chunk text.
+        Returned chunks drop document-level H1 headings, preserve local H2-plus
+        headings from the source text, and avoid injecting duplicate section
+        context. ``DocumentChunker`` carries the active section path through
+        metadata.
     """
 
     def __init__(
@@ -121,7 +122,7 @@ class MarkdownSectionSplitter(BaseSplitter):
 
         chunks: list[str] = []
         for section in sections:
-            section_text = _strip_markdown_headings(section.text)
+            section_text = _strip_document_h1_headings(section.text)
             if not section_text:
                 continue
             if len(section_text) <= self.chunk_size:
@@ -162,7 +163,7 @@ class MarkdownSectionSplitter(BaseSplitter):
         sections: list[MarkdownSection] = []
         first_start = headings[boundary_indexes[0]]["start"]
         preamble = text[:first_start].strip()
-        if preamble and _has_non_heading_content(preamble):
+        if preamble and _has_retrievable_preamble_content(preamble):
             sections.append(
                 MarkdownSection(
                     text=preamble,
@@ -254,8 +255,8 @@ class MarkdownSectionSplitter(BaseSplitter):
         """
 
         context = ""
-        body = _strip_markdown_headings(section.text)
-        blocks = _merge_advice_blocks(_markdown_blocks(body))
+        body = _strip_document_h1_headings(section.text)
+        blocks = _merge_advice_blocks(_merge_heading_blocks(_markdown_blocks(body)))
         chunks: list[str] = []
         current = context
 
@@ -341,10 +342,47 @@ class MarkdownSectionSplitter(BaseSplitter):
 
         header = lines[:2]
         rows = lines[2:]
+        grouped_rows = self._balanced_table_row_groups(
+            header,
+            rows,
+            first_context=first_context,
+            base_context=context,
+        )
         chunks: list[str] = []
-        current_rows: list[str] = []
+        for group_index, row_group in enumerate(grouped_rows):
+            active_context = first_context if group_index == 0 and first_context else context
+            if group_index == len(grouped_rows) - 1:
+                chunks.extend(
+                    self._finish_table_rows(
+                        header,
+                        row_group,
+                        active_context=active_context,
+                        base_context=context,
+                        tail_block=tail_block,
+                    )
+                )
+                continue
+            chunks.append(_join_context(active_context, "\n".join([*header, *row_group])))
+        if not grouped_rows and tail_block is not None:
+            chunks.append(_join_context(context, tail_block))
+        return chunks
 
-        active_context = first_context or context
+    def _balanced_table_row_groups(
+        self,
+        header: list[str],
+        rows: list[str],
+        *,
+        first_context: str | None,
+        base_context: str,
+    ) -> list[list[str]]:
+        """Group table rows evenly while keeping every group within chunk_size."""
+
+        if not rows:
+            return []
+
+        groups: list[list[str]] = []
+        current_rows: list[str] = []
+        active_context = first_context or base_context
         for row in rows:
             candidate_rows = [*current_rows, row]
             candidate = _join_context(
@@ -354,26 +392,79 @@ class MarkdownSectionSplitter(BaseSplitter):
             if len(candidate) <= self.chunk_size or not current_rows:
                 current_rows = candidate_rows
                 continue
-            chunks.append(
-                _join_context(active_context, "\n".join([*header, *current_rows]))
-            )
-            active_context = context
+            groups.append(current_rows)
+            active_context = base_context
             current_rows = [row]
-
         if current_rows:
-            chunks.extend(
-                self._finish_table_rows(
-                    header,
-                    current_rows,
-                    active_context=active_context,
-                    base_context=context,
-                    tail_block=tail_block,
-                )
-            )
-        elif tail_block is not None:
-            chunks.append(_join_context(context, tail_block))
-        return chunks
+            groups.append(current_rows)
 
+        return self._rebalance_table_row_groups(
+            header,
+            groups,
+            first_context=first_context,
+            base_context=base_context,
+        )
+
+    def _rebalance_table_row_groups(
+        self,
+        header: list[str],
+        groups: list[list[str]],
+        *,
+        first_context: str | None,
+        base_context: str,
+    ) -> list[list[str]]:
+        """Move rows from fuller groups to a short tail when the chunks still fit."""
+
+        if len(groups) < 2:
+            return groups
+
+        changed = True
+        while changed:
+            changed = False
+            lengths = [
+                len(
+                    _join_context(
+                        first_context if index == 0 and first_context else base_context,
+                        "\n".join([*header, *group]),
+                    )
+                )
+                for index, group in enumerate(groups)
+            ]
+            shortest_index = lengths.index(min(lengths))
+            longest_index = lengths.index(max(lengths))
+            if lengths[shortest_index] >= lengths[longest_index] * 0.55:
+                break
+            if shortest_index <= longest_index or len(groups[longest_index]) <= 1:
+                break
+
+            candidate_groups = [list(group) for group in groups]
+            candidate_groups[shortest_index].insert(0, candidate_groups[longest_index].pop())
+            if self._table_row_groups_fit(
+                header,
+                candidate_groups,
+                first_context=first_context,
+                base_context=base_context,
+            ):
+                groups = candidate_groups
+                changed = True
+        return groups
+
+    def _table_row_groups_fit(
+        self,
+        header: list[str],
+        groups: list[list[str]],
+        *,
+        first_context: str | None,
+        base_context: str,
+    ) -> bool:
+        """Return whether every table row group fits inside chunk_size."""
+
+        for index, group in enumerate(groups):
+            active_context = first_context if index == 0 and first_context else base_context
+            candidate = _join_context(active_context, "\n".join([*header, *group]))
+            if len(candidate) > self.chunk_size:
+                return False
+        return True
     def _finish_table_rows(
         self,
         header: list[str],
@@ -487,6 +578,12 @@ def _has_non_heading_content(text: str) -> bool:
     return False
 
 
+
+def _has_retrievable_preamble_content(text: str) -> bool:
+    """Return whether preamble has non-heading body after dropping H1."""
+
+    return _has_non_heading_content(_strip_document_h1_headings(text))
+
 def _active_path_before(headings: list[dict[str, Any]], offset: int) -> list[str]:
     """Return the last heading path active before an arbitrary source offset."""
 
@@ -504,13 +601,8 @@ def _same_parent(left: MarkdownSection, right: MarkdownSection) -> bool:
     return left.path[:-1] == right.path[:-1]
 
 
-def _strip_markdown_headings(text: str) -> str:
-    """Remove Markdown ATX heading lines while preserving code blocks.
-
-    Markdown headings are structural metadata for retrieval, not content that
-    should be embedded in every chunk. ``DocumentChunker`` later restores the
-    active heading path through chunk metadata.
-    """
+def _strip_document_h1_headings(text: str) -> str:
+    """Remove document-level H1 ATX heading lines while preserving code blocks."""
 
     cleaned: list[str] = []
     in_code_block = False
@@ -528,7 +620,8 @@ def _strip_markdown_headings(text: str) -> str:
                 in_code_block = False
                 opening_fence = ""
             continue
-        if _ATX_HEADING.match(stripped):
+        match = _ATX_HEADING.match(stripped)
+        if match and len(match.group("marks")) == 1:
             continue
         cleaned.append(line)
     return "\n".join(cleaned).strip()
@@ -566,6 +659,40 @@ def _merge_advice_blocks(blocks: list[str]) -> list[str]:
         index += 1
     return merged
 
+
+def _merge_heading_blocks(blocks: list[str]) -> list[str]:
+    """Attach local heading blocks to their following source block.
+
+    Keeping H2-plus headings in chunk text should not create title-only chunks.
+    This preserves the source heading where it naturally appears while avoiding
+    synthetic repetition in later overflow chunks.
+    """
+
+    merged: list[str] = []
+    index = 0
+    while index < len(blocks):
+        block = blocks[index]
+        if (
+            _is_local_heading_block(block)
+            and index + 1 < len(blocks)
+            and not _is_table_block(blocks[index + 1])
+        ):
+            merged.append(f"{block.rstrip()}\n\n{blocks[index + 1].lstrip()}")
+            index += 2
+            continue
+        merged.append(block)
+        index += 1
+    return merged
+
+
+def _is_local_heading_block(block: str) -> bool:
+    """Return whether a block is exactly one H2-plus ATX heading line."""
+
+    lines = [line.strip() for line in block.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return False
+    match = _ATX_HEADING.match(lines[0])
+    return bool(match and len(match.group("marks")) > 1)
 
 def _is_advice_block(block: str) -> bool:
     """Return whether a block is a short buying-advice style section tail."""
