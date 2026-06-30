@@ -12,13 +12,11 @@ remain placeholders until E3.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from pathlib import Path
-from time import perf_counter
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -53,6 +51,7 @@ class QueryRuntimeLike(Protocol):
         no_rerank: bool,
         trace_id: str,
         request_source: str = "query_cli",
+        collections: Sequence[str] | None = None,
     ) -> QueryExecutionLike | Awaitable[QueryExecutionLike]:
         """Execute one query and return a public response wrapper."""
 
@@ -191,26 +190,33 @@ class QueryKnowledgeHubTool:
             pool.open()
             self._schema_initializer(pool)
             runtime = self._runtime_builder(settings, pool, no_rerank)
-            if len(active_collections) == 1:
-                execution = await _resolve_runtime_execution(
-                    runtime.execute(
-                        query.strip(),
-                        collection=active_collection,
-                        top_k=active_top_k,
-                        no_rerank=no_rerank,
-                        trace_id=self._trace_id_factory(),
-                        request_source=active_request_source,
-                    )
-                )
-                payload = execution.response.model_dump(mode="json")
-            else:
-                payload = await self._execute_multi_collection(
-                    runtime=runtime,
-                    query=query.strip(),
-                    collections=active_collections,
+            execution = await _resolve_runtime_execution(
+                runtime.execute(
+                    query.strip(),
+                    collection=active_collection,
+                    collections=active_collections if len(active_collections) > 1 else None,
                     top_k=active_top_k,
                     no_rerank=no_rerank,
+                    trace_id=self._trace_id_factory(),
                     request_source=active_request_source,
+                )
+            )
+            payload = execution.response.model_dump(mode="json")
+            if len(active_collections) > 1:
+                payload.setdefault("query_trace_ids", [payload.get("trace_id")])
+                collection_results = list(getattr(execution, "collection_results", ()) or [])
+                if not collection_results:
+                    collection_results = [
+                        {
+                            "collection": item,
+                            "candidate_count": len(execution.final_results),
+                            "status": "success",
+                        }
+                        for item in active_collections
+                    ]
+                payload.setdefault(
+                    "collection_results",
+                    _public_collection_results(collection_results),
                 )
             if include_image_base64:
                 self._attach_image_base64(payload)
@@ -299,92 +305,6 @@ class QueryKnowledgeHubTool:
                 resolved.append(selected)
         return resolved or [default_collection]
 
-    async def _execute_multi_collection(
-        self,
-        *,
-        runtime: QueryRuntimeLike,
-        query: str,
-        collections: list[str],
-        top_k: int,
-        no_rerank: bool,
-        request_source: str,
-    ) -> dict[str, Any]:
-        """Run collection-specific runtime calls concurrently for MCP clients.
-
-        Args:
-            runtime: Query runtime created for this MCP request.
-            query: Validated and stripped user query.
-            collections: Ordered unique collection IDs selected by the caller.
-            top_k: Result count propagated to each collection.
-            no_rerank: Whether each child retrieval should skip rerank.
-            request_source: Caller label written to each child query trace.
-
-        Returns:
-            Aggregated public MCP response with child trace IDs and
-            per-collection execution summaries.
-        """
-
-        async def run_collection(collection: str) -> dict[str, Any]:
-            started = perf_counter()
-            trace_id = self._trace_id_factory()
-            try:
-                execution = await _resolve_runtime_execution(
-                    runtime.execute(
-                        query,
-                        collection=collection,
-                        top_k=top_k,
-                        no_rerank=no_rerank,
-                        trace_id=trace_id,
-                        request_source=request_source,
-                    )
-                )
-            except Exception as error:  # noqa: BLE001 - multi-collection keeps partial successes.
-                return {
-                    "collection": collection,
-                    "trace_id": trace_id,
-                    "status": "failed",
-                    "candidate_count": 0,
-                    "duration_ms": (perf_counter() - started) * 1000,
-                    "error": str(error),
-                }
-            return {
-                "collection": collection,
-                "trace_id": trace_id,
-                "status": "success",
-                "candidate_count": len(execution.final_results),
-                "duration_ms": (perf_counter() - started) * 1000,
-                "execution": execution,
-                "payload": execution.response.model_dump(mode="json"),
-            }
-
-        rows = await asyncio.gather(*(run_collection(item) for item in collections))
-        successful_rows = [row for row in rows if row.get("status") == "success"]
-        if not successful_rows:
-            errors = [str(row.get("error", "")) for row in rows if row.get("error")]
-            return _business_error(
-                "invalid_request",
-                "; ".join(error for error in errors if error)
-                or "multi-collection query returned no results",
-            )
-        results = sorted(
-            (
-                result
-                for row in successful_rows
-                for result in row["execution"].final_results
-            ),
-            key=lambda result: result.score,
-            reverse=True,
-        )[:top_k]
-        return _merge_parallel_payloads(
-            results=list(results),
-            payloads=[row["payload"] for row in successful_rows],
-            collection_results=[
-                {key: value for key, value in row.items() if key not in {"execution", "payload"}}
-                for row in rows
-            ],
-            query_trace_ids=[str(row["trace_id"]) for row in successful_rows],
-        )
-
     def _attach_image_base64(self, payload: dict[str, Any]) -> None:
         """Attach bounded image bytes to an already public response payload."""
 
@@ -400,42 +320,6 @@ class QueryKnowledgeHubTool:
             image["base64_content"] = base64.b64encode(path.read_bytes()).decode("ascii")
 
 
-def _merge_parallel_payloads(
-    *,
-    results: list[RetrievalResult],
-    payloads: list[dict[str, Any]],
-    collection_results: list[dict[str, Any]],
-    query_trace_ids: list[str],
-) -> dict[str, Any]:
-    """Build one public MCP response from globally merged collection results."""
-
-    citation_by_chunk = {
-        citation.get("chunk_id"): citation
-        for payload in payloads
-        for citation in payload.get("citations", [])
-        if isinstance(citation, dict) and citation.get("chunk_id")
-    }
-    citations = [
-        citation_by_chunk[result.chunk_id]
-        for result in results
-        if result.chunk_id in citation_by_chunk
-    ]
-    images = _dedupe_images(
-        image for payload in payloads for image in payload.get("images", [])
-    )
-    return {
-        "ok": True,
-        "content": "\n\n".join(
-            f"[{index}] {result.text.strip()}"
-            for index, result in enumerate(results, start=1)
-        ),
-        "citations": citations,
-        "images": images,
-        "trace_id": query_trace_ids[0] if query_trace_ids else "multi-collection",
-        "query_trace_ids": query_trace_ids,
-        "collection_results": _public_collection_results(collection_results),
-        "is_empty": not results,
-    }
 
 
 def _public_collection_results(
@@ -447,30 +331,15 @@ def _public_collection_results(
     for row in collection_results:
         public_row = {
             "collection": row.get("collection"),
-            "trace_id": row.get("trace_id"),
             "candidate_count": row.get("candidate_count", 0),
             "status": row.get("status", "unknown"),
         }
+        if row.get("duration_ms") is not None:
+            public_row["duration_ms"] = row["duration_ms"]
         if row.get("error"):
             public_row["error"] = row["error"]
         public_rows.append(public_row)
     return public_rows
-
-
-def _dedupe_images(images: Any) -> list[dict[str, Any]]:
-    """Return images in first-seen order by image_id."""
-
-    deduped: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for image in images:
-        if not isinstance(image, dict):
-            continue
-        image_id = image.get("image_id")
-        if not isinstance(image_id, str) or image_id in seen:
-            continue
-        seen.add(image_id)
-        deduped.append(image)
-    return deduped
 
 
 def _business_error(code: str, message: str) -> dict[str, Any]:

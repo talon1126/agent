@@ -526,6 +526,117 @@ async def test_async_query_runtime_merges_collections_before_single_self_rag_and
 
 
 @pytest.mark.asyncio
+async def test_async_query_runtime_uses_caller_collection_override() -> None:
+    """Require MCP/AImodel supplied collections to override router defaults."""
+
+    from src.core.query_engine.async_runtime import AsyncQueryRuntime
+    from src.core.query_engine.intent_router import IntentRoute
+    from src.core.query_engine.query_processor import ProcessedQuery
+    from src.core.response import KnowledgeHubResponse
+
+    processed = ProcessedQuery(
+        raw_query="用户投诉发货慢，客服应该怎么回复？",
+        normalized_query="用户投诉发货慢，客服应该怎么回复？",
+        keywords=("发货", "客服"),
+        collection="shopping_guides",
+        top_k=2,
+    )
+    route = IntentRoute(
+        collection="shopping_guides",
+        collections=("shopping_guides",),
+        domain_intent="default",
+        complexity="simple",
+        retrieval_strategy="hybrid",
+        confidence=0.5,
+        method="default",
+        provider="IntentRouter",
+        reason="default",
+    )
+    query_processor = Mock()
+    query_processor.process.return_value = processed
+    intent_router = Mock()
+    intent_router.route.return_value = route
+    seen_collections: list[str] = []
+
+    async def _collection_runner(
+        query, *, collection, top_k, no_rerank, routing_score, routing_reason
+    ):
+        from src.core.query_engine.parallel_retrieval import AsyncCollectionRetrievalResult
+
+        seen_collections.append(collection)
+        result = RetrievalResult(
+            chunk_id=f"{collection}-chunk",
+            text=f"{collection} text",
+            score=0.8,
+            metadata={"collection": collection, "document_id": f"doc-{collection}"},
+        )
+        return AsyncCollectionRetrievalResult(
+            collection=collection,
+            results=[result],
+            dense_results=[result],
+            sparse_results=[result],
+            fused_results=[result],
+            filtered_results=[result],
+            rerank_results=[result],
+            stages=_collection_stage_fixture(result),
+            fallback_used=False,
+            rerank_applied=True,
+            duration_ms=1.0,
+        )
+
+    self_rag_controller = Mock()
+
+    def _accept_candidates(_query, candidates, **_kwargs):
+        return SelfRagDecision(
+            decision="accepted",
+            score_band="medium_confidence",
+            selected_results=list(candidates),
+            fallback_action=None,
+            judge_result=None,
+            reason="judge_passed",
+        )
+
+    self_rag_controller.evaluate.side_effect = _accept_candidates
+    response_builder = Mock()
+    response_builder.build.return_value = KnowledgeHubResponse(
+        content="merged",
+        citations=(),
+        images=(),
+        trace_id="query-override",
+        is_empty=False,
+    )
+    runtime = AsyncQueryRuntime(
+        query_processor=query_processor,
+        intent_router=intent_router,
+        hybrid_search=Mock(),
+        rerank_controller=Mock(),
+        self_rag_controller=self_rag_controller,
+        response_builder=response_builder,
+        collection_runner=_collection_runner,
+        max_collection_concurrency=2,
+        per_collection_timeout_seconds=1,
+    )
+
+    execution = await runtime.execute(
+        "用户投诉发货慢，客服应该怎么回复？",
+        collection="shopping_guides",
+        collections=["policies", "manual", "policies"],
+        top_k=2,
+        no_rerank=False,
+        trace_id="query-override",
+    )
+
+    assert seen_collections == ["policies", "manual"]
+    assert execution.processed_query.collection == "policies"
+    assert [result.metadata["collection"] for result in execution.final_results] == [
+        "policies",
+        "manual",
+    ]
+    self_rag_controller.evaluate.assert_called_once()
+    response_builder.build.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_async_multi_collection_trace_preserves_query_stage_semantics() -> None:
     """Require async multi-collection traces to keep normal query stage names."""
 

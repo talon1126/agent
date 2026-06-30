@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -75,6 +75,7 @@ class AsyncQueryExecutionResult:
     response: KnowledgeHubResponse
     rerank_applied: bool
     fallback_used: bool
+    collection_results: tuple[dict[str, Any], ...] = ()
 
 
 class AsyncQueryRuntime:
@@ -132,6 +133,7 @@ class AsyncQueryRuntime:
         no_rerank: bool,
         trace_id: str,
         request_source: str = "query_cli",
+        collections: Sequence[str] | None = None,
     ) -> AsyncQueryExecutionResult:
         """Run the complete async query path and return public/debug projections.
 
@@ -142,6 +144,9 @@ class AsyncQueryRuntime:
             no_rerank: Explicit caller request to bypass reranking.
             trace_id: Stable query identifier included in every citation.
             request_source: Calling surface written to query trace metadata.
+            collections: Optional caller-selected collection list. When supplied,
+                it overrides IntentRouter collections and lets MCP/AImodel run
+                one multi-collection query with a single final Self-RAG/response.
 
         Returns:
             Public response plus immutable stage snapshots matching the sync
@@ -176,6 +181,15 @@ class AsyncQueryRuntime:
                 processed=processed,
                 trace_controller=trace_controller,
             )
+            override_collections = _normalize_runtime_collections(collections)
+            if override_collections:
+                intent_route = replace(
+                    intent_route,
+                    collection=override_collections[0],
+                    collections=tuple(override_collections),
+                    reason="caller_collections_override",
+                )
+                trace_controller.context.collection = override_collections[0]
             if intent_route.collection != processed.collection:
                 processed = processed.model_copy(update={"collection": intent_route.collection})
                 trace_controller.context.collection = intent_route.collection
@@ -236,6 +250,7 @@ class AsyncQueryRuntime:
                 response=response,
                 rerank_applied=rerank_applied,
                 fallback_used=fallback_used,
+                collection_results=tuple(dict(row) for row in parallel.collection_results),
             )
         except Exception as error:
             if trace_controller.context.finished_at is None:
@@ -572,6 +587,22 @@ class AsyncQueryRuntime:
             candidate_count=len(candidates),
         )
         return response
+
+
+
+def _normalize_runtime_collections(collections: Sequence[str] | None) -> tuple[str, ...]:
+    """Return ordered unique caller-selected collections for one query."""
+
+    if collections is None or isinstance(collections, str):
+        return ()
+    selected: list[str] = []
+    for value in collections:
+        if not isinstance(value, str):
+            continue
+        collection = value.strip()
+        if collection and collection not in selected:
+            selected.append(collection)
+    return tuple(selected)
 
 
 def build_async_query_runtime(

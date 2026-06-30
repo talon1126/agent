@@ -95,6 +95,7 @@ class FakeRuntime:
         no_rerank: bool,
         trace_id: str,
         request_source: str | None = None,
+        collections: list[str] | tuple[str, ...] | None = None,
     ) -> FakeQueryExecution:
         """Capture normalized tool arguments and return the fixture response."""
 
@@ -106,6 +107,7 @@ class FakeRuntime:
                 "no_rerank": no_rerank,
                 "trace_id": trace_id,
                 "request_source": request_source,
+                "collections": list(collections) if collections is not None else None,
             }
         )
         return FakeQueryExecution(
@@ -132,6 +134,7 @@ class AsyncFakeRuntime(FakeRuntime):
         no_rerank: bool,
         trace_id: str,
         request_source: str | None = None,
+        collections: list[str] | tuple[str, ...] | None = None,
     ) -> FakeQueryExecution:
         """Capture arguments and return a fake execution after awaiting."""
 
@@ -142,6 +145,7 @@ class AsyncFakeRuntime(FakeRuntime):
             no_rerank=no_rerank,
             trace_id=trace_id,
             request_source=request_source,
+            collections=collections,
         )
 
 
@@ -520,6 +524,7 @@ async def test_query_knowledge_hub_returns_public_response_and_closes_pool() -> 
             "no_rerank": True,
             "trace_id": "trace-mcp-test",
             "request_source": "mcp",
+            "collections": None,
         }
     ]
     assert pool.closed is True
@@ -547,6 +552,7 @@ async def test_query_knowledge_hub_awaits_async_runtime_contract() -> None:
             "no_rerank": False,
             "trace_id": "trace-mcp-test",
             "request_source": "mcp",
+            "collections": None,
         }
     ]
     assert pool.closed is True
@@ -593,19 +599,18 @@ async def test_query_knowledge_hub_uses_defaults_and_preserves_empty_success() -
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_query_knowledge_hub_executes_each_requested_collection() -> None:
-    """Expose multi-collection RAG calls as one MCP response with child traces."""
+async def test_query_knowledge_hub_passes_requested_collections_to_runtime_once() -> None:
+    """Expose multi-collection RAG as one runtime query with one final response."""
 
     settings = load_settings(SETTINGS_PATH, validate_environment=False)
     pool = FakePool()
     runtime = FakeRuntime(_knowledge_response())
-    trace_ids = iter(["trace-faq", "trace-policies"])
     tool = QueryKnowledgeHubTool(
         settings_loader=lambda: settings,
         pool_factory=lambda _database_settings: pool,
         schema_initializer=lambda _pool: None,
         runtime_builder=lambda _settings, _pool, _no_rerank: runtime,
-        trace_id_factory=lambda: next(trace_ids),
+        trace_id_factory=lambda: "trace-merged",
     )
 
     payload = await tool.query_knowledge_hub(
@@ -617,24 +622,23 @@ async def test_query_knowledge_hub_executes_each_requested_collection() -> None:
     )
 
     assert payload["ok"] is True
-    assert payload["trace_id"] == "trace-faq"
-    assert payload["query_trace_ids"] == ["trace-faq", "trace-policies"]
+    assert payload["trace_id"] == "trace-mcp-test"
+    assert payload["query_trace_ids"] == ["trace-mcp-test"]
     assert payload["collection_results"] == [
-        {
-            "collection": "faq",
-            "trace_id": "trace-faq",
-            "candidate_count": 1,
-            "status": "success",
-        },
-        {
-            "collection": "policies",
-            "trace_id": "trace-policies",
-            "candidate_count": 1,
-            "status": "success",
-        },
+        {"collection": "faq", "candidate_count": 1, "status": "success"},
+        {"collection": "policies", "candidate_count": 1, "status": "success"},
     ]
-    assert [call["collection"] for call in runtime.calls] == ["faq", "policies"]
-    assert all(call["request_source"] == "aimodel" for call in runtime.calls)
+    assert runtime.calls == [
+        {
+            "query": "退货后多久退款",
+            "collection": "faq",
+            "top_k": 2,
+            "no_rerank": False,
+            "trace_id": "trace-merged",
+            "request_source": "aimodel",
+            "collections": ["faq", "policies"],
+        }
+    ]
 
 
 @pytest.mark.unit
