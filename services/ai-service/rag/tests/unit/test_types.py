@@ -151,7 +151,7 @@ def test_chunk_enforces_offsets_and_metadata_source_fields() -> None:
 
     ``start_offset`` is inclusive and ``end_offset`` is exclusive. Source path,
     document identity, collection, and section path live in ``metadata`` so the
-    database stores one source contract instead of both metadata and source_ref.
+    database stores one source contract owned by metadata.
     """
     chunk = Chunk(
         id="chunk-1",
@@ -174,7 +174,7 @@ def test_chunk_enforces_offsets_and_metadata_source_fields() -> None:
     assert chunk.metadata["document_id"] == "doc-1"
     assert chunk.metadata["source_path"] == "guides/headphones.md"
 
-    with pytest.raises(ValidationError, match="source_ref"):
+    with pytest.raises(ValidationError, match="unexpected_source"):
         Chunk(
             id="chunk-legacy-source-ref",
             text="legacy chunk",
@@ -182,7 +182,7 @@ def test_chunk_enforces_offsets_and_metadata_source_fields() -> None:
             chunk_index=0,
             start_offset=0,
             end_offset=12,
-            source_ref={"document_id": "doc-1"},
+            unexpected_source={"document_id": "doc-1"},
         )
 
 

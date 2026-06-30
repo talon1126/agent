@@ -120,7 +120,6 @@ def test_document_chunker_converts_document_to_business_chunks() -> None:
     assert "image_refs" not in chunks[1].metadata
     assert chunks[2].metadata["image_refs"] == ["image-2"]
     for chunk in chunks:
-        assert not hasattr(chunk, "source_ref")
         assert "images" not in chunk.metadata
         assert "headings" not in chunk.metadata
         assert "source_type" not in chunk.metadata
