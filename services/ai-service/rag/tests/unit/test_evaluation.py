@@ -526,6 +526,48 @@ def test_build_prediction_from_query_result_uses_ranked_chunk_text_for_contexts(
         "effective_collection": None,
     }
 
+@pytest.mark.unit
+def test_build_prediction_from_query_result_preserves_empty_result_diagnostics() -> None:
+    """Represent Self-RAG empty fallback as a diagnosable prediction row."""
+
+    lookup = _FakeChunkLookup([])
+
+    prediction = build_prediction_from_query_result(
+        {
+            "id": "sample-empty",
+            "collection": "faq",
+            "question": "空调开机有异味怎么办？",
+            "golden_answer": "应检查滤网、蒸发器和排水区域。",
+        },
+        {
+            "contexts": [],
+            "content": "",
+            "citations": [],
+            "images": [],
+            "is_empty": True,
+            "empty_reason": "self_rag_low_confidence",
+        },
+        chunk_lookup=lookup,
+        query_trace_id="query-trace-empty",
+        effective_collection="faq",
+    )
+
+    assert lookup.requests == []
+    assert prediction["answer"] == "未检索到足够可信的内部知识。"
+    assert prediction["contexts"] == []
+    assert prediction["retrieved_contexts"] == []
+    assert prediction["context_chunk_ids"] == []
+    assert prediction["error"] == {
+        "empty_result": True,
+        "empty_reason": "self_rag_low_confidence",
+        "skipped_metrics": [
+            "faithfulness",
+            "answer_relevancy",
+            "context_precision",
+            "context_recall",
+        ],
+        "scored_metrics": [],
+    }
 
 @pytest.mark.unit
 def test_select_single_collection_rejects_mixed_golden_sets_without_filter() -> None:
@@ -1580,6 +1622,188 @@ def test_evaluation_service_does_not_copy_aggregate_metrics_to_samples(
     sample_results = repository.sample_result_batches[0][1]
     assert [result.metrics for result in sample_results] == [{}, {}]
 
+@pytest.mark.unit
+def test_evaluation_service_skips_empty_predictions_for_ragas_and_persists_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty RAG samples should reduce coverage, not fail the whole run."""
+
+    class FakeEvaluator:
+        """Require that only scoreable rows reach the evaluator."""
+
+        def evaluate_with_samples(
+            self,
+            dataset: list[Mapping[str, Any]],
+            predictions: list[Mapping[str, Any]],
+        ) -> Mapping[str, Any]:
+            """Return metrics for the single non-empty prediction."""
+
+            assert [sample["id"] for sample in dataset] == ["sample-ok"]
+            assert [prediction["sample_id"] for prediction in predictions] == ["sample-ok"]
+            return {
+                "metrics": {"faithfulness": 0.8, "answer_relevancy": 0.75},
+                "sample_metrics": [
+                    {"faithfulness": 0.8, "answer_relevancy": 0.75},
+                ],
+            }
+
+    repository = _FakeEvaluationRepository()
+    monkeypatch.setattr(EvaluatorFactory, "create", lambda **kwargs: FakeEvaluator())
+    service = EvaluationService(
+        SimpleNamespace(),
+        repository=repository,
+        clock=lambda: datetime(2026, 6, 27, 12, 0, tzinfo=UTC),
+    )
+    dataset = [
+        {
+            "id": "sample-ok",
+            "collection": "faq",
+            "question": "金属碗能放微波炉吗？",
+            "golden_answer": "普通家庭不建议把金属碗放入微波炉。",
+        },
+        {
+            "id": "sample-empty",
+            "collection": "faq",
+            "question": "空调开机有异味怎么办？",
+            "golden_answer": "应检查滤网、蒸发器和排水区域。",
+        },
+    ]
+    predictions = [
+        {
+            "sample_id": "sample-ok",
+            "answer": "不建议将金属碗放入微波炉。",
+            "contexts": ["金属会反射微波并产生火花。"],
+            "context_chunk_ids": ["chunk-1"],
+            "query_trace_id": "trace-1",
+            "effective_collection": "faq",
+        },
+        {
+            "sample_id": "sample-empty",
+            "answer": "未检索到足够可信的内部知识。",
+            "contexts": [],
+            "retrieved_contexts": [],
+            "context_chunk_ids": [],
+            "query_trace_id": "trace-empty",
+            "effective_collection": "faq",
+            "error": {
+                "empty_result": True,
+                "empty_reason": "self_rag_low_confidence",
+                "skipped_metrics": ["faithfulness", "answer_relevancy"],
+                "scored_metrics": [],
+            },
+        },
+    ]
+
+    detail = service.run_evaluation(
+        collection_id="faq",
+        evaluator="ragas",
+        dataset_name="golden_set",
+        dataset=dataset,
+        predictions=predictions,
+        run_id="eval-empty-sample",
+    )
+
+    assert detail.status == "success"
+    assert detail.summary == {
+        "sample_count": 2,
+        "prediction_count": 2,
+        "metric_count": 2,
+        "empty_sample_count": 1,
+        "coverage_rate": 0.5,
+        "scored_sample_count_by_metric": {
+            "faithfulness": 1,
+            "answer_relevancy": 1,
+        },
+        "skipped_sample_count_by_metric": {
+            "faithfulness": 1,
+            "answer_relevancy": 1,
+        },
+    }
+    sample_results = repository.sample_result_batches[0][1]
+    assert [result.sample_id for result in sample_results] == ["sample-ok", "sample-empty"]
+    assert sample_results[0].metrics == {"faithfulness": 0.8, "answer_relevancy": 0.75}
+    assert sample_results[1].metrics == {}
+    assert sample_results[1].retrieved_contexts == ()
+    assert sample_results[1].context_chunk_ids == ()
+    assert dict(sample_results[1].error or {}) == {
+        "empty_result": True,
+        "empty_reason": "self_rag_low_confidence",
+        "skipped_metrics": ("faithfulness", "answer_relevancy"),
+        "scored_metrics": (),
+    }
+@pytest.mark.unit
+def test_evaluation_service_persists_all_empty_predictions_without_calling_evaluator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All-empty runs should report zero coverage instead of invoking Ragas."""
+
+    class FailingEvaluator:
+        """Raise if an all-empty run tries to call generation metrics."""
+
+        def evaluate_with_samples(
+            self,
+            dataset: list[Mapping[str, Any]],
+            predictions: list[Mapping[str, Any]],
+        ) -> Mapping[str, Any]:
+            """The service should not call this for all-empty predictions."""
+
+            raise AssertionError("all-empty runs must not call evaluator")
+
+    repository = _FakeEvaluationRepository()
+    monkeypatch.setattr(EvaluatorFactory, "create", lambda **kwargs: FailingEvaluator())
+    service = EvaluationService(
+        SimpleNamespace(),
+        repository=repository,
+        clock=lambda: datetime(2026, 6, 27, 12, 0, tzinfo=UTC),
+    )
+    dataset = [
+        {
+            "id": "sample-empty",
+            "collection": "faq",
+            "question": "空调开机有异味怎么办？",
+            "golden_answer": "应检查滤网、蒸发器和排水区域。",
+        },
+    ]
+    predictions = [
+        {
+            "sample_id": "sample-empty",
+            "answer": "未检索到足够可信的内部知识。",
+            "contexts": [],
+            "retrieved_contexts": [],
+            "context_chunk_ids": [],
+            "query_trace_id": "trace-empty",
+            "effective_collection": "faq",
+            "error": {
+                "empty_result": True,
+                "empty_reason": "self_rag_low_confidence",
+                "skipped_metrics": ["faithfulness", "answer_relevancy"],
+                "scored_metrics": [],
+            },
+        },
+    ]
+
+    detail = service.run_evaluation(
+        collection_id="faq",
+        evaluator="ragas",
+        dataset_name="golden_set",
+        dataset=dataset,
+        predictions=predictions,
+        run_id="eval-all-empty",
+    )
+
+    assert detail.status == "success"
+    assert detail.metrics == {}
+    assert detail.summary == {
+        "sample_count": 1,
+        "prediction_count": 1,
+        "metric_count": 0,
+        "empty_sample_count": 1,
+        "coverage_rate": 0.0,
+        "scored_sample_count_by_metric": {},
+        "skipped_sample_count_by_metric": {},
+    }
+    assert repository.result_batches == [("eval-all-empty", [])]
+    assert repository.sample_result_batches[0][1][0].error is not None
 
 @pytest.mark.unit
 def test_evaluation_runner_saves_strategy_results_for_dashboard_trends() -> None:

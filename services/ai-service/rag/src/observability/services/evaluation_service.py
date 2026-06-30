@@ -173,33 +173,47 @@ class EvaluationService:
             provider=evaluator_name,
             **dict(evaluator_options or {}),
         )
-        try:
-            metric_result = _evaluate_with_optional_samples(
-                evaluator_client,
-                dataset,
-                predictions,
-            )
-            normalized_metrics = _normalize_metric_values(metric_result.metrics)
-        except Exception as error:
-            failed_at = self._clock()
-            failed_run = self._repository.upsert_run(
-                EvaluationRunRecord(
-                    id=stable_run_id,
-                    collection_id=collection,
-                    evaluator=evaluator_name,
-                    dataset_name=dataset_label,
-                    status="failed",
-                    started_at=started_at,
-                    finished_at=failed_at,
-                    settings_snapshot=dict(settings_snapshot or {}),
-                    summary={"sample_count": len(dataset), "metric_count": 0},
-                    error={
-                        "type": error.__class__.__name__,
-                        "message": str(error),
-                    },
+        scoreable_dataset, scoreable_predictions, scoreable_indices = _scoreable_records(
+            dataset,
+            predictions,
+        )
+        if not scoreable_predictions:
+            metric_result = _EvaluationMetricResult(metrics={})
+            normalized_metrics: dict[str, float] = {}
+            aligned_sample_metrics = tuple({} for _ in range(len(dataset)))
+        else:
+            try:
+                metric_result = _evaluate_with_optional_samples(
+                    evaluator_client,
+                    scoreable_dataset,
+                    scoreable_predictions,
                 )
-            )
-            return _run_detail(failed_run, [], [])
+                normalized_metrics = _normalize_metric_values(metric_result.metrics)
+                aligned_sample_metrics = _align_sample_metrics(
+                    sample_metrics=metric_result.sample_metrics,
+                    sample_count=len(dataset),
+                    scoreable_indices=scoreable_indices,
+                )
+            except Exception as error:
+                failed_at = self._clock()
+                failed_run = self._repository.upsert_run(
+                    EvaluationRunRecord(
+                        id=stable_run_id,
+                        collection_id=collection,
+                        evaluator=evaluator_name,
+                        dataset_name=dataset_label,
+                        status="failed",
+                        started_at=started_at,
+                        finished_at=failed_at,
+                        settings_snapshot=dict(settings_snapshot or {}),
+                        summary={"sample_count": len(dataset), "metric_count": 0},
+                        error={
+                            "type": error.__class__.__name__,
+                            "message": str(error),
+                        },
+                    )
+                )
+                return _run_detail(failed_run, [], [])
 
         finished_at = self._clock()
         run = self._repository.upsert_run(
@@ -212,11 +226,14 @@ class EvaluationService:
                 started_at=started_at,
                 finished_at=finished_at,
                 settings_snapshot=dict(settings_snapshot or {}),
-                summary={
-                    "sample_count": len(dataset),
-                    "prediction_count": len(predictions),
-                    "metric_count": len(normalized_metrics),
-                },
+                summary=_evaluation_summary(
+                    sample_count=len(dataset),
+                    prediction_count=len(predictions),
+                    metric_count=len(normalized_metrics),
+                    predictions=predictions,
+                    metrics=normalized_metrics,
+                    aligned_sample_metrics=aligned_sample_metrics,
+                ),
             )
         )
         results = self._repository.upsert_results(
@@ -242,7 +259,7 @@ class EvaluationService:
                 dataset,
                 predictions,
                 normalized_metrics,
-                sample_metrics=metric_result.sample_metrics,
+                sample_metrics=aligned_sample_metrics,
             ),
         )
         return _run_detail(run, results, sample_results)
@@ -329,6 +346,86 @@ class _EvaluationMetricResult:
     sample_metrics: tuple[Mapping[str, Any], ...] = ()
 
 
+def _scoreable_records(
+    dataset: Sequence[Mapping[str, Any]],
+    predictions: Sequence[Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]], list[int]]:
+    """Return samples that can safely be sent to generation evaluators."""
+
+    if len(dataset) != len(predictions):
+        raise ValueError("dataset and predictions must contain the same number of records")
+    scoreable_dataset: list[Mapping[str, Any]] = []
+    scoreable_predictions: list[Mapping[str, Any]] = []
+    scoreable_indices: list[int] = []
+    for index, (sample, prediction) in enumerate(
+        zip(dataset, predictions, strict=True),
+    ):
+        if _is_empty_prediction(prediction):
+            continue
+        scoreable_dataset.append(sample)
+        scoreable_predictions.append(prediction)
+        scoreable_indices.append(index)
+    return scoreable_dataset, scoreable_predictions, scoreable_indices
+
+
+def _is_empty_prediction(prediction: Mapping[str, Any]) -> bool:
+    """Return whether a prediction represents a retrieval coverage miss."""
+
+    error = prediction.get("error")
+    if isinstance(error, Mapping) and error.get("empty_result") is True:
+        return True
+    contexts = prediction.get("retrieved_contexts")
+    if contexts is None:
+        contexts = prediction.get("contexts")
+    return contexts == []
+
+
+def _align_sample_metrics(
+    *,
+    sample_metrics: Sequence[Mapping[str, Any]],
+    sample_count: int,
+    scoreable_indices: Sequence[int],
+) -> tuple[Mapping[str, Any], ...]:
+    """Map evaluator sample metrics back to original dataset order."""
+
+    if not sample_metrics:
+        return tuple({} for _ in range(sample_count))
+    if len(sample_metrics) != len(scoreable_indices):
+        raise ValueError("sample_metrics must match scoreable sample count")
+    aligned: list[Mapping[str, Any]] = [{} for _ in range(sample_count)]
+    for metric_row, original_index in zip(sample_metrics, scoreable_indices, strict=True):
+        aligned[original_index] = dict(metric_row)
+    return tuple(aligned)
+
+
+def _evaluation_summary(
+    *,
+    sample_count: int,
+    prediction_count: int,
+    metric_count: int,
+    predictions: Sequence[Mapping[str, Any]],
+    metrics: Mapping[str, float],
+    aligned_sample_metrics: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build run-level coverage and metric applicability summary."""
+
+    empty_count = sum(1 for prediction in predictions if _is_empty_prediction(prediction))
+    scored_by_metric: dict[str, int] = {}
+    skipped_by_metric: dict[str, int] = {}
+    for metric_name in metrics:
+        scored_by_metric[metric_name] = sum(
+            1 for row in aligned_sample_metrics if metric_name in row
+        )
+        skipped_by_metric[metric_name] = sample_count - scored_by_metric[metric_name]
+    return {
+        "sample_count": sample_count,
+        "prediction_count": prediction_count,
+        "metric_count": metric_count,
+        "empty_sample_count": empty_count,
+        "coverage_rate": 1.0 if sample_count == 0 else (sample_count - empty_count) / sample_count,
+        "scored_sample_count_by_metric": scored_by_metric,
+        "skipped_sample_count_by_metric": skipped_by_metric,
+    }
 def _evaluate_with_optional_samples(
     evaluator_client: Any,
     dataset: Sequence[Mapping[str, Any]],
@@ -470,8 +567,11 @@ def _sample_result_records(
                     field_name="answer",
                 ),
                 retrieved_contexts=_text_tuple(
-                    prediction.get("retrieved_contexts") or prediction.get("contexts"),
+                    prediction.get("retrieved_contexts")
+                    if prediction.get("retrieved_contexts") is not None
+                    else prediction.get("contexts"),
                     field_name="retrieved_contexts",
+                    allow_empty=_is_empty_prediction(prediction),
                 ),
                 context_chunk_ids=_text_tuple(
                     prediction.get("context_chunk_ids"),

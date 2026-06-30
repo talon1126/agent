@@ -1048,13 +1048,21 @@ def build_prediction_from_query_result(
             records the sample's own collection.
 
     Returns:
-        Prediction record with ``answer`` from ``query_result.content`` and
-        ``contexts`` from ranked chunk text.
+        Prediction record with answer text and retrieved context text, or an
+        empty-result diagnostic row when Self-RAG rejected the evidence.
 
     Raises:
-        ValueError: If content, contexts, or looked-up chunk text is missing.
+        ValueError: If non-empty content, contexts, or looked-up chunk text is missing.
     """
 
+    if _query_result_is_empty(query_result):
+        return _empty_prediction_from_query_result(
+            sample,
+            query_result,
+            query_trace_id=query_trace_id,
+            effective_collection=effective_collection,
+            answer_source=EvaluationAnswerSource.RAG,
+        )
     answer = _required_text(query_result.get("content"), field_name="query_result.content")
     ranked_contexts = _ranked_contexts(query_result.get("contexts"))
     chunk_ids = [context["chunk_id"] for context in ranked_contexts]
@@ -1079,6 +1087,64 @@ def build_prediction_from_query_result(
         "effective_collection": effective_collection or sample.get("collection"),
     }
 
+
+DEFAULT_EMPTY_RAG_ANSWER = "未检索到足够可信的内部知识。"
+DEFAULT_EMPTY_SKIPPED_METRICS = (
+    "faithfulness",
+    "answer_relevancy",
+    "context_precision",
+    "context_recall",
+)
+
+
+def _query_result_is_empty(query_result: Mapping[str, Any]) -> bool:
+    """Return whether a query_result represents Self-RAG empty fallback."""
+
+    contexts = query_result.get("contexts")
+    return query_result.get("is_empty") is True or contexts == []
+
+
+def _empty_prediction_from_query_result(
+    sample: Mapping[str, Any],
+    query_result: Mapping[str, Any],
+    *,
+    query_trace_id: str,
+    effective_collection: str | None,
+    answer_source: EvaluationAnswerSource,
+) -> dict[str, Any]:
+    """Build a valid diagnostic prediction for an empty RAG query result."""
+
+    empty_reason = _optional_query_result_text(query_result.get("empty_reason"))
+    if empty_reason is None:
+        empty_reason = _optional_query_result_text(query_result.get("reason"))
+    if empty_reason is None:
+        empty_reason = "empty_result"
+    return {
+        "sample_id": sample.get("id"),
+        "question": _required_text(sample.get("question"), field_name="question"),
+        "answer": DEFAULT_EMPTY_RAG_ANSWER,
+        "answer_source": answer_source.value,
+        "contexts": [],
+        "retrieved_contexts": [],
+        "query_trace_id": _required_text(query_trace_id, field_name="query_trace_id"),
+        "context_chunk_ids": [],
+        "sample_collection": sample.get("collection"),
+        "effective_collection": effective_collection or sample.get("collection"),
+        "error": {
+            "empty_result": True,
+            "empty_reason": empty_reason,
+            "skipped_metrics": list(DEFAULT_EMPTY_SKIPPED_METRICS),
+            "scored_metrics": [],
+        },
+    }
+
+
+def _optional_query_result_text(value: Any) -> str | None:
+    """Return optional stripped query_result diagnostic text."""
+
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 def build_prediction_from_message_answer(
     sample: Mapping[str, Any],
@@ -1819,12 +1885,17 @@ def _merge_query_results(query_results: Sequence[Mapping[str, Any]]) -> dict[str
     AImodel can call the RAG tool more than once for a single user question.
     Ragas accepts one answer with many retrieved contexts, so this helper
     flattens trace contexts, de-duplicates chunk IDs in first-seen order, and
-    assigns a fresh combined rank sequence.
+    assigns a fresh combined rank sequence. Empty query traces are preserved as
+    diagnostics when no scoreable context exists.
     """
 
     merged_contexts: list[dict[str, Any]] = []
     seen_chunk_ids: set[str] = set()
+    empty_results: list[Mapping[str, Any]] = []
     for query_result in query_results:
+        if _query_result_is_empty(query_result):
+            empty_results.append(query_result)
+            continue
         for context in _ranked_contexts(query_result.get("contexts")):
             chunk_id = context["chunk_id"]
             if chunk_id in seen_chunk_ids:
@@ -1832,10 +1903,21 @@ def _merge_query_results(query_results: Sequence[Mapping[str, Any]]) -> dict[str
             seen_chunk_ids.add(chunk_id)
             merged_contexts.append({"chunk_id": chunk_id, "rank": len(merged_contexts) + 1})
     if not merged_contexts:
-        raise ValueError("Linked query traces contain no retrieved contexts")
+        empty_source = empty_results[0] if empty_results else {}
+        return {
+            "contexts": [],
+            "content": "",
+            "citations": [],
+            "images": [],
+            "is_empty": True,
+            "empty_reason": _optional_query_result_text(empty_source.get("empty_reason"))
+            or _optional_query_result_text(empty_source.get("reason"))
+            or "empty_result",
+        }
     content_parts = [
         _required_text(query_result.get("content"), field_name="query_result.content")
         for query_result in query_results
+        if not _query_result_is_empty(query_result)
     ]
     return {
         "contexts": merged_contexts,
