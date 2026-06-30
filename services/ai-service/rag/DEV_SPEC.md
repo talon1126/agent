@@ -1110,15 +1110,14 @@ Query Trace 面向查询链路，结构固定为 **基础信息、各阶段详�
 | --- | --- |
 | `query_processing` | 原始 query、改写 query（若有）、query normalize 方法、关键词数量、collection/top_k 参数、耗时 |
 | `intent_routing` | 输入 query 摘要、候选 collection、domain intent、问题复杂度、检索策略、置信度、命中原因、fallback 状态、耗时 |
-| `parallel_retrieval` | 多 collection 检索计划、selected_collections、dropped_collections、每个 collection 的候选数量/耗时/状态、partial failure、child_trace_ids 或 per-collection stage summary、合并后候选数量 |
 | `dense` | Query Embedding 模型、向量库 Provider、命中的 chunk ID 列表、候选数量、耗时 |
 | `sparse` | BM25 方法、倒排索引命中词、命中的 chunk ID 列表、候选数量、缺失 chunk ID、耗时 |
-| `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果、耗时 |
+| `fusion` | RRF 融合方法、Dense/BM25 候选来源、融合后候选快照、重复候选合并结果和耗时；async 多 collection 查询仍只记录 fusion 语义，不能把 dense/sparse/filter/rerank 总耗时合并进 fusion |
 | `filter` | 过滤参数、过滤前候选快照、过滤后候选快照、被过滤候选与原因、耗时 |
 | `rerank` | Reranker Provider、过滤后 rerank 前候选快照、rerank 后候选快照、fallback 原因（若有）、耗时 |
 | `self_rag` | 证据分档、极低分候选裁剪数量、单次 LLM judge 输入摘要、relevance/evidence sufficiency 判断、最终通过候选快照、empty fallback 原因、耗时 |
 
-候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化和证据决策结果；多 collection 查询时 `parallel_retrieval` 阶段只记录 collection 级摘要和最终合并快照，不重复保存每个 collection 的完整正文，用于后续 Hit Rate、MRR、NDCG、rerank delta、evidence sufficiency、跨 collection precision 与空结果原因分析。
+候选快照只保存评估与回表所需的轻量字段：`rank`、`chunk_id`、`score` 和少量可过滤 metadata，不保存完整 chunk 正文。Dense 与 Sparse 阶段只记录命中的 `chunk_ids`，避免 trace 体积过大；Fusion、Filter、Rerank、Self-RAG 阶段记录排序变化、过滤变化和证据决策结果；async 多 collection 查询必须保持与同步链路一致的顶层 stage：`intent_routing`、`dense`、`sparse`、`fusion`、`filter`、`rerank`、`self_rag`、`response`。每个顶层 stage 可在 `details.collection_runs` 中记录 collection 级耗时、候选数量、状态和 fallback 原因，但不得把 dense/sparse/filter/rerank 的耗时合并记入 fusion。
 
 查询结果：
 
@@ -2415,7 +2414,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | I1 | 定义 async provider 契约与兼容适配层 | [✔] | 2026-06-29 | 为 LLM、Embedding、VectorStore 和 Reranker 补充默认 async 最小接口；新增 SyncToAsync adapters，支持 timeout 与 cancellation；同步 retrieval/evaluation async 配置；158 个相关单元测试和 ruff 通过 |
 | I2 | 实现 provider 原生 async 化 | [✔] | 2026-06-29 | OpenAI-compatible/DeepSeek/CCSwitch/Embedding provider 使用原生 async SDK client；pgvector/BM25 在线查询提供 async 方法；LLM Reranker 使用 async LLM；Cross-Encoder 通过 worker thread 避免阻塞事件循环；142 个相关单元测试和 ruff 通过 |
 | I3 | 实现 AsyncQueryRuntime | [✔] | 2026-06-29 | 新增在线查询 `AsyncQueryRuntime`，覆盖 query processing、intent routing、hybrid retrieval、rerank、Self-RAG 和 Response Builder；`run_query_cli()` 支持同步/async runtime 兼容执行；8 个 async runtime 单元测试、2 个 query pipeline 集成测试和 ruff 通过 |
-| I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [✔] | 2026-06-29 | 新增 `AsyncParallelRetrievalController`，使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断并保留 collection/routing/merge metadata；Self-RAG judge 和 Response Builder 在 merge 后只执行一次；支持 max concurrency、per-collection timeout、partial failure、全部 empty 和全部失败；111 个 I4 指定单元测试和 ruff 通过 |
+| I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [✔] | 2026-06-29 | 新增 `AsyncParallelRetrievalController`，使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断并保留 collection/routing/merge metadata；async trace 必须保持与同步链路一致的顶层 stage，分别记录 dense/sparse/fusion/filter/rerank 耗时、候选数、状态和 fallback 原因；Self-RAG judge 和 Response Builder 在 merge 后只执行一次；支持 max concurrency、per-collection timeout、partial failure、全部 empty 和全部失败；111 个 I4 指定单元测试和 ruff 通过 |
 | I5 | 接入 MCP 与 evaluation async 路径 | [✔] | 2026-06-29 | `query_knowledge_hub` 可 await async runtime 且保留 MCP 公共响应和错误 envelope；MCP 默认按 `retrieval.async_enabled` 选择 async runtime，多 collection 工具调用使用 async gather 聚合公共结果；evaluation 在 `evaluation.async_enabled` 下并发构造 prediction，支持 `max_sample_concurrency`，Ragas client 支持 `max_metric_concurrency` 映射到 evaluator worker；RAG answer-source 单样本失败写入 prediction error，message answer-source 保持缺失 message/trace 时 fail fast；59 个 I5 目标测试通过，1 个外部 Ragas 测试按 marker 跳过 |
 | I6 | 完成 async 查询验收与性能对比 | [✔] | 2026-06-29 | async 链路相关单元、集成和 MCP stdio contract 测试通过；新增 `async_query_performance_report()` 汇总 first10/last10 风格的 sync/async avg latency、P95、RAG trace、Self-RAG judge、Response Builder、timeout 和 Ragas metric delta；新增 `data/resume/async_query_runtime.md` 记录 deterministic 验收 fixture 与已有本地 first10/last10 历史耗时，严格 live A/B benchmark 需在外部模型启用时单独运行；14 个 I6 目标测试和 ruff 通过 |
 

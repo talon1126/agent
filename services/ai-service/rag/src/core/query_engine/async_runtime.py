@@ -402,9 +402,16 @@ class AsyncQueryRuntime:
 
         started = perf_counter()
         collection_query = query.model_copy(update={"collection": collection})
+        local_trace = TraceContext.query(
+            trace_id=f"async-{collection}-{id(collection_query)}",
+            collection=collection,
+            raw_query=query.raw_query,
+            request_source="async_collection",
+        )
+        local_controller = TraceController(local_trace)
         hybrid = await self._search_single_collection(
             collection_query,
-            trace_controller=None,
+            trace_controller=local_controller,
         )
         rerank_applied = not no_rerank and self._rerank_controller is not None
         if rerank_applied:
@@ -412,7 +419,7 @@ class AsyncQueryRuntime:
                 collection_query.normalized_query,
                 hybrid.results,
                 top_k=top_k,
-                trace_controller=None,
+                trace_controller=local_controller,
             )
             rerank_results = outcome.results
             fallback_used = hybrid.fallback_used or outcome.fallback_used
@@ -432,6 +439,7 @@ class AsyncQueryRuntime:
             fused_results=list(hybrid.fused_results),
             filtered_results=list(hybrid.results),
             rerank_results=list(rerank_results),
+            stages=[dict(stage) for stage in local_trace.stages],
             fallback_used=fallback_used,
             rerank_applied=rerank_applied,
             duration_ms=(perf_counter() - started) * 1000,

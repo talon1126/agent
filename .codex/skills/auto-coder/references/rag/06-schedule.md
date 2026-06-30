@@ -2120,10 +2120,10 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `AsyncParallelRetrievalController.search()`：使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子任务。
 - `AsyncParallelRetrievalController._run_collection()`：为单个 collection 执行 retrieval/rerank，不执行最终 Self-RAG 或 Response。
 - `AsyncParallelRetrievalController._merge_collection_results()`：跨 collection 合并结果并统一 top_k 截断。
-- `AsyncParallelRetrievalController._record_trace()`：记录 collection runs、timeout、partial failure、merge snapshot 和 child trace id。
+- `AsyncParallelRetrievalController._record_trace()`：按同步链路一致的顶层 stage 语义记录 async 多 collection 查询，分别输出 dense、sparse、fusion、filter、rerank 的耗时、候选数量、状态、collection 明细和 fallback 原因。
 - `AsyncQueryRuntime._finalize_merged_results()`：对 merge 后候选执行一次 Self-RAG 和一次 Response Builder。
 
-验收标准：多 collection 查询必须用 `asyncio.gather()` 或等价任务编排并发执行 collection 子任务；每个 collection 只执行 retrieval/rerank 子链路；Self-RAG judge 和 Response Builder 对 merge 后最终候选只调用一次；支持 `retrieval.max_collection_concurrency`、`retrieval.per_collection_timeout_seconds`、partial failure、全部 empty 和全部失败；trace 中必须能看出 collection 级耗时和最终统一后处理耗时；单元测试必须验证两个中置信 collection 不会触发两次 Self-RAG LLM judge。
+验收标准：多 collection 查询必须用 `asyncio.gather()` 或等价任务编排并发执行 collection 子任务；每个 collection 只执行 retrieval/rerank 子链路；Self-RAG judge 和 Response Builder 对 merge 后最终候选只调用一次；支持 `retrieval.max_collection_concurrency`、`retrieval.per_collection_timeout_seconds`、partial failure、全部 empty 和全部失败；async trace 顶层 stage 必须与同步链路一致，保持 `intent_routing/dense/sparse/fusion/filter/rerank/self_rag/response` 语义，不能把 retrieval 和 rerank 总耗时合并进 `fusion`；每个顶层 stage 可在 `details.collection_runs` 中展示 collection 级耗时、候选数量、状态和 fallback 原因；单元测试必须验证两个中置信 collection 不会触发两次 Self-RAG LLM judge。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_async_query_runtime.py services\ai-service\rag\tests\unit\test_retrieval.py services\ai-service\rag\tests\unit\test_trace_context.py -v`
 

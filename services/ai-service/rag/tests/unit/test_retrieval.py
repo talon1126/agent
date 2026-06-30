@@ -2143,6 +2143,7 @@ class FakeAsyncCollectionRunner:
             fused_results=candidates,
             filtered_results=candidates,
             rerank_results=candidates,
+            stages=[],
             fallback_used=False,
             rerank_applied=not no_rerank,
             duration_ms=1.0,

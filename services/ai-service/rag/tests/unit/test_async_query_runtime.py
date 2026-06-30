@@ -456,6 +456,7 @@ async def test_async_query_runtime_merges_collections_before_single_self_rag_and
             fused_results=[result],
             filtered_results=[result],
             rerank_results=[result],
+            stages=_collection_stage_fixture(result),
             fallback_used=False,
             rerank_applied=True,
             duration_ms=1.0,
@@ -521,6 +522,198 @@ async def test_async_query_runtime_merges_collections_before_single_self_rag_and
     assert traces[0]["query_result"]["contexts"] == [
         {"chunk_id": "policy-a", "score": 0.7, "rank": 1},
         {"chunk_id": "faq-a", "score": 0.6, "rank": 2},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_multi_collection_trace_preserves_query_stage_semantics() -> None:
+    """Require async multi-collection traces to keep normal query stage names."""
+
+    from src.core.query_engine.async_runtime import AsyncQueryRuntime
+    from src.core.query_engine.intent_router import IntentRoute
+    from src.core.query_engine.query_processor import ProcessedQuery
+    from src.core.response import KnowledgeHubResponse
+
+    processed = ProcessedQuery(
+        raw_query="配送和退货规则",
+        normalized_query="配送和退货规则",
+        keywords=("配送", "退货"),
+        collection="policies",
+        top_k=2,
+    )
+    route = IntentRoute(
+        collection="policies",
+        collections=("policies", "faq"),
+        domain_intent="support_policy",
+        complexity="medium",
+        retrieval_strategy="hybrid",
+        confidence=0.82,
+        method="rules",
+        provider="IntentRouter",
+        reason="multi collection",
+    )
+    policy = RetrievalResult(
+        chunk_id="policy-a",
+        text="policy text",
+        score=0.8,
+        metadata={"collection": "policies", "document_id": "doc-policy"},
+    )
+    faq = RetrievalResult(
+        chunk_id="faq-a",
+        text="faq text",
+        score=0.7,
+        metadata={"collection": "faq", "document_id": "doc-faq"},
+    )
+    query_processor = Mock()
+    query_processor.process.return_value = processed
+    intent_router = Mock()
+    intent_router.route.return_value = route
+
+    async def _collection_runner(
+        query, *, collection, top_k, no_rerank, routing_score, routing_reason
+    ):
+        from src.core.query_engine.parallel_retrieval import AsyncCollectionRetrievalResult
+
+        result = policy if collection == "policies" else faq
+        return AsyncCollectionRetrievalResult(
+            collection=collection,
+            results=[result],
+            dense_results=[result],
+            sparse_results=[result],
+            fused_results=[result],
+            filtered_results=[result],
+            rerank_results=[result],
+            stages=_collection_stage_fixture(result),
+            fallback_used=False,
+            rerank_applied=True,
+            duration_ms=1.0,
+        )
+
+    class _RecordingSelfRagController:
+        """Small fake that records the self_rag stage like production does."""
+
+        def evaluate(self, query, candidates, *, trace_context=None):
+            decision = SelfRagDecision(
+                decision="accepted",
+                score_band="medium_confidence",
+                selected_results=[policy, faq],
+                fallback_action=None,
+                judge_result=None,
+                reason="judge_passed",
+            )
+            if trace_context is not None:
+                trace_context.record_stage(
+                    stage="self_rag",
+                    method="score_gate_or_llm_judge",
+                    provider="SelfRagController",
+                    duration_ms=1.0,
+                    candidate_count=len(decision.selected_results),
+                    status="success",
+                    details={
+                        "selected_chunk_ids": [
+                            item.chunk_id for item in decision.selected_results
+                        ]
+                    },
+                )
+            return decision
+
+    self_rag_controller = _RecordingSelfRagController()
+    response_builder = Mock()
+    response_builder.build.return_value = KnowledgeHubResponse(
+        content="[1] policy\n[2] faq",
+        citations=(),
+        images=(),
+        trace_id="query-async-stage-semantics",
+        is_empty=False,
+    )
+    traces: list[dict[str, object]] = []
+    runtime = AsyncQueryRuntime(
+        query_processor=query_processor,
+        intent_router=intent_router,
+        hybrid_search=Mock(),
+        rerank_controller=Mock(),
+        self_rag_controller=self_rag_controller,
+        response_builder=response_builder,
+        collection_runner=_collection_runner,
+        max_collection_concurrency=2,
+        per_collection_timeout_seconds=1,
+        trace_sink=traces.append,
+    )
+
+    await runtime.execute(
+        "配送和退货规则",
+        collection="policies",
+        top_k=2,
+        no_rerank=False,
+        trace_id="query-async-stage-semantics",
+    )
+
+    stages = traces[0]["stages"]
+    stage_names = [stage["stage"] for stage in stages]
+    assert stage_names == [
+        "query_processing",
+        "intent_routing",
+        "dense",
+        "sparse",
+        "fusion",
+        "filter",
+        "rerank",
+        "self_rag",
+        "response",
+    ]
+    for stage_name in ("dense", "sparse", "fusion", "filter", "rerank"):
+        stage = next(stage for stage in stages if stage["stage"] == stage_name)
+        assert stage["details"]["collection_runs"][0]["collection"] == "policies"
+        assert stage["details"]["collection_runs"][1]["collection"] == "faq"
+    assert sum(1 for stage in stages if stage["stage"] == "fusion") == 1
+
+
+def _collection_stage_fixture(result: RetrievalResult) -> list[dict[str, object]]:
+    """Build compact collection stage rows for async trace tests."""
+
+    snapshot = [{"rank": 1, "chunk_id": result.chunk_id, "score": result.score}]
+    return [
+        {
+            "stage": "dense",
+            "duration_ms": 1.0,
+            "candidate_count": 1,
+            "status": "success",
+            "details": {"chunk_ids": [result.chunk_id]},
+        },
+        {
+            "stage": "sparse",
+            "duration_ms": 1.0,
+            "candidate_count": 1,
+            "status": "success",
+            "details": {"chunk_ids": [result.chunk_id]},
+        },
+        {
+            "stage": "fusion",
+            "duration_ms": 1.0,
+            "candidate_count": 1,
+            "status": "success",
+            "details": {"fused_candidates": snapshot},
+        },
+        {
+            "stage": "filter",
+            "duration_ms": 1.0,
+            "candidate_count": 1,
+            "status": "success",
+            "details": {
+                "before_candidates": snapshot,
+                "after_candidates": snapshot,
+            },
+        },
+        {
+            "stage": "rerank",
+            "duration_ms": 1.0,
+            "candidate_count": 1,
+            "status": "success",
+            "details": {
+                "before_candidates": snapshot,
+                "after_candidates": snapshot,
+            },
+        },
     ]
 def test_run_query_cli_selects_async_runtime_from_settings() -> None:
     """Require CLI to use async runtime when retrieval.async_enabled is true."""

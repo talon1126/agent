@@ -58,6 +58,7 @@ class AsyncCollectionRetrievalResult:
     fused_results: list[RetrievalResult]
     filtered_results: list[RetrievalResult]
     rerank_results: list[RetrievalResult]
+    stages: list[dict[str, Any]]
     fallback_used: bool
     rerank_applied: bool
     duration_ms: float
@@ -342,30 +343,41 @@ class AsyncParallelRetrievalController:
         partial_failure_count: int,
         result_count: int,
     ) -> None:
-        """Write aggregate collection-run diagnostics into query trace."""
+        """Write async multi-collection diagnostics using normal query stages."""
 
         if trace_context is None:
             return
-        status = "degraded" if partial_failure_count else "success"
-        try:
-            trace_context.record_stage(
-                stage="fusion",
-                method="async_multi_collection_merge",
-                provider="AsyncParallelRetrievalController",
-                status=status,
-                duration_ms=round((perf_counter() - started) * 1000, 3),
-                candidate_count=result_count,
-                details={
-                    "selected_collections": selected,
-                    "dropped_collections": dropped,
-                    "collection_results": collection_results,
-                    "merged_candidate_count": merged_candidate_count,
-                    "partial_failure_count": partial_failure_count,
-                },
-            )
-        except Exception:
-            return
-
+        stage_rows = _aggregate_stage_rows(collection_results)
+        for stage_name in ("dense", "sparse", "fusion", "filter", "rerank"):
+            rows = stage_rows.get(stage_name, [])
+            if not rows and stage_name not in {"fusion", "filter"}:
+                continue
+            details = {
+                "selected_collections": selected,
+                "dropped_collections": dropped,
+                "collection_runs": rows,
+                "partial_failure_count": partial_failure_count,
+            }
+            if stage_name == "fusion":
+                details["merged_candidate_count"] = merged_candidate_count
+            try:
+                trace_context.record_stage(
+                    stage=stage_name,
+                    method=(
+                        "async_multi_collection_merge"
+                        if stage_name == "fusion"
+                        else f"async_multi_collection_{stage_name}"
+                    ),
+                    provider="AsyncParallelRetrievalController",
+                    status="degraded" if partial_failure_count else "success",
+                    duration_ms=_stage_duration(rows),
+                    candidate_count=(
+                        result_count if stage_name == "fusion" else _stage_candidate_count(rows)
+                    ),
+                    details=details,
+                )
+            except Exception:
+                return
 
 @dataclass(frozen=True, slots=True)
 class _CollectionRun:
@@ -443,6 +455,7 @@ class _CollectionRun:
         if self.result is not None:
             row["fallback_used"] = self.result.fallback_used
             row["rerank_applied"] = self.result.rerank_applied
+            row["stages"] = [dict(stage) for stage in self.result.stages]
         if self.error_type is not None:
             row["error_type"] = self.error_type
             row["error"] = self.error_message
@@ -494,3 +507,75 @@ def _coerce_score(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _aggregate_stage_rows(
+    collection_results: Sequence[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Group per-collection trace rows by normal query stage name."""
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in collection_results:
+        collection = str(row.get("collection") or "")
+        for stage in row.get("stages") or []:
+            if not isinstance(stage, dict):
+                continue
+            stage_name = str(stage.get("stage") or "")
+            if stage_name not in {"dense", "sparse", "fusion", "filter", "rerank"}:
+                continue
+            grouped.setdefault(stage_name, []).append(
+                _collection_stage_row(collection, row, stage)
+            )
+    return grouped
+
+
+def _collection_stage_row(
+    collection: str,
+    collection_row: Mapping[str, Any],
+    stage: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return one compact collection-level trace row for a query stage."""
+
+    details = stage.get("details") if isinstance(stage.get("details"), dict) else {}
+    result: dict[str, Any] = {
+        "collection": collection,
+        "status": str(stage.get("status") or collection_row.get("status") or "success"),
+        "duration_ms": float(stage.get("duration_ms") or 0),
+        "candidate_count": int(stage.get("candidate_count") or 0),
+    }
+    for key in ("method", "provider"):
+        if stage.get(key) is not None:
+            result[key] = stage[key]
+    if collection_row.get("routing_score") is not None:
+        result["routing_score"] = collection_row["routing_score"]
+    if collection_row.get("routing_reason") is not None:
+        result["routing_reason"] = collection_row["routing_reason"]
+    for key in (
+        "chunk_ids",
+        "missing_chunk_ids",
+        "fused_candidates",
+        "before_candidates",
+        "after_candidates",
+        "rejected_candidates",
+        "rejected_counts",
+        "fallback_reasons",
+        "failed_routes",
+        "fallback_reason",
+    ):
+        if key in details:
+            result[key] = details[key]
+    return result
+
+
+def _stage_duration(rows: Sequence[Mapping[str, Any]]) -> float:
+    """Return parallel stage wall time as the slowest collection duration."""
+
+    if not rows:
+        return 0.0
+    return round(max(float(row.get("duration_ms") or 0) for row in rows), 3)
+
+
+def _stage_candidate_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    """Return total candidates observed across collection rows."""
+
+    return sum(int(row.get("candidate_count") or 0) for row in rows)
