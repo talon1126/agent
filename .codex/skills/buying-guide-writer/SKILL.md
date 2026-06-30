@@ -14,7 +14,7 @@ description: Create high-quality Chinese product buying guides in Markdown. Use 
 5. For each recommendation, state who it fits, who should avoid it, why it fits, and the concrete risk or tradeoff.
 6. Keep headings stable for Markdown/RAG splitting: `#` title, `##` major sections, and `###` sub-sections.
 7. Prefer dense Markdown tables for comparisons, but use paragraphs for reasoning, tradeoffs, pitfalls, and final recommendations.
-8. After writing, run a quality pass. Report any issues found, fix them, and only then present the final result.
+8. After writing, run a quality pass and a review pass. Report review findings, fix actionable issues, re-check the affected sections, and only then present the final result.
 
 ## Hard Quality Rules
 
@@ -51,8 +51,10 @@ After generating or rewriting a guide:
 3. Check whether each table column is category-specific.
 4. Check whether every scenario has a real risk point.
 5. Check whether final recommendations explain configuration, fit, reason, avoid conditions, and concrete brand/series examples.
-6. If issues are found, state the issue briefly, revise the document, and re-check.
-7. In the final response, summarize what was checked and what was fixed.
+6. Run a review pass after every newly generated guide or batch of guides. The review must explicitly check compliance with this skill: structure completeness, category-specific tables, template filler, repeated phrasing, category contamination, vague non-actionable advice, final recommendation usefulness, and RAG-friendly headings/paragraphs.
+7. Treat review findings as actionable defects. Fix them before final response unless the user explicitly asks for review-only output.
+8. Re-check edited sections after fixes.
+9. In the final response, include a concise "审查发现" summary and a "修复总结" summary. If no actionable issues remain, state that clearly.
 
 
 ## High-Quality Writing Heuristics
@@ -64,6 +66,7 @@ After generating or rewriting a guide:
 - Explain tradeoffs, not only parameter definitions. Say when a parameter matters, when it is overkill, and what it can sacrifice.
 - Include what the product cannot solve or should not be expected to do.
 - Quality review must include semantic reading of key sections, not only keyword scanning.
+- Review output must distinguish findings from fixes: list actionable issues found, then list what was changed or state that no changes were needed.
 
 ## Output Rules
 
