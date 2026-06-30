@@ -722,6 +722,11 @@ def test_system_prompt_separates_product_api_facts_from_rag_knowledge() -> None:
     assert "政策" in SYSTEM_PROMPT
     assert "不能使用 RAG 内容生成实时商品事实" in SYSTEM_PROMPT
     assert "不能编造引用" in SYSTEM_PROMPT
+    assert "本轮必用工具" in SYSTEM_PROMPT
+    assert "至少调用一次该工具" in SYSTEM_PROMPT
+    assert "不能绕过工具直接用常识回答" in SYSTEM_PROMPT
+    assert "rag_tool" in SYSTEM_PROMPT
+    assert "未调用本轮必用工具前，不允许直接生成最终答案" in SYSTEM_PROMPT
 
 
 def test_system_prompt_covers_recommendation_comparison_guide_and_policy_faq_scenarios() -> None:

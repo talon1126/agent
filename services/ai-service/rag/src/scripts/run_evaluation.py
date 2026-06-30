@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import inspect
 import json
+import math
 import sys
 import threading
 import time
@@ -1136,6 +1137,283 @@ def main() -> int:
     """Run the evaluation CLI with process arguments."""
 
     return run_evaluation_cli()
+
+
+def async_query_performance_report(
+    measurements: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Summarize sync versus async query performance measurements.
+
+    Args:
+        measurements: Rows grouped by ``dataset`` and ``mode``. Each row may
+            contain ``query_latencies_ms`` or ``query_latencies_s``,
+            ``rag_trace_count``, ``self_rag_judge_count``,
+            ``response_builder_count``, ``timeout_count``, and a ``metrics``
+            mapping. The function is intentionally pure so live first10/last10
+            runs can write JSON once and regenerate the Markdown report without
+            touching providers or PostgreSQL.
+
+    Returns:
+        A report dictionary containing per-dataset sync/async summaries,
+        deltas, recommendations, and a Markdown rendering safe for
+        ``data/resume``.
+
+    Raises:
+        ValueError: If required dataset/mode values are missing or invalid.
+    """
+
+    grouped: dict[str, dict[str, Mapping[str, Any]]] = {}
+    for row in measurements:
+        dataset = _required_text(row.get("dataset"), field_name="dataset")
+        mode = _required_text(row.get("mode"), field_name="mode").lower()
+        if mode not in {"sync", "async"}:
+            raise ValueError("mode must be either sync or async")
+        grouped.setdefault(dataset, {})[mode] = row
+
+    datasets: dict[str, dict[str, Any]] = {}
+    recommendations: list[str] = []
+    for dataset, modes in sorted(grouped.items()):
+        if "sync" not in modes or "async" not in modes:
+            raise ValueError(f"dataset {dataset!r} must contain sync and async rows")
+        sync_summary = _performance_row_summary(modes["sync"])
+        async_summary = _performance_row_summary(modes["async"])
+        delta = _performance_delta(sync_summary, async_summary)
+        dataset_recommendations = _performance_recommendations(dataset, delta)
+        recommendations.extend(dataset_recommendations)
+        datasets[dataset] = {
+            "sync": sync_summary,
+            "async": async_summary,
+            "delta": delta,
+            "recommendations": dataset_recommendations,
+        }
+
+    report = {
+        "datasets": datasets,
+        "recommendations": recommendations,
+        "summary": _performance_overall_summary(datasets),
+    }
+    report["markdown"] = _render_async_performance_markdown(report)
+    return report
+
+
+def _performance_row_summary(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize one performance measurement row into numeric summary fields."""
+
+    latencies = _latencies_ms(row)
+    return {
+        "sample_count": len(latencies),
+        "avg_latency_ms": _round_metric(sum(latencies) / len(latencies)),
+        "p95_latency_ms": _round_metric(_percentile_nearest_rank(latencies, 0.95)),
+        "rag_trace_count": _non_negative_int(row.get("rag_trace_count"), "rag_trace_count"),
+        "self_rag_judge_count": _non_negative_int(
+            row.get("self_rag_judge_count"),
+            "self_rag_judge_count",
+        ),
+        "response_builder_count": _non_negative_int(
+            row.get("response_builder_count"),
+            "response_builder_count",
+        ),
+        "timeout_count": _non_negative_int(row.get("timeout_count", 0), "timeout_count"),
+        "metrics": _numeric_metrics(row.get("metrics") or {}),
+    }
+
+
+def _latencies_ms(row: Mapping[str, Any]) -> list[float]:
+    """Return positive latency measurements in milliseconds from one row."""
+
+    raw_values = row.get("query_latencies_ms")
+    multiplier = 1.0
+    if raw_values is None:
+        raw_values = row.get("query_latencies_s")
+        multiplier = 1000.0
+    if not isinstance(raw_values, Sequence) or isinstance(raw_values, str | bytes):
+        raise ValueError("query_latencies_ms or query_latencies_s must be a list")
+    latencies: list[float] = []
+    for value in raw_values:
+        latency = float(value) * multiplier
+        if latency < 0:
+            raise ValueError("latency values must be non-negative")
+        latencies.append(latency)
+    if not latencies:
+        raise ValueError("latency list must not be empty")
+    return latencies
+
+
+def _non_negative_int(value: Any, field_name: str) -> int:
+    """Normalize an integer counter used by the async performance report."""
+
+    count = int(value or 0)
+    if count < 0:
+        raise ValueError(f"{field_name} must be non-negative")
+    return count
+
+
+def _numeric_metrics(value: Any) -> dict[str, float]:
+    """Return finite metric values keyed by metric name."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError("metrics must be an object")
+    metrics: dict[str, float] = {}
+    for metric_name, metric_value in value.items():
+        name = str(metric_name).strip()
+        if not name:
+            raise ValueError("metric names must not be blank")
+        metrics[name] = float(metric_value)
+    return metrics
+
+
+def _percentile_nearest_rank(values: Sequence[float], percentile: float) -> float:
+    """Return the nearest-rank percentile used by the resume report."""
+
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(percentile * len(ordered)) - 1))
+    return ordered[index]
+
+
+def _performance_delta(
+    sync_summary: Mapping[str, Any],
+    async_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Calculate async-minus-sync deltas for one dataset."""
+
+    sync_avg = float(sync_summary["avg_latency_ms"])
+    async_avg = float(async_summary["avg_latency_ms"])
+    metric_names = sorted(
+        set(sync_summary.get("metrics", {})) | set(async_summary.get("metrics", {}))
+    )
+    metric_deltas: dict[str, dict[str, float | None]] = {}
+    for metric_name in metric_names:
+        sync_value = sync_summary.get("metrics", {}).get(metric_name)
+        async_value = async_summary.get("metrics", {}).get(metric_name)
+        metric_deltas[metric_name] = {
+            "sync": sync_value,
+            "async": async_value,
+            "delta": (
+                _round_metric(float(async_value) - float(sync_value))
+                if sync_value is not None and async_value is not None
+                else None
+            ),
+        }
+    return {
+        "avg_latency_ms": _round_metric(async_avg - sync_avg),
+        "avg_latency_improvement_pct": _round_metric(
+            ((sync_avg - async_avg) / sync_avg) * 100 if sync_avg else 0.0
+        ),
+        "p95_latency_ms": _round_metric(
+            float(async_summary["p95_latency_ms"]) - float(sync_summary["p95_latency_ms"])
+        ),
+        "rag_trace_count": int(async_summary["rag_trace_count"])
+        - int(sync_summary["rag_trace_count"]),
+        "self_rag_judge_count": int(async_summary["self_rag_judge_count"])
+        - int(sync_summary["self_rag_judge_count"]),
+        "response_builder_count": int(async_summary["response_builder_count"])
+        - int(sync_summary["response_builder_count"]),
+        "timeout_count": int(async_summary["timeout_count"])
+        - int(sync_summary["timeout_count"]),
+        "metrics": metric_deltas,
+    }
+
+
+def _performance_recommendations(dataset: str, delta: Mapping[str, Any]) -> list[str]:
+    """Explain regressions that should be reviewed after an async benchmark."""
+
+    recommendations: list[str] = []
+    if float(delta["avg_latency_ms"]) > 0:
+        recommendations.append(
+            f"{dataset}: async average latency increased; inspect provider concurrency, "
+            "per-collection timeouts, and thread-backed adapters."
+        )
+    if int(delta["timeout_count"]) > 0:
+        recommendations.append(
+            f"{dataset}: async timeout count increased; inspect slow samples and "
+            "provider timeout settings before enabling higher concurrency."
+        )
+    for metric_name, metric_delta in delta["metrics"].items():
+        value = metric_delta.get("delta")
+        if value is not None and float(value) < 0:
+            recommendations.append(
+                f"{dataset}: {metric_name} decreased by {float(value):.4f}; "
+                "compare retrieved contexts and message answers before rollout."
+            )
+    return recommendations
+
+
+def _performance_overall_summary(datasets: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """Aggregate dataset-level deltas into one compact report summary."""
+
+    if not datasets:
+        return {"dataset_count": 0}
+    improvements = [
+        float(dataset_report["delta"]["avg_latency_improvement_pct"])
+        for dataset_report in datasets.values()
+    ]
+    return {
+        "dataset_count": len(datasets),
+        "avg_latency_improvement_pct": _round_metric(sum(improvements) / len(improvements)),
+        "total_timeout_delta": sum(
+            int(dataset_report["delta"]["timeout_count"])
+            for dataset_report in datasets.values()
+        ),
+        "total_self_rag_judge_delta": sum(
+            int(dataset_report["delta"]["self_rag_judge_count"])
+            for dataset_report in datasets.values()
+        ),
+    }
+
+
+def _render_async_performance_markdown(report: Mapping[str, Any]) -> str:
+    """Render a resume-safe Markdown performance summary."""
+
+    lines = [
+        "# Async Query Runtime Performance Report",
+        "",
+        "| Dataset | Mode | Samples | Avg Latency ms | P95 Latency ms | "
+        "RAG Traces | Self-RAG Judges | Response Builders | Timeouts |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for dataset, dataset_report in report["datasets"].items():
+        for mode in ("sync", "async"):
+            row = dataset_report[mode]
+            lines.append(
+                f"| {dataset} | {mode} | {row['sample_count']} | "
+                f"{row['avg_latency_ms']:.2f} | {row['p95_latency_ms']:.2f} | "
+                f"{row['rag_trace_count']} | {row['self_rag_judge_count']} | "
+                f"{row['response_builder_count']} | {row['timeout_count']} |"
+            )
+    lines.extend(["", "## Metric Deltas", ""])
+    for dataset, dataset_report in report["datasets"].items():
+        lines.append(f"### {dataset}")
+        lines.append("| Metric | Sync | Async | Delta |")
+        lines.append("|---|---:|---:|---:|")
+        for metric_name, values in dataset_report["delta"]["metrics"].items():
+            sync_value = _format_optional_float(values["sync"])
+            async_value = _format_optional_float(values["async"])
+            delta_value = _format_optional_float(values["delta"])
+            lines.append(f"| {metric_name} | {sync_value} | {async_value} | {delta_value} |")
+        lines.append("")
+    lines.append("## Recommendations")
+    if report["recommendations"]:
+        lines.extend(f"- {item}" for item in report["recommendations"])
+    else:
+        lines.append(
+            "- No async latency, timeout, or metric regressions detected in "
+            "the supplied measurements."
+        )
+    return "\n".join(lines).strip() + "\n"
+
+
+def _format_optional_float(value: Any) -> str:
+    """Format optional metric values for Markdown tables."""
+
+    if value is None:
+        return "n/a"
+    return f"{float(value):.4f}"
+
+
+def _round_metric(value: float) -> float:
+    """Round report values without hiding meaningful millisecond differences."""
+
+    return round(float(value), 2)
 
 
 def _build_evaluation_runtime(

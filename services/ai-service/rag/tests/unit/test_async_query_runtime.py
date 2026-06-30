@@ -597,6 +597,7 @@ def test_run_query_cli_selects_async_runtime_from_settings() -> None:
     assert exit_code == 0
     assert json.loads(output[0])["response"] == response.model_dump(mode="json")
 
+
 def test_select_runtime_builder_uses_async_runtime_when_enabled(monkeypatch) -> None:
     """Require the default CLI runtime selector to honor retrieval.async_enabled."""
 
@@ -610,3 +611,68 @@ def test_select_runtime_builder_uses_async_runtime_when_enabled(monkeypatch) -> 
 
     assert selected is async_runtime
     builder.assert_called_once_with(settings, pool, True)
+
+
+def test_async_query_performance_report_summarizes_latency_metrics_and_regressions() -> None:
+    """Require I6 reporting to explain first10/last10 async query performance."""
+
+    from src.scripts.run_evaluation import async_query_performance_report
+
+    report = async_query_performance_report(
+        [
+            {
+                "dataset": "first10",
+                "mode": "sync",
+                "query_latencies_ms": [1200, 1400, 1600],
+                "rag_trace_count": 6,
+                "self_rag_judge_count": 4,
+                "response_builder_count": 6,
+                "timeout_count": 0,
+                "metrics": {"faithfulness": 0.52, "context_recall": 0.61},
+            },
+            {
+                "dataset": "first10",
+                "mode": "async",
+                "query_latencies_ms": [700, 900, 1000],
+                "rag_trace_count": 3,
+                "self_rag_judge_count": 1,
+                "response_builder_count": 3,
+                "timeout_count": 0,
+                "metrics": {"faithfulness": 0.58, "context_recall": 0.67},
+            },
+            {
+                "dataset": "last10",
+                "mode": "sync",
+                "query_latencies_ms": [2000, 2400, 2800],
+                "rag_trace_count": 8,
+                "self_rag_judge_count": 5,
+                "response_builder_count": 8,
+                "timeout_count": 0,
+                "metrics": {"faithfulness": 0.62, "answer_relevancy": 0.91},
+            },
+            {
+                "dataset": "last10",
+                "mode": "async",
+                "query_latencies_ms": [2100, 2600, 3100],
+                "rag_trace_count": 6,
+                "self_rag_judge_count": 2,
+                "response_builder_count": 6,
+                "timeout_count": 1,
+                "metrics": {"faithfulness": 0.59, "answer_relevancy": 0.9},
+            },
+        ]
+    )
+
+    first10 = report["datasets"]["first10"]
+    assert first10["sync"]["avg_latency_ms"] == 1400.0
+    assert first10["async"]["p95_latency_ms"] == 1000.0
+    assert first10["delta"]["avg_latency_improvement_pct"] == pytest.approx(38.09, abs=0.01)
+    assert first10["delta"]["rag_trace_count"] == -3
+    assert first10["delta"]["self_rag_judge_count"] == -3
+    assert first10["delta"]["metrics"]["faithfulness"]["delta"] == pytest.approx(0.06)
+    last10 = report["datasets"]["last10"]
+    assert last10["delta"]["timeout_count"] == 1
+    assert any("last10" in item and "timeout" in item for item in report["recommendations"])
+    assert any("faithfulness" in item for item in report["recommendations"])
+    assert "first10" in report["markdown"]
+    assert "P95" in report["markdown"]
