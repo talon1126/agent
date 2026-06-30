@@ -1621,6 +1621,7 @@ async def _prediction_for_sample_async(
     trace_id = f"query-eval-{uuid4().hex}"
     execute_kwargs = {
         "collection": collection,
+        "collections": _collections_for_sample(sample, primary_collection=collection),
         "top_k": top_k,
         "no_rerank": no_rerank,
         "trace_id": trace_id,
@@ -1733,6 +1734,7 @@ def _prediction_for_sample(
         execution = runtime.execute(
             question,
             collection=collection,
+            collections=_collections_for_sample(sample, primary_collection=collection),
             top_k=top_k,
             no_rerank=no_rerank,
             trace_id=trace_id,
@@ -2154,6 +2156,32 @@ def _collection_for_sample(
         return _required_text(override, field_name="collection")
     return _required_text(sample.get("collection"), field_name="collection")
 
+
+def _collections_for_sample(
+    sample: Mapping[str, Any],
+    *,
+    primary_collection: str,
+) -> tuple[str, ...] | None:
+    """Return explicit multi-collection targets for a golden sample."""
+
+    raw_collections = sample.get("collections")
+    if raw_collections is None:
+        return None
+    if isinstance(raw_collections, str) or not isinstance(raw_collections, Sequence):
+        raise ValueError("collections must be a non-empty list of strings")
+    selected: list[str] = []
+    seen: set[str] = set()
+    for raw_collection in raw_collections:
+        collection = _required_text(raw_collection, field_name="collections")
+        if collection in seen:
+            continue
+        seen.add(collection)
+        selected.append(collection)
+    if not selected:
+        raise ValueError("collections must be a non-empty list of strings")
+    if selected[0] != primary_collection:
+        selected.insert(0, primary_collection)
+    return tuple(selected)
 
 def _filter_dataset(
     dataset: list[dict[str, Any]],

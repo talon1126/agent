@@ -862,6 +862,55 @@ def test_run_evaluation_cli_uses_sample_collection_when_cli_collection_is_absent
 
 
 @pytest.mark.unit
+def test_run_evaluation_passes_sample_collections_to_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Route multi-collection golden samples through runtime collection override."""
+
+    golden_set_path = tmp_path / "golden_set_multi_collection.json"
+    golden_set_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "multi-1",
+                    "collection": "manual",
+                    "collections": ["manual", "policies"],
+                    "question": "退款慢时客服怎么解释？",
+                    "golden_answer": "客服应安抚并解释退款时效。",
+                    "expected_doc_ids": [
+                        "manual/客服话术手册.md",
+                        "policies/售后服务政策.md",
+                    ],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, Any] = {}
+    settings = run_evaluation_module.load_settings(
+        SETTINGS_PATH,
+        validate_environment=False,
+    )
+    settings.evaluation.answer_source = "rag"
+    settings.evaluation.async_enabled = True
+    settings.retrieval.async_enabled = True
+    _patch_evaluation_cli_dependencies(
+        monkeypatch,
+        settings=settings,
+        captured=captured,
+    )
+
+    exit_code = run_evaluation_module.run_evaluation_cli(
+        ["--golden-set", str(golden_set_path)]
+    )
+
+    assert exit_code == 0
+    assert captured["execute_kwargs"]["collection"] == "manual"
+    assert captured["execute_kwargs"]["collections"] == ("manual", "policies")
+
+@pytest.mark.unit
 def test_run_evaluation_cli_supports_rag_answer_source_for_context_debugging(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
