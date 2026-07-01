@@ -2276,6 +2276,13 @@ async def test_parallel_retrieval_keeps_successes_and_reports_timeout_failures()
     assert result.collection_results[2]["status"] == "success"
     assert trace.stages[0]["status"] == "degraded"
     assert trace.stages[0]["details"]["partial_failure_count"] == 2
+    for stage in trace.stages:
+        collection_runs = stage["details"]["collection_runs"]
+        failed_runs = {row["collection"]: row for row in collection_runs if row["status"] != "success"}
+        assert failed_runs["broken"]["error_type"] == "RetrievalError"
+        assert failed_runs["broken"]["error"]
+        assert failed_runs["slow"]["error_type"] == "TimeoutError"
+        assert failed_runs["slow"]["error"]
 
 
 @pytest.mark.asyncio

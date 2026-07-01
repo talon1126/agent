@@ -437,7 +437,7 @@ class _CollectionRun:
             status=status,
             duration_ms=duration_ms,
             error_type=type(error).__name__,
-            error_message=str(error),
+            error_message=str(error) or type(error).__name__,
         )
 
     def to_trace_row(self) -> dict[str, Any]:
@@ -517,6 +517,7 @@ def _aggregate_stage_rows(
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in collection_results:
         collection = str(row.get("collection") or "")
+        stage_count = 0
         for stage in row.get("stages") or []:
             if not isinstance(stage, dict):
                 continue
@@ -526,7 +527,45 @@ def _aggregate_stage_rows(
             grouped.setdefault(stage_name, []).append(
                 _collection_stage_row(collection, row, stage)
             )
+            stage_count += 1
+        if stage_count == 0 and _collection_row_failed(row):
+            for stage_name in ("dense", "sparse", "fusion", "filter", "rerank"):
+                grouped.setdefault(stage_name, []).append(
+                    _collection_failure_stage_row(collection, row)
+                )
     return grouped
+
+
+def _collection_row_failed(collection_row: Mapping[str, Any]) -> bool:
+    """Return whether a collection run failed before producing stage rows."""
+
+    status = str(collection_row.get("status") or "success")
+    return status != "success" or collection_row.get("error_type") is not None
+
+
+def _collection_failure_stage_row(
+    collection: str,
+    collection_row: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return a compact failure row for aggregate multi-collection stages."""
+
+    result: dict[str, Any] = {
+        "collection": collection,
+        "status": str(collection_row.get("status") or "failed"),
+        "duration_ms": float(collection_row.get("duration_ms") or 0),
+        "candidate_count": 0,
+        "method": "async_collection_failure",
+        "provider": "AsyncParallelRetrievalController",
+    }
+    if collection_row.get("routing_score") is not None:
+        result["routing_score"] = collection_row["routing_score"]
+    if collection_row.get("routing_reason") is not None:
+        result["routing_reason"] = collection_row["routing_reason"]
+    if collection_row.get("error_type") is not None:
+        result["error_type"] = collection_row["error_type"]
+    if collection_row.get("error") is not None:
+        result["error"] = collection_row["error"]
+    return result
 
 
 def _collection_stage_row(
