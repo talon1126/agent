@@ -1624,6 +1624,39 @@ def test_self_rag_controller_accepts_high_confidence_without_judge() -> None:
     assert traces[0]["details"]["judge_called"] is False
 
 
+def test_self_rag_controller_sorts_candidates_by_score_before_gating() -> None:
+    """Use rerank score order for confidence even after multi-collection merge."""
+
+    judge = _FakeJudgeLLM(
+        json.dumps(
+            {
+                "relevant": True,
+                "relevance_score": 0.9,
+                "sufficient": True,
+                "evidence_sufficiency_score": 0.88,
+                "missing_evidence": [],
+                "reason": "The top evidence is sufficient.",
+            }
+        )
+    )
+    controller = SelfRagController(settings=_self_rag_settings(), llm_client=judge)
+    candidates = [
+        _result("policy-low", score=0.14, metadata={"collection": "policies"}),
+        _result("manual-high", score=0.98, metadata={"collection": "manual"}),
+        _result("policy-lower", score=0.13, metadata={"collection": "policies"}),
+        _result("manual-medium", score=0.89, metadata={"collection": "manual"}),
+    ]
+
+    decision = controller.evaluate("用户投诉发货慢，客服应该怎么回复？", candidates)
+
+    assert decision.decision == "accepted"
+    assert decision.score_band == "medium_confidence"
+    assert [result.chunk_id for result in decision.selected_results] == [
+        "manual-high",
+        "manual-medium",
+    ]
+    assert len(judge.messages) == 1
+
 def test_self_rag_controller_trims_low_score_candidates_and_accepts_judge() -> None:
     """Call one judge after dropping weak rerank candidates from the Prompt."""
 

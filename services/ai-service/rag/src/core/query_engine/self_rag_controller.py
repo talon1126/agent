@@ -160,7 +160,7 @@ class SelfRagController:
         if not query.strip():
             raise ValueError("Self-RAG query must not be blank")
         started_at = perf_counter()
-        candidate_copies = [candidate.model_copy(deep=True) for candidate in candidates]
+        candidate_copies = self._sort_candidates_by_score(candidates)
         score_band = self._classify_score_band(candidate_copies)
         judge_called = False
         trimmed_count = 0
@@ -237,6 +237,18 @@ class SelfRagController:
         )
         return decision
 
+    @staticmethod
+    def _sort_candidates_by_score(
+        candidates: Sequence[RetrievalResult],
+    ) -> list[RetrievalResult]:
+        """Return defensive copies ordered by descending relevance score."""
+
+        indexed_candidates = [
+            (index, candidate.model_copy(deep=True))
+            for index, candidate in enumerate(candidates)
+        ]
+        indexed_candidates.sort(key=lambda item: (-item[1].score, item[0]))
+        return [candidate for _, candidate in indexed_candidates]
     def _classify_score_band(self, candidates: Sequence[RetrievalResult]) -> SelfRagScoreBand:
         """Classify rerank score confidence before any LLM judging."""
 

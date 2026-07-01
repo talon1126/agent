@@ -3289,6 +3289,7 @@ JSON 数据写入后返回深层不可变记录；Trace 历史可按 collection 
 - `SelfRagDecision`：封装 `decision`、`score_band`、`selected_results`、`fallback_action`、`judge_result` 和 `reason`
 - `SelfRagJudgeResult`：封装单次 LLM judge 返回的 `relevance_score`、`evidence_sufficiency_score`、`relevant`、`sufficient`、`missing_evidence` 和 `reason`
 - `SelfRagController.evaluate()`：接收 query、rerank 后候选和可选 trace，执行分档、裁剪、judge 和 empty fallback
+- `SelfRagController._sort_candidates_by_score()`：在分档和裁剪前按最终 rerank score 降序生成防御性副本，确保 multi-collection merge 后的低分候选不会影响高/中/低置信判断
 - `SelfRagController._classify_score_band()`：根据 TopN rerank score 判断 high/medium/low 置信分档
 - `SelfRagController._trim_low_score_candidates()`：在调用 judge 前剔除低于 `judge_min_candidate_score` 的 chunk，减少上下文拥挤和 judge token 消耗
 - `SelfRagController._judge_relevance_and_sufficiency()`：用一个 LLM 调用同时判断 relevance 与 evidence sufficiency，要求返回严格 JSON object
