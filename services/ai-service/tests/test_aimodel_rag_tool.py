@@ -286,23 +286,27 @@ def test_close_rag_knowledge_client_does_not_create_unused_client(monkeypatch) -
 
     get_rag_knowledge_client.cache_clear()
 
-    def fail_if_constructed(*args: Any, **kwargs: Any) -> PersistentMcpRagKnowledgeClient:
+    def fail_if_constructed(
+        *args: Any, **kwargs: Any
+    ) -> PersistentMcpRagKnowledgeClient:
         raise AssertionError("shutdown should not create a new RAG MCP client")
 
-    monkeypatch.setattr(aimodel_tools, "PersistentMcpRagKnowledgeClient", fail_if_constructed)
+    monkeypatch.setattr(
+        aimodel_tools, "PersistentMcpRagKnowledgeClient", fail_if_constructed
+    )
 
     close_rag_knowledge_client()
 
     assert get_rag_knowledge_client.cache_info().currsize == 0
 
 
-def test_persistent_mcp_rag_client_cleans_loop_when_session_start_fails(tmp_path) -> None:
+def test_persistent_mcp_rag_client_cleans_loop_when_session_start_fails(
+    tmp_path,
+) -> None:
     """A failed MCP startup must not leave the background event loop alive."""
 
     before_count = sum(
-        1
-        for thread in threading.enumerate()
-        if thread.name == "aimodel-rag-mcp-client"
+        1 for thread in threading.enumerate() if thread.name == "aimodel-rag-mcp-client"
     )
 
     def fail_to_create_session() -> Any:
@@ -327,9 +331,7 @@ def test_persistent_mcp_rag_client_cleans_loop_when_session_start_fails(tmp_path
         raise AssertionError("query_knowledge_hub should propagate startup failure")
 
     after_count = sum(
-        1
-        for thread in threading.enumerate()
-        if thread.name == "aimodel-rag-mcp-client"
+        1 for thread in threading.enumerate() if thread.name == "aimodel-rag-mcp-client"
     )
     assert after_count == before_count
 
@@ -404,6 +406,31 @@ def test_aimodel_intent_router_routes_internal_policy_to_rag_collection() -> Non
     assert route.matched_rule
 
 
+def test_aimodel_intent_router_routes_presale_explanations_to_shopping_guides() -> None:
+    """Broad why/can phrasing should not force buying advice into FAQ."""
+
+    router = AImodelIntentRouter(
+        rules=load_aimodel_intent_routes(
+            "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+        ),
+        default_collection="shopping_guides",
+    )
+
+    questions = [
+        "低龄儿童安全座椅为什么建议尽量延长反向乘坐？",
+        "老人儿童家庭想直饮，净水器为什么通常建议 RO，还要同时看哪些长期成本？",
+        "家里有 NAS 和千兆以上宽带，只换一台 2.5G 路由器就一定能提升内网速度吗？",
+    ]
+
+    for question in questions:
+        route = router.route(question)
+        assert route.action == "rag"
+        assert route.collection == "shopping_guides"
+        assert route.collections[0] == "shopping_guides"
+        assert route.intent == "buying_recommendation"
+        assert route.matched_rule == "support_presale_buying_recommendation"
+
+
 def test_aimodel_intent_router_exposes_top_three_candidate_scores() -> None:
     """Trace diagnostics need the top candidate scores, not only the winner."""
 
@@ -440,7 +467,9 @@ def test_aimodel_intent_router_includes_policies_for_installation_limits() -> No
     assert "shopping_guides" in route.collections
 
 
-def test_select_rag_collections_by_score_keeps_close_high_confidence_candidates() -> None:
+def test_select_rag_collections_by_score_keeps_close_high_confidence_candidates() -> (
+    None
+):
     """Multi-collection routing should come from scored candidates, not YAML lists."""
 
     selected = select_rag_collections_by_score(
@@ -468,6 +497,7 @@ def test_aimodel_intent_route_loader_alias_and_default_router_cache() -> None:
 
     assert rules
     assert first_router is second_router
+
 
 def test_aimodel_intent_router_routes_greeting_to_direct_without_rag() -> None:
     """Greeting messages should stay in AImodel and avoid RAG trace creation."""
@@ -521,6 +551,7 @@ def test_build_rag_tool_uses_intent_selected_collection() -> None:
             "include_image_base64": False,
         }
     ]
+
 
 def test_build_rag_tool_passes_intent_selected_collections() -> None:
     """AImodel should pass multi-collection routing without changing raw query."""
@@ -633,6 +664,7 @@ def test_agent_tools_for_intent_route_only_exposes_selected_action_tools() -> No
     )
     assert _tool_names(_agent_tools_for_intent_route(refuse_route, **tool_kwargs)) == []
 
+
 def test_query_trace_ids_from_tool_results_deduplicates_rag_traces() -> None:
     tool_results = [
         AiModelToolResult(
@@ -681,7 +713,9 @@ def test_stream_chat_does_not_prefetch_rag_before_agent(monkeypatch) -> None:
         request: AiModelChatRequest,
         tool_results: list[AiModelToolResult],
     ) -> list[str]:
-        captured["tool_results_before_agent"] = [result.model_dump() for result in tool_results]
+        captured["tool_results_before_agent"] = [
+            result.model_dump() for result in tool_results
+        ]
         return ["这是最终回答。"]
 
     def fake_rag_tool(**kwargs: Any) -> AiModelToolResult:
@@ -746,7 +780,9 @@ def test_system_prompt_separates_product_api_facts_from_rag_knowledge() -> None:
     assert "未调用本轮必用工具前，不允许直接生成最终答案" in SYSTEM_PROMPT
 
 
-def test_system_prompt_covers_recommendation_comparison_guide_and_policy_faq_scenarios() -> None:
+def test_system_prompt_covers_recommendation_comparison_guide_and_policy_faq_scenarios() -> (
+    None
+):
     assert "推荐场景" in SYSTEM_PROMPT
     assert "商品搜索工具" in SYSTEM_PROMPT
     assert "商品链接对比场景" in SYSTEM_PROMPT
@@ -756,13 +792,12 @@ def test_system_prompt_covers_recommendation_comparison_guide_and_policy_faq_sce
     assert "证据不足" in SYSTEM_PROMPT
 
 
-
-
 def test_system_prompt_forbids_source_process_phrases_in_final_answer() -> None:
     assert "不要在最终回答中声明" in SYSTEM_PROMPT
     assert "内部知识库" in SYSTEM_PROMPT
     assert "RAG" in SYSTEM_PROMPT
     assert "直接给出答案" in SYSTEM_PROMPT
+
 
 def test_stream_chat_hides_rag_tool_payload_and_internal_ids_from_frontend(
     monkeypatch,

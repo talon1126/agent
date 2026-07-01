@@ -76,7 +76,7 @@ RAG 工具返回的是可直接用于回答的内部知识上下文，不是最�
 不能使用 RAG 内容生成实时商品事实，不能用 RAG 编造价格、库存、优惠、可购买商品或商品链接。
 联网搜索工具不能替代商品搜索工具、商品详情工具或 RAG 工具，不能覆盖平台内部政策、售后规则或客服口径。
 当 RAG 与联网搜索冲突时，平台内部规则、政策、FAQ 和客服口径以 RAG 为准；外部市场信息以联网搜索为准。
-如果 RAG 返回空结果或证据不足，应明确说明当前内部知识库没有足够依据，不要用常识补写平台规则。
+如果 RAG 返回空结果、低置信或证据不足，应明确说明当前资料依据不足；可以补充通用安全常识或通用选购原则，但必须降低确定性，不能伪装成平台规则、售后承诺、商品事实或文档结论。
 RAG 返回引用时可以在回答中展示引用标题或章节，但不能编造引用，也不能展示内部 chunk id、trace id、query_trace_id 或原始工具 JSON。
 不要在最终回答中声明“根据内部知识库”“我查了内部知识库”“来自 RAG”“我调用了工具”等来源过程；直接给出答案。
 如果工具没有找到合适商品，请明确说明未找到。
@@ -301,12 +301,16 @@ def _run_langchain_agent(
         tool_results.append(result)
         return result.model_dump()
 
-    intent_route, intent_candidates = route_aimodel_intent_with_candidates(request.message)
+    intent_route, intent_candidates = route_aimodel_intent_with_candidates(
+        request.message
+    )
     rag_tool = build_rag_tool(
         tool_results,
         original_query=request.message,
         collection=intent_route.collection if intent_route.action == "rag" else None,
-        collections=list(intent_route.collections) if intent_route.action == "rag" else None,
+        collections=list(intent_route.collections)
+        if intent_route.action == "rag"
+        else None,
     )
     web_search_tool = build_web_search_tool(tool_results)
     agent_tools = _agent_tools_for_intent_route(
@@ -377,12 +381,16 @@ def _run_langchain_agent_stream(
         tool_results.append(result)
         return result.model_dump()
 
-    intent_route, intent_candidates = route_aimodel_intent_with_candidates(request.message)
+    intent_route, intent_candidates = route_aimodel_intent_with_candidates(
+        request.message
+    )
     rag_tool = build_rag_tool(
         tool_results,
         original_query=request.message,
         collection=intent_route.collection if intent_route.action == "rag" else None,
-        collections=list(intent_route.collections) if intent_route.action == "rag" else None,
+        collections=list(intent_route.collections)
+        if intent_route.action == "rag"
+        else None,
     )
     web_search_tool = build_web_search_tool(tool_results)
     agent_tools = _agent_tools_for_intent_route(

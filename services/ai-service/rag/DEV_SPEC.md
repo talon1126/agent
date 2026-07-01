@@ -2416,7 +2416,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | H2 | 实现 AImodel RAG 工具适配 | [✔] | 2026-06-12 | 新增 `search_shopping_guides` 和 `StdioMcpRagKnowledgeClient`，默认通过 `uv run --project services/ai-service/rag` 启动 stdio MCP 并调用 `query_knowledge_hub`，只返回 content、citations、images、is_empty、trace_id 等公共字段；保留可注入 client 以便单元测试和后续长期连接优化；MemoryStore 已支持 assistant message 与多个 query trace 的去重逻辑关联；27 个 AImodel 目标测试通过，ruff 通过 |
 | H3 | 将 RAG 工具接入 Agent 工具列表 | [✔] | 2026-06-12 | 新增 `build_rag_tool()`，将 `search_shopping_guides` 包装成 LangChain Agent 工具并加入同步/流式 Agent tools 列表；工具调用结果进入 per-request `tool_results`，最终 assistant message 可关联去重后的 RAG query trace id；测试环境缺少 LangChain 时使用轻量 fallback tool 保持单元测试可运行；29 个 AImodel 目标测试通过，ruff 通过 |
 | H4 | 验证商品 API 工具与 RAG 工具协同 | [✔] | 2026-06-12 | System prompt 明确商品事实必须来自商品搜索/详情工具，覆盖价格、库存、优惠、规格、可购买商品和商品链接；RAG 只用于选购指南、品类知识、政策 FAQ、售后规则和文档知识上下文；禁止把 RAG 当实时商品事实来源或编造引用；22 个 AImodel 边界回归测试通过，ruff 通过 |
-| H5 | 验证简单询问和商品链接场景 | [✔] | 2026-06-12 | System prompt 明确推荐场景使用商品搜索工具、商品链接对比场景使用商品详情工具、选购指南和政策 FAQ 场景使用 RAG 工具；新增场景测试覆盖四类入口；23 个 AImodel 场景回归测试通过，ruff 通过 |
+| H5 | 验证简单询问和商品链接场景 | [✔] | 2026-06-12 | System prompt 明确推荐场景使用商品搜索工具、商品链接对比场景使用商品详情工具、选购指南和政策 FAQ 场景使用 RAG 工具；AImodel intent rule 将选购解释、参数判断和“是否值得/能否提升”类问题路由到 shopping_guides，FAQ 规则只覆盖明确使用、故障、异常和维护场景；低置信或证据不足时允许补充通用安全常识或通用选购原则，但不得伪装成平台规则、售后承诺、商品事实或文档结论；新增场景测试覆盖四类入口；48 个 AImodel 场景回归测试通过，ruff 通过 |
 | H6 | 完成前后端联调和端到端测试 | [✔] | 2026-06-12 | AImodel SSE 输出过滤原始 RAG tool JSON，并移除普通文本和跨流片段形式的 `chunk_id`、`trace_id` 等内部标识；前端可见 delta、done answer 和持久化 assistant message 均使用清洗后的回答；25 个 AImodel 目标测试通过，ruff 通过 |
 | H7 | 优化 AImodel MCP 长连接 | [✔] | 2026-06-12 | `get_rag_knowledge_client()` 返回进程级 `PersistentMcpRagKnowledgeClient`，RAG stdio MCP 子进程和 `ClientSession` 在多次 RAG 查询间复用；FastAPI shutdown 调用 `close_rag_knowledge_client()` 释放资源，未创建过 client 时 shutdown 不会启动新 MCP 资源，session 启动失败会清理后台事件循环；AImodel 通过 MCP 调用 RAG 时 `request_source=aimodel`，直接 MCP 调用默认 `request_source=mcp`，CLI 保持 `request_source=query_cli`；ai-service Docker 镜像包含 RAG 子项目并可在 `/app/rag` 浅路径启动 MCP；H7 目标回归测试、MCP 工具测试、Query Runtime 测试和 AImodel RAG 工具测试通过，ruff 通过 |
 
@@ -4008,7 +4008,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `SYSTEM_PROMPT`：明确推荐、商品链接对比、选购指南和政策 FAQ 的工具选择规则
 - 场景测试：覆盖推荐、对比、选购指南、政策 FAQ
 
-验收标准：推荐场景必须使用商品搜索工具；商品链接对比场景必须使用商品详情工具；选购指南和政策 FAQ 场景必须使用 RAG 工具；四类场景都有测试覆盖。
+验收标准：推荐场景必须使用商品搜索工具；商品链接对比场景必须使用商品详情工具；选购指南和政策 FAQ 场景必须使用 RAG 工具；选购解释、参数判断和“是否值得/能否提升”类问题不得被宽泛 FAQ regex 抢路由；FAQ 规则只覆盖明确使用、故障、异常和维护场景；低置信或证据不足时可以补充通用安全常识或通用选购原则，但不得伪装成平台规则、售后承诺、商品事实或文档结论；四类场景都有测试覆盖。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\tests\test_aimodel_agent.py -v`；`uv run --project services/ai-service/rag ruff check services\ai-service\app\routers\AImodel\service.py services\ai-service\tests\test_aimodel_rag_tool.py`
 
