@@ -18,6 +18,7 @@ from src.libs.reranker.cross_encoder_reranker import CrossEncoderReranker
 from src.libs.reranker.fake_reranker import FakeReranker
 from src.libs.reranker.llm_reranker import LLMReranker
 from src.libs.reranker.no_op_reranker import NoOpReranker
+from src.libs.reranker.qwen_reranker import QwenReranker
 
 
 class RerankerFactory:
@@ -40,6 +41,7 @@ class RerankerFactory:
             return
         cls.register("cross_encoder", CrossEncoderReranker)
         cls.register("llm", LLMReranker)
+        cls.register("qwen", QwenReranker)
         cls.register("fake", FakeReranker)
         cls.register("none", NoOpReranker)
         cls.register("rrf", NoOpReranker)
@@ -198,9 +200,7 @@ class RerankerFactory:
 
         options: dict[str, Any] = {}
         if settings is not None and provider in settings.rerank.providers:
-            options.update(
-                settings.rerank.providers[provider].model_dump(exclude_none=True)
-            )
+            options.update(settings.rerank.providers[provider].model_dump(exclude_none=True))
         if settings is not None and provider == "llm":
             options.setdefault("prompt_path", settings.rerank.prompt_path)
         return options

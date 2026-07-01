@@ -11,6 +11,7 @@ from src.libs.reranker.cross_encoder_reranker import CrossEncoderReranker
 from src.libs.reranker.fake_reranker import FakeReranker
 from src.libs.reranker.llm_reranker import LLMReranker
 from src.libs.reranker.no_op_reranker import NoOpReranker
+from src.libs.reranker.qwen_reranker import QwenReranker
 from src.libs.reranker.reranker_factory import RerankerFactory
 
 __all__ = (
@@ -19,5 +20,6 @@ __all__ = (
     "FakeReranker",
     "LLMReranker",
     "NoOpReranker",
+    "QwenReranker",
     "RerankerFactory",
 )

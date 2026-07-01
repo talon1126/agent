@@ -26,6 +26,7 @@ from src.libs.reranker import (
     FakeReranker,
     LLMReranker,
     NoOpReranker,
+    QwenReranker,
     RerankerFactory,
 )
 from src.libs.reranker.cross_encoder_reranker import CrossEncoderModelCache
@@ -65,6 +66,37 @@ class RecordingScorer:
 
         self.pairs = pairs
         return self.scores
+
+
+class RecordingQwenScorer:
+    """Deterministic Qwen reranker scorer used by unit tests."""
+
+    def __init__(self, scores: list[float]) -> None:
+        """Configure normalized relevance scores returned for one call."""
+
+        self.scores = scores
+        self.calls: list[dict[str, object]] = []
+
+    def score(
+        self,
+        pairs: list[tuple[str, str]],
+        *,
+        instruction: str,
+        max_length: int,
+        batch_size: int,
+    ) -> list[float]:
+        """Record Qwen-specific scoring inputs and return fixed scores."""
+
+        self.calls.append(
+            {
+                "pairs": pairs,
+                "instruction": instruction,
+                "max_length": max_length,
+                "batch_size": batch_size,
+            }
+        )
+        return self.scores
+
 
 class CountingCrossEncoderLoader:
     """Fake Cross-Encoder loader that records cache and warmup behavior."""
@@ -289,6 +321,62 @@ def test_cross_encoder_reranker_scores_query_document_pairs_and_sorts_descending
     assert "rerank" not in candidates[1].metadata
 
 
+def test_qwen_reranker_scores_pairs_with_instruction_and_sorts_descending() -> None:
+    """Require QwenReranker to return normalized scores and diagnostics."""
+
+    scorer = RecordingQwenScorer([0.15, 0.98, 0.44])
+    reranker = QwenReranker(
+        model="local-qwen-reranker",
+        device="cuda",
+        max_length=4096,
+        batch_size=2,
+        scorer=scorer,
+    )
+    candidates = [
+        _candidate("chunk-a", "Generic paragraph.", score=0.01),
+        _candidate("chunk-b", "Direct child seat evidence.", score=0.02),
+        _candidate("chunk-c", "Partial safety context.", score=0.03),
+    ]
+
+    results = reranker.rerank("child seat reverse riding", candidates, top_k=2)
+
+    assert [result.chunk_id for result in results] == ["chunk-b", "chunk-c"]
+    assert [result.score for result in results] == [0.98, 0.44]
+    assert scorer.calls == [
+        {
+            "pairs": [
+                ("child seat reverse riding", "Generic paragraph."),
+                ("child seat reverse riding", "Direct child seat evidence."),
+                ("child seat reverse riding", "Partial safety context."),
+            ],
+            "instruction": (
+                "Given a web search query, retrieve relevant passages that answer the query"
+            ),
+            "max_length": 4096,
+            "batch_size": 2,
+        }
+    ]
+    assert results[0].metadata["rerank"] == {
+        "provider": "qwen",
+        "model": "local-qwen-reranker",
+        "original_score": 0.02,
+    }
+
+
+def test_qwen_reranker_wraps_invalid_scores() -> None:
+    """Require QwenReranker to expose invalid model output as ProviderError."""
+
+    reranker = QwenReranker(
+        model="local-qwen-reranker",
+        scorer=RecordingQwenScorer([1.2]),
+    )
+
+    with pytest.raises(ProviderError, match="Qwen rerank failed") as captured:
+        reranker.rerank("query", [_candidate("chunk-a", "A")])
+
+    assert captured.value.context["provider"] == "qwen"
+
+
 def test_cross_encoder_reranker_preserves_stable_order_for_equal_scores_and_top_k() -> None:
     """Require equal rerank scores to preserve filtered RRF order."""
 
@@ -363,7 +451,6 @@ def test_cross_encoder_reranker_wraps_scorer_failures() -> None:
     assert captured.value.context["provider"] == "cross_encoder"
 
 
-
 def test_cross_encoder_model_cache_reuses_same_model_device_scorer() -> None:
     """Require Cross-Encoder model loading to be process-level cached."""
 
@@ -404,13 +491,13 @@ def test_cross_encoder_model_cache_warmup_uses_cached_scorer() -> None:
         reranker.rerank("query", [_candidate("a", "A")])
 
         assert loader.load_calls == [("local-cross-encoder", "cuda")]
-        assert loader.scorers[0].predict_calls[0] == [
-            ("warmup query", "warmup document")
-        ]
+        assert loader.scorers[0].predict_calls[0] == [("warmup query", "warmup document")]
         assert loader.scorers[0].predict_calls[1] == [("query", "A")]
     finally:
         CrossEncoderModelCache.configure_loader(None)
         CrossEncoderModelCache.clear()
+
+
 def test_rerank_prompt_requires_a_strict_json_object_array() -> None:
     """Prevent chat models from returning ID-only arrays or explanatory prose."""
 
@@ -429,6 +516,23 @@ def test_rerank_prompt_requires_a_strict_json_object_array() -> None:
     assert '"candidate_id": "<exact candidate_id from Candidate chunks>"' in combined_prompt
     assert '"score": 0.95' in combined_prompt
     assert '"reason": "Directly answers the query."' in combined_prompt
+
+
+def test_reranker_factory_creates_qwen_with_injected_scorer() -> None:
+    """Require Qwen provider registration in the reranker factory."""
+
+    scorer = RecordingQwenScorer([0.8])
+
+    reranker = RerankerFactory.create(
+        provider="qwen",
+        model="local-qwen-reranker",
+        scorer=scorer,
+    )
+    results = reranker.rerank("query", [_candidate("chunk-a", "A")])
+
+    assert isinstance(reranker, QwenReranker)
+    assert [result.chunk_id for result in results] == ["chunk-a"]
+    assert results[0].score == 0.8
 
 
 def test_reranker_factory_creates_cross_encoder_with_injected_scorer() -> None:

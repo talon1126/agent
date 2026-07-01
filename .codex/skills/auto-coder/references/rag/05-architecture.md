@@ -147,6 +147,7 @@ services/ai-service/rag/
 │   │   │   ├── base_reranker.py                   # Reranker 最小抽象接口
 │   │   │   ├── reranker_factory.py                # 根据配置创建 Reranker
 │   │   │   ├── cross_encoder_reranker.py          # Cross-Encoder 精排实现
+│   │   │   ├── qwen_reranker.py                   # Qwen yes/no logits 精排实现
 │   │   │   └── llm_reranker.py                    # LLM Rerank 实现
 │   │   └── evaluator/
 │   │       ├── base_evaluator.py                  # Evaluator 最小抽象接口
@@ -341,8 +342,9 @@ services/ai-service/rag/
 | `src/libs/vector_store/pgvector_store.py` | pgvector 实现 | PostgreSQL vector(1536)、cosine search、metadata filter；Dense search 直接读取 metadata 并注入 RetrievalResult |
 | `src/libs/vector_store/fake_vector_store.py` | 内存 VectorStore 测试实现 | cosine search、metadata filter、ID 顺序恢复，并与 pgvector 保持 metadata 来源字段契约 |
 | `src/libs/reranker/base_reranker.py` | 定义 Reranker 抽象接口 | `rerank(query, candidates)`；Phase I 增加 `async_rerank()`，LLM reranker 使用原生 async HTTP，Cross-Encoder 可使用受限 executor 或专用推理队列 |
-| `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、LLM Rerank、None/fallback；Cross-Encoder 创建必须复用进程级模型缓存，避免每次 Factory 调用重复加载本地模型 |
+| `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、Qwen Reranker、LLM Rerank、None/fallback；本地模型 reranker 创建必须复用进程级模型缓存，避免每次 Factory 调用重复加载本地模型 |
 | `src/libs/reranker/cross_encoder_reranker.py` | Cross-Encoder 精排实现 | query-document pair 打分、排序；按 `model + device` 维护进程级 scorer/model 缓存，并提供显式预热入口供 MCP 启动阶段调用 |
+| `src/libs/reranker/qwen_reranker.py` | Qwen 精排实现 | 使用 Qwen 官方 yes/no logits 方式计算 0-1 相关性分数，支持 `max_length`、`batch_size`、`instruction` 和进程级模型缓存 |
 | `src/libs/reranker/llm_reranker.py` | LLM Rerank 实现 | prompt 驱动排序、超时 fallback |
 | `src/libs/evaluator/base_evaluator.py` | 定义 Evaluator 抽象接口 | `evaluate(dataset, predictions) -> metrics` 保持最小抽象；支持具体 evaluator 额外提供 `evaluate_with_samples()` 返回样本级指标 |
 | `src/libs/evaluator/evaluator_factory.py` | 创建 Evaluator | Ragas 或自定义指标 |

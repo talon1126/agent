@@ -235,7 +235,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 
 项目当前位置：
 
-RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async runtime 执行多 collection 查询。多 collection 查询以 collection 为并发单元执行 retrieval/rerank，跨 collection merge 后统一执行一次 Self-RAG judge 和一次 Response Builder。MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder 按 `model + device` 单例缓存并支持启动预热。离线 ingestion 仍保持同步批处理架构。
+RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async runtime 执行多 collection 查询。多 collection 查询以 collection 为并发单元执行 retrieval/rerank，跨 collection merge 后统一执行一次 Self-RAG judge 和一次 Response Builder。MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder/Qwen Reranker 按 `provider + model + device` 单例缓存并支持启动预热。离线 ingestion 仍保持同步批处理架构。
 
 可用功能：
 
@@ -243,7 +243,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 - AsyncQueryRuntime 在线查询入口。
 - 多 collection 真并发检索与部分失败降级。
 - MCP `query_knowledge_hub` async 调用路径。
-- MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder 按 `model + device` 单例缓存并支持启动预热。
+- MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder/Qwen Reranker 按 `provider + model + device` 单例缓存并支持启动预热。
 - Evaluation async 样本并发和指标并发限流。
 - Query Trace 中可观察 async collection runs、timeout、partial failure、merge 后 Self-RAG 和 response 阶段。
 
@@ -368,7 +368,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | G4 | 实现策略对比评估 | [✔] | 2026-06-10 | `src/observability/evaluation/runner.py` 通过可注入 retrieval callable 对比 hybrid、dense_only、sparse_only、rerank 四种策略，并复用 Hit Rate@K、MRR@K、NDCG@K 计算指标；runner 不直接打开数据库或构造 QueryRuntime；包入口导出 `RetrievalStrategy` 以支持外部自定义策略，空 metrics 配置 fail fast；9 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 | G5 | 实现评估历史趋势展示 | [✔] | 2026-06-10 | `EvaluationRunner.save_results()`，将策略对比结果写入 `EvaluationRepository` 边界，生成一条 evaluation run 和按 `strategy.metric` 命名的 metric rows；metric details 保留 strategy、retrieval_mode、use_rerank、raw_metric_name、sample_count 和 predictions，供 Dashboard 趋势与详情展示；保存前校验各策略 prediction 数量一致，避免 summary 误导；11 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 | G6 | 实现评估脚本进度日志与控制台反馈 | [✔] | 2026-06-27 | `run_evaluation.py` 通过 `EvaluationReporter` 输出可读阶段日志、样本级进度、耗时、trace/message 关联和失败定位；同时写入 `src/logs/evaluation.log.jsonl` JSONL 诊断日志，保留最终评估 JSON 输出契约；单元测试覆盖 reporter 注入、样本进度、失败事件和最终结果输出；25 个 evaluation 单元测试通过，1 个 external 测试按环境跳过，ruff 通过 |
-| G7 | 实现真实 Ragas 评估入口与最终上下文优化 | [✔] | 2026-06-12 | 注册 `ragas` 到 `EvaluatorFactory`；新增 `run_evaluation.py` 读取 golden set、调用真实 Query Pipeline、支持 `message` 与 `rag` 两种 answer source；默认 `message` 对每个 golden question 调用 AImodel chat 接口生成 assistant message，再通过 `message_query_trace` 读取 message 作为 Ragas answer；显式 `rag` 才使用 `query_result.content` 作为上下文包调试 answer；按 `query_result.contexts` 回查 chunk 正文构造 Ragas `retrieved_contexts`、调用 `RagasEvaluator` 并写入 evaluation run/results/sample_results；empty result 作为样本级覆盖失败保存，不中断整次评估；`RagasEvaluator.evaluate_with_samples()` 从 Ragas dataframe 提取逐样本指标，`EvaluationService` 将其写入 `rag_evaluation_sample_results.metrics`，aggregate-only evaluator 不复制聚合指标到样本结果；同时将 `query_result.content` 升级为配置驱动的 Agent-ready final context，优化失败 fallback 到原始编号证据块；evaluation 单元测试覆盖样本级 metrics、empty result 和 skipped metrics 持久化，ruff 通过，真实 Ragas provider 创建 smoke 通过 |
+| G7 | 实现真实 Ragas 评估入口与最终上下文优化 | [✔] | 2026-06-12 | 注册 `ragas` 到 `EvaluatorFactory`；新增 `run_evaluation.py` 读取 golden set、调用真实 Query Pipeline、支持 `message` 与 `rag` 两种 answer source；默认 `message` 对每个 golden question 调用 AImodel chat 接口生成 assistant message，再通过 `message_query_trace` 读取 message 作为 Ragas answer；显式 `rag` 才使用 `query_result.content` 作为上下文包调试 answer；按 `query_result.contexts` 回查 chunk 正文构造 Ragas `retrieved_contexts`、调用 `RagasEvaluator` 并写入 evaluation run/results/sample_results；empty result 作为样本级覆盖失败保存，不中断整次评估；`RagasEvaluator.evaluate_with_samples()` 从 Ragas dataframe 提取逐样本指标，`EvaluationService` 将其写入 `rag_evaluation_sample_results.metrics`，aggregate-only evaluator 不复制聚合指标到样本结果；同时将 `query_result.content` 升级为配置驱动的 Agent-ready final context，优化失败 fallback 到原始编号证据块；golden sample 的 `golden_answer` 必须能被 `expected_doc_ids` 指向的文档直接支撑，避免用超出文档证据的答案拉低 recall/faithfulness；evaluation 单元测试覆盖样本级 metrics、empty result 和 skipped metrics 持久化，ruff 通过，真实 Ragas provider 创建 smoke 通过 |
 
 #### 阶段 H：AImodel 联调集成
 
@@ -378,7 +378,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | H2 | 实现 AImodel RAG 工具适配 | [✔] | 2026-06-12 | 新增 `search_shopping_guides` 和 `StdioMcpRagKnowledgeClient`，默认通过 `uv run --project services/ai-service/rag` 启动 stdio MCP 并调用 `query_knowledge_hub`，只返回 content、citations、images、is_empty、trace_id 等公共字段；保留可注入 client 以便单元测试和后续长期连接优化；MemoryStore 已支持 assistant message 与多个 query trace 的去重逻辑关联；27 个 AImodel 目标测试通过，ruff 通过 |
 | H3 | 将 RAG 工具接入 Agent 工具列表 | [✔] | 2026-06-12 | 新增 `build_rag_tool()`，将 `search_shopping_guides` 包装成 LangChain Agent 工具并加入同步/流式 Agent tools 列表；工具调用结果进入 per-request `tool_results`，最终 assistant message 可关联去重后的 RAG query trace id；测试环境缺少 LangChain 时使用轻量 fallback tool 保持单元测试可运行；29 个 AImodel 目标测试通过，ruff 通过 |
 | H4 | 验证商品 API 工具与 RAG 工具协同 | [✔] | 2026-06-12 | System prompt 明确商品事实必须来自商品搜索/详情工具，覆盖价格、库存、优惠、规格、可购买商品和商品链接；RAG 只用于选购指南、品类知识、政策 FAQ、售后规则和文档知识上下文；禁止把 RAG 当实时商品事实来源或编造引用；22 个 AImodel 边界回归测试通过，ruff 通过 |
-| H5 | 验证简单询问和商品链接场景 | [✔] | 2026-06-12 | System prompt 明确推荐场景使用商品搜索工具、商品链接对比场景使用商品详情工具、选购指南和政策 FAQ 场景使用 RAG 工具；新增场景测试覆盖四类入口；23 个 AImodel 场景回归测试通过，ruff 通过 |
+| H5 | 验证简单询问和商品链接场景 | [✔] | 2026-06-12 | System prompt 明确推荐场景使用商品搜索工具、商品链接对比场景使用商品详情工具、选购指南和政策 FAQ 场景使用 RAG 工具；AImodel intent rule 将选购解释、参数判断和“是否值得/能否提升”类问题路由到 shopping_guides，FAQ 规则只覆盖明确使用、故障、异常和维护场景；低置信或证据不足时允许补充通用安全常识或通用选购原则，但不得伪装成平台规则、售后承诺、商品事实或文档结论；新增场景测试覆盖四类入口；48 个 AImodel 场景回归测试通过，ruff 通过 |
 | H6 | 完成前后端联调和端到端测试 | [✔] | 2026-06-12 | AImodel SSE 输出过滤原始 RAG tool JSON，并移除普通文本和跨流片段形式的 `chunk_id`、`trace_id` 等内部标识；前端可见 delta、done answer 和持久化 assistant message 均使用清洗后的回答；25 个 AImodel 目标测试通过，ruff 通过 |
 | H7 | 优化 AImodel MCP 长连接 | [✔] | 2026-06-12 | `get_rag_knowledge_client()` 返回进程级 `PersistentMcpRagKnowledgeClient`，RAG stdio MCP 子进程和 `ClientSession` 在多次 RAG 查询间复用；FastAPI shutdown 调用 `close_rag_knowledge_client()` 释放资源，未创建过 client 时 shutdown 不会启动新 MCP 资源，session 启动失败会清理后台事件循环；AImodel 通过 MCP 调用 RAG 时 `request_source=aimodel`，直接 MCP 调用默认 `request_source=mcp`，CLI 保持 `request_source=query_cli`；ai-service Docker 镜像包含 RAG 子项目并可在 `/app/rag` 浅路径启动 MCP；H7 目标回归测试、MCP 工具测试、Query Runtime 测试和 AImodel RAG 工具测试通过，ruff 通过 |
 
@@ -1970,7 +1970,7 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 - `SYSTEM_PROMPT`：明确推荐、商品链接对比、选购指南和政策 FAQ 的工具选择规则
 - 场景测试：覆盖推荐、对比、选购指南、政策 FAQ
 
-验收标准：推荐场景必须使用商品搜索工具；商品链接对比场景必须使用商品详情工具；选购指南和政策 FAQ 场景必须使用 RAG 工具；四类场景都有测试覆盖。
+验收标准：推荐场景必须使用商品搜索工具；商品链接对比场景必须使用商品详情工具；选购指南和政策 FAQ 场景必须使用 RAG 工具；选购解释、参数判断和“是否值得/能否提升”类问题不得被宽泛 FAQ regex 抢路由；FAQ 规则只覆盖明确使用、故障、异常和维护场景；低置信或证据不足时可以补充通用安全常识或通用选购原则，但不得伪装成平台规则、售后承诺、商品事实或文档结论；四类场景都有测试覆盖。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\tests\test_aimodel_rag_tool.py services\ai-service\tests\test_aimodel_agent.py -v`；`uv run --project services/ai-service/rag ruff check services\ai-service\app\routers\AImodel\service.py services\ai-service\tests\test_aimodel_rag_tool.py`
 

@@ -373,6 +373,7 @@ def test_reranker_factory_uses_configured_rrf_fallback_when_default_is_unavailab
     """
 
     settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    settings.rerank.default = "llm"
     reranker = RerankerFactory.create(settings=settings)
     candidates = [
         types_module.RetrievalResult(
@@ -405,6 +406,7 @@ def test_reranker_factory_preserves_configured_options_for_non_default_fallback(
     """
 
     settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    settings.rerank.default = "llm"
     settings.rerank.fallback = "cross_encoder"
     scorer = SimpleNamespace(predict=lambda pairs: [0.42])
 

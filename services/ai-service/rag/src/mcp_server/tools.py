@@ -57,7 +57,6 @@ class QueryRuntimeLike(Protocol):
         """Execute one query and return a public response wrapper."""
 
 
-
 class RuntimeHolderLike(Protocol):
     """Describe the reusable MCP runtime holder consumed by query tools."""
 
@@ -129,25 +128,31 @@ class McpRuntimeHolder:
             return runtime
 
     def warmup(self) -> None:
-        """Warm the configured Cross-Encoder model when MCP preload is enabled."""
+        """Warm the configured local reranker model when MCP preload is enabled."""
 
         settings = self._settings or self._settings_loader()
         self._settings = settings
         if not getattr(settings.mcp, "preload_cross_encoder", False):
             return
-        if not settings.rerank.enabled or settings.rerank.default != "cross_encoder":
+        if not settings.rerank.enabled:
             return
-        provider = settings.rerank.providers.get("cross_encoder")
+        provider_name = settings.rerank.default.strip().lower()
+        if provider_name not in {"cross_encoder", "qwen"}:
+            return
+        provider = settings.rerank.providers.get(provider_name)
         model = getattr(provider, "model", None) if provider is not None else None
         if not isinstance(model, str) or not model.strip():
             return
         device = getattr(provider, "device", None) if provider is not None else None
-        from src.libs.reranker.cross_encoder_reranker import CrossEncoderModelCache
+        normalized_device = device if isinstance(device, str) else None
+        if provider_name == "cross_encoder":
+            from src.libs.reranker.cross_encoder_reranker import CrossEncoderModelCache
 
-        CrossEncoderModelCache.warmup(
-            model.strip(),
-            device if isinstance(device, str) else None,
-        )
+            CrossEncoderModelCache.warmup(model.strip(), normalized_device)
+            return
+        from src.libs.reranker.qwen_reranker import QwenModelCache
+
+        QwenModelCache.warmup(model.strip(), normalized_device)
 
     def close(self) -> None:
         """Release the process-level pool and cached runtime references."""
@@ -220,16 +225,12 @@ class QueryKnowledgeHubTool:
         self._pool_factory = pool_factory or PostgresPool.from_settings
         self._schema_initializer = schema_initializer or init_schema
         self._runtime_builder = (
-            None
-            if runtime_holder is not None
-            else (runtime_builder or _default_runtime_builder)
+            None if runtime_holder is not None else (runtime_builder or _default_runtime_builder)
         )
         self._runtime_holder = runtime_holder or (
             None if runtime_builder is not None else get_default_runtime_holder()
         )
-        self._trace_id_factory = trace_id_factory or (
-            lambda: f"mcp-query-{uuid4().hex}"
-        )
+        self._trace_id_factory = trace_id_factory or (lambda: f"mcp-query-{uuid4().hex}")
         self._max_image_base64_bytes = max_image_base64_bytes
 
     async def query_knowledge_hub(
@@ -292,9 +293,7 @@ class QueryKnowledgeHubTool:
             default_collection=settings.retrieval.filters.default_collection,
         )
         active_collection = active_collections[0]
-        active_top_k = (
-            settings.retrieval.final_top_k if top_k is None else top_k
-        )
+        active_top_k = settings.retrieval.final_top_k if top_k is None else top_k
         active_request_source = (
             request_source.strip()
             if isinstance(request_source, str) and request_source.strip()
@@ -364,9 +363,7 @@ class QueryKnowledgeHubTool:
 
         if not isinstance(query, str) or not query.strip():
             return _business_error("invalid_request", "query must not be blank")
-        if collection is not None and (
-            not isinstance(collection, str) or not collection.strip()
-        ):
+        if collection is not None and (not isinstance(collection, str) or not collection.strip()):
             return _business_error(
                 "invalid_request",
                 "collection must be a non-blank string when provided",
@@ -441,8 +438,6 @@ class QueryKnowledgeHubTool:
             if not path.is_file() or path.stat().st_size > self._max_image_base64_bytes:
                 continue
             image["base64_content"] = base64.b64encode(path.read_bytes()).decode("ascii")
-
-
 
 
 def _public_collection_results(
@@ -623,9 +618,7 @@ class MetadataTool:
                 "invalid_request",
                 "provide document_id or source_uri",
             )
-        if collection is not None and (
-            not isinstance(collection, str) or not collection.strip()
-        ):
+        if collection is not None and (not isinstance(collection, str) or not collection.strip()):
             return _business_error(
                 "invalid_request",
                 "collection must be a non-blank string when provided",

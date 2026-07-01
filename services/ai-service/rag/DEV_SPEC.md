@@ -328,7 +328,7 @@ Query rewrite 通过最小化 `QueryRewriter.rewrite(query)` 接口注入，Quer
 | 意图识别与路由 | 判断查询所属知识域和检索策略 | **Intent Router**：输入 `raw_query` 和 `ProcessedQuery`，基于规则、轻量语义匹配和可选 LLM fallback 输出候选 collection、domain intent、问题复杂度、检索策略、置信度和原因；结果写入 query trace 的 `intent_routing` stage |
 | 双路混合检索 | 同时召回关键词相关和语义相关的 chunk | **Dense Route**：输入 `ProcessedQuery` 和 Intent Router 的路由结果，计算 Query Embedding，检索 pgvector，返回 `List[RetrievalResult]`；**Sparse Route**：使用 `ProcessedQuery.keywords` 查询 BM25 倒排索引，按 `chunk_id` 回表读取 chunk 文本和 metadata，返回 `List[RetrievalResult]`；**Fusion** 先完成 RRF 排名融合；**HybridSearch** 依赖 Query Processor、Intent Router、Dense Route、Sparse Route 和 Fusion，并负责候选去重和单路降级 |
 | Rerank 前候选过滤与跳过决策 | 在精排前过滤候选并判断是否需要执行昂贵 rerank | 支持按 `collection`、`doc_type`、来源类型、文档状态、权限和生命周期状态等参数过滤，避免不符合调用参数的内容进入 Reranker；过滤后按整批候选执行 rerank skip gate，当 fusion 排序已满足高置信条件时直接使用过滤后的 RRF Top-k，否则将过滤后的 `fusion_top_k` 整批送入 Cross-Encoder 或 LLM Rerank |
-| 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder 和 LLM Rerank；只在 rerank skip gate 未通过时对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
+| 重排 | 提升最终上下文排序质量 | 支持 Cross-Encoder、Qwen Reranker 和 LLM Rerank；Qwen Reranker 使用官方 yes/no logits 方式输出 0-1 相关性分数，避免 raw logits 污染 Self-RAG 阈值；只在 rerank skip gate 未通过时对过滤后的候选进行二次排序，观察 rerank 前后排名变化；当 rerank 服务不可用、超时或返回异常时，自动 fallback 到过滤后的 RRF 融合排序结果 |
 | Async Query Runtime | 提升在线查询并发和可控超时能力 | Phase I 新增 `AsyncQueryRuntime` 与 provider async 契约；在线 query、MCP 和 evaluation 可走 async 路径；ingestion 暂不 async 化；同步入口保留兼容包装 |
 | Self-RAG 证据决策 | 判断 rerank 后证据是否相关且足够 | **SelfRagController** 位于 rerank 之后、Response Builder 之前；单 collection 查询直接消费 rerank 结果；多 collection 查询必须先完成各 collection retrieval/rerank，再跨 collection merge，最后只执行一次 Self-RAG judge；Top2/Top3 分数稳定较高时直接通过；中等置信度时先剔除极低分 chunk，减少 judge 上下文拥挤，再通过一次 LLM 调用同时返回 relevance 与 evidence sufficiency 判断；极低置信度或 judge 不通过时暂时只返回 empty result，不直接调用 Web/Tavily；后续可扩展纠错、重试或外部搜索建议 |
 | 最终上下文构造 | 输出可被 Agent 直接使用的上下文和引用 | 单 collection 查询基于 Self-RAG 通过的最终候选生成编号证据块；多 collection 查询在跨 collection merge 和单次 Self-RAG 后只执行一次 Response Builder；再使用配置驱动 Prompt 将证据整理为 Agent-ready final context；保留 `[1]`、`[2]` 编号与 `query_result.contexts.rank` 对齐；只允许压缩、去重、结构化和补充使用约束，不生成最终答案、不编造商品价格/库存/链接；优化失败时 fallback 到原始编号证据块 |
@@ -347,7 +347,7 @@ uv run --project services/ai-service/rag python -m src.mcp_server.server --trans
 
 stdio 协议要求 stdout/stdin 只承载 MCP 协议帧，业务日志不得写入 stdout。RAG MCP 普通运行日志写入 `src/logs/app.log`，错误诊断可以写 stderr；Trace 仍按可观测性阶段写入结构化日志。MCP 启动入口必须加载本地 `.env`，并读取 `DATABASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`RAG_SETTINGS_PATH`、`RAG_DEFAULT_COLLECTION` 等环境变量。
 
-MCP server 进程内必须复用在线查询依赖。`query_knowledge_hub` tool 不得在每次调用时重新构建 `AsyncQueryRuntime`、`RerankController` 或 Cross-Encoder 模型；同一个 MCP 进程应维护可关闭的 runtime holder，并在 tool 调用间复用 runtime、Reranker、数据库 pool 和模型资源。Cross-Encoder 模型加载必须使用进程级缓存，同一 `model + device` 组合只允许加载一次；MCP 启动时可按配置预热 Cross-Encoder，使第一次真实 query 不承担模型下载/加载/首轮 CUDA kernel 初始化耗时。
+MCP server 进程内必须复用在线查询依赖。`query_knowledge_hub` tool 不得在每次调用时重新构建 `AsyncQueryRuntime`、`RerankController` 或本地 reranker 模型；同一个 MCP 进程应维护可关闭的 runtime holder，并在 tool 调用间复用 runtime、Reranker、数据库 pool 和模型资源。Cross-Encoder 与 Qwen Reranker 模型加载必须使用进程级缓存，同一 `provider + model + device` 组合只允许加载一次；MCP 启动时可按配置预热本地 reranker，使第一次真实 query 不承担模型下载/加载/首轮 CUDA kernel 初始化耗时。
 
 AImodel 集成时不让 Agent 直接依赖 RAG 检索内部实现。`services/ai-service/app/routers/AImodel/tools.py` 提供 AImodel 侧 RAG 工具适配：`PersistentMcpRagKnowledgeClient` 负责通过 stdio MCP 启动并长期复用一个 RAG MCP 子进程，调用 `query_knowledge_hub`；`search_shopping_guides` 负责把 MCP 公共响应转换为 AImodel 工具结果。H3 再把该工具包装进 LangChain Agent 工具集合，Agent 只依赖业务工具边界。
 
@@ -471,7 +471,7 @@ MCP 工具三：`get_document_summary`
 | --- | --- | --- |
 | `LLMClient` | `chat(messages) -> response` | 上层只传入统一 messages，不关心 Azure OpenAI、OpenAI、Ollama、DeepSeek 的 SDK 差异 |
 | `EmbeddingClient` | `embed(text) -> vector`，`embed_batch(texts) -> vectors` | 单文本和批量文本使用同一抽象，方便 ingestion 批处理和 query embedding |
-| `RerankerClient` | `rerank(query, candidates) -> ranked_candidates` | Cross-Encoder 和 LLM Rerank 都实现同一排序接口 |
+| `RerankerClient` | `rerank(query, candidates) -> ranked_candidates` | Cross-Encoder、Qwen Reranker 和 LLM Rerank 都实现同一排序接口 |
 | `VectorStoreClient` | `upsert(chunks)`，`search(vector, filters, top_k)` | 首版实现 pgvector，上层检索流程不直接写 SQL |
 | `SplitterClient` | `split(text) -> List[str]` | 首版包装 LangChain `RecursiveCharacterTextSplitter`，只做纯文本切分；业务 `Chunk` 由 `DocumentChunker` 生成 |
 | `EvaluatorClient` | `evaluate(dataset, predictions) -> metrics` | Ragas 和自定义指标都走统一评估入口 |
@@ -2273,7 +2273,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 
 项目当前位置：
 
-RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async runtime 执行多 collection 查询。多 collection 查询以 collection 为并发单元执行 retrieval/rerank，跨 collection merge 后统一执行一次 Self-RAG judge 和一次 Response Builder。MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder 按 `model + device` 单例缓存并支持启动预热。离线 ingestion 仍保持同步批处理架构。
+RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async runtime 执行多 collection 查询。多 collection 查询以 collection 为并发单元执行 retrieval/rerank，跨 collection merge 后统一执行一次 Self-RAG judge 和一次 Response Builder。MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder/Qwen Reranker 按 `provider + model + device` 单例缓存并支持启动预热。离线 ingestion 仍保持同步批处理架构。
 
 可用功能：
 
@@ -2281,7 +2281,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 - AsyncQueryRuntime 在线查询入口。
 - 多 collection 真并发检索与部分失败降级。
 - MCP `query_knowledge_hub` async 调用路径。
-- MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder 按 `model + device` 单例缓存并支持启动预热。
+- MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder/Qwen Reranker 按 `provider + model + device` 单例缓存并支持启动预热。
 - Evaluation async 样本并发和指标并发限流。
 - Query Trace 中可观察 async collection runs、timeout、partial failure、merge 后 Self-RAG 和 response 阶段。
 
@@ -2406,7 +2406,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | G4 | 实现策略对比评估 | [✔] | 2026-06-10 | `src/observability/evaluation/runner.py` 通过可注入 retrieval callable 对比 hybrid、dense_only、sparse_only、rerank 四种策略，并复用 Hit Rate@K、MRR@K、NDCG@K 计算指标；runner 不直接打开数据库或构造 QueryRuntime；包入口导出 `RetrievalStrategy` 以支持外部自定义策略，空 metrics 配置 fail fast；9 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 | G5 | 实现评估历史趋势展示 | [✔] | 2026-06-10 | `EvaluationRunner.save_results()`，将策略对比结果写入 `EvaluationRepository` 边界，生成一条 evaluation run 和按 `strategy.metric` 命名的 metric rows；metric details 保留 strategy、retrieval_mode、use_rerank、raw_metric_name、sample_count 和 predictions，供 Dashboard 趋势与详情展示；保存前校验各策略 prediction 数量一致，避免 summary 误导；11 个 evaluation 单元测试通过，1 个 external 测试按环境跳过 |
 | G6 | 实现评估脚本进度日志与控制台反馈 | [✔] | 2026-06-27 | `run_evaluation.py` 通过 `EvaluationReporter` 输出可读阶段日志、样本级进度、耗时、trace/message 关联和失败定位；同时写入 `src/logs/evaluation.log.jsonl` JSONL 诊断日志，保留最终评估 JSON 输出契约；单元测试覆盖 reporter 注入、样本进度、失败事件和最终结果输出；25 个 evaluation 单元测试通过，1 个 external 测试按环境跳过，ruff 通过 |
-| G7 | 实现真实 Ragas 评估入口与最终上下文优化 | [✔] | 2026-06-12 | 注册 `ragas` 到 `EvaluatorFactory`；新增 `run_evaluation.py` 读取 golden set、调用真实 Query Pipeline、支持 `message` 与 `rag` 两种 answer source；默认 `message` 对每个 golden question 调用 AImodel chat 接口生成 assistant message，再通过 `message_query_trace` 读取 message 作为 Ragas answer；显式 `rag` 才使用 `query_result.content` 作为上下文包调试 answer；按 `query_result.contexts` 回查 chunk 正文构造 Ragas `retrieved_contexts`、调用 `RagasEvaluator` 并写入 evaluation run/results/sample_results；empty result 作为样本级覆盖失败保存，不中断整次评估；`RagasEvaluator.evaluate_with_samples()` 从 Ragas dataframe 提取逐样本指标，`EvaluationService` 将其写入 `rag_evaluation_sample_results.metrics`，aggregate-only evaluator 不复制聚合指标到样本结果；同时将 `query_result.content` 升级为配置驱动的 Agent-ready final context，优化失败 fallback 到原始编号证据块；evaluation 单元测试覆盖样本级 metrics、empty result 和 skipped metrics 持久化，ruff 通过，真实 Ragas provider 创建 smoke 通过 |
+| G7 | 实现真实 Ragas 评估入口与最终上下文优化 | [✔] | 2026-06-12 | 注册 `ragas` 到 `EvaluatorFactory`；新增 `run_evaluation.py` 读取 golden set、调用真实 Query Pipeline、支持 `message` 与 `rag` 两种 answer source；默认 `message` 对每个 golden question 调用 AImodel chat 接口生成 assistant message，再通过 `message_query_trace` 读取 message 作为 Ragas answer；显式 `rag` 才使用 `query_result.content` 作为上下文包调试 answer；按 `query_result.contexts` 回查 chunk 正文构造 Ragas `retrieved_contexts`、调用 `RagasEvaluator` 并写入 evaluation run/results/sample_results；empty result 作为样本级覆盖失败保存，不中断整次评估；`RagasEvaluator.evaluate_with_samples()` 从 Ragas dataframe 提取逐样本指标，`EvaluationService` 将其写入 `rag_evaluation_sample_results.metrics`，aggregate-only evaluator 不复制聚合指标到样本结果；同时将 `query_result.content` 升级为配置驱动的 Agent-ready final context，优化失败 fallback 到原始编号证据块；golden sample 的 `golden_answer` 必须能被 `expected_doc_ids` 指向的文档直接支撑，避免用超出文档证据的答案拉低 recall/faithfulness；evaluation 单元测试覆盖样本级 metrics、empty result 和 skipped metrics 持久化，ruff 通过，真实 Ragas provider 创建 smoke 通过 |
 
 #### 阶段 H：AImodel 联调集成
 

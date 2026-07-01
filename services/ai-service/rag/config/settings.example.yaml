@@ -144,7 +144,7 @@ intent_router:
 # Reranking falls back to the filtered RRF order when the selected backend fails.
 rerank:
   enabled: true
-  default: llm
+  default: qwen
   fallback: rrf
   prompt_path: config/prompts/rerank_prompt.yaml
   top_k: 5
@@ -163,6 +163,11 @@ rerank:
     cross_encoder:
       model: BAAI/bge-reranker-base
       device: cpu
+    qwen:
+      model: Qwen/Qwen3-Reranker-0.6B
+      device: cuda
+      max_length: 4096
+      batch_size: 1
 
 
 # Self-RAG gates reranked evidence before response construction.
