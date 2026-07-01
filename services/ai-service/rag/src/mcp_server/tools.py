@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import inspect
+import threading
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +57,14 @@ class QueryRuntimeLike(Protocol):
         """Execute one query and return a public response wrapper."""
 
 
+
+class RuntimeHolderLike(Protocol):
+    """Describe the reusable MCP runtime holder consumed by query tools."""
+
+    async def get_runtime(self, *, no_rerank: bool) -> QueryRuntimeLike:
+        """Return a reusable runtime for the requested rerank mode."""
+
+
 class MetadataReaderLike(Protocol):
     """Describe read-only metadata operations exposed as MCP tools."""
 
@@ -80,6 +89,102 @@ TraceIdFactory = Callable[[], str]
 SettingsLoader = Callable[[], RagSettings]
 
 
+class McpRuntimeHolder:
+    """Own reusable query resources for one MCP server process."""
+
+    def __init__(
+        self,
+        *,
+        settings_loader: SettingsLoader = load_settings,
+        pool_factory: PoolFactory | None = None,
+        schema_initializer: SchemaInitializer | None = None,
+        runtime_builder: RuntimeBuilder | None = None,
+    ) -> None:
+        """Configure lazy MCP runtime resources without opening them yet."""
+
+        self._settings_loader = settings_loader
+        self._pool_factory = pool_factory or PostgresPool.from_settings
+        self._schema_initializer = schema_initializer or init_schema
+        self._runtime_builder = runtime_builder or _default_async_runtime_builder
+        self._lock = threading.RLock()
+        self._settings: RagSettings | None = None
+        self._pool: PostgresPool | None = None
+        self._runtimes: dict[bool, QueryRuntimeLike] = {}
+
+    async def get_runtime(self, *, no_rerank: bool) -> QueryRuntimeLike:
+        """Return a cached async runtime for the requested rerank mode."""
+
+        with self._lock:
+            runtime = self._runtimes.get(no_rerank)
+            if runtime is not None:
+                return runtime
+            settings = self._settings or self._settings_loader()
+            self._settings = settings
+            if self._pool is None:
+                self._pool = self._pool_factory(settings.database)
+                self._pool.open()
+                self._schema_initializer(self._pool)
+            runtime = self._runtime_builder(settings, self._pool, no_rerank)
+            self._runtimes[no_rerank] = runtime
+            return runtime
+
+    def warmup(self) -> None:
+        """Warm the configured Cross-Encoder model when MCP preload is enabled."""
+
+        settings = self._settings or self._settings_loader()
+        self._settings = settings
+        if not getattr(settings.mcp, "preload_cross_encoder", False):
+            return
+        if not settings.rerank.enabled or settings.rerank.default != "cross_encoder":
+            return
+        provider = settings.rerank.providers.get("cross_encoder")
+        model = getattr(provider, "model", None) if provider is not None else None
+        if not isinstance(model, str) or not model.strip():
+            return
+        device = getattr(provider, "device", None) if provider is not None else None
+        from src.libs.reranker.cross_encoder_reranker import CrossEncoderModelCache
+
+        CrossEncoderModelCache.warmup(
+            model.strip(),
+            device if isinstance(device, str) else None,
+        )
+
+    def close(self) -> None:
+        """Release the process-level pool and cached runtime references."""
+
+        with self._lock:
+            self._runtimes.clear()
+            pool = self._pool
+            self._pool = None
+        if pool is not None:
+            pool.close()
+
+
+_DEFAULT_RUNTIME_HOLDER: McpRuntimeHolder | None = None
+_DEFAULT_RUNTIME_HOLDER_LOCK = threading.Lock()
+
+
+def get_default_runtime_holder() -> McpRuntimeHolder:
+    """Return the process-level holder used by default MCP query tools."""
+
+    global _DEFAULT_RUNTIME_HOLDER
+    with _DEFAULT_RUNTIME_HOLDER_LOCK:
+        if _DEFAULT_RUNTIME_HOLDER is None:
+            _DEFAULT_RUNTIME_HOLDER = McpRuntimeHolder()
+        return _DEFAULT_RUNTIME_HOLDER
+
+
+def close_default_runtime_holder() -> None:
+    """Close the process-level MCP runtime holder if it was created."""
+
+    global _DEFAULT_RUNTIME_HOLDER
+    with _DEFAULT_RUNTIME_HOLDER_LOCK:
+        holder = _DEFAULT_RUNTIME_HOLDER
+        _DEFAULT_RUNTIME_HOLDER = None
+    if holder is not None:
+        holder.close()
+
+
 class QueryKnowledgeHubTool:
     """Expose the configured RAG Retrieval pipeline as one MCP tool."""
 
@@ -88,8 +193,9 @@ class QueryKnowledgeHubTool:
         *,
         settings_loader: SettingsLoader = load_settings,
         pool_factory: PoolFactory | None = None,
-        schema_initializer: SchemaInitializer = init_schema,
+        schema_initializer: SchemaInitializer | None = None,
         runtime_builder: RuntimeBuilder | None = None,
+        runtime_holder: RuntimeHolderLike | None = None,
         trace_id_factory: TraceIdFactory | None = None,
         max_image_base64_bytes: int = MAX_IMAGE_BASE64_BYTES,
     ) -> None:
@@ -103,6 +209,8 @@ class QueryKnowledgeHubTool:
             runtime_builder: Creates the Phase D query runtime. ``None`` lazily
                 imports the CLI runtime composition to avoid startup side
                 effects.
+            runtime_holder: Optional process-level runtime owner used by MCP
+                servers to reuse pools, runtimes, and rerank providers.
             trace_id_factory: Produces per-call query trace IDs.
             max_image_base64_bytes: Upper bound for explicit image byte
                 embedding in stdio payloads.
@@ -110,8 +218,15 @@ class QueryKnowledgeHubTool:
 
         self._settings_loader = settings_loader
         self._pool_factory = pool_factory or PostgresPool.from_settings
-        self._schema_initializer = schema_initializer
-        self._runtime_builder = runtime_builder or _default_runtime_builder
+        self._schema_initializer = schema_initializer or init_schema
+        self._runtime_builder = (
+            None
+            if runtime_holder is not None
+            else (runtime_builder or _default_runtime_builder)
+        )
+        self._runtime_holder = runtime_holder or (
+            None if runtime_builder is not None else get_default_runtime_holder()
+        )
         self._trace_id_factory = trace_id_factory or (
             lambda: f"mcp-query-{uuid4().hex}"
         )
@@ -185,11 +300,18 @@ class QueryKnowledgeHubTool:
             if isinstance(request_source, str) and request_source.strip()
             else "mcp"
         )
-        pool = self._pool_factory(settings.database)
+        pool: PostgresPool | None = None
         try:
-            pool.open()
-            self._schema_initializer(pool)
-            runtime = self._runtime_builder(settings, pool, no_rerank)
+            if self._runtime_holder is not None:
+                runtime = await self._runtime_holder.get_runtime(no_rerank=no_rerank)
+            else:
+                pool = self._pool_factory(settings.database)
+                pool.open()
+                self._schema_initializer(pool)
+                if self._runtime_builder is None:
+                    runtime = _default_runtime_builder(settings, pool, no_rerank)
+                else:
+                    runtime = self._runtime_builder(settings, pool, no_rerank)
             execution = await _resolve_runtime_execution(
                 runtime.execute(
                     query.strip(),
@@ -224,7 +346,8 @@ class QueryKnowledgeHubTool:
         except ValueError as error:
             return _business_error("invalid_request", str(error))
         finally:
-            pool.close()
+            if pool is not None:
+                pool.close()
 
     @staticmethod
     def _validate_request(
@@ -368,7 +491,7 @@ class MetadataTool:
         *,
         settings_loader: SettingsLoader = load_settings,
         pool_factory: PoolFactory | None = None,
-        schema_initializer: SchemaInitializer = init_schema,
+        schema_initializer: SchemaInitializer | None = None,
         reader_factory: MetadataReaderFactory | None = None,
     ) -> None:
         """Configure metadata tool dependencies without opening resources.
@@ -385,7 +508,7 @@ class MetadataTool:
 
         self._settings_loader = settings_loader
         self._pool_factory = pool_factory or PostgresPool.from_settings
-        self._schema_initializer = schema_initializer
+        self._schema_initializer = schema_initializer or init_schema
         self._reader_factory = reader_factory or PostgresMetadataReader
 
     async def list_collections(self) -> dict[str, Any]:
@@ -415,7 +538,8 @@ class MetadataTool:
                 )
             return {"ok": True, "collections": collections}
         finally:
-            pool.close()
+            if pool is not None:
+                pool.close()
 
     async def get_document_summary(
         self,
@@ -465,7 +589,8 @@ class MetadataTool:
         except ValueError as error:
             return _business_error("invalid_request", str(error))
         finally:
-            pool.close()
+            if pool is not None:
+                pool.close()
 
     @staticmethod
     def _validate_summary_request(

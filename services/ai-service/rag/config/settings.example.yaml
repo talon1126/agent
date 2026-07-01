@@ -266,6 +266,7 @@ evaluation:
 # MCP tools expose retrieval capabilities without leaking internal pipeline data.
 mcp:
   enabled: true
+  preload_cross_encoder: false
   tools:
     - query_knowledge_hub
     - list_collections

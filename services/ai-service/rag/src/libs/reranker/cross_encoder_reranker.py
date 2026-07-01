@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import math
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
 from src.core.errors import ProviderError
@@ -33,6 +34,63 @@ class CrossEncoderScorer(Protocol):
             Scores aligned positionally with ``pairs``.
         """
 
+
+
+CrossEncoderLoader = Callable[[str, str | None], CrossEncoderScorer]
+
+
+class CrossEncoderModelCache:
+    """Cache Cross-Encoder scorer instances by model and device per process."""
+
+    _lock = threading.Lock()
+    _cache: dict[tuple[str, str | None], CrossEncoderScorer] = {}
+    _loader: CrossEncoderLoader | None = None
+
+    @classmethod
+    def configure_loader(cls, loader: CrossEncoderLoader | None) -> None:
+        """Override the scorer loader for tests or restore the default loader."""
+
+        with cls._lock:
+            cls._loader = loader
+
+    @classmethod
+    def clear(cls) -> None:
+        """Clear cached scorers without changing the configured loader."""
+
+        with cls._lock:
+            cls._cache.clear()
+
+    @classmethod
+    def get_scorer(cls, model: str, device: str | None) -> CrossEncoderScorer:
+        """Return one cached scorer for a ``model + device`` key."""
+
+        key = (model, device)
+        with cls._lock:
+            cached = cls._cache.get(key)
+            if cached is not None:
+                return cached
+        scorer = cls._load_scorer(model, device)
+        with cls._lock:
+            return cls._cache.setdefault(key, scorer)
+
+    @classmethod
+    def warmup(cls, model: str, device: str | None) -> None:
+        """Load and run a tiny prediction through the cached scorer."""
+
+        scorer = cls.get_scorer(model, device)
+        scorer.predict([("warmup query", "warmup document")])
+
+    @classmethod
+    def _load_scorer(cls, model: str, device: str | None) -> CrossEncoderScorer:
+        """Load one scorer through the injected or sentence-transformers loader."""
+
+        with cls._lock:
+            loader = cls._loader
+        if loader is not None:
+            return loader(model, device)
+        from sentence_transformers import CrossEncoder
+
+        return CrossEncoder(model, device=device)
 
 class CrossEncoderReranker(BaseReranker):
     """Score filtered candidates with a Cross-Encoder and reorder them."""
@@ -151,6 +209,12 @@ class CrossEncoderReranker(BaseReranker):
             top_k=top_k,
         )
 
+    def warmup(self) -> None:
+        """Preload and run one tiny prediction through the Cross-Encoder."""
+
+        scorer = self._get_scorer()
+        scorer.predict([("warmup query", "warmup document")])
+
     def _get_scorer(self) -> CrossEncoderScorer:
         """Return an injected scorer or lazily load ``sentence_transformers``.
 
@@ -165,9 +229,7 @@ class CrossEncoderReranker(BaseReranker):
         if self._scorer is not None:
             return self._scorer
         try:
-            from sentence_transformers import CrossEncoder
-
-            self._scorer = CrossEncoder(self._model, device=self._device)
+            self._scorer = CrossEncoderModelCache.get_scorer(self._model, self._device)
         except Exception as error:
             raise ProviderError(
                 "Unable to load Cross-Encoder reranker",

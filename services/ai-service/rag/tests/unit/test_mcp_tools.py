@@ -21,7 +21,12 @@ from src.core.errors import McpError
 from src.core.response import KnowledgeHubResponse, ResponseImage
 from src.core.types import Citation, RetrievalResult
 from src.mcp_server.server import create_mcp_server, parse_args, run_stdio_server
-from src.mcp_server.tools import MetadataTool, PostgresMetadataReader, QueryKnowledgeHubTool
+from src.mcp_server.tools import (
+    McpRuntimeHolder,
+    MetadataTool,
+    PostgresMetadataReader,
+    QueryKnowledgeHubTool,
+)
 
 SETTINGS_PATH = "services/ai-service/rag/config/settings.example.yaml"
 FORBIDDEN_MCP_OUTPUT_KEYS = {
@@ -1000,4 +1005,82 @@ async def test_get_document_summary_returns_readable_error_when_missing() -> Non
             "message": "document summary was not found",
         },
     }
+    assert pool.closed is True
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_default_query_tool_reuses_mcp_runtime_holder(monkeypatch) -> None:
+    """Require the production MCP path to reuse one runtime across tool calls."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    pool = FakePool()
+    runtime = AsyncFakeRuntime(_knowledge_response())
+    build_calls: list[tuple[bool, bool]] = []
+
+    def fake_pool_factory(_database_settings: Any) -> FakePool:
+        """Return one long-lived fake pool for the holder lifecycle."""
+
+        return pool
+
+    def fake_runtime_builder(
+        _settings: Any,
+        active_pool: FakePool,
+        no_rerank: bool,
+    ) -> AsyncFakeRuntime:
+        """Record runtime construction and return the shared async runtime."""
+
+        build_calls.append((active_pool.is_open, no_rerank))
+        return runtime
+
+    monkeypatch.setattr("src.mcp_server.tools.PostgresPool.from_settings", fake_pool_factory)
+    monkeypatch.setattr("src.mcp_server.tools.init_schema", lambda _pool: None)
+    monkeypatch.setattr("src.mcp_server.tools._default_async_runtime_builder", fake_runtime_builder)
+    holder = McpRuntimeHolder(settings_loader=lambda: settings)
+    tool = QueryKnowledgeHubTool(
+        settings_loader=lambda: settings,
+        runtime_holder=holder,
+        trace_id_factory=lambda: "trace-mcp-test",
+    )
+
+    first = await tool.query_knowledge_hub("无线耳机怎么选", collection="shopping_guides")
+    second = await tool.query_knowledge_hub("空调怎么选", collection="shopping_guides")
+    holder.close()
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert build_calls == [(True, False)]
+    assert [call["query"] for call in runtime.calls] == ["无线耳机怎么选", "空调怎么选"]
+    assert pool.closed is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_mcp_runtime_holder_keeps_no_rerank_runtime_separate(monkeypatch) -> None:
+    """Require rerank-enabled and no-rerank MCP paths to use separate runtimes."""
+
+    settings = load_settings(SETTINGS_PATH, validate_environment=False)
+    pool = FakePool()
+    build_calls: list[bool] = []
+
+    def fake_runtime_builder(
+        _settings: Any,
+        _pool: FakePool,
+        no_rerank: bool,
+    ) -> AsyncFakeRuntime:
+        """Return a distinct runtime for each no_rerank construction."""
+
+        build_calls.append(no_rerank)
+        return AsyncFakeRuntime(_knowledge_response())
+
+    monkeypatch.setattr("src.mcp_server.tools.PostgresPool.from_settings", lambda _settings: pool)
+    monkeypatch.setattr("src.mcp_server.tools.init_schema", lambda _pool: None)
+    monkeypatch.setattr("src.mcp_server.tools._default_async_runtime_builder", fake_runtime_builder)
+    holder = McpRuntimeHolder(settings_loader=lambda: settings)
+
+    await holder.get_runtime(no_rerank=False)
+    await holder.get_runtime(no_rerank=True)
+    await holder.get_runtime(no_rerank=False)
+    holder.close()
+
+    assert build_calls == [False, True]
     assert pool.closed is True

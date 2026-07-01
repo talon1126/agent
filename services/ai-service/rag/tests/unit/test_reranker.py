@@ -28,6 +28,7 @@ from src.libs.reranker import (
     NoOpReranker,
     RerankerFactory,
 )
+from src.libs.reranker.cross_encoder_reranker import CrossEncoderModelCache
 
 RAG_ROOT = Path(__file__).resolve().parents[2]
 SETTINGS_PATH = RAG_ROOT / "config" / "settings.example.yaml"
@@ -64,6 +65,38 @@ class RecordingScorer:
 
         self.pairs = pairs
         return self.scores
+
+class CountingCrossEncoderLoader:
+    """Fake Cross-Encoder loader that records cache and warmup behavior."""
+
+    def __init__(self) -> None:
+        """Initialize empty loader and scorer call logs."""
+
+        self.load_calls: list[tuple[str, str | None]] = []
+        self.scorers: list[DynamicScorer] = []
+
+    def __call__(self, model: str, device: str | None) -> DynamicScorer:
+        """Create one fake scorer and record its model cache key."""
+
+        scorer = DynamicScorer()
+        self.load_calls.append((model, device))
+        self.scorers.append(scorer)
+        return scorer
+
+
+class DynamicScorer:
+    """Return deterministic scores for any requested pair count."""
+
+    def __init__(self) -> None:
+        """Initialize predict call recording for cache tests."""
+
+        self.predict_calls: list[list[tuple[str, str]]] = []
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        """Record pairs and return descending scores of matching length."""
+
+        self.predict_calls.append(list(pairs))
+        return [float(len(pairs) - index) for index, _pair in enumerate(pairs)]
 
 
 class RecordingLLM(BaseLLM):
@@ -330,6 +363,54 @@ def test_cross_encoder_reranker_wraps_scorer_failures() -> None:
     assert captured.value.context["provider"] == "cross_encoder"
 
 
+
+def test_cross_encoder_model_cache_reuses_same_model_device_scorer() -> None:
+    """Require Cross-Encoder model loading to be process-level cached."""
+
+    loader = CountingCrossEncoderLoader()
+    CrossEncoderModelCache.clear()
+    CrossEncoderModelCache.configure_loader(loader)
+    try:
+        reranker_a = CrossEncoderReranker(model="local-cross-encoder", device="cuda")
+        reranker_b = CrossEncoderReranker(model="local-cross-encoder", device="cuda")
+        reranker_c = CrossEncoderReranker(model="local-cross-encoder", device="cpu")
+        candidates = [_candidate("a", "A"), _candidate("b", "B")]
+
+        reranker_a.rerank("query", candidates)
+        reranker_b.rerank("query", candidates)
+        reranker_c.rerank("query", candidates)
+
+        assert loader.load_calls == [
+            ("local-cross-encoder", "cuda"),
+            ("local-cross-encoder", "cpu"),
+        ]
+        assert len(loader.scorers[0].predict_calls) == 2
+        assert len(loader.scorers[1].predict_calls) == 1
+    finally:
+        CrossEncoderModelCache.configure_loader(None)
+        CrossEncoderModelCache.clear()
+
+
+def test_cross_encoder_model_cache_warmup_uses_cached_scorer() -> None:
+    """Require MCP startup warmup to load and reuse the cached scorer."""
+
+    loader = CountingCrossEncoderLoader()
+    CrossEncoderModelCache.clear()
+    CrossEncoderModelCache.configure_loader(loader)
+    try:
+        CrossEncoderModelCache.warmup("local-cross-encoder", "cuda")
+        reranker = CrossEncoderReranker(model="local-cross-encoder", device="cuda")
+
+        reranker.rerank("query", [_candidate("a", "A")])
+
+        assert loader.load_calls == [("local-cross-encoder", "cuda")]
+        assert loader.scorers[0].predict_calls[0] == [
+            ("warmup query", "warmup document")
+        ]
+        assert loader.scorers[0].predict_calls[1] == [("query", "A")]
+    finally:
+        CrossEncoderModelCache.configure_loader(None)
+        CrossEncoderModelCache.clear()
 def test_rerank_prompt_requires_a_strict_json_object_array() -> None:
     """Prevent chat models from returning ID-only arrays or explanatory prose."""
 

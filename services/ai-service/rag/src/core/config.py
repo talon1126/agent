@@ -551,6 +551,7 @@ class McpSettings(ConfigSection):
     """Describe MCP availability and the tools exposed by the server."""
 
     enabled: bool = True
+    preload_cross_encoder: bool = False
     tools: list[str] = Field(min_length=1)
 
 

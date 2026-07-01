@@ -347,6 +347,8 @@ uv run --project services/ai-service/rag python -m src.mcp_server.server --trans
 
 stdio 协议要求 stdout/stdin 只承载 MCP 协议帧，业务日志不得写入 stdout。RAG MCP 普通运行日志写入 `src/logs/app.log`，错误诊断可以写 stderr；Trace 仍按可观测性阶段写入结构化日志。MCP 启动入口必须加载本地 `.env`，并读取 `DATABASE_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`RAG_SETTINGS_PATH`、`RAG_DEFAULT_COLLECTION` 等环境变量。
 
+MCP server 进程内必须复用在线查询依赖。`query_knowledge_hub` tool 不得在每次调用时重新构建 `AsyncQueryRuntime`、`RerankController` 或 Cross-Encoder 模型；同一个 MCP 进程应维护可关闭的 runtime holder，并在 tool 调用间复用 runtime、Reranker、数据库 pool 和模型资源。Cross-Encoder 模型加载必须使用进程级缓存，同一 `model + device` 组合只允许加载一次；MCP 启动时可按配置预热 Cross-Encoder，使第一次真实 query 不承担模型下载/加载/首轮 CUDA kernel 初始化耗时。
+
 AImodel 集成时不让 Agent 直接依赖 RAG 检索内部实现。`services/ai-service/app/routers/AImodel/tools.py` 提供 AImodel 侧 RAG 工具适配：`PersistentMcpRagKnowledgeClient` 负责通过 stdio MCP 启动并长期复用一个 RAG MCP 子进程，调用 `query_knowledge_hub`；`search_shopping_guides` 负责把 MCP 公共响应转换为 AImodel 工具结果。H3 再把该工具包装进 LangChain Agent 工具集合，Agent 只依赖业务工具边界。
 
 MCP 工具一：`query_knowledge_hub`
@@ -1721,8 +1723,8 @@ services/ai-service/rag/
 | `src/libs/vector_store/pgvector_store.py` | pgvector 实现 | PostgreSQL vector(1536)、cosine search、metadata filter；Dense search 直接读取 metadata 并注入 RetrievalResult |
 | `src/libs/vector_store/fake_vector_store.py` | 内存 VectorStore 测试实现 | cosine search、metadata filter、ID 顺序恢复，并与 pgvector 保持 metadata 来源字段契约 |
 | `src/libs/reranker/base_reranker.py` | 定义 Reranker 抽象接口 | `rerank(query, candidates)`；Phase I 增加 `async_rerank()`，LLM reranker 使用原生 async HTTP，Cross-Encoder 可使用受限 executor 或专用推理队列 |
-| `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、LLM Rerank、None/fallback |
-| `src/libs/reranker/cross_encoder_reranker.py` | Cross-Encoder 精排实现 | query-document pair 打分、排序 |
+| `src/libs/reranker/reranker_factory.py` | 创建 Reranker | Cross-Encoder、LLM Rerank、None/fallback；Cross-Encoder 创建必须复用进程级模型缓存，避免每次 Factory 调用重复加载本地模型 |
+| `src/libs/reranker/cross_encoder_reranker.py` | Cross-Encoder 精排实现 | query-document pair 打分、排序；按 `model + device` 维护进程级 scorer/model 缓存，并提供显式预热入口供 MCP 启动阶段调用 |
 | `src/libs/reranker/llm_reranker.py` | LLM Rerank 实现 | prompt 驱动排序、超时 fallback |
 | `src/libs/evaluator/base_evaluator.py` | 定义 Evaluator 抽象接口 | `evaluate(dataset, predictions) -> metrics` 保持最小抽象；支持具体 evaluator 额外提供 `evaluate_with_samples()` 返回样本级指标 |
 | `src/libs/evaluator/evaluator_factory.py` | 创建 Evaluator | Ragas 或自定义指标 |
@@ -2053,7 +2055,7 @@ RAG 子系统的数据流分为三类：**离线摄取数据流**、**在线查�
 | Phase F | 可观测与管理平台 | TraceContext、结构化日志、ingestion/query 链路打点、Dashboard services、六大 Streamlit 页面和页面测试 | [✔] |
 | Phase G | 质量评估体系 | 黄金测试集、检索指标、配置驱动 Ragas 生成指标、评估脚本进度日志、真实 Query Pipeline 评估入口、AImodel message answer 评估、策略对比和评估趋势 | [✔] |
 | Phase H | AImodel 联调集成 | 集成前验收门禁、AImodel RAG 工具适配、商品 API 协同、前端/Agent 联调、端到端测试和 MCP 长连接优化 | [✔] |
-| Phase I | Async Query Runtime | 在线 Query/MCP/Evaluation async 化、provider 原生 async、multi-collection 真并发、merge 后单次 Self-RAG 和 Response Builder；暂不改 ingestion async | [✔] |
+| Phase I | Async Query Runtime | 在线 Query/MCP/Evaluation async 化、provider 原生 async、multi-collection 真并发、merge 后单次 Self-RAG 和 Response Builder；补充 MCP 进程内 runtime 与 Cross-Encoder 模型生命周期优化；暂不改 ingestion async | [✔] |
 
 ### 6.2 交付里程碑
 
@@ -2271,7 +2273,7 @@ RAG 提供可观测和可视化管理能力。Ingestion 和 Query 主链路注�
 
 项目当前位置：
 
-RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async runtime 执行多 collection 查询。多 collection 查询以 collection 为并发单元执行 retrieval/rerank，跨 collection merge 后统一执行一次 Self-RAG judge 和一次 Response Builder。离线 ingestion 仍保持同步批处理架构。
+RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async runtime 执行多 collection 查询。多 collection 查询以 collection 为并发单元执行 retrieval/rerank，跨 collection merge 后统一执行一次 Self-RAG judge 和一次 Response Builder。MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder 按 `model + device` 单例缓存并支持启动预热。离线 ingestion 仍保持同步批处理架构。
 
 可用功能：
 
@@ -2279,6 +2281,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 - AsyncQueryRuntime 在线查询入口。
 - 多 collection 真并发检索与部分失败降级。
 - MCP `query_knowledge_hub` async 调用路径。
+- MCP 进程内长期复用 AsyncQueryRuntime、Reranker 和数据库 pool，Cross-Encoder 按 `model + device` 单例缓存并支持启动预热。
 - Evaluation async 样本并发和指标并发限流。
 - Query Trace 中可观察 async collection runs、timeout、partial failure、merge 后 Self-RAG 和 response 阶段。
 
@@ -2427,6 +2430,7 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | I4 | 实现 multi-collection 真并发与 merge 后统一后处理 | [✔] | 2026-06-29 | 新增 `AsyncParallelRetrievalController`，使用 `asyncio.gather()` 并发执行 collection retrieval/rerank 子链路；跨 collection merge 后统一 top_k 截断并保留 collection/routing/merge metadata；async trace 必须保持与同步链路一致的顶层 stage，分别记录 dense/sparse/fusion/filter/rerank 耗时、候选数、状态和 fallback 原因；Self-RAG judge 和 Response Builder 在 merge 后只执行一次；支持 max concurrency、per-collection timeout、partial failure、全部 empty 和全部失败；111 个 I4 指定单元测试和 ruff 通过 |
 | I5 | 接入 MCP 与 evaluation async 路径 | [✔] | 2026-06-29 | `query_knowledge_hub` 可 await async runtime 且保留 MCP 公共响应和错误 envelope；MCP 默认按 `retrieval.async_enabled` 选择 async runtime，多 collection 工具调用使用 async gather 聚合公共结果；evaluation 在 `evaluation.async_enabled` 下并发构造 prediction，支持 `max_sample_concurrency`，Ragas client 支持 `max_metric_concurrency` 映射到 evaluator worker；RAG answer-source 单样本失败写入 prediction error，message answer-source 保持缺失 message/trace 时 fail fast；59 个 I5 目标测试通过，1 个外部 Ragas 测试按 marker 跳过 |
 | I6 | 完成 async 查询验收与性能对比 | [✔] | 2026-06-29 | async 链路相关单元、集成和 MCP stdio contract 测试通过；新增 `async_query_performance_report()` 汇总 first10/last10 风格的 sync/async avg latency、P95、RAG trace、Self-RAG judge、Response Builder、timeout 和 Ragas metric delta；新增 `data/resume/async_query_runtime.md` 记录 deterministic 验收 fixture 与已有本地 first10/last10 历史耗时，严格 live A/B benchmark 需在外部模型启用时单独运行；14 个 I6 目标测试和 ruff 通过 |
+| I7 | 优化 MCP runtime 与 Cross-Encoder 模型生命周期 | [✔] | 2026-07-01 | MCP `query_knowledge_hub` 在同一 server 进程内复用 AsyncQueryRuntime、RerankController、Reranker 和数据库 pool；Cross-Encoder 按 `model + device` 进程级单例缓存；MCP server 启动时按配置预热 Cross-Encoder；104 个目标单元测试和 ruff 通过 |
 
 ### 6.4 总体进度表
 
@@ -2440,8 +2444,8 @@ RAG 在线查询链路完成 async 化，MCP 和 evaluation 可以通过 async r
 | Phase F | 12 | 12 | 100% |
 | Phase G | 6 | 6 | 100% |
 | Phase H | 7 | 7 | 100% |
-| Phase I | 6 | 6 | 100% |
-| **总计** | **80** | **78** | **97.5%** |
+| Phase I | 7 | 7 | 100% |
+| **总计** | **81** | **79** | **97.5%** |
 
 ### 6.5 阶段实施明细
 
@@ -4122,7 +4126,6 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 
 修改文件：
 
-- `src/core/query_engine/async_runtime.py`
 - `src/core/query_engine/__init__.py`
 - `src/scripts/query.py`
 - `src/core/trace/trace_controller.py`
@@ -4150,7 +4153,6 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 修改文件：
 
 - `src/core/query_engine/parallel_retrieval.py`
-- `src/core/query_engine/async_runtime.py`
 - `src/core/query_engine/trace_snapshots.py`
 - `src/core/trace/trace_context.py`
 - `tests/unit/test_async_query_runtime.py`
@@ -4219,6 +4221,35 @@ rerank/no-rerank 双路径、RerankController 空候选/重复候选 fallback、
 验收标准：async 链路相关单元、集成和 MCP contract 测试通过；first10/last10 对比报告必须记录平均查询耗时、P95、RAG trace 数量、Self-RAG judge 次数、Response Builder 次数和 Ragas 指标变化；若 async 指标下降或超时增加，报告必须说明原因和下一步优化建议；`data/resume/async_query_runtime.md` 只记录可用于项目复盘的量化结果，不包含 secret、完整 prompt 或用户隐私数据。
 
 测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_async_query_runtime.py services\ai-service\rag\tests\integration\test_query_pipeline.py services\ai-service\rag\tests\e2e\test_full_rag_flow.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
+
+##### I7：优化 MCP runtime 与 Cross-Encoder 模型生命周期
+
+目标：降低 MCP tool call 在线延迟，确保同一个 RAG MCP server 进程内复用查询 runtime 与本地 Cross-Encoder 模型资源，避免每次工具调用重复构建 `AsyncQueryRuntime`、`RerankController` 或重新加载 Cross-Encoder。
+
+修改文件：
+
+- `src/mcp_server/server.py`
+- `src/mcp_server/tools.py`
+- `src/core/query_engine/async_runtime.py`
+- `src/libs/reranker/reranker_factory.py`
+- `src/libs/reranker/cross_encoder_reranker.py`
+- `tests/unit/test_mcp_tools.py`
+- `tests/unit/test_reranker.py`
+- `tests/unit/test_async_query_runtime.py`
+
+实现类/函数：
+
+- `McpRuntimeHolder`：在 MCP server 进程内惰性构建并长期复用 `AsyncQueryRuntime`，提供 `get_runtime()`、`warmup()` 和 `close()` 生命周期方法。
+- `_default_async_runtime_builder()`：继续负责组装 async runtime，MCP holder 只在首次调用时构建并缓存该 runtime。
+- `QueryKnowledgeHubTool.query_knowledge_hub()`：复用 holder 返回的 runtime，保持公共 schema、错误 envelope 和 trace 行为不变。
+- `CrossEncoderModelCache`：按 `model_name + device` 缓存 scorer/model，同一进程内相同 key 只加载一次，并支持测试注入 fake loader。
+- `CrossEncoderReranker.warmup()`：对缓存模型执行轻量 pair 推理或等价预热操作，使首次真实 query 不承担模型加载和首轮推理初始化耗时。
+- `RerankerFactory.get_reranker()`：创建 Cross-Encoder reranker 时复用 `CrossEncoderModelCache`，LLM reranker 与 fake reranker 行为不变。
+- `create_mcp_server()` / server 启动入口：按 settings 中 rerank provider、model、device 和预热开关调用 holder warmup；预热失败必须记录日志并允许 server 启动，后续真实 rerank 仍按现有 fallback 语义处理。
+
+验收标准：同一个 MCP server 进程连续两次调用 `query_knowledge_hub` 不得重复构建 `AsyncQueryRuntime`、`RerankController` 或 Cross-Encoder scorer；相同 `model + device` 的 Cross-Encoder scorer 在进程内只加载一次；不同 `model` 或不同 `device` 必须使用不同缓存 key；MCP 启动时可配置预热 Cross-Encoder，预热不向 stdout 写业务日志，不破坏 stdio MCP 协议；预热失败不得阻止 MCP server 启动，但必须记录到 app log 或 stderr，并让后续 rerank 走现有 ProviderError/fallback；关闭 MCP server 时必须释放 runtime holder 和数据库 pool，不能留下后台任务；单元测试不得加载真实 sentence-transformers 模型，必须通过 fake scorer/loader 验证缓存、复用和预热行为。
+
+测试方法：`uv run --project services/ai-service/rag pytest services\ai-service\rag\tests\unit\test_mcp_tools.py services\ai-service\rag\tests\unit\test_reranker.py services\ai-service\rag\tests\unit\test_async_query_runtime.py -v`；`uv run --project services/ai-service/rag ruff check services/ai-service/rag/src services/ai-service/rag/tests`
 
 ## 7. 开发规范
 

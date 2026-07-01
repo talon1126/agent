@@ -25,7 +25,11 @@ from mcp.server.fastmcp import FastMCP
 
 from src.core.config import RagSettings, load_settings
 from src.core.errors import McpError
-from src.mcp_server.tools import MetadataTool, QueryKnowledgeHubTool
+from src.mcp_server.tools import (
+    McpRuntimeHolder,
+    MetadataTool,
+    QueryKnowledgeHubTool,
+)
 
 RAG_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 DEFAULT_APP_LOG_PATH: Final[Path] = RAG_ROOT / "src" / "logs" / "app.log"
@@ -100,10 +104,18 @@ async def run_stdio_server(
     _load_local_environment(env_paths=env_paths)
     logger = _configure_stdio_logging(log_path)
     settings = settings_loader()
-    server = create_mcp_server(settings=settings)
-    logger.info("Starting RAG MCP server", extra={"transport": "stdio"})
-    runner = stdio_runner or _run_fastmcp_stdio
-    await runner(server)
+    runtime_holder = McpRuntimeHolder(settings_loader=lambda: settings)
+    try:
+        try:
+            runtime_holder.warmup()
+        except Exception:
+            logger.exception("RAG MCP Cross-Encoder warmup failed")
+        server = create_mcp_server(settings=settings, runtime_holder=runtime_holder)
+        logger.info("Starting RAG MCP server", extra={"transport": "stdio"})
+        runner = stdio_runner or _run_fastmcp_stdio
+        await runner(server)
+    finally:
+        runtime_holder.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -139,6 +151,7 @@ def create_mcp_server(
     query_knowledge_hub: McpToolHandler | None = None,
     list_collections: McpToolHandler | None = None,
     get_document_summary: McpToolHandler | None = None,
+    runtime_holder: McpRuntimeHolder | None = None,
 ) -> FastMCP:
     """Create a configured MCP server and register enabled RAG tool names.
 
@@ -152,6 +165,8 @@ def create_mcp_server(
             creates the default ``MetadataTool`` handler lazily.
         get_document_summary: Optional E3 document summary handler. ``None``
             creates the default ``MetadataTool`` handler lazily.
+        runtime_holder: Optional process-level runtime owner used by the default
+            query tool to reuse DB pools, query runtimes, and rerank providers.
 
     Returns:
         A ``FastMCP`` server with E1 placeholder handlers registered for every
@@ -167,7 +182,9 @@ def create_mcp_server(
     tool_names = tuple(settings.mcp.tools if settings.mcp.enabled else ())
     _validate_tool_names(tool_names)
     server = FastMCP(name=SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
-    query_tool = query_knowledge_hub or QueryKnowledgeHubTool().query_knowledge_hub
+    query_tool = query_knowledge_hub or QueryKnowledgeHubTool(
+        runtime_holder=runtime_holder,
+    ).query_knowledge_hub
     metadata_tool = MetadataTool()
     list_tool = list_collections or metadata_tool.list_collections
     summary_tool = get_document_summary or metadata_tool.get_document_summary
