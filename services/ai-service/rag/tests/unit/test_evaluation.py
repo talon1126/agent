@@ -15,7 +15,7 @@ import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -35,6 +35,7 @@ from src.observability.evaluation.runner import (
     StrategyComparisonResult,
 )
 from src.observability.services.evaluation_service import EvaluationService
+from src.storage import repositories as storage_repositories
 from src.scripts.run_evaluation import (
     build_prediction_from_query_result,
     select_single_collection,
@@ -49,6 +50,73 @@ RAG_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_SET_PATH = RAG_ROOT / "tests" / "fixtures" / "golden_set.json"
 SETTINGS_PATH = RAG_ROOT / "config" / "settings.example.yaml"
 
+@pytest.mark.unit
+def test_detail_payload_recursively_converts_frozen_summary_values() -> None:
+    """CLI output must serialize persisted evaluation details safely."""
+
+    detail = SimpleNamespace(
+        run_id="eval-jsonable",
+        collection_id="mixed",
+        evaluator="ragas",
+        dataset_name="golden_set",
+        status="success",
+        metrics=MappingProxyType({"faithfulness": 0.8}),
+        summary=MappingProxyType(
+            {
+                "sample_errors": [MappingProxyType({"reason": "self_rag_low_confidence"})],
+                "skipped_metrics": ("faithfulness", "answer_relevancy"),
+            }
+        ),
+        error=None,
+    )
+
+    payload = run_evaluation_module._detail_payload(detail)
+
+    assert json.loads(json.dumps(payload, ensure_ascii=False)) == {
+        "run_id": "eval-jsonable",
+        "collection": "mixed",
+        "evaluator": "ragas",
+        "dataset_name": "golden_set",
+        "status": "success",
+        "metrics": {"faithfulness": 0.8},
+        "summary": {
+            "sample_errors": [{"reason": "self_rag_low_confidence"}],
+            "skipped_metrics": ["faithfulness", "answer_relevancy"],
+        },
+        "error": None,
+    }
+
+@pytest.mark.unit
+def test_json_compatible_recursively_converts_frozen_containers_in_lists() -> None:
+    """Repository JSONB writes must handle frozen trace data nested in lists."""
+
+    value = {
+        "contexts": (),
+        "errors": [
+            MappingProxyType(
+                {
+                    "empty_result": True,
+                    "skipped_metrics": ("faithfulness", "answer_relevancy"),
+                    "details": [MappingProxyType({"reason": "self_rag_low_confidence"})],
+                }
+            )
+        ],
+    }
+
+    converted = storage_repositories._json_compatible(value)
+
+    assert converted == {
+        "contexts": [],
+        "errors": [
+            {
+                "empty_result": True,
+                "skipped_metrics": ["faithfulness", "answer_relevancy"],
+                "details": [{"reason": "self_rag_low_confidence"}],
+            }
+        ],
+    }
+    assert type(converted["errors"][0]) is dict
+    assert type(converted["errors"][0]["details"][0]) is dict
 
 @pytest.mark.unit
 def test_golden_set_fixture_exists_and_contains_representative_cases() -> None:
@@ -524,6 +592,59 @@ def test_build_prediction_from_query_result_uses_ranked_chunk_text_for_contexts(
         "context_chunk_ids": ["chunk-a", "chunk-b"],
         "sample_collection": None,
         "effective_collection": None,
+    }
+
+@pytest.mark.unit
+def test_build_prediction_from_message_answer_preserves_empty_tuple_contexts() -> None:
+    """Treat frozen empty query contexts as message-mode coverage misses."""
+
+    lookup = _FakeChunkLookup([])
+    message_answer = run_evaluation_module.MessageAnswer(
+        message_id=42,
+        conversation_id=24,
+        content="客服应先安抚用户，再解释退款审核和支付渠道到账时效。",
+        query_trace_ids=("query-empty",),
+    )
+
+    prediction = run_evaluation_module.build_prediction_from_message_answer(
+        {
+            "id": "sample-message-empty",
+            "collection": "manual",
+            "question": "用户催退款并情绪激动，客服怎么回答？",
+            "golden_answer": "客服应安抚并解释退款时效。",
+        },
+        {
+            "contexts": (),
+            "content": "",
+            "citations": (),
+            "images": (),
+            "is_empty": True,
+            "empty_reason": "self_rag_low_confidence",
+        },
+        chunk_lookup=lookup,
+        query_trace_id="query-empty",
+        message_answer=message_answer,
+        effective_collection="manual",
+    )
+
+    assert lookup.requests == []
+    assert prediction["answer"] == message_answer.content
+    assert prediction["answer_source"] == "message"
+    assert prediction["contexts"] == []
+    assert prediction["retrieved_contexts"] == []
+    assert prediction["context_chunk_ids"] == []
+    assert prediction["message_id"] == 42
+    assert prediction["query_trace_ids"] == ["query-empty"]
+    assert prediction["error"] == {
+        "empty_result": True,
+        "empty_reason": "self_rag_low_confidence",
+        "skipped_metrics": [
+            "faithfulness",
+            "answer_relevancy",
+            "context_precision",
+            "context_recall",
+        ],
+        "scored_metrics": [],
     }
 
 @pytest.mark.unit

@@ -366,8 +366,8 @@ class EvaluationReporter:
             if self._run_started_at is not None
             else None
         )
-        metrics = dict(getattr(detail, "metrics", {}) or {})
-        summary = dict(getattr(detail, "summary", {}) or {})
+        metrics = _jsonable(getattr(detail, "metrics", {}) or {})
+        summary = _jsonable(getattr(detail, "summary", {}) or {})
         run_id = str(getattr(detail, "run_id", self._run_label()))
         self._stop_heartbeat()
         self._write_console(
@@ -461,7 +461,7 @@ class EvaluationReporter:
         """
 
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
-        event = dict(payload)
+        event = _jsonable(dict(payload))
         event.setdefault("timestamp", _shanghai_timestamp())
         with self._log_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -1101,7 +1101,12 @@ def _query_result_is_empty(query_result: Mapping[str, Any]) -> bool:
     """Return whether a query_result represents Self-RAG empty fallback."""
 
     contexts = query_result.get("contexts")
-    return query_result.get("is_empty") is True or contexts == []
+    contexts_empty = (
+        isinstance(contexts, Sequence)
+        and not isinstance(contexts, str | bytes)
+        and len(contexts) == 0
+    )
+    return query_result.get("is_empty") is True or contexts_empty
 
 
 def _empty_prediction_from_query_result(
@@ -2272,10 +2277,21 @@ def _detail_payload(detail: Any) -> dict[str, Any]:
         "evaluator": detail.evaluator,
         "dataset_name": detail.dataset_name,
         "status": detail.status,
-        "metrics": dict(detail.metrics),
-        "summary": dict(detail.summary),
-        "error": dict(detail.error) if detail.error is not None else None,
+        "metrics": _jsonable(detail.metrics),
+        "summary": _jsonable(detail.summary),
+        "error": _jsonable(detail.error) if detail.error is not None else None,
     }
+
+
+
+def _jsonable(value: Any) -> Any:
+    """Recursively convert frozen JSON containers into JSON-safe values."""
+
+    if isinstance(value, Mapping):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [_jsonable(item) for item in value]
+    return value
 
 
 def _required_text(value: Any, *, field_name: str) -> str:

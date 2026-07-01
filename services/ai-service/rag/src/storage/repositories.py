@@ -98,7 +98,7 @@ def _json_compatible(value: Any) -> Any:
 
     if isinstance(value, Mapping):
         return {key: _json_compatible(item) for key, item in value.items()}
-    if isinstance(value, tuple):
+    if isinstance(value, list | tuple):
         return [_json_compatible(item) for item in value]
     return value
 
