@@ -178,6 +178,25 @@ routers:
               all: []
               regex:
                 - ".*多久.*退款.*"
+          installation_service_limits:
+            action: rag
+            collection: policies
+            priority: 108
+            confidence: 0.94
+            match:
+              any:
+                - 安装限制
+                - 售后限制
+                - 售后阶段
+                - 特殊商品售后限制
+                - 安装服务
+                - 大家电
+              all:
+                - 安装
+                - 限制
+              regex:
+                - ".*售后.*安装.*限制.*"
+                - ".*安装.*限制.*"
           account_invoice:
             action: rag
             collection: policies

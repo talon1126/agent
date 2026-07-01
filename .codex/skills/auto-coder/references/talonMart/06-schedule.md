@@ -1214,6 +1214,7 @@
 - `AImodelIntentRouter.route()`：按 rules -> semantic profile -> LLM fallback -> default 的顺序选择工具动作和主 collection。
 - `AImodelIntentRouter.route_with_candidates()`：返回 winner 与 top candidates，每个 candidate 包含 collection、score、domain、category、intent 和 matched_rule。
 - `select_rag_collections_by_score()`：根据 candidate score、winner score、collection 去重和最小阈值动态选择多 collection，例如保留 `score >= max(min_score, winner_score - delta)` 的 RAG candidates。
+- `intent_routes.yaml`：为售后限制、安装限制、特殊商品安装服务等内部政策场景提供 policies 规则，使这类问题进入政策知识库候选。
 - `stream_chat_events()` / `_run_langchain_agent_stream()`：消费 AImodel 意图结果，必要时把 collection 或 collections 传给 `rag_tool`，并保留原始用户 query。
 
 验收标准：
@@ -1222,6 +1223,7 @@
 - action 至少支持 `rag`、`product_api`、`web`、`direct`、`refuse`，其中 `rag` 必须携带目标 collection。
 - AImodel 不通过新增 YAML `collections` 字段来解决每个跨域问题，而是基于已有 intent candidate score 阈值动态选择多个 collection。
 - 当 top candidates 中多个 RAG collection 的分数接近 winner 且超过阈值时，AImodel 应把多个 collection 发送给 RAG；例如 `manual + policies`、`shopping_guides + faq`。
+- 安装限制、售后限制、特殊商品售后限制和大家电安装服务类问题必须把 `policies` 纳入候选 collections；如果问题同时涉及选购建议，也应保留相近的 `shopping_guides` 候选。
 - 多 collection 查询应并行执行；任一 collection 成功返回 evidence 时，最终 Agent 可使用所有成功 evidence；失败或 empty 的 collection 应记录但不得阻断其他 collection。
 - 选购指南、FAQ、政策、客服话术等内部知识问题由 AImodel 选择 collection 或 collections 后调用 RAG；RAG query 仍使用用户原始问题。
 - 商品价格、库存、优惠、可购买链接仍走商品 API；外部公开信息走 Tavily；寒暄和明显越界问题不调用 RAG。

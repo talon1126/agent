@@ -423,6 +423,23 @@ def test_aimodel_intent_router_exposes_top_three_candidate_scores() -> None:
     assert all("domain_intent" in candidate for candidate in candidates)
 
 
+def test_aimodel_intent_router_includes_policies_for_installation_limits() -> None:
+    """Installation and aftersales limit questions should search policy docs too."""
+
+    router = AImodelIntentRouter(
+        rules=load_aimodel_intent_routes(
+            "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+        ),
+        default_collection="shopping_guides",
+    )
+
+    route = router.route("买大家电时，选购阶段和售后阶段分别要注意哪些安装限制？")
+
+    assert route.action == "rag"
+    assert "policies" in route.collections
+    assert "shopping_guides" in route.collections
+
+
 def test_select_rag_collections_by_score_keeps_close_high_confidence_candidates() -> None:
     """Multi-collection routing should come from scored candidates, not YAML lists."""
 
