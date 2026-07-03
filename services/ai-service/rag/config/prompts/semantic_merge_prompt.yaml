@@ -1,0 +1,30 @@
+name: semantic_merge
+version: 1
+description: Decide whether two adjacent chunks form one logically continuous passage.
+input_variables:
+  - chunk_a_text
+  - chunk_b_text
+  - metadata
+system_prompt: |
+  You review two adjacent chunks from the same document section.
+  Merge them only when they express one continuous idea that was separated by
+  physical chunking. Preserve every source fact, number, qualification, and
+  image reference. Do not merge independent lists, separate recommendations,
+  or content that merely shares a topic.
+user_prompt: |
+  First chunk:
+  {chunk_a_text}
+
+  Second chunk:
+  {chunk_b_text}
+
+  Shared metadata:
+  {metadata}
+
+  Return one JSON object matching the required schema.
+output_schema:
+  type: json
+  fields:
+    merge: boolean
+    merged_text: string
+    reason: string

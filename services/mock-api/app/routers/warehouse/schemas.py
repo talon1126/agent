@@ -10,10 +10,10 @@ class WarehouseInventorySearchRequest(BaseModel):
     location_code: str | None = None
     category: str | None = None
     category_id: str | None = None
-    batch_no: str | None = None
     expiry_risk: str | None = None
     risk_level: str | None = None
     limit: int = 50
+    offset: int = 0
 
 
 class WarehouseStockBalanceTableRowsRequest(BaseModel):
@@ -22,6 +22,17 @@ class WarehouseStockBalanceTableRowsRequest(BaseModel):
     location_code: str | None = None
     cursor: str | None = None
     limit: int = 500
+    offset: int = 0
+
+
+class WarehouseInventoryMovementTableRowsRequest(BaseModel):
+    order_id: str | None = None
+    movement_type: str | None = None
+    item_id: str | None = None
+    warehouse_id: str | None = None
+    cursor: str | None = None
+    limit: int = 500
+    offset: int = 0
 
 
 class WarehouseInventorySyncJobUpdateRequest(BaseModel):
@@ -52,6 +63,15 @@ class WarehouseOrderStatusUpdateRequest(BaseModel):
     updated_by: str = "warehouse-agent"
 
 
+class WarehouseOrderFulfillmentConfirmRequest(BaseModel):
+    order_id: str = ""
+    warehouse_id: str = ""
+    delivery_provider_id: str | None = None
+    courier_phone: str = ""
+    tracking_no: str = ""
+    updated_by: str = "warehouse-agent"
+
+
 class WarehouseOrderReleaseExpiredRequest(BaseModel):
     processed_by: str = "warehouse-timeout-release"
     now: str | None = None
@@ -60,5 +80,19 @@ class WarehouseOrderReleaseExpiredRequest(BaseModel):
 
 class WarehousePurchaseOrderArrivalSyncRequest(BaseModel):
     processed_by: str = "warehouse-agent"
+    limit: int = 50
+
+
+class WarehousePurchaseOrderInventorySyncRequest(BaseModel):
+    purchase_order_id: str = ""
+    processed_by: str = "feishu-automation"
+    trigger_source: str = "feishu_bitable_button"
+    operator_id: str = ""
+
+
+class WarehousePurchaseOrderArrivalNotifyRequest(BaseModel):
+    processed_by: str = "warehouse-arrival-notify"
+    target_date: str | None = None
+    chat_id: str = ""
     limit: int = 50
 

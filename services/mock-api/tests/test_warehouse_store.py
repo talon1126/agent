@@ -13,6 +13,7 @@ from app.warehouse_store import (
     build_item_search_sql,
     _quote_literal,
     cart_items,
+    category_rank_snapshots,
     categories,
     delivery_addresses,
     flash_sale_claims,
@@ -20,18 +21,17 @@ from app.warehouse_store import (
     init_warehouse_schema,
     inventory_movements,
     inventory_location_balances,
-    inventory_batches,
+    item_rank_events,
+    item_reviews,
     items,
     delivery_providers,
     order_items,
     orders,
     procurement_suppliers,
     purchase_orders,
-    replenishment_requests,
     seed_warehouse_fixtures,
     storage_locations,
     users,
-    warehouse_inventory_sync_jobs,
     warehouses,
 )
 
@@ -41,17 +41,17 @@ WAREHOUSE_TABLES = [
     storage_locations,
     categories,
     items,
-    inventory_batches,
-    replenishment_requests,
     delivery_providers,
     users,
     delivery_addresses,
     cart_items,
     flash_sales,
     flash_sale_claims,
+    item_rank_events,
+    category_rank_snapshots,
+    item_reviews,
     procurement_suppliers,
     purchase_orders,
-    warehouse_inventory_sync_jobs,
     inventory_location_balances,
     inventory_movements,
     orders,
@@ -71,12 +71,9 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         location_count = connection.execute(text("select count(*) from storage_locations")).scalar_one()
         category_count = connection.execute(text("select count(*) from categories")).scalar_one()
         item_count = connection.execute(text("select count(*) from items")).scalar_one()
-        batch_count = connection.execute(text("select count(*) from inventory_batches")).scalar_one()
-        replenishment_count = connection.execute(text("select count(*) from replenishment_requests")).scalar_one()
         delivery_provider_count = connection.execute(text("select count(*) from delivery_providers")).scalar_one()
         supplier_count = connection.execute(text("select count(*) from procurement_suppliers")).scalar_one()
         purchase_order_count = connection.execute(text("select count(*) from purchase_orders")).scalar_one()
-        sync_job_count = connection.execute(text("select count(*) from warehouse_inventory_sync_jobs")).scalar_one()
         balance_count = connection.execute(text("select count(*) from inventory_location_balances")).scalar_one()
         movement_count = connection.execute(text("select count(*) from inventory_movements")).scalar_one()
         order_count = connection.execute(text("select count(*) from orders")).scalar_one()
@@ -88,6 +85,9 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
             text("select count(*) from flash_sales where status = 'active'")
         ).scalar_one()
         flash_sale_claim_count = connection.execute(text("select count(*) from flash_sale_claims")).scalar_one()
+        rank_event_count = connection.execute(text("select count(*) from item_rank_events")).scalar_one()
+        rank_snapshot_count = connection.execute(text("select count(*) from category_rank_snapshots")).scalar_one()
+        item_review_count = connection.execute(text("select count(*) from item_reviews")).scalar_one()
         default_address = connection.execute(
             text("select address from delivery_addresses where user_id = 1 and is_default = 1")
         ).scalar_one()
@@ -96,15 +96,12 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
 
     assert warehouse_count == 2
     assert location_count == 6
-    assert category_count == 5
-    assert item_count == 8
-    assert batch_count == 10
-    assert replenishment_count == 0
+    assert category_count == 9
+    assert item_count == 20
     assert delivery_provider_count == 3
     assert supplier_count == 7
     assert purchase_order_count == 0
-    assert sync_job_count == 0
-    assert balance_count == 10
+    assert balance_count == 9
     assert movement_count == 0
     assert order_count == 0
     assert order_item_count == 0
@@ -113,9 +110,51 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert flash_sale_count == 8
     assert active_flash_sale_count == 7
     assert flash_sale_claim_count == 0
+    assert rank_event_count >= 20
+    assert rank_snapshot_count >= 9
+    assert item_review_count == 4
     assert default_address == "广东省深圳市南山区示例路 100 号"
     assert cart_item_count == 0
     assert float(milk_price) == 18.4
+
+
+def test_warehouse_repository_lists_and_creates_item_reviews(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    reviews = repository.list_item_reviews("item_milk_pure", limit=20, offset=0)
+    summary = repository.item_review_summary("item_milk_pure")
+    created = repository.create_item_review(
+        "item_milk_pure",
+        {
+            "user_id": 1,
+            "rating": 5,
+            "title": "Good value",
+            "content": "Fresh taste and good price for a family pack.",
+        },
+        created_at="2026-06-03T10:00:00+08:00",
+    )
+
+    assert len(reviews) == 2
+    assert reviews[0]["item_id"] == "item_milk_pure"
+    assert reviews[0]["rating"] == 5
+    assert summary == {"average_rating": 4.5, "review_count": 2}
+    assert created == {
+        "id": 5,
+        "item_id": "item_milk_pure",
+        "user_id": 1,
+        "rating": 5,
+        "title": "Good value",
+        "content": "Fresh taste and good price for a family pack.",
+        "created_at": "2026-06-03T10:00:00+08:00",
+        "updated_at": "2026-06-03T10:00:00+08:00",
+    }
+    assert repository.item_review_summary("item_milk_pure") == {
+        "average_rating": 4.7,
+        "review_count": 3,
+    }
 
 
 def test_warehouse_repository_lists_delivery_addresses(tmp_path: Path) -> None:
@@ -220,6 +259,109 @@ def test_warehouse_repository_lists_flash_sales_by_status(tmp_path: Path) -> Non
     assert sales[0]["status"] == "active"
 
 
+def test_warehouse_repository_rebuilds_category_rankings_from_rank_events(tmp_path: Path) -> None:
+    """Protect the F8 ranking contract from drifting back to static frontend data.
+
+    The repository owns durable ranking facts and snapshots. Rebuilding should
+    aggregate item events into deterministic category rankings, then expose rows
+    with item display fields so routers and frontend pages do not need separate
+    item lookups for the common read path.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    repository.record_item_rank_event(
+        item_id="item_wireless_earbuds",
+        event_type="purchase",
+        user_id=1,
+        occurred_at="2026-06-17T10:00:00+08:00",
+    )
+    repository.record_item_rank_event(
+        item_id="item_smart_tv_43",
+        event_type="view",
+        user_id=1,
+        occurred_at="2026-06-17T10:01:00+08:00",
+    )
+
+    rebuilt = repository.rebuild_category_rankings(
+        category_id="electronics",
+        rank_type="hot",
+        window_type="all_time",
+        limit=10,
+        generated_at="2026-06-17T10:05:00+08:00",
+    )
+    ranking = repository.get_category_ranking(
+        category_id="electronics",
+        rank_type="hot",
+        window_type="all_time",
+        limit=10,
+    )
+
+    assert rebuilt[0]["item_id"] == "item_wireless_earbuds"
+    assert rebuilt[0]["rank"] == 1
+    assert rebuilt[0]["score"] > rebuilt[1]["score"]
+    assert ranking == rebuilt
+    assert ranking[0]["item_name"]
+    assert isinstance(ranking[0]["price"], float)
+
+
+def test_warehouse_repository_gets_ranked_items_by_cached_ids(tmp_path: Path) -> None:
+    """Ensure Redis ZSET cache hits can hydrate display cards from PostgreSQL.
+
+    Redis only stores `item_id` scores. The repository must preserve the cached
+    item order while joining current item facts and category metadata.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    rows = repository.get_ranked_items_by_ids(
+        ["item_smart_tv_43", "item_wireless_earbuds"],
+        scores={"item_smart_tv_43": 42.0, "item_wireless_earbuds": 39.0},
+    )
+
+    assert [row["item_id"] for row in rows] == ["item_smart_tv_43", "item_wireless_earbuds"]
+    assert rows[0]["rank"] == 1
+    assert rows[0]["score"] == 42.0
+    assert rows[0]["category_id"] == "electronics"
+
+
+def test_warehouse_repository_home_hot_preserves_category_snapshot_rank(tmp_path: Path) -> None:
+    """Keep homepage hot labels aligned with the category leaderboard rank.
+
+    The home rail sorts products from every category by score, but each label is
+    still rendered as "#N in Category". The repository must therefore return the
+    rank stored in `category_rank_snapshots` instead of re-numbering the
+    cross-category result set.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                update category_rank_snapshots
+                set rank = 2, score = 999
+                where item_id = 'item_wireless_earbuds'
+                  and category_id = 'electronics'
+                  and rank_type = 'hot'
+                  and window_type = 'all_time'
+                """
+            )
+        )
+
+    rows = repository.list_home_hot_rankings(rank_type="hot", window_type="all_time", limit=1)
+
+    assert rows[0]["item_id"] == "item_wireless_earbuds"
+    assert rows[0]["rank"] == 2
+
+
 def test_warehouse_tables_and_columns_have_chinese_comments() -> None:
     table_names = {table.name for table in WAREHOUSE_TABLES}
 
@@ -243,6 +385,53 @@ def test_item_search_sql_uses_pg_search_bm25_without_like() -> None:
     assert "search_text &&&" in statement
     assert "pdb.score" in statement
     assert "LIKE" not in statement.upper()
+
+
+def test_warehouse_repository_searches_items_by_category_without_keyword(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    rows = repository.search_items(category_id="electronics")
+
+    item_ids = {item["item_id"] for item in rows}
+    assert {
+        "item_smart_tv_43",
+        "item_wireless_earbuds",
+        "item_xiaomi_air_fryer_6_5l",
+        "item_xiaomi_robot_vacuum_x20_plus",
+        "item_xiaomi_air_purifier_4",
+        "item_xiaomi_electric_kettle_2",
+    }.issubset(item_ids)
+    assert {item["category_id"] for item in rows} == {"electronics"}
+    assert {item["category_name"] for item in rows} == {"Electronics"}
+    assert all(isinstance(item["price"], float) for item in rows)
+    assert all(
+        str(item["image"]).startswith(("https://", "oss://", "products/"))
+        for item in rows
+    )
+
+
+def test_warehouse_repository_lists_catalog_without_keyword_or_category(tmp_path: Path) -> None:
+    """Protect Product Operations table sync from empty pg_search queries.
+
+    Feishu Product Operations can request a full catalog refresh without a
+    category filter. That path must return deterministic catalog rows instead of
+    sending an empty string into pg_search and producing an empty table.
+    """
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    rows = repository.search_items(limit=3)
+
+    assert len(rows) == 3
+    assert all(item["item_id"] for item in rows)
+    assert all(item["category_name"] for item in rows)
+    assert all(isinstance(item["price"], float) for item in rows)
 
 
 def test_item_pg_search_index_uses_chinese_compatible_tokenizer() -> None:
@@ -271,13 +460,13 @@ def test_warehouse_repository_gets_item_detail_from_items_table(tmp_path: Path) 
     assert item["barcode"]
 
 
-def test_warehouse_repository_reads_batch_inventory_rows(tmp_path: Path) -> None:
+def test_warehouse_repository_reads_inventory_balance_rows(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
     init_warehouse_schema(engine)
     seed_warehouse_fixtures(engine, FIXTURE_DIR)
     repository = WarehouseRepository(engine)
 
-    rows = repository.list_inventory_batches(
+    rows = repository.list_inventory_balances(
         warehouse_id="wh_sz_1",
         category_id="paper",
     )
@@ -290,73 +479,37 @@ def test_warehouse_repository_reads_batch_inventory_rows(tmp_path: Path) -> None
     assert rows[0]["category_name"] == "纸品"
     assert rows[0]["item_id"] == "item_vinda_tissue"
     assert rows[0]["item_name"] == "维达纸巾"
-    assert rows[0]["batch_no"] == "BATCH-20260401"
+    assert "batch_no" not in rows[0]
 
 
-def test_inventory_batch_ids_are_autoincrementing_integers(tmp_path: Path) -> None:
+def test_inventory_balance_ids_are_autoincrementing_integers(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
     init_warehouse_schema(engine)
     seed_warehouse_fixtures(engine, FIXTURE_DIR)
-    repository = WarehouseRepository(engine)
 
     with engine.connect() as connection:
-        seeded_batch_id = connection.execute(
-            text("select batch_id from inventory_batches order by batch_id limit 1")
+        seeded_balance_id = connection.execute(
+            text("select id from inventory_location_balances order by id limit 1")
         ).scalar_one()
-        max_seeded_batch_id = connection.execute(
-            text("select max(batch_id) from inventory_batches")
+        max_seeded_balance_id = connection.execute(
+            text("select max(id) from inventory_location_balances")
+        ).scalar_one()
+        connection.execute(
+            text(
+                "insert into inventory_location_balances "
+                "(warehouse_id, location_code, item_id, production_date, expiry_date, quantity_on_hand, "
+                "reorder_threshold, storage_status, created_at, updated_at) "
+                "values ('wh_sz_1', 'A1', 'item_vinda_tissue', '2026-05-26', '2028-05-25', 20, "
+                "100, 'available', '2026-05-26T00:00:00+00:00', '2026-05-26T00:00:00+00:00')"
+            )
+        )
+        created_balance_id = connection.execute(
+            text("select max(id) from inventory_location_balances")
         ).scalar_one()
 
-    created = repository.create_inventory_batch(
-        {
-            "warehouse_id": "wh_sz_1",
-            "location_code": "A1",
-            "item_id": "item_vinda_tissue",
-            "batch_no": "RCV-POD-TEST-1",
-            "production_date": "2026-05-26",
-            "expiry_date": "2028-05-25",
-            "quantity_on_hand": 20,
-            "quantity_reserved": 0,
-            "reorder_threshold": 100,
-            "storage_status": "available",
-        }
-    )
-
-    assert isinstance(seeded_batch_id, int)
-    assert created["batch_id"] == max_seeded_batch_id + 1
-    assert isinstance(created["batch_id"], int)
-
-
-def test_warehouse_repository_persists_replenishment_requests(tmp_path: Path) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
-    init_warehouse_schema(engine)
-    repository = WarehouseRepository(engine)
-
-    created = repository.create_replenishment_request(
-        {
-            "request_id": "REQ-2001",
-            "source": "warehouse",
-            "status": "未审批",
-            "warehouse_id": "wh_sz_1",
-            "warehouse_name": "深圳仓",
-            "location_code": "A1",
-            "item_id": "item_vinda_tissue",
-            "item_name": "维达纸巾",
-            "category_id": "paper",
-            "category_name": "纸品",
-            "current_quantity": 96,
-            "reorder_threshold": 100,
-            "suggested_quantity": 104,
-            "reason": "available_quantity_below_reorder_threshold",
-            "created_by": "warehouse:user-001",
-            "created_at": "2026-05-24T21:00:00+08:00",
-            "updated_at": "2026-05-24T21:00:00+08:00",
-        }
-    )
-    listed = repository.list_replenishment_requests(status="未审批")
-
-    assert created["request_id"] == "REQ-2001"
-    assert listed == [created]
+    assert isinstance(seeded_balance_id, int)
+    assert created_balance_id == max_seeded_balance_id + 1
+    assert isinstance(created_balance_id, int)
 
 
 def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_path: Path) -> None:
@@ -369,7 +522,8 @@ def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_p
     created = repository.create_purchase_order(
         {
             "purchase_order_id": "PO-5001",
-            "request_id": "REQ-2001",
+            "approval_status": "pending",
+            "source": "warehouse",
             "supplier_id": supplier["supplier_id"],
             "supplier_name": supplier["supplier_name"],
             "item_id": "item_vinda_tissue",
@@ -382,6 +536,7 @@ def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_p
             "estimated_total_price": 832,
             "lead_time_days": supplier["lead_time_days"],
             "estimated_arrival_date": "2026-05-27",
+            "reason": "available_quantity_below_reorder_threshold",
             "payment_status": "unpaid",
             "warehouse_sync_status": "pending_arrival",
             "created_by": "procurement:user-001",
@@ -389,13 +544,33 @@ def test_warehouse_repository_reads_suppliers_and_persists_purchase_orders(tmp_p
             "updated_at": "2026-05-24T21:00:00+08:00",
         }
     )
-    listed = repository.list_purchase_orders(request_id="REQ-2001")
+    listed = repository.list_purchase_orders(approval_status="pending")
 
     assert supplier["supplier_name"] == "深圳纸品供应商"
     assert created["purchase_order_id"] == "PO-5001"
+    assert created["approval_status"] == "pending"
     assert created["payment_status"] == "unpaid"
     assert created["warehouse_sync_status"] == "pending_arrival"
+    assert "current_quantity" not in created
+    assert "reorder_threshold" not in created
+    assert "suggested_quantity" not in created
+    assert "request_id" not in created
     assert listed == [created]
+
+
+def test_purchase_orders_schema_excludes_derived_inventory_hint_columns(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+
+    with engine.connect() as connection:
+        column_names = {
+            row["name"]
+            for row in connection.execute(text("PRAGMA table_info(purchase_orders)")).mappings()
+        }
+
+    assert "current_quantity" not in column_names
+    assert "reorder_threshold" not in column_names
+    assert "suggested_quantity" not in column_names
 
 
 def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_balances(tmp_path: Path) -> None:
@@ -407,7 +582,8 @@ def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_ba
     repository.create_purchase_order(
         {
             "purchase_order_id": "PO-6001",
-            "request_id": "REQ-3001",
+            "approval_status": "approved",
+            "source": "warehouse",
             "supplier_id": supplier["supplier_id"],
             "supplier_name": supplier["supplier_name"],
             "item_id": "item_vinda_tissue",
@@ -420,6 +596,7 @@ def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_ba
             "estimated_total_price": 832,
             "lead_time_days": supplier["lead_time_days"],
             "estimated_arrival_date": "2026-05-29",
+            "reason": "available_quantity_below_reorder_threshold",
             "payment_status": "paid",
             "warehouse_sync_status": "arrived_unsynced",
             "arrived_at": "2026-05-29T10:00:00+00:00",
@@ -436,7 +613,6 @@ def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_ba
     )
 
     assert len(synced) == 1
-    assert synced[0]["batch_no"] == "BATCH-20260529"
     assert synced[0]["location_code"] == "A1"
     assert synced[0]["expiry_date"] == "2027-05-29"
     assert 20 <= synced[0]["reorder_threshold"] <= 120
@@ -445,54 +621,20 @@ def test_warehouse_repository_syncs_paid_arrived_purchase_orders_to_inventory_ba
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert {item["location_code"] for item in balances} == {"A1"}
     assert sum(item["quantity_on_hand"] for item in balances) == 240
+    movements = repository.list_inventory_movements(order_id="PO-6001")
+    assert movements == []
 
 
-def test_warehouse_repository_persists_inventory_sync_jobs(tmp_path: Path) -> None:
+def test_warehouse_repository_does_not_create_legacy_inventory_sync_jobs_table(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
     init_warehouse_schema(engine)
-    repository = WarehouseRepository(engine)
-
-    created = repository.upsert_warehouse_inventory_sync_job(
-        {
-            "job_id": "WSJ-POD-5001",
-            "team": "warehouse",
-            "event": "warehouse_inventory_sync_requested",
-            "po_draft_id": "POD-5001",
-            "request_id": "REQ-2001",
-            "item_id": "item_vinda_tissue",
-            "warehouse_id": "wh_sz_1",
-            "warehouse_name": "深圳仓",
-            "location_code": "A1",
-            "batch_no": "RCV-POD-5001",
-            "quantity": 104,
-            "next_action": "notify_warehouse_to_sync_inventory_table",
-            "suggested_message": "@warehouse 同步 item_vinda_tissue 库存到飞书",
-            "created_by": "warehouse:user-001",
-            "created_at": "2026-05-26T10:00:00+00:00",
-            "updated_at": "2026-05-26T10:00:00+00:00",
+    with engine.connect() as connection:
+        table_names = {
+            row["name"]
+            for row in connection.execute(text("select name from sqlite_master where type='table'")).mappings()
         }
-    )
-    pending = repository.list_warehouse_inventory_sync_jobs(status="pending")
-
-    assert created["job_id"] == "WSJ-POD-5001"
-    assert created["status"] == "pending"
-    assert pending == [created]
-
-    completed = repository.update_warehouse_inventory_sync_job(
-        "WSJ-POD-5001",
-        status="completed",
-        processed_by="warehouse-agent",
-        processed_at="2026-05-26T10:05:00+00:00",
-        updated_at="2026-05-26T10:05:00+00:00",
-        result={"synced_count": 1},
-    )
-
-    assert completed
-    assert completed["status"] == "completed"
-    assert completed["processed_by"] == "warehouse-agent"
-    assert completed["result"] == {"synced_count": 1}
-    assert repository.list_warehouse_inventory_sync_jobs(status="pending") == []
-    assert repository.list_warehouse_inventory_sync_jobs(status="completed") == [completed]
+    assert "warehouse_inventory_sync_jobs" not in table_names
+    assert "inventory_batches" not in table_names
 
 
 def test_warehouse_repository_persists_order_lifecycle_against_location_balances(tmp_path: Path) -> None:
@@ -505,7 +647,7 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
         {
             "order_id": "ORD-CODEX-DB-1",
             "customer_id": "cus_100",
-            "status": "未付款",
+            "status": "unpaid",
             "delivery_provider_id": "sf",
             "delivery_provider_name": "顺丰",
             "courier_phone": "13800000001",
@@ -516,7 +658,6 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
             "selected_warehouse_id": "wh_sz_1",
             "selected_warehouse_name": "深圳仓",
             "expires_at": "2026-05-28T10:30:00+00:00",
-            "released_at": "",
             "release_reason": "",
             "items": [
                 {"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}
@@ -533,28 +674,49 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
     )
 
     assert created["order"]["id"] == 1
-    assert created["order"]["status"] == "未付款"
+    assert created["order"]["status"] == "unpaid"
     assert created["order"]["delivery_provider_name"] == "顺丰"
+    assert "created_by" not in created["order"]
+    assert "released_at" not in created["order"]
     assert "requested_items" not in created["order"]
-    assert [item["status"] for item in created["items"]] == ["未付款", "未付款"]
+    assert [item["status"] for item in created["items"]] == ["unpaid"]
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
-    assert sum(item["quantity_on_hand"] for item in balances) == 116
+    assert sum(item["quantity_on_hand"] for item in balances) == 136
 
-    paid = repository.pay_order(
+    candidates = repository.list_order_fulfillment_candidates("ORD-CODEX-DB-1")
+
+    assert candidates["recommended_warehouse_id"] == "wh_sz_1"
+    assert candidates["candidates"][0]["can_fulfill"] is True
+
+    paid_before_review = repository.pay_order(
         "ORD-CODEX-DB-1",
-        updated_by="warehouse-agent",
-        updated_at="2026-05-28T10:01:00+00:00",
+        updated_by="customer",
+        updated_at="2026-05-28T10:00:20+00:00",
     )
 
-    assert paid["order"]["status"] == "待发货"
-    assert [item["batch_no"] for item in paid["items"]] == ["BATCH-20260401", "BATCH-20260501"]
-    assert [item["quantity"] for item in paid["items"]] == [16, 4]
-    assert all(item["status"] == "待发货" for item in paid["items"])
+    assert paid_before_review["order"]["status"] == "pending_fulfillment_review"
+    assert [item["status"] for item in paid_before_review["items"]] == ["pending_fulfillment_review"]
+
+    confirmed = repository.confirm_order_fulfillment(
+        "ORD-CODEX-DB-1",
+        warehouse_id="wh_sz_1",
+        delivery_provider_id="jd",
+        updated_by="warehouse-agent",
+        updated_at="2026-05-28T10:00:30+00:00",
+    )
+
+    assert confirmed["order"]["status"] == "shipped"
+    assert confirmed["order"]["delivery_provider_id"] == "jd"
+    assert confirmed["order"]["delivery_provider_name"] == "京东"
+    assert [item["status"] for item in confirmed["items"]] == ["shipped"]
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 116
 
-    batch = repository.get_inventory_batch_by_batch_no("BATCH-20260401")
-    assert batch["quantity_on_hand"] == 16
+    assert "batch_no" not in confirmed["items"][0]
+    assert [item["quantity"] for item in confirmed["items"]] == [20]
+    assert all(item["status"] == "shipped" for item in confirmed["items"])
+    balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
+    assert sum(item["quantity_on_hand"] for item in balances) == 116
 
     returned = repository.return_order(
         "ORD-CODEX-DB-1",
@@ -562,14 +724,73 @@ def test_warehouse_repository_persists_order_lifecycle_against_location_balances
         updated_at="2026-05-28T10:10:00+00:00",
     )
 
-    assert returned["order"]["status"] == "已退货"
+    assert returned["order"]["status"] == "returned"
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 136
 
     movements = repository.list_inventory_movements(order_id="ORD-CODEX-DB-1")
-    assert [item["movement_type"] for item in movements] == ["order_created", "order_returned"]
+    assert [item["movement_type"] for item in movements] == ["order_fulfillment_confirmed", "order_returned"]
     assert [item["quantity_delta"] for item in movements] == [-20, 20]
     assert "batch_no" not in movements[0]
+
+
+def test_warehouse_repository_confirm_fulfillment_auto_selects_highest_stock_warehouse(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+
+    repository.create_order(
+        {
+            "order_id": "ORD-CODEX-DB-AUTO-WH",
+            "customer_id": "cus_100",
+            "status": "unpaid",
+            "delivery_provider_id": "sf",
+            "delivery_provider_name": "顺丰",
+            "courier_phone": "",
+            "tracking_no": "",
+            "shipping_address": "香港",
+            "shipping_province": "",
+            "shipping_city": "香港",
+            "selected_warehouse_id": "wh_hk_1",
+            "selected_warehouse_name": "香港仓",
+            "release_reason": "",
+            "items": [
+                {"item_id": "item_milk_pure", "warehouse_id": "wh_hk_1", "quantity": 10}
+            ],
+            "created_at": "2026-05-28T10:00:00+00:00",
+            "updated_at": "2026-05-28T10:00:00+00:00",
+            "paid_at": "",
+            "shipped_at": "",
+            "arrived_at": "",
+            "cancelled_at": "",
+            "returned_at": "",
+            "expires_at": "",
+        }
+    )
+    repository.pay_order(
+        "ORD-CODEX-DB-AUTO-WH",
+        updated_by="customer",
+        updated_at="2026-05-28T10:00:20+00:00",
+    )
+
+    confirmed = repository.confirm_order_fulfillment(
+        "ORD-CODEX-DB-AUTO-WH",
+        warehouse_id="",
+        delivery_provider_id="jd",
+        tracking_no="JD-DB-AUTO-1",
+        updated_by="warehouse-agent",
+        updated_at="2026-05-28T10:00:30+00:00",
+    )
+
+    assert confirmed["order"]["status"] == "shipped"
+    assert confirmed["order"]["selected_warehouse_id"] == "wh_sz_1"
+    assert confirmed["order"]["selected_warehouse_name"] == "深圳仓"
+    assert confirmed["order"]["shipped_at"] == "2026-05-28T10:00:30+00:00"
+    assert [item["status"] for item in confirmed["items"]] == ["shipped"]
+    assert [item["warehouse_id"] for item in confirmed["items"]] == ["wh_sz_1"]
+    balances = repository.list_location_balances(item_id="item_milk_pure", warehouse_id="wh_sz_1")
+    assert sum(item["quantity_on_hand"] for item in balances) == 130
 
 
 def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path) -> None:
@@ -581,7 +802,7 @@ def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path
         {
             "order_id": "ORD-CODEX-DB-EXPIRED",
             "customer_id": "cus_100",
-            "status": "未付款",
+            "status": "unpaid",
             "delivery_provider_id": "sf",
             "delivery_provider_name": "顺丰",
             "courier_phone": "",
@@ -592,7 +813,6 @@ def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path
             "selected_warehouse_id": "wh_sz_1",
             "selected_warehouse_name": "深圳仓",
             "expires_at": "2026-05-28T10:30:00+00:00",
-            "released_at": "",
             "release_reason": "",
             "items": [
                 {"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}
@@ -607,7 +827,6 @@ def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path
             "returned_at": "",
         }
     )
-
     released = repository.release_expired_orders(
         processed_by="warehouse-timeout-job",
         now="2026-05-28T10:31:00+00:00",
@@ -618,12 +837,9 @@ def test_warehouse_repository_releases_expired_unpaid_orders_once(tmp_path: Path
     )
 
     assert [item["order_id"] for item in released] == ["ORD-CODEX-DB-EXPIRED"]
-    assert released[0]["status"] == "已取消"
+    assert released[0]["status"] == "canceled"
     assert released_again == []
     balances = repository.list_location_balances(item_id="item_vinda_tissue", warehouse_id="wh_sz_1")
     assert sum(item["quantity_on_hand"] for item in balances) == 136
     movements = repository.list_inventory_movements(order_id="ORD-CODEX-DB-EXPIRED")
-    assert [item["movement_type"] for item in movements] == [
-        "order_created",
-        "order_timeout_released",
-    ]
+    assert movements == []

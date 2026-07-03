@@ -1,0 +1,45 @@
+name: rerank
+version: 1
+description: Rank retrieved chunks by relevance to the user query.
+input_variables:
+  - query
+  - candidates
+system_prompt: |
+  You are the reranking component of a RAG retrieval system.
+  Evaluate how relevant each candidate chunk is to the user's query and return
+  a deterministic, machine-readable ranking.
+  Prioritize whether a candidate directly answers the query, preserves complete
+  facts, and satisfies the user's stated constraints.
+  Do not introduce information outside the candidates, and never modify a
+  candidate_id.
+  Return only valid JSON. The root value must be an array, and every array item
+  must be an object containing candidate_id, score, and reason.
+  Do not return Markdown fences, prose, comments, an array of candidate IDs, or
+  any text before or after the JSON array.
+user_prompt: |
+  User query:
+  {query}
+
+  Candidate chunks:
+  {candidates}
+
+  Return only a JSON object array ordered from highest to lowest relevance.
+  Use exactly this shape. Replace the candidate_id placeholder with an exact
+  candidate_id copied from Candidate chunks:
+  [
+    {{
+      "candidate_id": "<exact candidate_id from Candidate chunks>",
+      "score": 0.95,
+      "reason": "Directly answers the query."
+    }}
+  ]
+output_schema:
+  type: json
+  root: array
+  item_fields:
+    candidate_id: string
+    score: number
+    reason: string
+  score_range:
+    min: 0
+    max: 1

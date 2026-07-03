@@ -1,27 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink } from 'vue-router'
 import {
   ChevronDown,
   Gift,
-  Heart,
   Info,
   LoaderCircle,
   MapPin,
   Minus,
   Plus,
-  Search,
-  ShoppingCart,
   Truck,
-  UserRound,
 } from 'lucide-vue-next'
 
+import StoreHeader from '@/components/StoreHeader.vue'
 import { addCartItem, CART_USER_ID, fetchCart, removeCartItem } from '@/services/cartApi'
 import { createWarehouseOrder, fetchDeliveryAddresses } from '@/services/checkoutApi'
 import type { CartItem } from '@/types/cart'
 import type { DeliveryAddress } from '@/types/checkout'
-
-const router = useRouter()
 
 const cartItems = ref<CartItem[]>([])
 const deliveryAddresses = ref<DeliveryAddress[]>([])
@@ -32,19 +27,8 @@ const isCheckingOut = ref(false)
 const errorMessage = ref('')
 const addressErrorMessage = ref('')
 const checkoutErrorMessage = ref('')
+const checkoutSuccessMessage = ref('')
 const pendingItemId = ref('')
-const searchQuery = ref('')
-
-const topTabs = [
-  'Departments',
-  'Services',
-  'Rollbacks & More',
-  "Father's Day",
-  'Get it Fast',
-  'Pharmacy',
-  'New Arrivals',
-  'TalonMart+',
-]
 
 const essentials = [
   {
@@ -185,6 +169,7 @@ async function removeItem(item: CartItem) {
 
 async function continueToCheckout() {
   checkoutErrorMessage.value = ''
+  checkoutSuccessMessage.value = ''
 
   if (cartItems.value.length === 0) {
     checkoutErrorMessage.value = 'Your cart is empty.'
@@ -199,8 +184,8 @@ async function continueToCheckout() {
   isCheckingOut.value = true
 
   try {
-    // 中文注释：前端只传商品和数量，仓库选择、库位分配、库存扣减由后端订单接口负责。
-    await createWarehouseOrder({
+    // The frontend creates an unpaid order; payment later triggers the warehouse fulfillment review.
+    const response = await createWarehouseOrder({
       customer_id: String(CART_USER_ID),
       delivery_provider_id: 'sf',
       courier_phone: '',
@@ -211,19 +196,13 @@ async function continueToCheckout() {
       })),
       created_by: 'talonmart-web',
     })
-    router.push({ name: 'home' })
+    checkoutSuccessMessage.value = `Order ${response.order.order_id} was created and is waiting for payment.`
   } catch (error) {
     checkoutErrorMessage.value =
       error instanceof Error ? error.message : 'Unable to create order. Check the order API.'
   } finally {
     isCheckingOut.value = false
   }
-}
-
-function submitSearch() {
-  const normalized = searchQuery.value.trim()
-  if (!normalized) return
-  router.push({ name: 'search', query: { q: normalized } })
 }
 
 onMounted(() => {
@@ -234,64 +213,7 @@ onMounted(() => {
 
 <template>
   <main class="min-h-screen bg-[#F7F8FA] text-[#101828]">
-    <header class="bg-[#0053E2] text-white shadow-sm">
-      <div class="mx-auto flex max-w-[1440px] items-center gap-4 px-6 py-4">
-        <RouterLink class="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#FFC220] font-black text-[#0053E2]" to="/">
-          TM
-        </RouterLink>
-
-        <form class="flex min-h-12 flex-1 overflow-hidden rounded-full bg-white" role="search" @submit.prevent="submitSearch">
-          <input
-            v-model="searchQuery"
-            aria-label="Search products"
-            class="min-w-0 flex-1 px-6 text-base text-[#101828] outline-none"
-            placeholder="Search everything at TalonMart online and in store"
-            type="search"
-          />
-          <button class="grid w-14 place-items-center bg-[#003A9B] text-white" type="submit" aria-label="Submit search">
-            <Search class="h-5 w-5" aria-hidden="true" />
-          </button>
-        </form>
-
-        <RouterLink class="hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex" to="/">
-          <Heart class="h-5 w-5" aria-hidden="true" />
-          <span>
-            <span class="block text-xs">Reorder</span>
-            My Items
-          </span>
-        </RouterLink>
-
-        <RouterLink class="hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex" to="/">
-          <UserRound class="h-5 w-5" aria-hidden="true" />
-          <span>
-            <span class="block text-xs">Sign In</span>
-            Account
-          </span>
-        </RouterLink>
-
-        <RouterLink class="relative flex min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10" to="/cart">
-          <ShoppingCart class="h-6 w-6" aria-hidden="true" />
-          <span v-if="cartQuantity" class="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#FFC220] px-1 text-xs font-black text-[#101828]">
-            {{ cartQuantity }}
-          </span>
-          <span class="hidden sm:inline">{{ formatCurrency(subtotal) }}</span>
-        </RouterLink>
-      </div>
-
-      <nav class="border-t border-white/15 bg-[#EAF2FF] text-[#101828]">
-        <div class="mx-auto flex max-w-[1440px] gap-3 overflow-x-auto px-6 py-3">
-          <button
-            v-for="tab in topTabs"
-            :key="tab"
-            class="flex min-h-10 shrink-0 items-center gap-2 rounded-full bg-white px-5 text-sm font-bold shadow-sm"
-            type="button"
-          >
-            {{ tab }}
-            <ChevronDown v-if="tab === 'Departments' || tab === 'Services'" class="h-4 w-4" aria-hidden="true" />
-          </button>
-        </div>
-      </nav>
-    </header>
+    <StoreHeader :cart-quantity="cartQuantity" />
 
     <section class="mx-auto grid max-w-[1180px] gap-6 px-6 py-8 xl:grid-cols-[1fr_360px]">
       <div class="space-y-6">
@@ -487,6 +409,9 @@ onMounted(() => {
           </button>
           <p v-if="checkoutErrorMessage" class="mt-3 rounded-md bg-[#FEF2F2] p-3 text-sm font-semibold text-[#991B1B]" role="alert">
             {{ checkoutErrorMessage }}
+          </p>
+          <p v-if="checkoutSuccessMessage" class="mt-3 rounded-md bg-[#ECFDF3] p-3 text-sm font-semibold text-[#027A48]" role="status">
+            {{ checkoutSuccessMessage }}
           </p>
           <p class="mt-5 text-center text-sm">
             For the best shopping experience,

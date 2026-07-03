@@ -1,51 +1,31 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import {
-  ClipboardList,
-  Headphones,
-  MessageSquareText,
-  Sparkles,
-  UserCircle,
-} from 'lucide-vue-next'
 
 import AiModeChatPanel from './AiModeChatPanel.vue'
 
 const isAiPanelOpen = ref(false)
 
-const sideItems = [
-  { label: '我的', icon: UserCircle },
-  { label: '客服', icon: Headphones },
-  { label: 'AI模式', icon: Sparkles, action: 'ai' },
-  { label: '反馈', icon: MessageSquareText },
-  { label: '调研', icon: ClipboardList },
-]
-
-function handleSideItemClick(action?: string) {
-  if (action === 'ai') {
-    // 中文注释：AI模式只负责打开本地对话面板，实际问答通过 ai-service AImodel 接口完成。
-    isAiPanelOpen.value = true
-  }
+function openAiPanel() {
+  isAiPanelOpen.value = true
 }
 </script>
 
 <template>
-  <div class="ai-mode-shell" aria-label="TalonMart sidebar">
-    <nav class="ai-mode-sidebar" aria-label="Quick actions">
-      <button
-        v-for="item in sideItems"
-        :key="item.label"
-        class="ai-mode-sidebar__item"
-        type="button"
-        :aria-label="item.action === 'ai' ? 'Open AI mode' : item.label"
-        :class="{ 'ai-mode-sidebar__item--active': item.action === 'ai' && isAiPanelOpen }"
-        @click="handleSideItemClick(item.action)"
-      >
-        <span class="ai-mode-sidebar__icon">
-          <component :is="item.icon" :size="29" stroke-width="2.3" />
-        </span>
-        <span>{{ item.label }}</span>
-      </button>
-    </nav>
+  <div class="ai-mode-shell" aria-label="TalonMart AI shopping assistant">
+    <button
+      class="ai-smiley-launcher"
+      type="button"
+      aria-label="Open AI mode"
+      data-testid="ai-smiley-launcher"
+      :aria-expanded="isAiPanelOpen"
+      @click="openAiPanel"
+    >
+      <span class="ai-smiley-launcher__face" aria-hidden="true">
+        <span class="ai-smiley-launcher__eye ai-smiley-launcher__eye--left"></span>
+        <span class="ai-smiley-launcher__eye ai-smiley-launcher__eye--right"></span>
+        <span class="ai-smiley-launcher__mouth"></span>
+      </span>
+    </button>
 
     <AiModeChatPanel v-if="isAiPanelOpen" @close="isAiPanelOpen = false" />
   </div>
@@ -56,76 +36,106 @@ function handleSideItemClick(action?: string) {
   pointer-events: none;
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 48;
 }
 
-.ai-mode-sidebar,
-.ai-mode-sidebar__item,
-.ai-mode-sidebar__icon {
-  display: flex;
-  align-items: center;
-}
-
-.ai-mode-sidebar {
+.ai-smiley-launcher {
   pointer-events: auto;
   position: fixed;
-  top: 50%;
-  right: 14px;
-  z-index: 44;
-  width: 52px;
-  transform: translateY(-50%);
-  flex-direction: column;
-  gap: 6px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 18px 46px rgba(16, 24, 40, 0.16);
-  padding: 10px 4px;
-}
-
-.ai-mode-sidebar__item {
-  width: 44px;
-  min-height: 58px;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
+  right: 28px;
+  bottom: 28px;
+  z-index: 52;
+  display: grid;
+  height: 76px;
+  width: 76px;
+  place-items: center;
   border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: #4b5563;
+  border-radius: 50%;
+  background: rgba(233, 241, 254, 0.92);
+  box-shadow: 0 14px 30px rgba(0, 83, 226, 0.18);
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.15;
-  padding: 5px 2px;
+  padding: 0;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+  animation: ai-smiley-float 3.2s ease-in-out infinite;
 }
 
-.ai-mode-sidebar__item:hover,
-.ai-mode-sidebar__item--active {
-  background: #fff0f3;
-  color: #101828;
+.ai-smiley-launcher:hover {
+  transform: translateY(-3px) scale(1.03);
+  box-shadow: 0 18px 38px rgba(0, 83, 226, 0.26);
 }
 
-.ai-mode-sidebar__item--active svg {
-  color: #ff5a72;
-}
-
-.ai-mode-sidebar__icon {
+.ai-smiley-launcher__face {
   position: relative;
-  justify-content: center;
-  color: #111827;
+  display: block;
+  height: 60px;
+  width: 60px;
+  border-radius: 50%;
+  background: #ffc220;
+  box-shadow:
+    inset 0 -4px 0 rgba(196, 134, 0, 0.16),
+    inset 0 3px 0 rgba(255, 255, 255, 0.28);
+}
+
+.ai-smiley-launcher__eye {
+  position: absolute;
+  top: 18px;
+  height: 14px;
+  width: 6px;
+  border-radius: 999px;
+  background: #0053e2;
+  animation: ai-smiley-blink 4.6s infinite;
+}
+
+.ai-smiley-launcher__eye--left {
+  left: 18px;
+}
+
+.ai-smiley-launcher__eye--right {
+  right: 18px;
+}
+
+.ai-smiley-launcher__mouth {
+  position: absolute;
+  left: 15px;
+  top: 29px;
+  height: 17px;
+  width: 30px;
+  border-bottom: 4px solid #0053e2;
+  border-radius: 0 0 999px 999px;
+}
+
+@keyframes ai-smiley-float {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+
+  50% {
+    translate: 0 -5px;
+  }
+}
+
+@keyframes ai-smiley-blink {
+  0%,
+  46%,
+  50%,
+  100% {
+    transform: scaleY(1);
+  }
+
+  48% {
+    transform: scaleY(0.12);
+  }
 }
 
 @media (max-width: 720px) {
-  .ai-mode-sidebar {
-    right: 8px;
-    width: 48px;
-    padding: 8px 3px;
-  }
-
-  .ai-mode-sidebar__item {
-    width: 42px;
-    min-height: 54px;
-    font-size: 12px;
+  .ai-smiley-launcher {
+    right: 18px;
+    bottom: 18px;
+    height: 68px;
+    width: 68px;
   }
 }
 </style>

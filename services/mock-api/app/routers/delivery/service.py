@@ -47,24 +47,26 @@ def delivery_details_for_order(order: dict[str, Any]) -> dict[str, Any]:
 
 def delivery_risk_level(order: dict[str, Any]) -> str:
     status = str(order.get("status") or "")
-    if status == "已发货":
+    if status == "shipped":
         return "medium"
-    if status in {"已退款", "已退货"}:
+    if status in {"refunded", "returned"}:
         return "high"
     return "low"
 
 
 def delivery_recommendation(order: dict[str, Any]) -> str:
     status = str(order.get("status") or "")
-    if status == "未付款":
-        return "订单未付款，物流暂不处理。"
-    if status == "待发货":
+    if status == "pending_fulfillment_review":
+        return "订单等待仓库确认发仓，物流暂不处理。"
+    if status == "unpaid":
+        return "订单待付款，物流暂不处理。"
+    if status == "pending_shipment":
         return "订单待发货，Warehouse 负责出库发货。"
-    if status == "已发货":
+    if status == "shipped":
         return "订单已发货，Delivery 负责跟进承运商配送进度。"
-    if status == "已到货":
+    if status == "arrived":
         return "订单已到货，物流流程完成。"
-    if status in {"已退款", "已退货"}:
+    if status in {"refunded", "returned"}:
         return "订单已进入退款或退货状态，物流流程只保留配送记录。"
     return "订单状态未知，请人工复核。"
 

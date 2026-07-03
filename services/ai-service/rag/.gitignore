@@ -1,0 +1,42 @@
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+
+# Virtual environments and local secrets
+.venv/
+.env
+.env.*
+!.env.example
+config/settings.yaml
+
+# Test and static-analysis caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# RAG runtime data
+data/raw/
+data/db/
+data/images/
+data/markdown/
+data/evaluation/
+src/cache/
+src/logs/*.log
+src/logs/*.jsonl
+
+# Local models and temporary images
+models/
+tmp/
+*.tmp

@@ -1,0 +1,302 @@
+version: "1.0"
+routers:
+  support:
+    description: Customer support intents that should use internal TalonMart knowledge.
+    categories:
+      presale:
+        description: Buying advice, use cases, parameter consulting, and comparison.
+        intents:
+          buying_recommendation:
+            action: rag
+            collection: shopping_guides
+            priority: 70
+            confidence: 0.82
+            match:
+              any:
+                - 怎么选
+                - 选购
+                - 推荐
+                - 哪个品牌
+                - 哪款
+                - 性价比
+                - 适合
+                - 购买建议
+                - 建议
+                - 为什么建议
+                - 为什么通常建议
+              all: []
+              regex:
+                - ".*怎么.*选.*"
+                - ".*哪个.*适合.*"
+                - ".*为什么.*建议.*"
+                - ".*为什么.*通常建议.*"
+                - ".*只换.*能.*提升.*"
+          parameter_consulting:
+            action: rag
+            collection: shopping_guides
+            priority: 65
+            confidence: 0.80
+            match:
+              any:
+                - 参数
+                - 规格
+                - 配置
+                - 容量
+                - 功率
+                - 能效
+                - 尺寸
+                - 材质
+                - 性能
+              all: []
+              regex:
+                - ".*参数.*怎么看.*"
+          comparison:
+            action: rag
+            collection: shopping_guides
+            priority: 60
+            confidence: 0.80
+            match:
+              any:
+                - 对比
+                - 区别
+                - 差异
+                - 哪个更好
+                - vs
+                - 比较
+              all: []
+              regex:
+                - ".*和.*区别.*"
+          price_promotion:
+            action: product_api
+            collection: null
+            priority: 90
+            confidence: 0.86
+            rag_enabled: false
+            match:
+              any:
+                - 价格
+                - 优惠
+                - 折扣
+                - 促销
+                - 活动
+                - 秒杀
+                - 库存
+              all: []
+              regex:
+                - ".*有没有.*活动.*"
+      usage:
+        description: Product usage, troubleshooting, and maintenance.
+        intents:
+          operation_guide:
+            action: rag
+            collection: faq
+            priority: 85
+            confidence: 0.86
+            match:
+              any:
+                - 常见问题
+                - faq
+                - 怎么用
+                - 如何使用
+                - 操作
+                - 设置
+                - 安装
+                - 注意事项
+                - 能不能使用
+                - 是否可以使用
+              all: []
+              regex:
+                - ".*怎么.*使用.*"
+                - ".*能不能.*使用.*"
+                - ".*是否.*可以.*使用.*"
+          troubleshooting:
+            action: rag
+            collection: faq
+            priority: 80
+            confidence: 0.86
+            match:
+              any:
+                - 怎么办
+                - 故障
+                - 不工作
+                - 异味
+                - 异响
+                - 报错
+                - 故障原因
+                - 异常原因
+              all: []
+              regex:
+                - ".*(故障|不工作|异味|异响|报错|坏了|异常).*为什么.*"
+                - ".*为什么.*(故障|不工作|异味|异响|报错|坏了|异常).*"
+                - ".*怎么办.*"
+          maintenance:
+            action: rag
+            collection: faq
+            priority: 75
+            confidence: 0.84
+            match:
+              any:
+                - 清洁
+                - 保养
+                - 维护
+                - 耗材
+                - 滤芯
+                - 除垢
+                - 消毒
+              all: []
+              regex:
+                - ".*怎么.*清洁.*"
+                - ".*多久.*更换.*"
+      aftersales:
+        description: Shipping, return, invoice, account, and service scripts.
+        intents:
+          shipping_policy:
+            action: rag
+            collection: policies
+            priority: 110
+            confidence: 0.94
+            match:
+              any:
+                - 发货
+                - 延迟发货
+                - 发货规则
+                - 配送
+                - 物流
+                - 履约
+                - 运费
+                - 拒收
+              all: []
+              regex:
+                - ".*多久.*发货.*"
+                - ".*延迟发货.*怎么.*"
+          return_exchange:
+            action: rag
+            collection: policies
+            priority: 105
+            confidence: 0.94
+            match:
+              any:
+                - 退货
+                - 退款
+                - 换货
+                - 退运费
+                - 价保
+                - 保修
+              all: []
+              regex:
+                - ".*多久.*退款.*"
+          installation_service_limits:
+            action: rag
+            collection: policies
+            priority: 108
+            confidence: 0.94
+            match:
+              any:
+                - 安装限制
+                - 售后限制
+                - 售后阶段
+                - 特殊商品售后限制
+                - 安装服务
+                - 大家电
+              all:
+                - 安装
+                - 限制
+              regex:
+                - ".*售后.*安装.*限制.*"
+                - ".*安装.*限制.*"
+          account_invoice:
+            action: rag
+            collection: policies
+            priority: 95
+            confidence: 0.90
+            match:
+              any:
+                - 发票
+                - 会员
+                - 积分
+                - 账号
+                - 隐私
+                - 企业采购
+              all: []
+              regex:
+                - ".*发票.*怎么.*"
+          service_script:
+            action: rag
+            collection: manual
+            priority: 90
+            confidence: 0.90
+            match:
+              any:
+                - 话术
+                - 怎么回复
+                - 怎么安抚
+                - 投诉
+                - 催发货
+                - 催退款
+                - 客服
+              all: []
+              regex:
+                - ".*客户.*生气.*怎么.*"
+  external:
+    description: Public information that should use controlled web search.
+    categories:
+      public_market:
+        description: External rankings, public releases, and news.
+        intents:
+          web_research:
+            action: web
+            collection: null
+            priority: 80
+            confidence: 0.84
+            rag_enabled: false
+            match:
+              any:
+                - 最新
+                - 新闻
+                - 排行榜
+                - 新品
+                - 市场趋势
+                - 公开信息
+              all: []
+              regex:
+                - ".*最新.*排行榜.*"
+  chat:
+    description: Conversation intents that do not require RAG.
+    categories:
+      chat_all:
+        description: Greeting, out-of-scope, and refusal routes.
+        intents:
+          greeting:
+            action: direct
+            collection: null
+            priority: 200
+            confidence: 0.95
+            rag_enabled: false
+            match:
+              any:
+                - 你好
+                - 您好
+                - hello
+                - hi
+                - 谢谢
+              all: []
+              regex:
+                - "^(你好|您好|hello|hi)[!！。 ]*$"
+          out_of_scope:
+            action: refuse
+            collection: null
+            priority: 195
+            confidence: 0.94
+            rag_enabled: false
+            match:
+              any:
+                - 写代码
+                - 炒股
+                - 医疗诊断
+                - 法律意见
+                - 政治立场
+                - 成人内容
+                - 攻击别人
+              all: []
+              regex:
+                - ".*和平台.*无关.*"

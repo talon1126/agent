@@ -3,12 +3,18 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from app.routers.pagination import page_items
 from app.store import load_json
 from app.warehouse_store import WAREHOUSE_COLUMN_COMMENTS
 
-from .schemas import WarehouseInventorySearchRequest, WarehouseStockBalanceTableRowsRequest
+from .schemas import (
+    WarehouseInventoryMovementTableRowsRequest,
+    WarehouseInventorySearchRequest,
+    WarehouseStockBalanceTableRowsRequest,
+)
 from .state import (
-    RECEIVED_INVENTORY_BATCHES,
+    RECEIVED_INVENTORY_BALANCES,
+    WAREHOUSE_INVENTORY_MOVEMENTS,
     WAREHOUSE_BATCH_QUANTITY_OVERRIDES,
     get_warehouse_repository,
 )
@@ -52,18 +58,6 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
         "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_name"],
     },
     {
-        "name": "Category ID",
-        "source": "categories.category_id",
-        "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_id"],
-    },
-    {
-        "name": "Item ID",
-        "source": "items.item_id",
-        "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["item_id"],
-    },
-    {
         "name": "Item Name",
         "source": "items.item_name",
         "type": "text",
@@ -73,16 +67,10 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
     {"name": "Spec", "source": "items.spec", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["spec"]},
     {"name": "Unit", "source": "items.unit", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["unit"]},
     {
-        "name": "Batch No",
-        "source": "inventory_batches.batch_no",
-        "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["batch_no"],
-    },
-    {
         "name": "Quantity On Hand",
-        "source": "inventory_batches.quantity_on_hand",
+        "source": "inventory_location_balances.quantity_on_hand",
         "type": "number",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["quantity_on_hand"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["quantity_on_hand"],
     },
     {
         "name": "Quantity Available",
@@ -92,27 +80,27 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
     },
     {
         "name": "Quantity Reserved",
-        "source": "inventory_batches.quantity_reserved",
+        "source": "computed.quantity_reserved",
         "type": "number",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["quantity_reserved"],
+        "comment": "当前模型不再预留库存，保留该计算字段用于兼容旧库存视图。",
     },
     {
         "name": "Reorder Threshold",
-        "source": "inventory_batches.reorder_threshold",
+        "source": "inventory_location_balances.reorder_threshold",
         "type": "number",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["reorder_threshold"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["reorder_threshold"],
     },
     {
         "name": "Production Date",
-        "source": "inventory_batches.production_date",
+        "source": "inventory_location_balances.production_date",
         "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["production_date"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["production_date"],
     },
     {
         "name": "Expiry Date",
-        "source": "inventory_batches.expiry_date",
+        "source": "inventory_location_balances.expiry_date",
         "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["expiry_date"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["expiry_date"],
     },
     {
         "name": "Days To Expiry",
@@ -145,9 +133,9 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
     },
     {
         "name": "Storage Status",
-        "source": "inventory_batches.storage_status",
+        "source": "inventory_location_balances.storage_status",
         "type": "single_select",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_batches"]["storage_status"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["storage_status"],
         "options": [
             {"name": "available", "color": 28},
             {"name": "quality_hold", "color": 17},
@@ -186,111 +174,135 @@ WAREHOUSE_INVENTORY_TABLE_SCHEMA = [
 
 WAREHOUSE_STOCK_BALANCE_TABLE_SCHEMA = [
     {
-        "name": "Balance Key",
-        "source": "computed.balance_key",
+        "name": "id",
+        "source": "inventory_location_balances.id",
         "type": "text",
-        "comment": "库存余额行唯一键，格式为 item_id:warehouse_id:location_code。",
-    },
-    {"name": "Warehouse", "source": "warehouses.name", "type": "text", "comment": "仓库展示名称，例如深圳仓、香港仓。"},
-    {
-        "name": "Warehouse ID",
-        "source": "warehouses.warehouse_id",
-        "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["warehouses"]["warehouse_id"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["id"],
     },
     {
-        "name": "Location",
+        "name": "warehouse_id",
+        "source": "inventory_location_balances.warehouse_id",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["warehouse_id"],
+    },
+    {
+        "name": "location_code",
         "source": "inventory_location_balances.location_code",
         "type": "text",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["location_code"],
     },
     {
-        "name": "Category",
-        "source": "categories.category_name",
+        "name": "item_id",
+        "source": "inventory_location_balances.item_id",
         "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_name"],
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["item_id"],
     },
     {
-        "name": "Category ID",
-        "source": "categories.category_id",
-        "type": "text",
-        "comment": WAREHOUSE_COLUMN_COMMENTS["categories"]["category_id"],
+        "name": "production_date",
+        "source": "inventory_location_balances.production_date",
+        "type": "date",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["production_date"],
     },
-    {"name": "Item ID", "source": "items.item_id", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["item_id"]},
-    {"name": "Item Name", "source": "items.item_name", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["item_name"]},
-    {"name": "Brand", "source": "items.brand", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["brand"]},
-    {"name": "Spec", "source": "items.spec", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["spec"]},
-    {"name": "Unit", "source": "items.unit", "type": "text", "comment": WAREHOUSE_COLUMN_COMMENTS["items"]["unit"]},
     {
-        "name": "Quantity On Hand",
+        "name": "expiry_date",
+        "source": "inventory_location_balances.expiry_date",
+        "type": "date",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["expiry_date"],
+    },
+    {
+        "name": "quantity_on_hand",
         "source": "inventory_location_balances.quantity_on_hand",
         "type": "number",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["quantity_on_hand"],
     },
     {
-        "name": "Quantity Available",
-        "source": "inventory_location_balances.quantity_on_hand",
-        "type": "number",
-        "comment": "当前可用库存余额；当前模型中等于 Quantity On Hand。",
-    },
-    {
-        "name": "Reorder Threshold",
+        "name": "reorder_threshold",
         "source": "inventory_location_balances.reorder_threshold",
         "type": "number",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["reorder_threshold"],
     },
     {
-        "name": "Storage Status",
+        "name": "storage_status",
         "source": "inventory_location_balances.storage_status",
         "type": "single_select",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["storage_status"],
         "options": [{"name": "available", "color": 28}, {"name": "quality_hold", "color": 17}],
     },
     {
-        "name": "Risk Level",
-        "source": "computed.risk_level",
-        "type": "single_select",
-        "comment": "根据库存余额、补货阈值和存储状态计算出的余额风险。",
-        "options": [
-            {"name": "low", "color": 28},
-            {"name": "medium", "color": 24},
-            {"name": "high", "color": 17},
-            {"name": "unknown", "color": 0},
-        ],
-    },
-    {
-        "name": "Balance Status",
-        "source": "computed.balance_status",
-        "type": "single_select",
-        "comment": "库存余额状态，zero_stock 表示余额为 0，low_stock 表示低于补货阈值。",
-        "options": [
-            {"name": "available", "color": 28},
-            {"name": "low_stock", "color": 24},
-            {"name": "zero_stock", "color": 17},
-            {"name": "quality_hold", "color": 17},
-        ],
-    },
-    {
-        "name": "Created At",
+        "name": "created_at",
         "source": "inventory_location_balances.created_at",
         "type": "date",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["created_at"],
     },
     {
-        "name": "Updated At",
+        "name": "updated_at",
         "source": "inventory_location_balances.updated_at",
         "type": "date",
         "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_location_balances"]["updated_at"],
     },
-    {"name": "Last Synced At", "source": "sync.last_synced_at", "type": "date", "comment": "同步到飞书多维表格的时间。"},
+]
+
+WAREHOUSE_INVENTORY_MOVEMENT_TABLE_SCHEMA = [
     {
-        "name": "Sync Status",
-        "source": "sync.status",
-        "type": "single_select",
-        "comment": "该行数据的同步状态。",
-        "options": [{"name": "synced", "color": 28}, {"name": "pending", "color": 24}, {"name": "failed", "color": 17}],
+        "name": "movement_id",
+        "source": "inventory_movements.movement_id",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_movements"]["movement_id"],
     },
-    {"name": "Source Version", "source": "computed.source_version", "type": "text", "comment": "用于追踪该库存余额行来源的版本标识。"},
+    {
+        "name": "order_id",
+        "source": "inventory_movements.order_id",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_movements"]["order_id"],
+    },
+    {
+        "name": "movement_type",
+        "source": "inventory_movements.movement_type",
+        "type": "single_select",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_movements"]["movement_type"],
+        "options": [
+            {"name": "order_fulfillment_confirmed", "color": 17},
+            {"name": "order_refunded", "color": 24},
+            {"name": "order_returned", "color": 28},
+            {"name": "order_timeout_released", "color": 20},
+        ],
+    },
+    {
+        "name": "item_id",
+        "source": "inventory_movements.item_id",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_movements"]["item_id"],
+    },
+    {
+        "name": "warehouse_id",
+        "source": "inventory_movements.warehouse_id",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_movements"]["warehouse_id"],
+    },
+    {
+        "name": "location_code",
+        "source": "inventory_movements.location_code",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_movements"]["location_code"],
+    },
+    {
+        "name": "quantity_delta",
+        "source": "inventory_movements.quantity_delta",
+        "type": "number",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_movements"]["quantity_delta"],
+    },
+    {
+        "name": "created_by",
+        "source": "inventory_movements.created_by",
+        "type": "text",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_movements"]["created_by"],
+    },
+    {
+        "name": "created_at",
+        "source": "inventory_movements.created_at",
+        "type": "date",
+        "comment": WAREHOUSE_COLUMN_COMMENTS["inventory_movements"]["created_at"],
+    },
 ]
 
 
@@ -308,7 +320,6 @@ def inventory_batch_key(row: dict[str, Any]) -> str:
             str(row["warehouse_id"]),
             str(row["location_code"]),
             str(row["item_id"]),
-            str(row["batch_no"]),
         ]
     )
 
@@ -326,16 +337,14 @@ def load_batch_inventory_rows(
     warehouse_id: str | None = None,
     location_code: str | None = None,
     category_id: str | None = None,
-    batch_no: str | None = None,
 ) -> list[dict[str, Any]]:
     repository = get_warehouse_repository()
     if repository:
-        return repository.list_inventory_batches(
+        return repository.list_inventory_balances(
             item_id=item_id,
             warehouse_id=warehouse_id,
             location_code=location_code,
             category_id=category_id,
-            batch_no=batch_no,
         )
 
     warehouse_by_id = {item["warehouse_id"]: item for item in load_json("warehouses.json")}
@@ -346,8 +355,9 @@ def load_batch_inventory_rows(
     category_by_id = {item["category_id"]: item for item in load_json("categories.json")}
     item_by_id = {item["item_id"]: item for item in load_json("items.json")}
     rows: list[dict[str, Any]] = []
-    for batch_index, batch in enumerate(load_json("inventory_batches.json"), start=1):
-        batch = {**batch, "batch_id": batch_index}
+    balance_rows = [*load_json("inventory_location_balances.json"), *RECEIVED_INVENTORY_BALANCES]
+    for batch_index, batch in enumerate(balance_rows, start=1):
+        batch = {**batch, "balance_id": batch_index, "quantity_reserved": 0}
         item = item_by_id[str(batch["item_id"])]
         category = category_by_id[str(item["category_id"])]
         if item_id and batch["item_id"] != item_id:
@@ -357,31 +367,13 @@ def load_batch_inventory_rows(
         if location_code and str(batch["location_code"]).casefold() != location_code.casefold():
             continue
         if category_id and category["category_id"] != category_id:
-            continue
-        if batch_no and batch["batch_no"] != batch_no:
-            continue
-        warehouse = warehouse_by_id[str(batch["warehouse_id"])]
-        location = location_by_key[(str(batch["warehouse_id"]), str(batch["location_code"]))]
-        rows.append({**batch, **warehouse, **location, **category, **item})
-    for batch in RECEIVED_INVENTORY_BATCHES:
-        item = item_by_id[str(batch["item_id"])]
-        category = category_by_id[str(item["category_id"])]
-        if item_id and batch["item_id"] != item_id:
-            continue
-        if warehouse_id and batch["warehouse_id"] != warehouse_id:
-            continue
-        if location_code and str(batch["location_code"]).casefold() != location_code.casefold():
-            continue
-        if category_id and category["category_id"] != category_id:
-            continue
-        if batch_no and batch["batch_no"] != batch_no:
             continue
         warehouse = warehouse_by_id[str(batch["warehouse_id"])]
         location = location_by_key[(str(batch["warehouse_id"]), str(batch["location_code"]))]
         rows.append({**batch, **warehouse, **location, **category, **item})
     return sorted(
         [apply_inventory_batch_override(row) for row in rows],
-        key=lambda row: (row["warehouse_id"], row["location_code"], row["item_name"], row["batch_no"]),
+        key=lambda row: (row["warehouse_id"], row["location_code"], row["item_name"]),
     )
 
 
@@ -491,7 +483,7 @@ def enrich_batch_row(row: dict[str, Any]) -> dict[str, Any]:
     enriched["recommendation"] = batch_recommendation(enriched)
     enriched["batch_key"] = (
         f"{enriched['warehouse_id']}:{enriched['location_code']}:"
-        f"{enriched['item_id']}:{enriched['batch_no']}"
+        f"{enriched['item_id']}"
     )
     return enriched
 
@@ -502,13 +494,10 @@ def batch_inventory_table_fields(row: dict[str, Any]) -> dict[str, Any]:
         "Warehouse ID": row["warehouse_id"],
         "Location": row["location_code"],
         "Category": row["category_name"],
-        "Category ID": row["category_id"],
-        "Item ID": row["item_id"],
         "Item Name": row["item_name"],
         "Brand": row["brand"],
         "Spec": row["spec"],
         "Unit": row["unit"],
-        "Batch No": row["batch_no"],
         "Quantity On Hand": int(row["quantity_on_hand"]),
         "Quantity Available": int(row["quantity_available"]),
         "Quantity Reserved": int(row["quantity_reserved"]),
@@ -528,6 +517,13 @@ def batch_inventory_table_fields(row: dict[str, Any]) -> dict[str, Any]:
 
 def balance_key(row: dict[str, Any]) -> str:
     return f"{row['item_id']}:{row['warehouse_id']}:{row['location_code']}"
+
+
+def balance_id(row: dict[str, Any]) -> str:
+    raw_id = row.get("id")
+    if raw_id is not None and str(raw_id).strip():
+        return str(raw_id)
+    return f"fallback:{balance_key(row)}"
 
 
 def balance_status(row: dict[str, Any]) -> str:
@@ -560,35 +556,26 @@ def load_stock_balance_rows(
 ) -> list[dict[str, Any]]:
     repository = get_warehouse_repository()
     if repository:
-        return aggregate_stock_balance_snapshot_rows(
-            repository.list_inventory_balance_snapshots(
-                item_id=item_id,
-                warehouse_id=warehouse_id,
-                location_code=location_code,
-            )
+        return repository.list_inventory_balance_snapshots(
+            item_id=item_id,
+            warehouse_id=warehouse_id,
+            location_code=location_code,
         )
 
-    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for row in load_batch_inventory_rows(
-        item_id=item_id,
-        warehouse_id=warehouse_id,
-        location_code=location_code,
-    ):
-        key = (str(row["item_id"]), str(row["warehouse_id"]), str(row["location_code"]))
-        existing = grouped.get(key)
-        if existing:
-            existing["quantity_on_hand"] = int(existing["quantity_on_hand"]) + int(row["quantity_on_hand"])
-            existing["reorder_threshold"] = max(int(existing["reorder_threshold"]), int(row["reorder_threshold"]))
-            if row.get("storage_status") == "quality_hold":
-                existing["storage_status"] = "quality_hold"
-            continue
-        grouped[key] = {
+    rows = [
+        {
             **row,
             "created_at": "2026-05-24T00:00:00+00:00",
             "updated_at": "2026-05-24T00:00:00+00:00",
         }
+        for row in load_batch_inventory_rows(
+            item_id=item_id,
+            warehouse_id=warehouse_id,
+            location_code=location_code,
+        )
+    ]
     return sorted(
-        grouped.values(),
+        rows,
         key=lambda row: (row["warehouse_id"], row["location_code"], row["item_id"]),
     )
 
@@ -617,6 +604,7 @@ def aggregate_stock_balance_snapshot_rows(rows: list[dict[str, Any]]) -> list[di
             continue
         grouped[key] = {
             **row,
+            "id": row.get("id"),
             "quantity_on_hand": int(row.get("quantity_on_hand") or 0),
             "reorder_threshold": int(row.get("reorder_threshold") or 0),
         }
@@ -627,31 +615,56 @@ def aggregate_stock_balance_snapshot_rows(rows: list[dict[str, Any]]) -> list[di
 
 
 def stock_balance_table_fields(row: dict[str, Any]) -> dict[str, Any]:
-    key = balance_key(row)
-    quantity = int(row["quantity_on_hand"])
+    row_balance_id = balance_id(row)
     return {
-        "Balance Key": key,
-        "Warehouse": row["warehouse_name"],
-        "Warehouse ID": row["warehouse_id"],
-        "Location": row["location_code"],
-        "Category": row["category_name"],
-        "Category ID": row["category_id"],
-        "Item ID": row["item_id"],
-        "Item Name": row["item_name"],
-        "Brand": row["brand"],
-        "Spec": row["spec"],
-        "Unit": row["unit"],
-        "Quantity On Hand": quantity,
-        "Quantity Available": quantity,
-        "Reorder Threshold": int(row["reorder_threshold"]),
-        "Storage Status": row["storage_status"],
-        "Risk Level": balance_risk_level(row),
-        "Balance Status": balance_status(row),
-        "Created At": row["created_at"],
-        "Updated At": row["updated_at"],
-        "Last Synced At": datetime.now(UTC).isoformat(),
-        "Sync Status": "synced",
-        "Source Version": f"mock-api:{key}:{row['updated_at']}",
+        "id": row_balance_id,
+        "warehouse_id": row["warehouse_id"],
+        "location_code": row["location_code"],
+        "item_id": row["item_id"],
+        "production_date": row["production_date"],
+        "expiry_date": row["expiry_date"],
+        "quantity_on_hand": int(row["quantity_on_hand"]),
+        "reorder_threshold": int(row["reorder_threshold"]),
+        "storage_status": row["storage_status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def load_inventory_movement_rows(
+    *,
+    order_id: str | None = None,
+    movement_type: str | None = None,
+    item_id: str | None = None,
+    warehouse_id: str | None = None,
+) -> list[dict[str, Any]]:
+    repository = get_warehouse_repository()
+    rows = repository.list_inventory_movements(order_id=order_id) if repository else list(WAREHOUSE_INVENTORY_MOVEMENTS)
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        if order_id and str(row.get("order_id") or "") != order_id:
+            continue
+        if movement_type and str(row.get("movement_type") or "") != movement_type:
+            continue
+        if item_id and str(row.get("item_id") or "") != item_id:
+            continue
+        if warehouse_id and str(row.get("warehouse_id") or "") != warehouse_id:
+            continue
+        filtered.append(row)
+    return sorted(filtered, key=lambda row: (str(row.get("created_at") or ""), str(row.get("movement_id") or "")))
+
+
+def inventory_movement_table_fields(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "movement_id": row["movement_id"],
+        "order_id": row["order_id"],
+        "movement_type": row["movement_type"],
+        "item_id": row["item_id"],
+        "warehouse_id": row["warehouse_id"],
+        "location_code": row["location_code"],
+        "quantity_delta": int(row["quantity_delta"]),
+        "created_by": row["created_by"],
+        "created_at": row["created_at"],
     }
 
 
@@ -684,19 +697,72 @@ def get_warehouse_stock_balance_table_rows(payload: WarehouseStockBalanceTableRo
         location_code=(payload.location_code or "").strip() or None,
     )
     limit = max(min(int(payload.limit or 500), 500), 1)
-    page, next_cursor = apply_cursor_page(rows, cursor=payload.cursor, limit=limit)
+    offset = payload.offset
+    if payload.cursor:
+        try:
+            offset = int(payload.cursor)
+        except ValueError:
+            offset = 0
+    page, has_more, next_offset = page_items(rows, limit=limit, offset=offset, default_limit=500)
+    next_cursor = str(next_offset) if next_offset is not None else ""
     return {
         "ok": True,
         "schema_id": "warehouse_inventory_balances",
         "count": len(page),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "next_cursor": next_cursor,
         "items": [
             {
-                "balance_key": balance_key(row),
+                "balance_id": balance_id(row),
                 "item_id": row["item_id"],
                 "warehouse_id": row["warehouse_id"],
                 "location_code": row["location_code"],
                 "fields": stock_balance_table_fields(row),
+            }
+            for row in page
+        ],
+    }
+
+
+@router.get("/warehouse/inventory-movements/table-schema")
+def get_warehouse_inventory_movement_table_schema() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "schema_id": "warehouse_inventory_movements",
+        "source": "mock-api",
+        "fields": WAREHOUSE_INVENTORY_MOVEMENT_TABLE_SCHEMA,
+    }
+
+
+@router.post("/warehouse/inventory-movements/table-rows")
+def get_warehouse_inventory_movement_table_rows(payload: WarehouseInventoryMovementTableRowsRequest) -> dict[str, Any]:
+    rows = load_inventory_movement_rows(
+        order_id=(payload.order_id or "").strip() or None,
+        movement_type=(payload.movement_type or "").strip() or None,
+        item_id=(payload.item_id or "").strip() or None,
+        warehouse_id=(payload.warehouse_id or "").strip() or None,
+    )
+    limit = max(min(int(payload.limit or 500), 500), 1)
+    offset = payload.offset
+    if payload.cursor:
+        try:
+            offset = int(payload.cursor)
+        except ValueError:
+            offset = 0
+    page, has_more, next_offset = page_items(rows, limit=limit, offset=offset, default_limit=500)
+    return {
+        "ok": True,
+        "schema_id": "warehouse_inventory_movements",
+        "count": len(page),
+        "has_more": has_more,
+        "next_offset": next_offset,
+        "next_cursor": str(next_offset) if next_offset is not None else "",
+        "items": [
+            {
+                "movement_id": row["movement_id"],
+                "order_id": row["order_id"],
+                "fields": inventory_movement_table_fields(row),
             }
             for row in page
         ],
@@ -720,7 +786,6 @@ def search_warehouse_inventory(payload: WarehouseInventorySearchRequest) -> dict
     warehouse_id = (payload.warehouse_id or "").strip()
     location_code = (payload.location_code or "").strip()
     category_id = normalize_category(payload.category_id or payload.category)
-    batch_no = (payload.batch_no or "").strip()
     expiry_risk_filter = (payload.expiry_risk or "").strip()
     risk_level = (payload.risk_level or "").strip()
     limit = max(min(int(payload.limit or 50), 100), 1)
@@ -731,7 +796,6 @@ def search_warehouse_inventory(payload: WarehouseInventorySearchRequest) -> dict
             warehouse_id=warehouse_id or None,
             location_code=location_code or None,
             category_id=category_id or None,
-            batch_no=batch_no or None,
         )
     ]
     matches: list[dict[str, Any]] = []
@@ -759,19 +823,42 @@ def search_warehouse_inventory(payload: WarehouseInventorySearchRequest) -> dict
 
 @router.post("/warehouse/inventory/table-rows")
 def get_warehouse_inventory_table_rows(payload: WarehouseInventorySearchRequest) -> dict[str, Any]:
-    search_result = search_warehouse_inventory(payload)
+    item_id = (payload.item_id or payload.sku or "").strip()
+    warehouse_id = (payload.warehouse_id or "").strip()
+    location_code = (payload.location_code or "").strip()
+    category_id = normalize_category(payload.category_id or payload.category)
+    expiry_risk_filter = (payload.expiry_risk or "").strip()
+    risk_level = (payload.risk_level or "").strip()
+    rows = [
+        enrich_batch_row(row)
+        for row in load_batch_inventory_rows(
+            item_id=item_id or None,
+            warehouse_id=warehouse_id or None,
+            location_code=location_code or None,
+            category_id=category_id or None,
+        )
+    ]
+    matches: list[dict[str, Any]] = []
+    for row in rows:
+        if expiry_risk_filter and row["expiry_risk"] != expiry_risk_filter:
+            continue
+        if risk_level and row["risk_level"] != risk_level:
+            continue
+        matches.append(row)
+    page, has_more, next_offset = page_items(matches, limit=payload.limit, offset=payload.offset, default_limit=50, max_limit=100)
     return {
         "ok": True,
         "schema_id": "warehouse_batch_inventory",
-        "count": search_result["count"],
+        "count": len(page),
+        "has_more": has_more,
+        "next_offset": next_offset,
         "items": [
             {
                 "batch_key": item["batch_key"],
                 "item_id": item["item_id"],
-                "batch_no": item["batch_no"],
                 "fields": batch_inventory_table_fields(item),
             }
-            for item in search_result["items"]
+            for item in page
         ],
     }
 
@@ -880,4 +967,3 @@ def get_warehouse_stock_balances(item_id: str, warehouse_id: str) -> dict[str, A
         item_id=item_id.strip(),
         warehouse_id=warehouse_id.strip(),
     )
-

@@ -31,7 +31,7 @@ export interface ProductDetail {
   price: number
   currency?: string
   images?: ProductImage[]
-  rating?: ProductRating
+  rating?: ProductRating | null
   badges?: string[]
   features?: string[]
   ingredients?: string

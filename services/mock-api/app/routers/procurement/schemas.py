@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
 
-class ReplenishmentRequestCreate(BaseModel):
+class PurchaseOrderCreateRequest(BaseModel):
     source: str = "warehouse"
     warehouse_id: str
     location_code: str | None = None
@@ -10,18 +10,18 @@ class ReplenishmentRequestCreate(BaseModel):
     created_by: str = "warehouse"
 
 
-class ReplenishmentApproveRequest(BaseModel):
+class PurchaseOrderApproveRequest(BaseModel):
     created_by: str = "procurement"
 
 
-class ReplenishmentRejectRequest(BaseModel):
+class PurchaseOrderRejectRequest(BaseModel):
     reason: str = "procurement_rejected"
     updated_by: str = "procurement"
 
 
-class ReplenishmentApproveBatchRequest(BaseModel):
+class PurchaseOrderApproveBatchRequest(BaseModel):
     created_by: str = "procurement"
-    status: str = "未审批"
+    approval_status: str = "pending"
 
 
 class PurchaseOrderConfirmArrivalBatchRequest(BaseModel):
@@ -29,15 +29,10 @@ class PurchaseOrderConfirmArrivalBatchRequest(BaseModel):
     received_by: str = "warehouse"
 
 
-class ReplenishmentRequestTableRowsRequest(BaseModel):
-    status: str | None = None
-    request_id: str | None = None
-    limit: int = 100
-
-
 class PurchaseOrderTableRowsRequest(BaseModel):
-    request_id: str | None = None
     purchase_order_id: str | None = None
+    approval_status: str | None = None
     warehouse_sync_status: str | None = None
     payment_status: str | None = None
     limit: int = 100
+    offset: int = 0

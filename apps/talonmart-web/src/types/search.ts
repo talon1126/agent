@@ -12,12 +12,18 @@ export interface SearchProduct {
   brand: string
   spec: string
   category_id: string
+  price: number
+  rating?: {
+    score: number
+    count: number
+  } | null
   balances: InventoryBalance[]
 }
 
 export interface SearchResponse {
   ok: true
   query: string
+  category?: string
   count: number
   items: SearchProduct[]
 }

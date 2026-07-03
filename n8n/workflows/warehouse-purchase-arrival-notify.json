@@ -1,0 +1,84 @@
+[
+  {
+    "updatedAt": "2026-06-17T00:00:00.000Z",
+    "createdAt": "2026-06-17T00:00:00.000Z",
+    "id": "warehouse-purchase-arrival-notify",
+    "name": "Warehouse Purchase Arrival Notify",
+    "description": "Notifies warehouse staff about paid purchase orders that are expected to arrive today.",
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "hours",
+                "hoursInterval": 24,
+                "triggerAtHour": 9
+              }
+            ]
+          }
+        },
+        "id": "warehouse-purchase-arrival-notify-schedule",
+        "name": "Every Day At 09:00",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          -320,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://mock-api:8000/warehouse/purchase-orders/arrival-notifications/send",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "{\n  \"processed_by\": \"warehouse-purchase-arrival-notify\",\n  \"limit\": 100\n}",
+          "options": {
+            "timeout": 300000
+          }
+        },
+        "id": "warehouse-purchase-arrival-notify-request",
+        "name": "Notify Today Purchase Arrivals",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          -64,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Every Day At 09:00": {
+        "main": [
+          [
+            {
+              "node": "Notify Today Purchase Arrivals",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "meta": {
+      "templateCredsSetupCompleted": true
+    },
+    "pinData": {}
+  }
+]

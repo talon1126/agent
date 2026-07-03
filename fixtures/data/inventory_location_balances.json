@@ -1,0 +1,92 @@
+[
+  {
+    "warehouse_id": "wh_sz_1",
+    "location_code": "A1",
+    "item_id": "item_vinda_tissue",
+    "production_date": "2026-04-01",
+    "expiry_date": "2027-04-01",
+    "quantity_on_hand": 136,
+    "reorder_threshold": 100,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_hk_1",
+    "location_code": "B1",
+    "item_id": "item_milk_pure",
+    "production_date": "2026-05-10",
+    "expiry_date": "2026-06-15",
+    "quantity_on_hand": 64,
+    "reorder_threshold": 80,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_sz_1",
+    "location_code": "C1",
+    "item_id": "item_milk_pure",
+    "production_date": "2026-05-12",
+    "expiry_date": "2026-07-20",
+    "quantity_on_hand": 140,
+    "reorder_threshold": 80,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_hk_1",
+    "location_code": "B1",
+    "item_id": "item_yogurt_plain",
+    "production_date": "2026-05-18",
+    "expiry_date": "2026-06-05",
+    "quantity_on_hand": 22,
+    "reorder_threshold": 60,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_hk_1",
+    "location_code": "A1",
+    "item_id": "item_water_spring",
+    "production_date": "2026-04-20",
+    "expiry_date": "2028-04-20",
+    "quantity_on_hand": 220,
+    "reorder_threshold": 120,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_sz_1",
+    "location_code": "A1",
+    "item_id": "item_cola_zero",
+    "production_date": "2026-04-22",
+    "expiry_date": "2027-04-22",
+    "quantity_on_hand": 90,
+    "reorder_threshold": 100,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_hk_1",
+    "location_code": "C1",
+    "item_id": "item_detergent",
+    "production_date": "2026-03-01",
+    "expiry_date": "2029-03-01",
+    "quantity_on_hand": 48,
+    "reorder_threshold": 50,
+    "storage_status": "quality_hold"
+  },
+  {
+    "warehouse_id": "wh_sz_1",
+    "location_code": "B1",
+    "item_id": "item_office_pen",
+    "production_date": "2026-05-02",
+    "expiry_date": "2030-05-02",
+    "quantity_on_hand": 300,
+    "reorder_threshold": 60,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_hk_1",
+    "location_code": "C1",
+    "item_id": "item_copy_paper",
+    "production_date": "2026-05-03",
+    "expiry_date": "2030-05-03",
+    "quantity_on_hand": 72,
+    "reorder_threshold": 80,
+    "storage_status": "available"
+  }
+]

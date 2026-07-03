@@ -1,6 +1,7 @@
 export interface FlashSale {
   id: number
   item_id: string
+  item_price?: number | null
   sale_price: number
   stock_limit: number
   stock_remaining: number | null

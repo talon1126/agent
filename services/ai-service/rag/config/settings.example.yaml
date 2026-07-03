@@ -1,0 +1,278 @@
+# Project identity and default knowledge collection.
+project:
+  name: aimodel-rag
+  default_collection: shopping_guides
+  environment: local
+
+# Sensitive database connection details are resolved from the named environment variable.
+database:
+  provider: postgresql
+  url_env: DATABASE_URL
+  pool_size: 5
+  timezone: Asia/Shanghai
+  echo_sql: false
+
+# Chat model providers share one selection and fallback contract.
+llm:
+  default: deepseek
+  fallback: openai
+  providers:
+    deepseek:
+      model: deepseek-v4-flash
+      api_key_env: DASHSCOPE_API_KEY
+      base_url_env: DASHSCOPE_BASE_URL
+      timeout_seconds: 60
+    ccswitch:
+      model: gpt-5.5
+      api_key: ccswitch-local-key
+      base_url: http://127.0.0.1:5511/v1
+      timeout_seconds: 60
+    openai:
+      model: gpt-4.1-mini
+      api_key_env: OPENAI_API_KEY
+      timeout_seconds: 60
+    ollama:
+      model: qwen2.5:7b
+      base_url: http://localhost:11434
+      timeout_seconds: 120
+
+# Vision processing can be disabled without blocking text ingestion.
+vision_llm:
+  default: qwen_vl_max
+  enabled: true
+  providers:
+    qwen_vl_max:
+      model: qwen-vl-max
+      api_key_env: DASHSCOPE_API_KEY
+      base_url_env: DASHSCOPE_BASE_URL
+      timeout_seconds: 90
+    openai:
+      model: gpt-4o
+      api_key_env: OPENAI_API_KEY
+      timeout_seconds: 90
+
+# Dense embeddings use the Qwen3-Embedding series through DashScope's
+# OpenAI-compatible endpoint while preserving the 1536-dimension pgvector schema.
+embedding:
+  default: dashscope
+  fallback: none
+  batch_size: 64
+  cache_enabled: true
+  providers:
+    dashscope:
+      model: text-embedding-v4
+      dimensions: 1536
+      api_key_env: DASHSCOPE_API_KEY
+      base_url_env: DASHSCOPE_BASE_URL
+      timeout_seconds: 60
+
+# PostgreSQL with pgvector is the only first-release vector store.
+vector_store:
+  provider: pgvector
+  collection_table: rag_collections
+  document_table: rag_documents
+  chunk_table: rag_chunks
+  distance: cosine
+  embedding_dimensions: 1536
+
+# The splitter remains a pure text-to-text-list component.
+splitter:
+  default: markdown_section
+  providers:
+    recursive_character:
+      chunk_size: 900
+      chunk_overlap: 150
+      separators:
+        - "\n\n"
+        - "\n"
+        - ". "
+        - "! "
+        - "? "
+        - "; "
+        - ", "
+        - " "
+        - ""
+    markdown_section:
+      chunk_size: 900
+      chunk_overlap: 150
+      min_section_chars: 180
+      section_level: 3
+
+# Transform steps run serially inside the ingestion pipeline and keep prompts outside business code.
+transform:
+  steps:
+    - name: metadata_enrich
+      enabled: true
+    - name: rewrite_chunk
+      enabled: true
+      prompt_path: config/prompts/rewrite_chunk_prompt.yaml
+    - name: semantic_merge
+      enabled: true
+      prompt_path: config/prompts/semantic_merge_prompt.yaml
+    - name: denoise
+      enabled: true
+    - name: image_captioner
+      enabled: true
+      prompt_path: config/prompts/image_caption_prompt.yaml
+
+# Hybrid retrieval keeps route limits separate from the final response limit.
+retrieval:
+  query_rewrite_enabled: true
+  dense_top_k: 30
+  sparse_top_k: 30
+  fusion_top_k: 12
+  final_top_k: 5
+  rrf_k: 60
+  async_enabled: true
+  max_collection_concurrency: 3
+  per_collection_timeout_seconds: 60
+  final_judge_timeout_seconds: 90
+  response_timeout_seconds: 90
+  filters:
+    include_deleted: false
+    default_collection: shopping_guides
+
+intent_router:
+  enabled: true
+  rules_path: config/intent_routes.yaml
+  collection_profiles_path: config/collection_profiles.yaml
+  rule_threshold: 0.75
+  semantic_threshold: 0.7
+  llm_fallback_enabled: false
+  llm_provider: deepseek
+
+# Reranking falls back to the filtered RRF order when the selected backend fails.
+rerank:
+  enabled: true
+  default: qwen
+  fallback: rrf
+  prompt_path: config/prompts/rerank_prompt.yaml
+  top_k: 5
+  skip_gate:
+    enabled: true
+    min_candidates: 3
+    max_candidates_for_skip: 5
+    min_dual_route_hits: 1
+    min_rrf_margin_ratio: 0.08
+    require_document_consistency: false
+    require_section_consistency: false
+  providers:
+    llm:
+      llm_provider: deepseek
+      timeout_seconds: 60
+    cross_encoder:
+      model: BAAI/bge-reranker-base
+      device: cpu
+    qwen:
+      model: Qwen/Qwen3-Reranker-0.6B
+      device: cuda
+      max_length: 4096
+      batch_size: 1
+
+
+# Self-RAG gates reranked evidence before response construction.
+self_rag:
+  enabled: true
+  high_confidence_top_n: 3
+  high_confidence_min_score: 0.75
+  medium_confidence_min_top_score: 0.35
+  judge_min_candidate_score: 0.15
+  relevance_threshold: 0.7
+  evidence_sufficiency_threshold: 0.7
+  fallback_action: empty
+  judge_llm_provider: deepseek
+  judge_prompt_path: config/prompts/self_rag_judge_prompt.yaml
+
+# Response context optimization turns ranked evidence into Agent-ready context.
+response:
+  evidence_context_optimizer:
+    enabled: true
+    llm_provider: deepseek
+    prompt_path: config/prompts/evidence_context_prompt.yaml
+    fallback_to_raw: true
+
+# Ingestion paths and document lifecycle behavior are configuration-driven.
+ingestion:
+  raw_data_dir: data/raw
+  markdown_dir: data/markdown
+  image_dir: data/images
+  document_summary:
+    enabled: true
+    llm_provider: deepseek
+    prompt_path: config/prompts/document_summary_prompt.yaml
+    max_document_chars: 12000
+  dedup:
+    document_hash: sha256
+    chunk_hash: sha256
+  lifecycle:
+    allow_delete: true
+    soft_delete: true
+
+# Local index and cache paths remain replaceable implementation details.
+storage:
+  bm25_index_dir: data/db/bm25
+  postgres_data_dir: data/db/postgres
+  embedding_cache_dir: src/cache/embedding
+  caption_cache_dir: src/cache/captions
+  processing_cache_dir: src/cache/processing
+
+# Traces use JSON Lines locally and may also be indexed in PostgreSQL.
+observability:
+  app_log_path: src/logs/app.log
+  trace_jsonl_path: src/logs/traces.jsonl
+  persist_to_postgresql: true
+  json_formatter: true
+  transform_snapshots:
+    enabled: true
+    max_chunks_per_step: 20
+    max_chars_per_chunk: 800
+    include_unchanged_chunks: false
+
+# Dashboard navigation exposes the six management and inspection pages.
+dashboard:
+  enabled: true
+  port: 8501
+  pages:
+    - overview
+    - ingestion_manage
+    - data_browser
+    - query_trace
+    - ingestion_trace
+    - evaluation
+
+# Evaluation supports retrieval and generation quality metrics.
+evaluation:
+  golden_set_path: tests/fixtures/golden_set.json
+  answer_source: message
+  llm_provider: deepseek
+  embedding_provider: dashscope
+  async_enabled: true
+  max_sample_concurrency: 2
+  max_metric_concurrency: 2
+  aimodel:
+    chat_url: http://127.0.0.1:8001/AImodel/chat
+    user_id: 1
+    timeout_seconds: 120
+  ragas:
+    timeout_seconds: 300
+    max_workers: 8
+  metrics:
+    retrieval:
+      hit_rate_at_k: true
+      mrr: true
+      ndcg: true
+    generation:
+      faithfulness: true
+      answer_relevancy: true
+      context_precision: true
+      context_recall: true
+      answer_correctness: false
+
+# MCP tools expose retrieval capabilities without leaking internal pipeline data.
+mcp:
+  enabled: true
+  preload_cross_encoder: false
+  tools:
+    - query_knowledge_hub
+    - list_collections
+    - get_document_summary

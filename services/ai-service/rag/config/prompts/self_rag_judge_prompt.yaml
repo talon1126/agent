@@ -1,0 +1,53 @@
+name: self_rag_judge
+version: 1
+description: Judge whether reranked RAG evidence is relevant and sufficient before response construction.
+input_variables:
+  - query
+  - candidates
+system_prompt: |
+  You are the evidence gate in a retrieval-augmented generation system.
+  Do not answer the user. Evaluate only whether the provided candidates are
+  relevant to the query and whether they contain enough evidence for a grounded
+  answer. Do not use outside knowledge. Return only one strict JSON object.
+user_prompt: |
+  User query:
+  {query}
+
+  Candidate evidence JSON:
+  {candidates}
+
+  Return a strict JSON object with exactly these fields:
+  - relevant: boolean
+  - relevance_score: number from 0 to 1
+  - sufficient: boolean
+  - evidence_sufficiency_score: number from 0 to 1
+  - missing_evidence: array of short strings
+  - reason: short string
+output_schema:
+  type: object
+  required:
+    - relevant
+    - relevance_score
+    - sufficient
+    - evidence_sufficiency_score
+    - missing_evidence
+    - reason
+  properties:
+    relevant:
+      type: boolean
+    relevance_score:
+      type: number
+      minimum: 0
+      maximum: 1
+    sufficient:
+      type: boolean
+    evidence_sufficiency_score:
+      type: number
+      minimum: 0
+      maximum: 1
+    missing_evidence:
+      type: array
+      items:
+        type: string
+    reason:
+      type: string

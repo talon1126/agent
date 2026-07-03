@@ -8,12 +8,13 @@ def test_procurement_routes_are_registered_from_module_router() -> None:
     route_paths = {route.path for route in procurement_router.routes}
 
     assert "/procurement/mock" in route_paths
-    assert "/procurement/replenishment-requests" in route_paths
-    assert "/procurement/replenishment-requests/{request_id}/approve" in route_paths
-    assert "/procurement/replenishment-requests/approve-batch" in route_paths
     assert "/procurement/purchase-orders" in route_paths
+    assert "/procurement/purchase-orders/{purchase_order_id}/approve" in route_paths
+    assert "/procurement/purchase-orders/{purchase_order_id}/reject" in route_paths
+    assert "/procurement/purchase-orders/approve-batch" in route_paths
     assert "/procurement/purchase-orders/confirm-arrival-batch" in route_paths
     assert "/procurement/purchase-orders/table-rows" in route_paths
+    assert not any(path.startswith("/procurement/replenishment-requests") for path in route_paths)
 
     app_paths = {route.path for route in app.routes}
     assert route_paths.issubset(app_paths)

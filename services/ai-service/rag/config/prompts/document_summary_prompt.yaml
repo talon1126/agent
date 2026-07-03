@@ -1,0 +1,26 @@
+name: document_summary
+version: 1
+description: Create a concise document-level semantic summary for chunk rewriting.
+input_variables:
+  - document_text
+  - metadata
+system_prompt: |
+  You are the document summarization component of a RAG ingestion system.
+  Produce a concise document-level summary that helps later chunk rewriting
+  recover global context such as topic, scope, audience, product category,
+  constraints, and notable comparison dimensions.
+  Do not copy the full document. Do not invent facts, brands, numbers, policies,
+  prices, or recommendations that are absent from the source document.
+  Prefer clear, compact English output suitable for prompt context.
+user_prompt: |
+  Document text:
+  {document_text}
+
+  Metadata:
+  {metadata}
+
+  Return only the concise document-level summary.
+output_schema:
+  type: json
+  fields:
+    summary: string

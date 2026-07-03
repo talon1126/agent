@@ -1,0 +1,402 @@
+"""Define provider-independent domain objects shared across RAG pipelines.
+
+The classes in this module form the stable data contract between loaders,
+ingestion stages, repositories, retrieval routes, response builders, and trace
+instrumentation. They validate structural invariants at construction time while
+remaining JSON-compatible for PostgreSQL metadata, MCP responses, and JSON
+Lines traces.
+
+This module does not generate IDs, split documents, assign image references, or
+rank retrieval results. Those behaviors belong to orchestration components that
+construct these validated objects.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Self
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class DomainModel(BaseModel):
+    """Apply strict, assignment-safe validation to shared domain objects.
+
+    Unknown fields are rejected so misspelled contract fields fail immediately.
+    Assignment validation prevents long-lived pipeline objects from becoming
+    invalid after construction.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+
+class ImageMetadata(DomainModel):
+    """Describe one extracted image exposed by the public document contract.
+
+    Loaders may use page numbers, physical positions, text anchors, and source
+    offsets internally while inserting ``[[image:...]]`` placeholders. The
+    final ``Document.metadata.images`` payload intentionally stores only the
+    stable image ID and managed file path so chunk metadata stays small and
+    source-position details remain trace/debug concerns.
+    """
+
+    id: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+
+    @field_validator("id", "path")
+    @classmethod
+    def reject_blank_strings(cls, value: str) -> str:
+        """Reject identifiers and paths containing only whitespace.
+
+        Args:
+            value: Candidate identifier or filesystem path.
+
+        Returns:
+            The original non-blank value, preserving meaningful whitespace in
+            paths rather than silently normalizing source metadata.
+
+        Raises:
+            ValueError: If the supplied string is blank.
+        """
+
+        if not value.strip():
+            raise ValueError("Image id and path must not be blank")
+        return value
+
+
+def _normalize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Validate the reserved ``images`` field while preserving custom metadata.
+
+    Args:
+        metadata: Extensible document or chunk metadata mapping.
+
+    Returns:
+        A shallow copy whose ``images`` entries are validated and serialized as
+        ordinary dictionaries.
+
+    Raises:
+        ValueError: If ``images`` is not a list.
+        pydantic.ValidationError: If an image entry violates
+            ``ImageMetadata``.
+    """
+
+    normalized = dict(metadata)
+    if "images" not in normalized:
+        return normalized
+
+    images = normalized["images"]
+    if not isinstance(images, list):
+        raise ValueError("metadata.images must be a list")
+    normalized["images"] = [ImageMetadata.model_validate(image).model_dump() for image in images]
+    return normalized
+
+
+class Document(DomainModel):
+    """Represent one canonical source document before business chunking.
+
+    Loaders convert PDF, Markdown, or future source formats into this contract.
+    The metadata mapping remains extensible for source-specific fields, while
+    the reserved ``images`` list is normalized to the shared image schema.
+    """
+
+    id: str = Field(min_length=1)
+    text: str
+    summary: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("id")
+    @classmethod
+    def reject_blank_id(cls, value: str) -> str:
+        """Require a usable stable document identifier.
+
+        Args:
+            value: Candidate document ID.
+
+        Returns:
+            The original non-blank identifier.
+
+        Raises:
+            ValueError: If the ID contains only whitespace.
+        """
+
+        if not value.strip():
+            raise ValueError("Document id must not be blank")
+        return value
+
+    @field_validator("text")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        """Require canonical content that can enter the ingestion pipeline.
+
+        Args:
+            value: Canonical text produced by a loader.
+
+        Returns:
+            The original text when it contains processable content.
+
+        Raises:
+            ValueError: If the document text is empty or whitespace-only.
+        """
+
+        if not value.strip():
+            raise ValueError("Document text must not be blank")
+        return value
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def normalize_summary(cls, value: Any) -> str | None:
+        """Normalize an optional document-level semantic summary.
+
+        Args:
+            value: Candidate summary produced by a summarization step, loader
+                fallback, or legacy storage row.
+
+        Returns:
+            A stripped summary string, or ``None`` when the value is absent or
+            blank.
+
+        Raises:
+            ValueError: If the summary is not a string-like value.
+        """
+
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("Document summary must be a string or null")
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def normalize_metadata_images(cls, value: Any) -> dict[str, Any]:
+        """Validate document metadata and normalize reserved image entries.
+
+        Args:
+            value: Candidate metadata mapping.
+
+        Returns:
+            Extensible metadata with JSON-compatible validated image mappings.
+
+        Raises:
+            ValueError: If metadata is not a mapping or ``images`` is not a
+                list.
+        """
+
+        if not isinstance(value, dict):
+            raise ValueError("Document metadata must be a mapping")
+        return _normalize_metadata(value)
+
+class Chunk(DomainModel):
+    """Represent one ordered, source-addressable unit of retrievable text.
+
+    Offsets refer to the canonical source ``Document.text`` and use a
+    start-inclusive, end-exclusive range. Transform stages may enhance
+    ``text`` without changing those source coordinates. Source identity,
+    path, and section details live in ``metadata`` so storage and retrieval
+    share one citation contract.
+    """
+
+    id: str = Field(min_length=1)
+    text: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    chunk_index: int = Field(ge=0)
+    start_offset: int = Field(ge=0)
+    end_offset: int = Field(ge=0)
+
+    @field_validator("id")
+    @classmethod
+    def reject_blank_id(cls, value: str) -> str:
+        """Require a usable stable chunk identifier.
+
+        Args:
+            value: Candidate chunk ID.
+
+        Returns:
+            The original non-blank identifier.
+
+        Raises:
+            ValueError: If the ID contains only whitespace.
+        """
+
+        if not value.strip():
+            raise ValueError("Chunk id must not be blank")
+        return value
+
+    @field_validator("text")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        """Prevent empty content from entering embedding or BM25 indexing.
+
+        Args:
+            value: Candidate searchable chunk text.
+
+        Returns:
+            The original text when it contains at least one non-whitespace
+            character.
+
+        Raises:
+            ValueError: If the text is empty or whitespace-only.
+        """
+
+        if not value.strip():
+            raise ValueError("Chunk text must not be blank")
+        return value
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def normalize_metadata_images(cls, value: Any) -> dict[str, Any]:
+        """Preserve metadata inheritance while validating optional images.
+
+        Args:
+            value: Candidate chunk metadata mapping copied from a document and
+                enriched by ``DocumentChunker`` or transforms.
+
+        Returns:
+            Extensible metadata with normalized image mappings.
+
+        Raises:
+            ValueError: If metadata is not a mapping or contains an invalid
+                ``images`` list.
+        """
+
+        if not isinstance(value, dict):
+            raise ValueError("Chunk metadata must be a mapping")
+        return _normalize_metadata(value)
+
+    @model_validator(mode="after")
+    def validate_source_range(self) -> Self:
+        """Ensure the chunk source range is ordered.
+
+        Returns:
+            The validated chunk.
+
+        Raises:
+            ValueError: If ``end_offset`` is not greater than ``start_offset``.
+        """
+
+        if self.end_offset <= self.start_offset:
+            raise ValueError("Chunk end_offset must be greater than start_offset")
+        return self
+
+
+class RetrievalResult(DomainModel):
+    """Carry one retrieval route's chunk payload and native relevance score.
+
+    Dense and BM25 routes use incomparable score scales. The model therefore
+    requires only a finite float and deliberately performs no normalization or
+    cross-route ordering.
+    """
+
+    chunk_id: str = Field(min_length=1)
+    text: str
+    score: float = Field(allow_inf_nan=False)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("chunk_id")
+    @classmethod
+    def reject_blank_chunk_id(cls, value: str) -> str:
+        """Require the stable ID needed for fusion, filtering, and citation.
+
+        Args:
+            value: Candidate retrieved chunk ID.
+
+        Returns:
+            The original non-blank ID.
+
+        Raises:
+            ValueError: If the ID contains only whitespace.
+        """
+
+        if not value.strip():
+            raise ValueError("RetrievalResult chunk_id must not be blank")
+        return value
+
+    @field_validator("text")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        """Require answerable content for every retrieved chunk.
+
+        Args:
+            value: Candidate retrieved chunk text.
+
+        Returns:
+            The original text when it contains meaningful content.
+
+        Raises:
+            ValueError: If the retrieved text is empty or whitespace-only.
+        """
+
+        if not value.strip():
+            raise ValueError("RetrievalResult text must not be blank")
+        return value
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def require_metadata_mapping(cls, value: Any) -> dict[str, Any]:
+        """Require retrieval metadata to remain a filterable mapping.
+
+        Args:
+            value: Candidate metadata associated with the retrieved chunk.
+
+        Returns:
+            A shallow copy of the supplied mapping.
+
+        Raises:
+            ValueError: If metadata is not a mapping.
+        """
+
+        if not isinstance(value, dict):
+            raise ValueError("RetrievalResult metadata must be a mapping")
+        return dict(value)
+
+
+class Citation(BaseModel):
+    """Represent one immutable source reference for a retrieved chunk.
+
+    Citations are shared by response builders, MCP tools, AImodel adapters,
+    Dashboard views, and quality evaluation. Every citation remains linked to
+    the query trace that selected its chunk.
+
+    Attributes:
+        document_id: Stable source document identifier.
+        chunk_id: Stable retrieved chunk identifier.
+        title: Human-readable source title from metadata or the source filename.
+        section_path: Ordered logical heading hierarchy for the chunk.
+        source_uri: Canonical source path or external URI.
+        score: Final retrieval or rerank relevance score.
+        trace_id: Query trace that produced this citation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_id: str = Field(min_length=1)
+    chunk_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    section_path: tuple[str, ...] = ()
+    source_uri: str = Field(min_length=1)
+    score: float = Field(allow_inf_nan=False)
+    trace_id: str = Field(min_length=1)
+
+    @field_validator(
+        "document_id",
+        "chunk_id",
+        "title",
+        "source_uri",
+        "trace_id",
+    )
+    @classmethod
+    def reject_blank_strings(cls, value: str) -> str:
+        """Reject whitespace-only identifiers and display fields.
+
+        Args:
+            value: Candidate citation field.
+
+        Returns:
+            The original non-blank string.
+
+        Raises:
+            ValueError: If the field contains only whitespace.
+        """
+
+        if not value.strip():
+            raise ValueError("Citation string fields must not be blank")
+        return value

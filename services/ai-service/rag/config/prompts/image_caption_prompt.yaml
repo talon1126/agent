@@ -1,0 +1,52 @@
+name: image_caption
+version: 1
+description: Generate retrieval-oriented captions for document images.
+input_variables:
+  - image_type
+system_prompt: |
+  You are the image captioning component of a RAG document ingestion system.
+  Generate a retrieval-oriented description from the visible image content,
+  including objects, text, structure, processes, and data.
+  When the image contains products, specifications, procedures, or comparisons,
+  emphasize facts useful for question answering and purchase decisions.
+  Write the description and every key_facts entry in Simplified Chinese so the
+  generated caption remains consistent with the primary knowledge-base
+  language. Preserve text copied from the image verbatim in extracted_text;
+  do not translate names, labels, model numbers, or source quotations.
+  Do not invent brands, prices, models, specifications, or conclusions that are
+  not visible in the image.
+  If the image is empty, unreadable, or has no retrieval value, return
+  low_quality and explain the reason.
+user_prompt: |
+  Image type:
+  {image_type}
+
+  Return a structured caption using the strategy for the supplied image type.
+image_type_strategies:
+  product:
+    focus: Product appearance, materials, structure, use cases, and visible selling points
+    guidance: Describe visible features useful for comparison and purchase decisions
+  parameters:
+    focus: Specification names, values, units, and applicable conditions
+    guidance: Extract key specifications while preserving constraints
+  flowchart:
+    focus: Nodes, arrows, sequence, inputs, and outputs
+    guidance: Describe the process step by step while preserving node relationships
+  table:
+    focus: Headers, row-column relationships, and comparison dimensions
+    guidance: Convert the table into a structured textual summary
+  ui_screenshot:
+    focus: Page sections, controls, states, and error messages
+    guidance: Describe interface functions and visible states
+  decorative:
+    focus: Determine whether the image has retrieval value
+    guidance: Return low_quality for low-information images to avoid index pollution
+output_schema:
+  type: json
+  fields:
+    status: string
+    description: string
+    extracted_text: string
+    key_facts: array
+    reason: string
+  low_quality_value: low_quality

@@ -7,20 +7,21 @@ from pydantic import BaseModel
 
 from app.store import FIXTURE_DIR, find_by_id
 from app.routers.cart import CART_ITEMS, router as cart_router
+from app.routers.category_rankings import router as category_rankings_router
 from app.routers.delivery_addresses import DEFAULT_DELIVERY_ADDRESSES, router as delivery_addresses_router
 from app.routers.delivery.router import router as delivery_router
 from app.routers.flash_sales import initialize_active_flash_sales, router as flash_sales_router
 from app.routers.delivery.state import DELIVERY_CASES
 from app.routers.procurement.router import router as procurement_router
 from app.routers.product_details import router as product_details_router
+from app.routers.product_reviews import router as product_reviews_router
 from app.routers.procurement.state import PURCHASE_ORDERS, REPLENISHMENT_REQUESTS
 from app.routers.search import router as search_router
 from app.routers.warehouse.router import router as warehouse_router
 from app.routers.warehouse.state import (
-    RECEIVED_INVENTORY_BATCHES,
+    RECEIVED_INVENTORY_BALANCES,
     WAREHOUSE_BATCH_QUANTITY_OVERRIDES,
     WAREHOUSE_INVENTORY_MOVEMENTS,
-    WAREHOUSE_INVENTORY_SYNC_JOBS,
     WAREHOUSE_ORDER_ITEMS,
     WAREHOUSE_ORDERS,
     get_warehouse_repository,
@@ -30,9 +31,11 @@ app = FastAPI(title="Ecommerce Mock Enterprise API")
 app.include_router(delivery_router)
 app.include_router(procurement_router)
 app.include_router(cart_router)
+app.include_router(category_rankings_router)
 app.include_router(delivery_addresses_router)
 app.include_router(flash_sales_router)
 app.include_router(product_details_router)
+app.include_router(product_reviews_router)
 app.include_router(search_router)
 app.include_router(warehouse_router)
 
@@ -40,10 +43,9 @@ __all__ = [
     "app",
     "CART_ITEMS",
     "DEFAULT_DELIVERY_ADDRESSES",
-    "RECEIVED_INVENTORY_BATCHES",
+    "RECEIVED_INVENTORY_BALANCES",
     "WAREHOUSE_BATCH_QUANTITY_OVERRIDES",
     "WAREHOUSE_INVENTORY_MOVEMENTS",
-    "WAREHOUSE_INVENTORY_SYNC_JOBS",
     "WAREHOUSE_ORDER_ITEMS",
     "WAREHOUSE_ORDERS",
     "REPLENISHMENT_REQUESTS",

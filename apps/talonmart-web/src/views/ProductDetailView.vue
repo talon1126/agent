@@ -1,49 +1,53 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import {
   ChevronDown,
   Heart,
   Info,
   LoaderCircle,
-  MapPin,
   PackageCheck,
-  Search,
   Share2,
   ShoppingCart,
   Star,
   Truck,
-  UserRound,
 } from 'lucide-vue-next'
 
+import StoreHeader from '@/components/StoreHeader.vue'
 import { addCartItem, CART_USER_ID } from '@/services/cartApi'
+import { fetchCategoryRanking } from '@/services/categoryRankingApi'
+import { fetchFlashSales } from '@/services/flashSaleApi'
 import { fetchProductDetail } from '@/services/productDetailApi'
+import { createItemReview, fetchItemReviews } from '@/services/productReviewApi'
+import type { FlashSale } from '@/types/flashSale'
+import type { CategoryRankingItem } from '@/types/categoryRanking'
 import type { ProductDetail, ProductImage } from '@/types/productDetail'
+import type { ItemReview, ItemReviewSummary } from '@/types/productReview'
 
 const route = useRoute()
-const router = useRouter()
 
 const product = ref<ProductDetail | null>(null)
+const activeFlashSale = ref<FlashSale | null>(null)
+const categoryRankingBadge = ref<CategoryRankingItem | null>(null)
 const selectedImageIndex = ref(0)
 const isLoading = ref(false)
 const isAddingToCart = ref(false)
 const errorMessage = ref('')
 const cartMessage = ref('')
 const cartErrorMessage = ref('')
-const searchQuery = ref('')
 const isZooming = ref(false)
 const zoomPosition = ref({ x: 50, y: 50 })
-
-const topTabs = [
-  'Departments',
-  'Services',
-  'Rollbacks & More',
-  "Father's Day",
-  'Get it Fast',
-  'Pharmacy',
-  'New Arrivals',
-  'TalonMart+',
-]
+const reviews = ref<ItemReview[]>([])
+const reviewSummary = ref<ItemReviewSummary>({ average_rating: 0, review_count: 0 })
+const isReviewLoading = ref(false)
+const isSubmittingReview = ref(false)
+const reviewMessage = ref('')
+const reviewErrorMessage = ref('')
+const reviewForm = ref({
+  rating: 5,
+  title: '',
+  content: '',
+})
 
 const itemId = computed(() => String(route.params.item_id ?? ''))
 
@@ -65,6 +69,23 @@ const featureList = computed(() => product.value?.features ?? [])
 const detailList = computed(() => product.value?.details ?? [])
 const badges = computed(() => product.value?.badges ?? [])
 
+const displayPrice = computed(() => activeFlashSale.value?.sale_price ?? product.value?.price ?? 0)
+const originalPrice = computed(() => {
+  if (!activeFlashSale.value?.item_price) {
+    return null
+  }
+
+  return activeFlashSale.value.item_price > activeFlashSale.value.sale_price
+    ? activeFlashSale.value.item_price
+    : null
+})
+
+const categoryRankingRoute = computed(() =>
+  categoryRankingBadge.value
+    ? { name: 'department-category', params: { departmentSlug: categoryRankingBadge.value.category_id } }
+    : '/',
+)
+
 function formatCurrency(value: number | string | undefined) {
   return new Intl.NumberFormat('en-US', {
     currency: product.value?.currency ?? 'USD',
@@ -74,6 +95,18 @@ function formatCurrency(value: number | string | undefined) {
 
 function formatCount(value: number) {
   return new Intl.NumberFormat('en-US').format(value)
+}
+
+function formatReviewDate(value: string) {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(parsed)
 }
 
 function handleImageEnter() {
@@ -87,7 +120,7 @@ function handleImageMove(event: MouseEvent) {
     return
   }
 
-  // 中文注释：图片放大效果只记录鼠标相对坐标，放大区域由背景图定位完成。
+  // The zoom lens stores relative cursor coordinates; CSS background positioning renders the lens.
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
   if (!rect.width || !rect.height) {
     zoomPosition.value = { x: 50, y: 50 }
@@ -113,17 +146,107 @@ async function loadProductDetail() {
   errorMessage.value = ''
   cartMessage.value = ''
   selectedImageIndex.value = 0
+  activeFlashSale.value = null
 
   try {
-    // 中文注释：详情页按前端路由参数读取后端 /ip/{item_id}，缺失扩展字段时由模板隐藏对应模块。
+    // Product detail is loaded from the documented `/ip/{item_id}` endpoint.
     const response = await fetchProductDetail(itemId.value)
     product.value = response.item
+    await loadActiveFlashSale(response.item.item_id)
+    await loadCategoryRankingBadge(response.item)
+    await loadItemReviews(response.item.item_id)
   } catch (error) {
     product.value = null
+    activeFlashSale.value = null
+    categoryRankingBadge.value = null
+    reviews.value = []
+    reviewSummary.value = { average_rating: 0, review_count: 0 }
     errorMessage.value =
       error instanceof Error ? error.message : 'Product detail service is unavailable.'
   } finally {
     isLoading.value = false
+  }
+}
+
+async function loadCategoryRankingBadge(targetProduct: ProductDetail) {
+  try {
+    const response = await fetchCategoryRanking(targetProduct.category_id, { limit: 3 })
+    categoryRankingBadge.value =
+      response.items.find((item) => item.item_id === targetProduct.item_id && item.rank <= 3) ??
+      null
+  } catch {
+    categoryRankingBadge.value = null
+  }
+}
+
+async function loadActiveFlashSale(targetItemId: string) {
+  try {
+    const response = await fetchFlashSales({ status: 'active', limit: 100 })
+    activeFlashSale.value =
+      response.flash_sales.find(
+        (sale) =>
+          sale.item_id === targetItemId &&
+          sale.item_price !== null &&
+          sale.item_price !== undefined &&
+          sale.sale_price < sale.item_price,
+      ) ?? null
+  } catch {
+    activeFlashSale.value = null
+  }
+}
+
+async function loadItemReviews(targetItemId = itemId.value) {
+  if (!targetItemId) {
+    return
+  }
+
+  isReviewLoading.value = true
+  reviewErrorMessage.value = ''
+
+  try {
+    const response = await fetchItemReviews(targetItemId, { limit: 20, offset: 0 })
+    reviews.value = response.reviews
+    reviewSummary.value = response.summary
+  } catch (error) {
+    reviews.value = []
+    reviewSummary.value = { average_rating: 0, review_count: 0 }
+    reviewErrorMessage.value =
+      error instanceof Error ? error.message : 'Unable to load customer reviews.'
+  } finally {
+    isReviewLoading.value = false
+  }
+}
+
+async function handleCreateReview() {
+  if (!product.value) {
+    return
+  }
+
+  const title = reviewForm.value.title.trim()
+  const content = reviewForm.value.content.trim()
+  if (!title || !content) {
+    reviewErrorMessage.value = 'Review title and content are required.'
+    return
+  }
+
+  isSubmittingReview.value = true
+  reviewMessage.value = ''
+  reviewErrorMessage.value = ''
+
+  try {
+    await createItemReview(product.value.item_id, {
+      user_id: CART_USER_ID,
+      rating: Number(reviewForm.value.rating),
+      title,
+      content,
+    })
+    reviewForm.value = { rating: 5, title: '', content: '' }
+    reviewMessage.value = 'Review submitted'
+    await loadItemReviews(product.value.item_id)
+  } catch (error) {
+    reviewErrorMessage.value = error instanceof Error ? error.message : 'Unable to submit review.'
+  } finally {
+    isSubmittingReview.value = false
   }
 }
 
@@ -137,7 +260,7 @@ async function handleAddToCart() {
   cartErrorMessage.value = ''
 
   try {
-    // 中文注释：商品详情页加入购物车复用现有购物车接口，价格最终仍以后端写入为准。
+    // Cart writes still go through the cart API, so backend cart validation remains authoritative.
     await addCartItem({
       user_id: CART_USER_ID,
       item_id: product.value.item_id,
@@ -151,12 +274,6 @@ async function handleAddToCart() {
   } finally {
     isAddingToCart.value = false
   }
-}
-
-function submitSearch() {
-  const normalized = searchQuery.value.trim()
-  if (!normalized) return
-  router.push({ name: 'search', query: { q: normalized } })
 }
 
 watch(
@@ -173,83 +290,7 @@ onMounted(() => {
 
 <template>
   <main class="min-h-screen bg-white text-[#101828]">
-    <header class="sticky top-0 z-30 bg-[#0053E2] text-white shadow-sm">
-      <div class="mx-auto flex max-w-[1440px] items-center gap-4 px-6 py-4">
-        <RouterLink
-          class="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#FFC220] font-black text-[#0053E2]"
-          to="/"
-          aria-label="TalonMart home"
-        >
-          TM
-        </RouterLink>
-
-        <button
-          class="hidden min-h-12 items-center gap-3 rounded-full bg-[#003A9B] px-4 text-left text-sm font-semibold xl:flex"
-          type="button"
-        >
-          <MapPin class="h-5 w-5 text-[#FFC220]" aria-hidden="true" />
-          <span>
-            <span class="block text-xs text-white/75">Pickup or delivery?</span>
-            <span>Sacramento, 95829</span>
-          </span>
-          <ChevronDown class="h-4 w-4" aria-hidden="true" />
-        </button>
-
-        <form
-          class="flex min-h-12 flex-1 overflow-hidden rounded-full bg-white"
-          role="search"
-          @submit.prevent="submitSearch"
-        >
-          <input
-            v-model="searchQuery"
-            aria-label="Search products"
-            class="min-w-0 flex-1 px-6 text-lg text-[#101828] outline-none"
-            placeholder="Search everything at TalonMart"
-            type="search"
-          />
-          <button
-            class="grid w-14 place-items-center bg-[#FFC220] text-[#101828] transition hover:bg-[#FFD35A]"
-            type="submit"
-            aria-label="Submit search"
-          >
-            <Search class="h-5 w-5" aria-hidden="true" />
-          </button>
-        </form>
-
-        <RouterLink
-          class="hidden min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10 lg:flex"
-          to="/"
-        >
-          <UserRound class="h-5 w-5" aria-hidden="true" />
-          Account
-        </RouterLink>
-        <RouterLink
-          class="flex min-h-11 items-center gap-2 rounded-full px-3 text-sm font-bold hover:bg-white/10"
-          to="/cart"
-        >
-          <ShoppingCart class="h-5 w-5" aria-hidden="true" />
-          Cart
-        </RouterLink>
-      </div>
-
-      <nav class="border-t border-white/15 bg-[#F3F8FF] text-[#101828]">
-        <div class="mx-auto flex max-w-[1440px] gap-3 overflow-x-auto px-6 py-3">
-          <button
-            v-for="tab in topTabs"
-            :key="tab"
-            class="flex min-h-10 shrink-0 items-center gap-2 rounded-full bg-white px-5 text-sm font-bold shadow-sm transition hover:bg-[#EAF2FF]"
-            type="button"
-          >
-            {{ tab }}
-            <ChevronDown
-              v-if="tab === 'Departments' || tab === 'Services'"
-              class="h-4 w-4"
-              aria-hidden="true"
-            />
-          </button>
-        </div>
-      </nav>
-    </header>
+    <StoreHeader />
 
     <section
       v-if="isLoading"
@@ -274,10 +315,8 @@ onMounted(() => {
       </div>
     </section>
 
-    <section
-      v-else-if="product"
-      class="mx-auto grid max-w-[1440px] gap-8 px-6 py-8 xl:grid-cols-[760px_1fr_360px]"
-    >
+    <template v-else-if="product">
+    <section class="mx-auto grid max-w-[1440px] gap-8 px-6 py-8 xl:grid-cols-[760px_1fr_360px]">
       <section class="grid gap-5 md:grid-cols-[96px_1fr]">
         <div class="hidden gap-4 md:grid md:content-start">
           <button
@@ -353,6 +392,14 @@ onMounted(() => {
           >
             {{ badge }}
           </span>
+          <RouterLink
+            v-if="categoryRankingBadge"
+            class="rounded-md bg-[#FFC220] px-3 py-1 text-sm font-black text-[#101828]"
+            :to="categoryRankingRoute"
+          >
+            #{{ categoryRankingBadge.rank }} in
+            {{ categoryRankingBadge.category_name || categoryRankingBadge.category_id }}
+          </RouterLink>
         </div>
 
         <p class="mt-4 text-sm font-semibold text-[#0053E2] underline">{{ product.brand }}</p>
@@ -408,7 +455,15 @@ onMounted(() => {
       <aside class="space-y-5">
         <section class="rounded-lg bg-[#F7F8FA] p-6 shadow-sm">
           <div class="flex items-baseline gap-3">
-            <p class="text-4xl font-black">{{ formatCurrency(product.price) }}</p>
+            <p class="text-4xl font-black">
+              <span v-if="activeFlashSale">Now </span>{{ formatCurrency(displayPrice) }}
+            </p>
+            <p
+              v-if="originalPrice !== null"
+              class="text-base font-semibold text-[#667085] line-through"
+            >
+              {{ formatCurrency(originalPrice) }}
+            </p>
             <p class="text-sm text-[#344054]">{{ product.spec }}</p>
           </div>
           <p class="mt-4 flex items-center gap-2 text-sm">
@@ -500,5 +555,115 @@ onMounted(() => {
         </section>
       </aside>
     </section>
+    <section class="mx-auto max-w-[1440px] px-6 pb-12">
+      <div class="border-t border-[#D8E0E8] pt-8">
+        <div class="grid gap-6 lg:grid-cols-[320px_1fr]">
+          <section class="rounded-lg border border-[#D8E0E8] bg-[#F7F8FA] p-6">
+            <p class="text-sm font-black uppercase tracking-wide text-[#0053E2]">Customer reviews</p>
+            <div class="mt-4 flex items-end gap-3">
+              <p class="text-5xl font-black">{{ reviewSummary.average_rating.toFixed(1) }}</p>
+              <div class="pb-1">
+                <div class="flex text-[#F59E0B]">
+                  <Star v-for="index in 5" :key="index" class="h-5 w-5 fill-current" aria-hidden="true" />
+                </div>
+                <p class="mt-1 text-sm font-semibold text-[#667085]">
+                  {{ formatCount(reviewSummary.review_count) }} reviews
+                </p>
+              </div>
+            </div>
+
+            <form
+              data-testid="item-review-form"
+              class="mt-6 grid gap-4"
+              @submit.prevent="handleCreateReview"
+            >
+              <label class="grid gap-2 text-sm font-bold">
+                Rating
+                <select
+                  v-model.number="reviewForm.rating"
+                  aria-label="Review rating"
+                  class="min-h-11 rounded-md border border-[#D8E0E8] bg-white px-3 outline-none focus:border-[#0053E2]"
+                >
+                  <option v-for="rating in [5, 4, 3, 2, 1]" :key="rating" :value="rating">
+                    {{ rating }} stars
+                  </option>
+                </select>
+              </label>
+              <label class="grid gap-2 text-sm font-bold">
+                Title
+                <input
+                  v-model="reviewForm.title"
+                  aria-label="Review title"
+                  class="min-h-11 rounded-md border border-[#D8E0E8] px-3 outline-none focus:border-[#0053E2]"
+                  maxlength="120"
+                  type="text"
+                />
+              </label>
+              <label class="grid gap-2 text-sm font-bold">
+                Review
+                <textarea
+                  v-model="reviewForm.content"
+                  aria-label="Review content"
+                  class="min-h-28 rounded-md border border-[#D8E0E8] px-3 py-3 outline-none focus:border-[#0053E2]"
+                  maxlength="2000"
+                />
+              </label>
+              <button
+                class="min-h-11 rounded-full bg-[#0053E2] px-5 font-black text-white transition hover:bg-[#003A9B] disabled:cursor-not-allowed disabled:bg-[#8CB7FF]"
+                type="submit"
+                :disabled="isSubmittingReview"
+              >
+                <span v-if="isSubmittingReview" class="inline-flex items-center gap-2">
+                  <LoaderCircle class="h-5 w-5 animate-spin" aria-hidden="true" />
+                  Submitting
+                </span>
+                <span v-else>Submit review</span>
+              </button>
+            </form>
+
+            <p v-if="reviewMessage" class="mt-4 rounded-md bg-[#ECFDF3] p-3 text-sm font-bold text-[#027A48]" role="status">
+              {{ reviewMessage }}
+            </p>
+            <p v-if="reviewErrorMessage" class="mt-4 rounded-md bg-[#FEF2F2] p-3 text-sm font-bold text-[#991B1B]" role="alert">
+              {{ reviewErrorMessage }}
+            </p>
+          </section>
+
+          <section>
+            <div v-if="isReviewLoading" class="flex min-h-40 items-center gap-3 text-[#0053E2]">
+              <LoaderCircle class="h-5 w-5 animate-spin" aria-hidden="true" />
+              <span class="font-bold">Loading reviews</span>
+            </div>
+            <div v-else-if="reviews.length === 0" class="rounded-lg border border-dashed border-[#D8E0E8] p-8 text-[#667085]">
+              No reviews yet
+            </div>
+            <div v-else class="grid gap-4">
+              <article
+                v-for="review in reviews"
+                :key="review.id"
+                class="rounded-lg border border-[#D8E0E8] bg-white p-5"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="flex items-center gap-2 text-[#F59E0B]">
+                    <Star
+                      v-for="index in review.rating"
+                      :key="index"
+                      class="h-4 w-4 fill-current"
+                      aria-hidden="true"
+                    />
+                    <span class="text-sm font-black text-[#101828]">{{ review.rating }}.0</span>
+                  </div>
+                  <p class="text-sm font-semibold text-[#667085]">{{ formatReviewDate(review.created_at) }}</p>
+                </div>
+                <h3 class="mt-3 text-lg font-black">{{ review.title }}</h3>
+                <p class="mt-2 leading-7 text-[#344054]">{{ review.content }}</p>
+                <p class="mt-4 text-sm font-semibold text-[#667085]">User {{ review.user_id }}</p>
+              </article>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+    </template>
   </main>
 </template>

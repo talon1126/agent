@@ -1,0 +1,65 @@
+"""Expose Dashboard-facing read services for observability pages.
+
+The services package is intentionally read-only at F6. Streamlit pages can use
+these classes to inspect settings, documents, chunks, images, and index status
+without importing storage repositories directly or opening their own SQL
+queries.
+"""
+
+from src.observability.services.config_reader import (
+    ComponentConfig,
+    ConfigOverview,
+    ConfigReaderService,
+)
+from src.observability.services.data_browser_service import (
+    ChunkBrowserRow,
+    CollectionStats,
+    DataBrowserService,
+    DocumentBrowserRow,
+    ImageBrowserRow,
+)
+from src.observability.services.evaluation_service import (
+    EvaluationMetricTrendPoint,
+    EvaluationRunDetail,
+    EvaluationRunSummary,
+    EvaluationService,
+)
+from src.observability.services.ingestion_operation_service import (
+    IngestionOperationRequest,
+    IngestionOperationResult,
+    IngestionOperationService,
+    UploadedIngestionFile,
+)
+from src.observability.services.trace_reader_service import (
+    TraceDetail,
+    TraceHistoryItem,
+    TraceReaderService,
+    TraceStageWaterfallItem,
+    TraceTransformSnapshotItem,
+    TraceTransformStepItem,
+)
+
+__all__ = [
+    "ChunkBrowserRow",
+    "CollectionStats",
+    "ComponentConfig",
+    "ConfigOverview",
+    "ConfigReaderService",
+    "DataBrowserService",
+    "DocumentBrowserRow",
+    "EvaluationMetricTrendPoint",
+    "EvaluationRunDetail",
+    "EvaluationRunSummary",
+    "EvaluationService",
+    "ImageBrowserRow",
+    "IngestionOperationRequest",
+    "IngestionOperationResult",
+    "IngestionOperationService",
+    "TraceDetail",
+    "TraceHistoryItem",
+    "TraceReaderService",
+    "TraceStageWaterfallItem",
+    "TraceTransformSnapshotItem",
+    "TraceTransformStepItem",
+    "UploadedIngestionFile",
+]

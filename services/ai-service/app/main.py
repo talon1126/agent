@@ -14,6 +14,7 @@ from app.message_schemas import (
 from app.schemas import DecisionOutput, EventContext
 from app.routers.AImodel import router as aimodel_router
 from app.routers.AImodel.memory import get_aimodel_memory_store
+from app.routers.AImodel.tools import close_rag_knowledge_client
 from app.session_store import get_session_store
 
 app = FastAPI(title="Ecommerce After-sales AI Service")
@@ -25,6 +26,13 @@ def initialize_session_store() -> None:
     get_session_store().initialize()
     # 中文注释：AImodel 会话记忆表由 ai-service 管理，启动时确保 conversation/message/user_memory 已初始化。
     get_aimodel_memory_store().initialize()
+
+
+@app.on_event("shutdown")
+def close_aimodel_rag_client() -> None:
+    """Release the process-wide RAG MCP client during FastAPI shutdown."""
+
+    close_rag_knowledge_client()
 
 
 @app.get("/health")

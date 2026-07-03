@@ -1,9 +1,22 @@
+import sys
+import threading
+import types
+
+from app.routers.AImodel.agent_trace import (
+    AgentTraceContext,
+    LangChainAgentTraceMiddleware,
+    record_allowed_tools,
+    record_intent_route,
+)
+from app.routers.AImodel.intent_router import AImodelIntentRoute
 from app.routers.AImodel.memory import (
     POSTGRES_AIMODEL_MEMORY_SCHEMA_SQL,
     AiModelMemoryMessage,
     AiModelUserMemory,
     NoopAiModelMemoryStore,
+    build_langchain_config,
     extract_user_memories_from_text,
+    get_langchain_checkpointer,
 )
 
 
@@ -22,15 +35,29 @@ def test_aimodel_memory_schema_uses_integer_ids_without_physical_foreign_keys() 
     assert "conversation_id INTEGER NOT NULL" in schema_sql
     assert "REFERENCES conversation" not in schema_sql
     assert "CREATE TABLE IF NOT EXISTS user_memory" in schema_sql
-    assert "TRUNCATE TABLE message, conversation, user_memory" in normalized_schema
+    assert "CREATE TABLE IF NOT EXISTS message_query_trace" in schema_sql
+    assert "message_id INTEGER NOT NULL" in schema_sql
+    assert "query_trace_id TEXT NOT NULL" in schema_sql
+    assert "REFERENCES message" not in schema_sql
+    assert "REFERENCES rag_query_traces" not in schema_sql
+    assert (
+        "TRUNCATE TABLE message_query_trace, message, conversation, user_memory"
+        in normalized_schema
+    )
 
 
-def test_noop_aimodel_memory_store_generates_conversation_id_and_keeps_recent_messages() -> None:
+def test_noop_aimodel_memory_store_generates_conversation_id_and_keeps_recent_messages() -> (
+    None
+):
     store = NoopAiModelMemoryStore()
 
-    conversation_id = store.ensure_conversation(None, user_id=1, first_message="我喜欢小米")
+    conversation_id = store.ensure_conversation(
+        None, user_id=1, first_message="我喜欢小米"
+    )
     for index in range(6):
-        store.append_user_message(conversation_id, user_id=1, content=f"用户消息 {index}", links=[])
+        store.append_user_message(
+            conversation_id, user_id=1, content=f"用户消息 {index}", links=[]
+        )
 
     recent_messages = store.load_recent_messages(conversation_id, limit=5)
 
@@ -50,18 +77,24 @@ def test_extract_user_memories_from_text_detects_price_and_brand_preferences() -
         user_id=1,
     )
 
-    assert AiModelUserMemory(
-        memory_type="brand_preference",
-        memory_value="小米",
-        evidence="用户表达了对小米的品牌偏好。",
-        confidence=0.8,
-    ) in memories
-    assert AiModelUserMemory(
-        memory_type="price_preference",
-        memory_value="高性价比",
-        evidence="用户表达了高性价比或预算敏感偏好。",
-        confidence=0.7,
-    ) in memories
+    assert (
+        AiModelUserMemory(
+            memory_type="brand_preference",
+            memory_value="小米",
+            evidence="用户表达了对小米的品牌偏好。",
+            confidence=0.8,
+        )
+        in memories
+    )
+    assert (
+        AiModelUserMemory(
+            memory_type="price_preference",
+            memory_value="高性价比",
+            evidence="用户表达了高性价比或预算敏感偏好。",
+            confidence=0.7,
+        )
+        in memories
+    )
 
 
 def test_noop_aimodel_memory_store_upserts_user_memory() -> None:
@@ -91,28 +124,348 @@ def test_memory_message_dataclass_shape() -> None:
     assert message.content == "推荐看高性价比商品。"
 
 
-def test_noop_aimodel_memory_store_lists_conversations_and_messages_by_int_user_id() -> None:
+def test_noop_aimodel_memory_store_lists_conversations_and_messages_by_int_user_id() -> (
+    None
+):
     store = NoopAiModelMemoryStore()
     first_id = store.ensure_conversation(None, user_id=1, first_message="第一轮")
     second_id = store.ensure_conversation(None, user_id=1, first_message="第二轮")
     other_user_id = store.ensure_conversation(None, user_id=2, first_message="其他用户")
-    store.append_user_message(first_id, user_id=1, content="第一轮", links=["/items/item_a"])
+    store.append_user_message(
+        first_id, user_id=1, content="第一轮", links=["/items/item_a"]
+    )
     store.append_assistant_message(
         first_id,
         user_id=1,
         content="第一轮回答",
-        recommended_links=[{"item_id": "item_a", "item_name": "商品A", "url": "/items/item_a"}],
+        recommended_links=[
+            {"item_id": "item_a", "item_name": "商品A", "url": "/items/item_a"}
+        ],
     )
 
     conversations = store.list_conversations(user_id=1)
     messages = store.list_messages(first_id, user_id=1)
 
     assert [conversation.id for conversation in conversations] == [second_id, first_id]
-    assert [conversation.title for conversation in conversations] == ["第二轮", "第一轮"]
+    assert [conversation.title for conversation in conversations] == [
+        "第二轮",
+        "第一轮",
+    ]
     assert store.list_messages(other_user_id, user_id=1) == []
     assert [(message.role, message.content) for message in messages] == [
         ("user", "第一轮"),
         ("assistant", "第一轮回答"),
     ]
     assert messages[0].links == ["/items/item_a"]
-    assert messages[1].recommended_links == [{"item_id": "item_a", "item_name": "商品A", "url": "/items/item_a"}]
+    assert messages[1].recommended_links == [
+        {"item_id": "item_a", "item_name": "商品A", "url": "/items/item_a"}
+    ]
+
+
+def test_noop_store_associates_assistant_message_with_multiple_query_traces() -> None:
+    """One Agent answer may consume multiple RAG query tool results."""
+
+    store = NoopAiModelMemoryStore()
+    conversation_id = store.ensure_conversation(
+        None, user_id=1, first_message="对比商品"
+    )
+
+    message_id = store.append_assistant_message(
+        conversation_id,
+        user_id=1,
+        content="对比结论",
+        recommended_links=[],
+        query_trace_ids=["query-a", "query-b", "query-a"],
+    )
+
+    assert message_id == 1
+    assert store.list_message_query_traces(message_id) == ["query-a", "query-b"]
+
+
+def test_noop_store_does_not_create_fake_query_trace_without_rag_tool() -> None:
+    store = NoopAiModelMemoryStore()
+    conversation_id = store.ensure_conversation(None, user_id=1, first_message="你好")
+
+    message_id = store.append_assistant_message(
+        conversation_id,
+        user_id=1,
+        content="你好，我可以帮你选购商品。",
+        recommended_links=[],
+    )
+
+    assert store.list_message_query_traces(message_id) == []
+
+
+def test_agent_trace_schema_uses_postgres_tables_without_answer_summary() -> None:
+    """G11 requires database-backed Agent Trace without storing answer summaries."""
+
+    schema_sql = "\n".join(POSTGRES_AIMODEL_MEMORY_SCHEMA_SQL)
+    normalized_schema = " ".join(schema_sql.split())
+
+    assert "CREATE TABLE IF NOT EXISTS agent_trace" in schema_sql
+    assert "CREATE TABLE IF NOT EXISTS agent_trace_event" in schema_sql
+    assert "agent_trace_id TEXT NOT NULL" in schema_sql
+    assert "intent_route JSONB NOT NULL DEFAULT '{}'::jsonb" in schema_sql
+    assert "allowed_tools JSONB NOT NULL DEFAULT '[]'::jsonb" in schema_sql
+    assert "query_trace_ids JSONB NOT NULL DEFAULT '[]'::jsonb" in schema_sql
+    assert "answer_summary" not in schema_sql
+    assert "idx_agent_trace_conversation" in normalized_schema
+    assert "idx_agent_trace_message" in normalized_schema
+    assert "idx_agent_trace_query_trace_ids" in normalized_schema
+    assert "idx_agent_trace_event_trace_created" in normalized_schema
+
+
+def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payloads() -> (
+    None
+):
+    """Agent Trace should preserve routing diagnostics while avoiding raw payload storage."""
+
+    context = AgentTraceContext.start(
+        user_query="金属碗、锡纸或者带金边的盘子能放进微波炉吗？",
+        conversation_id=151,
+    )
+    route = AImodelIntentRoute(
+        action="rag",
+        collection="faq",
+        domain="support",
+        category="usage",
+        intent="operation_guide",
+        confidence=0.92,
+        reason="matched rule",
+        matched_rule="support_usage_operation_guide",
+        matched_terms=("能不能", "微波炉"),
+    )
+
+    record_intent_route(
+        context,
+        route,
+        candidates=[
+            {"intent": "operation_guide", "score": 0.92},
+            {"intent": "troubleshooting", "score": 0.87},
+            {"intent": "maintenance", "score": 0.79},
+            {"intent": "buying_recommendation", "score": 0.73},
+        ],
+    )
+    record_allowed_tools(context, [type("Tool", (), {"name": "rag_tool"})()])
+    context.record_tool_call(
+        tool_name="rag_tool",
+        input_payload={"query": "x" * 1000, "collection": "faq"},
+        output_payload={"trace_id": "mcp-query-1", "content": "y" * 1000},
+        duration_ms=12.5,
+        status="success",
+    )
+    context.complete(message_id=301, query_trace_ids=["mcp-query-1", "mcp-query-1"])
+
+    payload = context.to_record()
+
+    assert payload["conversation_id"] == 151
+    assert payload["message_id"] == 301
+    assert payload["intent_route"] == {
+        "action": "rag",
+        "collection": "faq",
+        "collections": [],
+        "domain": "support",
+        "category": "usage",
+        "intent": "operation_guide",
+        "confidence": 0.92,
+    }
+    assert payload["allowed_tools"] == ["rag_tool"]
+    assert payload["query_trace_ids"] == ["mcp-query-1"]
+    assert "answer_summary" not in payload
+    intent_event = payload["events"][0]
+    assert intent_event["event_type"] == "intent"
+    assert [
+        candidate["intent"]
+        for candidate in intent_event["summary_payload"]["top_candidates"]
+    ] == [
+        "operation_guide",
+        "troubleshooting",
+        "maintenance",
+    ]
+    assert [
+        candidate["score"]
+        for candidate in intent_event["summary_payload"]["top_candidates"]
+    ] == [
+        0.92,
+        0.87,
+        0.79,
+    ]
+    assert payload["events"][2]["event_type"] == "tool_call"
+    assert (
+        payload["events"][2]["summary_payload"]["input_summary"]["query_chars"] == 1000
+    )
+    assert "x" * 20 not in str(payload["events"][2]["summary_payload"])
+    assert "y" * 20 not in str(payload["events"][2]["summary_payload"])
+
+
+def test_langchain_agent_trace_middleware_records_success_and_error_tool_calls() -> (
+    None
+):
+    """The middleware object should record LangChain tool success and failure events."""
+
+    context = AgentTraceContext.start(user_query="查 FAQ", conversation_id=1)
+    middleware = LangChainAgentTraceMiddleware(context)
+
+    success_response = middleware.record_tool_call_for_test(
+        tool_name="rag_tool",
+        input_payload={"collection": "faq"},
+        invoke=lambda: {"ok": True, "data": {"trace_id": "mcp-query-1"}},
+    )
+
+    assert success_response["ok"] is True
+    assert context.tool_calls[-1].tool_name == "rag_tool"
+    assert context.tool_calls[-1].status == "success"
+
+    try:
+        middleware.record_tool_call_for_test(
+            tool_name="rag_tool",
+            input_payload={"collection": "faq"},
+            invoke=lambda: (_ for _ in ()).throw(RuntimeError("tool failed")),
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("tool errors should be re-raised after trace recording")
+
+    assert context.tool_calls[-1].status == "error"
+    assert context.tool_calls[-1].error == "RuntimeError: tool failed"
+
+
+def test_langchain_checkpointer_is_process_level_singleton(monkeypatch) -> None:
+    import app.routers.AImodel.memory as aimodel_memory
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+    first = get_langchain_checkpointer()
+    second = get_langchain_checkpointer()
+
+    assert first is second
+    assert hasattr(first, "get_tuple")
+    assert hasattr(first, "put")
+
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+
+def test_build_langchain_config_uses_conversation_id_as_thread_id() -> None:
+    assert build_langchain_config(42) == {"configurable": {"thread_id": "42"}}
+
+    try:
+        build_langchain_config(0)
+    except ValueError as error:
+        assert "conversation_id" in str(error)
+    else:
+        raise AssertionError("build_langchain_config should reject non-positive IDs")
+
+
+def test_langchain_checkpointer_uses_postgres_when_database_url_is_configured(
+    monkeypatch,
+) -> None:
+    import app.routers.AImodel.memory as aimodel_memory
+
+    created: dict[str, object] = {}
+
+    class FakeConnection:
+        @staticmethod
+        def connect(database_url: str, **kwargs: object) -> str:
+            created["database_url"] = database_url
+            created["connect_kwargs"] = kwargs
+            return "connection"
+
+    class FakePostgresSaver:
+        def __init__(self, connection: str) -> None:
+            created["connection"] = connection
+            self.setup_called = False
+
+        def setup(self) -> None:
+            self.setup_called = True
+            created["setup_called"] = True
+
+        def get_tuple(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def put(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    fake_psycopg = types.SimpleNamespace(Connection=FakeConnection)
+    fake_rows = types.SimpleNamespace(dict_row="dict_row")
+    fake_postgres = types.SimpleNamespace(PostgresSaver=FakePostgresSaver)
+    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+    monkeypatch.setitem(sys.modules, "psycopg.rows", fake_rows)
+    monkeypatch.setitem(sys.modules, "langgraph.checkpoint.postgres", fake_postgres)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://agent:agent@db/agent_ops")
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+    checkpointer = get_langchain_checkpointer()
+
+    assert isinstance(checkpointer, FakePostgresSaver)
+    assert created["database_url"] == "postgresql://agent:agent@db/agent_ops"
+    assert created["connection"] == "connection"
+    assert created["setup_called"] is True
+
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+
+def test_langchain_checkpointer_setup_is_serialized_for_concurrent_callers(
+    monkeypatch,
+) -> None:
+    import app.routers.AImodel.memory as aimodel_memory
+
+    created: dict[str, object] = {"setup_calls": 0}
+    setup_entered = threading.Barrier(2)
+    release_setup = threading.Event()
+
+    class FakeConnection:
+        @staticmethod
+        def connect(database_url: str, **kwargs: object) -> str:
+            return "connection"
+
+    class FakePostgresSaver:
+        def __init__(self, connection: str) -> None:
+            created["connection"] = connection
+
+        def setup(self) -> None:
+            created["setup_calls"] = int(created["setup_calls"]) + 1
+            if int(created["setup_calls"]) == 1:
+                setup_entered.wait(timeout=2)
+                release_setup.wait(timeout=2)
+
+        def get_tuple(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def put(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    fake_psycopg = types.SimpleNamespace(Connection=FakeConnection)
+    fake_rows = types.SimpleNamespace(dict_row="dict_row")
+    fake_postgres = types.SimpleNamespace(PostgresSaver=FakePostgresSaver)
+    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+    monkeypatch.setitem(sys.modules, "psycopg.rows", fake_rows)
+    monkeypatch.setitem(sys.modules, "langgraph.checkpoint.postgres", fake_postgres)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://agent:agent@db/agent_ops")
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def load_checkpointer() -> None:
+        try:
+            results.append(get_langchain_checkpointer())
+        except BaseException as error:
+            errors.append(error)
+
+    first = threading.Thread(target=load_checkpointer)
+    second = threading.Thread(target=load_checkpointer)
+    first.start()
+    setup_entered.wait(timeout=2)
+    second.start()
+    release_setup.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert errors == []
+    assert len(results) == 2
+    assert results[0] is results[1]
+    assert created["setup_calls"] == 1
+
+    aimodel_memory.get_langchain_checkpointer.cache_clear()

@@ -3,128 +3,119 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   BadgePercent,
-  ClipboardList,
+  ChevronLeft,
+  ChevronRight,
   LoaderCircle,
-  MapPin,
-  Menu,
-  PackageCheck,
-  Search,
-  ShoppingCart,
-  UserRound,
 } from 'lucide-vue-next'
+import StoreHeader from '@/components/StoreHeader.vue'
 import { CART_USER_ID } from '@/services/cartApi'
+import { fetchHomeHotRankings } from '@/services/categoryRankingApi'
 import { fetchFlashSales, purchaseFlashSaleWithDefaultAddress } from '@/services/flashSaleApi'
+import type { CategoryRankingItem } from '@/types/categoryRanking'
 import type { FlashSale } from '@/types/flashSale'
 
-const categories = ['Paper Goods', 'Dairy', 'Beverages', 'Office Supplies']
 const router = useRouter()
 
-const deals = [
+type HeroSlide = {
+  accent: string
+  cta: string
+  description: string
+  image: string
+  imageAlt: string
+  searchTerm: string
+  title: string
+}
+
+const heroSlides: HeroSlide[] = [
   {
-    id: 'item_vinda_tissue',
-    category: 'Paper Goods',
-    name: 'Vinda soft tissue 3-ply family pack',
+    accent: 'Fast pickup essentials',
+    cta: 'Search grocery deals',
+    description:
+      'Build a basket from live warehouse stock and keep daily essentials ready for pickup.',
     image:
-      'https://images.unsplash.com/photo-1583947581924-860bda6a26df?auto=format&fit=crop&w=640&q=80',
-    price: '$12.80',
-    originalPrice: '$15.90',
-    stock: 'In stock',
+      'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=900&q=80',
+    imageAlt: 'Fresh groceries arranged in a shopping basket',
+    searchTerm: 'milk',
+    title: 'Weekend cart refresh',
   },
   {
-    id: 'item_milk_pure',
-    category: 'Dairy',
-    name: 'Pure milk 1L multipack',
+    accent: 'New tech arrivals',
+    cta: 'Shop electronics',
+    description:
+      'Compare in-stock devices, accessories, and smart home picks before checkout.',
     image:
-      'https://images.unsplash.com/photo-1563636619-e9143da7973b?auto=format&fit=crop&w=640&q=80',
-    price: '$18.40',
-    originalPrice: '$21.00',
-    stock: 'Low stock',
+      'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=900&q=80',
+    imageAlt: 'Laptop and electronics on a bright retail desk',
+    searchTerm: 'electronics',
+    title: 'Electronics that ship fast',
   },
   {
-    id: 'item_cola_zero',
-    category: 'Beverages',
-    name: 'Zero sugar cola cans 12 pack',
+    accent: 'Family-ready finds',
+    cta: 'Browse kids picks',
+    description:
+      'Find practical clothing, baby care, and school-day basics from the same catalog.',
     image:
-      'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?auto=format&fit=crop&w=640&q=80',
-    price: '$9.90',
-    originalPrice: '$12.50',
-    stock: 'In stock',
-  },
-  {
-    id: 'item_copy_paper',
-    category: 'Office Supplies',
-    name: 'A4 copy paper 500 sheets',
-    image:
-      'https://images.unsplash.com/photo-1586075010923-2dd4570fb338?auto=format&fit=crop&w=640&q=80',
-    price: '$6.20',
-    originalPrice: '$7.40',
-    stock: 'In stock',
+      'https://images.unsplash.com/photo-1515488042361-ee00e0ddd4e4?auto=format&fit=crop&w=900&q=80',
+    imageAlt: 'Colorful folded children clothes and small toys',
+    searchTerm: 'baby kids',
+    title: 'Everything for busy family days',
   },
 ]
 
 type FlashSaleMeta = {
   category: string
   image: string
-  originalPrice: number
   title: string
 }
 
-// 中文注释：后端秒杀列表当前只返回活动和商品 ID，前端先用商品 ID 补足首页卡片展示信息。
+// Flash-sale responses carry campaign data and item IDs; the storefront maps IDs to card media.
 const flashSaleMetaByItemId: Record<string, FlashSaleMeta> = {
   item_milk_pure: {
     category: 'Dairy',
     image:
       'https://images.unsplash.com/photo-1563636619-e9143da7973b?auto=format&fit=crop&w=640&q=80',
-    originalPrice: 18.4,
     title: 'Pure milk flash deal',
   },
   item_cola_zero: {
     category: 'Beverages',
     image:
       'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?auto=format&fit=crop&w=640&q=80',
-    originalPrice: 24.9,
     title: 'Zero sugar cola flash pack',
   },
   item_vinda_tissue: {
     category: 'Paper Goods',
     image:
       'https://images.unsplash.com/photo-1583947581924-860bda6a26df?auto=format&fit=crop&w=640&q=80',
-    originalPrice: 24.8,
     title: 'Soft tissue family flash deal',
   },
   item_yogurt_plain: {
     category: 'Dairy',
     image:
       'https://images.unsplash.com/photo-1488477181946-6428a0291777?auto=format&fit=crop&w=640&q=80',
-    originalPrice: 21.5,
     title: 'Plain yogurt flash bundle',
   },
   item_water_spring: {
     category: 'Beverages',
     image:
       'https://images.unsplash.com/photo-1616118132534-381148898bb4?auto=format&fit=crop&w=640&q=80',
-    originalPrice: 25.9,
     title: 'Spring water case flash deal',
   },
   item_detergent: {
     category: 'Household',
     image:
       'https://images.unsplash.com/photo-1624372524708-543ca5344a83?auto=format&fit=crop&w=640&q=80',
-    originalPrice: 52.9,
     title: 'Laundry detergent flash deal',
   },
   item_office_pen: {
     category: 'Office Supplies',
     image:
       'https://images.unsplash.com/photo-1583485088034-697b5bc54ccd?auto=format&fit=crop&w=640&q=80',
-    originalPrice: 9.9,
     title: 'Office pen flash pack',
   },
   item_copy_paper: {
     category: 'Office Supplies',
     image:
       'https://images.unsplash.com/photo-1586075010923-2dd4570fb338?auto=format&fit=crop&w=640&q=80',
-    originalPrice: 25.9,
     title: 'A4 copy paper flash deal',
   },
 }
@@ -134,10 +125,17 @@ const searchError = ref('')
 const flashSales = ref<FlashSale[]>([])
 const flashSaleError = ref('')
 const flashSaleSuccess = ref('')
+const hotRankings = ref<CategoryRankingItem[]>([])
+const hotRankingError = ref('')
+const isHotRankingLoading = ref(false)
 const isFlashSaleLoading = ref(false)
 const pendingFlashSaleId = ref<number | null>(null)
+const activeSlideIndex = ref(0)
 
 const flashSaleListReady = computed(() => flashSales.value.length > 0)
+const heroTrackTransform = computed(
+  () => `translate3d(${activeSlideIndex.value === 0 ? 0 : -activeSlideIndex.value * 100}%, 0, 0)`,
+)
 
 function handleSearch() {
   const query = searchQuery.value.trim()
@@ -149,6 +147,24 @@ function handleSearch() {
 
   searchError.value = ''
   router.push({ name: 'search', query: { q: query } })
+}
+
+function runHeroSearch(slide: HeroSlide) {
+  searchQuery.value = slide.searchTerm
+  handleSearch()
+}
+
+function showPreviousSlide() {
+  activeSlideIndex.value =
+    activeSlideIndex.value === 0 ? heroSlides.length - 1 : activeSlideIndex.value - 1
+}
+
+function showNextSlide() {
+  activeSlideIndex.value = (activeSlideIndex.value + 1) % heroSlides.length
+}
+
+function selectSlide(index: number) {
+  activeSlideIndex.value = index
 }
 
 function formatCurrency(value: number) {
@@ -167,17 +183,28 @@ function humanizeItemId(itemId: string) {
 }
 
 function flashSaleMeta(sale: FlashSale): FlashSaleMeta {
-  const fallbackPrice = Math.round(sale.sale_price * 1.35 * 100) / 100
-
   return (
     flashSaleMetaByItemId[sale.item_id] ?? {
       category: 'Flash Deal',
       image:
         'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=640&q=80',
-      originalPrice: fallbackPrice,
       title: `${humanizeItemId(sale.item_id)} flash deal`,
     }
   )
+}
+
+function flashSaleOriginalPrice(sale: FlashSale) {
+  if (sale.item_price !== null && sale.item_price !== undefined && sale.item_price > sale.sale_price) {
+    return sale.item_price
+  }
+
+  return null
+}
+
+function flashSaleOriginalPriceLabel(sale: FlashSale) {
+  const originalPrice = flashSaleOriginalPrice(sale)
+
+  return originalPrice === null ? null : formatCurrency(originalPrice)
 }
 
 function flashSaleStockLabel(sale: FlashSale) {
@@ -196,8 +223,35 @@ function canBuyFlashSale(sale: FlashSale) {
   return sale.status === 'active' && sale.stock_remaining !== null && sale.stock_remaining > 0
 }
 
+function openFlashSaleProduct(sale: FlashSale) {
+  router.push({
+    name: 'product-detail',
+    params: { item_id: sale.item_id },
+  })
+}
+
+function openHotRankingProduct(item: CategoryRankingItem) {
+  router.push({
+    name: 'product-detail',
+    params: { item_id: item.item_id },
+  })
+}
+
+function rankingProductImage(item: CategoryRankingItem) {
+  if (item.category_id === 'electronics') {
+    return 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=640&q=80'
+  }
+  if (item.category_id === 'dairy') {
+    return 'https://images.unsplash.com/photo-1563636619-e9143da7973b?auto=format&fit=crop&w=640&q=80'
+  }
+  if (item.category_id === 'paper') {
+    return 'https://images.unsplash.com/photo-1583947581924-860bda6a26df?auto=format&fit=crop&w=640&q=80'
+  }
+  return 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=640&q=80'
+}
+
 async function loadFlashSales() {
-  // 中文注释：库存弱实时策略是用户刷新页面时重新查询一次，不在前端做轮询扣减。
+  // Stock is weakly real-time: the page refreshes from the backend instead of polling locally.
   isFlashSaleLoading.value = true
   flashSaleError.value = ''
 
@@ -213,12 +267,29 @@ async function loadFlashSales() {
   }
 }
 
+async function loadHomeHotRankings() {
+  // The homepage rail reads backend ranking snapshots so product popularity is not hardcoded in Vue.
+  isHotRankingLoading.value = true
+  hotRankingError.value = ''
+
+  try {
+    const response = await fetchHomeHotRankings({ limit: 8 })
+    hotRankings.value = response.items
+  } catch (error) {
+    hotRankings.value = []
+    hotRankingError.value =
+      error instanceof Error ? error.message : 'Unable to load popular products right now.'
+  } finally {
+    isHotRankingLoading.value = false
+  }
+}
+
 async function buyFlashSale(sale: FlashSale) {
   if (!canBuyFlashSale(sale)) {
     return
   }
 
-  // 中文注释：秒杀购买复用默认收货地址，抢购和扣库存结果以后端原子接口返回为准。
+  // Flash-sale checkout uses the default address and trusts the backend atomic stock claim result.
   pendingFlashSaleId.value = sale.id
   flashSaleError.value = ''
   flashSaleSuccess.value = ''
@@ -237,140 +308,93 @@ async function buyFlashSale(sale: FlashSale) {
 
 onMounted(() => {
   void loadFlashSales()
+  void loadHomeHotRankings()
 })
 </script>
 
 <template>
   <main class="min-h-screen bg-[#F5F7FA] text-[#101828]">
-    <header class="bg-[#0F2A44] text-white">
-      <div class="mx-auto flex max-w-[1440px] flex-wrap items-center gap-4 px-6 py-4">
-        <a href="/" class="flex shrink-0 items-center gap-3" aria-label="TalonMart home">
-          <span
-            class="grid h-11 w-11 place-items-center rounded-md bg-[#00A6C8] font-bold text-[#0F2A44]"
-          >
-            TM
-          </span>
-          <span class="text-2xl font-bold">TalonMart</span>
-        </a>
+    <StoreHeader :initial-search-query="searchQuery" />
 
-        <button
-          class="flex min-h-11 shrink-0 items-center gap-2 rounded-md px-3 text-left text-sm hover:bg-white/10"
-        >
-          <MapPin class="h-5 w-5 text-[#00A6C8]" aria-hidden="true" />
-          <span>
-            <span class="block text-xs text-white/70">Deliver to</span>
-            <span class="font-semibold">Hong Kong</span>
-          </span>
-        </button>
-
-        <form
-          class="order-3 flex min-h-11 w-full overflow-hidden rounded-md bg-white lg:order-none lg:min-w-[360px] lg:flex-1"
-          role="search"
-          @submit.prevent="handleSearch"
-        >
-          <input
-            v-model="searchQuery"
-            aria-label="Search products"
-            class="min-w-0 flex-1 px-4 text-base text-[#101828] outline-none"
-            placeholder="Search groceries, beverages, paper goods..."
-            type="search"
-          />
-          <button
-            class="grid w-14 place-items-center bg-[#00A6C8] text-[#0F2A44] transition hover:bg-[#28BEDB]"
-            type="submit"
-            aria-label="Submit search"
-          >
-            <Search class="h-5 w-5" aria-hidden="true" />
-          </button>
-        </form>
-
-        <a
-          class="flex min-h-11 shrink-0 items-center gap-2 rounded-md px-3 text-sm hover:bg-white/10"
-          href="#"
-        >
-          <UserRound class="h-5 w-5 text-[#00A6C8]" aria-hidden="true" />
-          Account
-        </a>
-        <a
-          class="flex min-h-11 shrink-0 items-center gap-2 rounded-md px-3 text-sm hover:bg-white/10"
-          href="#"
-        >
-          <ClipboardList class="h-5 w-5 text-[#00A6C8]" aria-hidden="true" />
-          Orders
-        </a>
-        <RouterLink
-          class="flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-md bg-white px-3 text-sm font-bold text-[#0F2A44]"
-          to="/cart"
-          style="color: #0f2a44"
-        >
-          <ShoppingCart class="h-5 w-5" aria-hidden="true" />
-          Cart
-        </RouterLink>
-      </div>
-
-      <nav class="border-t border-white/10 bg-[#123A5D]">
-        <div
-          class="mx-auto flex max-w-[1440px] flex-wrap items-center gap-x-6 gap-y-2 px-6 py-3 text-sm font-semibold"
-        >
-          <button class="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-white/10">
-            <Menu class="h-5 w-5 text-[#00A6C8]" aria-hidden="true" />
-            Departments
-          </button>
-          <a v-for="category in categories" :key="category" href="#" class="hover:text-[#8BE8F7]">
-            {{ category }}
-          </a>
-        </div>
-      </nav>
-    </header>
-
-    <section class="mx-auto grid max-w-[1440px] gap-5 px-6 py-6 xl:grid-cols-[280px_1fr]">
-      <aside class="rounded-lg border border-[#D8E0E8] bg-white p-4">
-        <h2 class="mb-3 text-base font-bold">Shop by department</h2>
-        <div class="grid gap-2">
-          <a
-            v-for="category in categories"
-            :key="category"
-            class="rounded-md border border-transparent px-3 py-3 text-sm font-semibold hover:border-[#00A6C8] hover:bg-[#E6F8FB]"
-            href="#"
-          >
-            {{ category }}
-          </a>
-        </div>
-      </aside>
-
+    <section class="mx-auto max-w-[1440px] px-6 py-6">
       <div class="grid gap-5">
         <section
-          class="grid min-h-[260px] overflow-hidden rounded-lg bg-[#0F2A44] text-white lg:grid-cols-[1.2fr_0.8fr]"
+          class="relative min-h-[330px] overflow-hidden rounded-[8px] bg-[#0053E2] text-white shadow-[0_18px_46px_rgba(0,83,226,0.22)]"
+          data-testid="home-hero-carousel"
         >
-          <div class="p-8">
-            <p class="mb-3 text-sm font-bold uppercase tracking-normal text-[#8BE8F7]">
-              Today deals
-            </p>
-            <h1 class="max-w-2xl text-3xl font-bold leading-tight lg:text-4xl">
-              Stock-ready daily essentials with fast local fulfillment.
-            </h1>
-            <p class="mt-4 max-w-xl text-base text-white/75">
-              Search product inventory from the live warehouse API, then compare stock by warehouse
-              before the storefront is connected to checkout.
-            </p>
-            <button
-              class="mt-6 min-h-11 rounded-md bg-[#FFB020] px-5 font-bold text-[#0F2A44] hover:bg-[#FFC44D]"
-              type="button"
-              @click="handleSearch"
+          <div
+            class="flex min-h-[330px] transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
+            data-testid="home-hero-track"
+            :style="{ transform: heroTrackTransform }"
+          >
+            <article
+              v-for="slide in heroSlides"
+              :key="slide.title"
+              class="relative grid min-w-full items-center gap-6 overflow-hidden lg:grid-cols-[1fr_0.86fr]"
             >
-              Search milk inventory
-            </button>
+              <div
+                class="absolute inset-y-0 right-0 hidden w-[46%] bg-[#FFC220] lg:block"
+                aria-hidden="true"
+              ></div>
+              <div class="relative px-7 py-8 sm:px-10 lg:px-12">
+                <p class="text-sm font-black uppercase tracking-normal text-[#FFC220]">
+                  {{ slide.accent }}
+                </p>
+                <h1 class="mt-3 max-w-[640px] text-4xl font-black leading-[1.02] sm:text-5xl lg:text-[58px]">
+                  {{ slide.title }}
+                </h1>
+                <p class="mt-5 max-w-xl text-base font-semibold leading-7 text-white/86">
+                  {{ slide.description }}
+                </p>
+                <button
+                  class="mt-7 min-h-11 rounded-full bg-white px-6 text-sm font-black text-[#0053E2] shadow-sm transition hover:bg-[#EAF2FF]"
+                  type="button"
+                  @click="runHeroSearch(slide)"
+                >
+                  {{ slide.cta }}
+                </button>
+              </div>
+
+              <div class="relative min-h-[260px] overflow-hidden lg:min-h-[330px]">
+                <img
+                  class="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-[1.02]"
+                  :alt="slide.imageAlt"
+                  :src="slide.image"
+                  data-testid="home-hero-slide"
+                />
+                <div class="absolute inset-0 bg-gradient-to-r from-[#0053E2] via-transparent to-transparent lg:from-transparent"></div>
+              </div>
+            </article>
           </div>
-          <div class="grid bg-[#E6F8FB] p-6 text-[#0F2A44]">
-            <div class="rounded-lg border border-[#B9EDF5] bg-white p-5">
-              <PackageCheck class="mb-4 h-10 w-10 text-[#00A6C8]" aria-hidden="true" />
-              <p class="text-sm font-bold uppercase text-[#667085]">Fulfillment signal</p>
-              <p class="mt-2 text-3xl font-bold">Ready to ship</p>
-              <p class="mt-3 text-sm text-[#667085]">
-                Consumer-facing stock messages stay simple while the backend handles warehouse
-                selection.
-              </p>
-            </div>
+
+          <button
+            class="absolute left-4 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/95 text-[#0053E2] shadow-md transition hover:bg-[#EAF2FF]"
+            type="button"
+            aria-label="Previous promotional slide"
+            data-testid="home-hero-prev"
+            @click="showPreviousSlide"
+          >
+            <ChevronLeft class="h-5 w-5" aria-hidden="true" />
+          </button>
+          <button
+            class="absolute right-4 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/95 text-[#0053E2] shadow-md transition hover:bg-[#EAF2FF]"
+            type="button"
+            aria-label="Next promotional slide"
+            data-testid="home-hero-next"
+            @click="showNextSlide"
+          >
+            <ChevronRight class="h-5 w-5" aria-hidden="true" />
+          </button>
+          <div class="absolute bottom-5 left-1/2 flex -translate-x-1/2 gap-2" aria-label="Carousel slides">
+            <button
+              v-for="(_slide, index) in heroSlides"
+              :key="index"
+              class="h-2.5 rounded-full transition-all"
+              :class="index === activeSlideIndex ? 'w-8 bg-[#FFC220]' : 'w-2.5 bg-white/70'"
+              type="button"
+              :aria-label="`Show promotional slide ${index + 1}`"
+              @click="selectSlide(index)"
+            ></button>
           </div>
         </section>
 
@@ -443,20 +467,27 @@ onMounted(() => {
             <article
               v-for="sale in flashSales"
               :key="sale.id"
-              class="group rounded-lg border border-[#D8E0E8] bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+              class="group rounded-lg bg-white p-0 transition hover:-translate-y-0.5"
+              data-testid="flash-sale-card"
             >
-              <div class="relative aspect-[4/3] overflow-hidden rounded-md bg-[#F2F4F7]">
+              <button
+                class="relative block aspect-[4/3] w-full overflow-hidden rounded-md bg-white text-left"
+                :data-testid="`flash-sale-detail-${sale.item_id}`"
+                type="button"
+                :aria-label="`View details for ${flashSaleMeta(sale).title}`"
+                @click="openFlashSaleProduct(sale)"
+              >
                 <img
                   :alt="flashSaleMeta(sale).title"
                   :src="flashSaleMeta(sale).image"
                   class="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
                 />
                 <span
-                  class="absolute left-3 top-3 rounded-md border border-[#B7E4C7] bg-white px-2 py-1 text-xs font-black text-[#1A7F00]"
+                  class="absolute left-3 top-3 rounded-md bg-white px-2 py-1 text-xs font-black text-[#1A7F00]"
                 >
                   Reduced price
                 </span>
-              </div>
+              </button>
               <button
                 class="mt-3 min-h-10 rounded-full border border-[#667085] px-5 font-black text-[#344054] transition enabled:hover:border-[#0F2A44] enabled:hover:bg-[#F2F4F7] disabled:cursor-not-allowed disabled:border-[#D0D5DD] disabled:text-[#98A2B3]"
                 type="button"
@@ -468,13 +499,21 @@ onMounted(() => {
               </button>
               <p class="mt-3 text-sm font-bold text-[#1A7F00]">
                 Now {{ formatCurrency(sale.sale_price) }}
-                <span class="ml-1 text-xs font-medium text-[#667085] line-through">
-                  {{ formatCurrency(flashSaleMeta(sale).originalPrice) }}
+                <span
+                  v-if="flashSaleOriginalPriceLabel(sale) !== null"
+                  class="ml-1 text-xs font-medium text-[#667085] line-through"
+                >
+                  {{ flashSaleOriginalPriceLabel(sale) }}
                 </span>
               </p>
-              <h3 class="mt-1 min-h-12 text-sm font-semibold leading-snug text-[#344054]">
+              <button
+                class="mt-1 min-h-12 text-left text-sm font-semibold leading-snug text-[#344054] hover:underline"
+                type="button"
+                :aria-label="`View details for ${flashSaleMeta(sale).title}`"
+                @click="openFlashSaleProduct(sale)"
+              >
                 {{ flashSaleMeta(sale).title }}
-              </h3>
+              </button>
               <p class="mt-2 text-xs font-bold uppercase text-[#667085]">
                 {{ flashSaleMeta(sale).category }}
               </p>
@@ -488,41 +527,71 @@ onMounted(() => {
           </div>
         </section>
 
-        <section>
-          <div class="mb-3 flex items-end justify-between">
+        <section class="bg-white px-0 py-8">
+          <div class="mb-5 flex items-end justify-between gap-4">
             <div>
-              <h2 class="text-2xl font-bold">Today deals</h2>
-              <p class="text-sm text-[#667085]">
-                Dense retail cards for the first TalonMart storefront pass.
-              </p>
+              <p class="text-sm font-black uppercase text-[#0053E2]">Popular now</p>
+              <h2 class="mt-1 text-2xl font-black">Bet you like it.</h2>
             </div>
-            <a class="text-sm font-bold text-[#0F2A44] hover:text-[#00A6C8]" href="#">View all</a>
           </div>
 
-          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <p
+            v-if="hotRankingError"
+            class="mb-4 rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-4 text-sm font-bold text-[#991B1B]"
+            role="alert"
+          >
+            {{ hotRankingError }}
+          </p>
+
+          <div
+            v-if="isHotRankingLoading"
+            class="grid min-h-[180px] place-items-center rounded-lg border border-[#D8E0E8] bg-[#FCFCFD]"
+          >
+            <div class="flex items-center gap-3 text-sm font-bold text-[#344054]">
+              <LoaderCircle class="h-5 w-5 animate-spin text-[#00A6C8]" aria-hidden="true" />
+              Loading popular products
+            </div>
+          </div>
+
+          <div
+            v-else-if="hotRankings.length === 0"
+            class="rounded-lg border border-[#D8E0E8] bg-[#F7F8FA] p-6"
+          >
+            <p class="text-sm font-bold text-[#667085]">Ranking data is warming up</p>
+          </div>
+
+          <div v-else class="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
             <article
-              v-for="deal in deals"
-              :key="deal.id"
-              class="rounded-lg border border-[#D8E0E8] bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+              v-for="item in hotRankings"
+              :key="item.item_id"
+              class="rounded-lg bg-white transition hover:-translate-y-0.5"
             >
-              <div class="aspect-[4/3] overflow-hidden rounded-md bg-[#E6F8FB]">
-                <img :alt="deal.name" :src="deal.image" class="h-full w-full object-cover" />
-              </div>
-              <p class="mt-3 text-xs font-bold uppercase text-[#667085]">{{ deal.category }}</p>
-              <h3 class="mt-1 min-h-12 text-base font-semibold leading-snug">{{ deal.name }}</h3>
-              <div class="mt-2 flex items-baseline gap-2">
-                <span class="text-xl font-bold text-[#0F2A44]">{{ deal.price }}</span>
-                <span class="text-sm text-[#667085] line-through">{{ deal.originalPrice }}</span>
-              </div>
-              <p class="mt-2 text-sm font-semibold text-[#039855]">{{ deal.stock }}</p>
               <button
-                class="mt-3 min-h-10 w-full rounded-md bg-[#0F2A44] font-bold text-white transition hover:bg-[#123A5D]"
+                class="block w-full text-left"
+                type="button"
+                :data-testid="`home-hot-product-${item.item_id}`"
+                @click="openHotRankingProduct(item)"
               >
-                Add to cart
+                <span class="block aspect-[4/3] overflow-hidden rounded-md bg-white">
+                  <img
+                    class="h-full w-full object-cover"
+                    :alt="item.item_name"
+                    :src="rankingProductImage(item)"
+                  />
+                </span>
+                <span class="mt-3 block text-xs font-black uppercase text-[#0053E2]">
+                  #{{ item.rank }} in {{ item.category_name || item.category_id }}
+                </span>
+                <span class="mt-1 block min-h-12 text-base font-black leading-tight">
+                  {{ item.item_name }}
+                </span>
+                <span class="mt-2 block text-sm text-[#667085]">{{ item.brand }} / {{ item.spec }}</span>
+                <span class="mt-3 block text-xl font-black">{{ formatCurrency(item.price) }}</span>
               </button>
             </article>
           </div>
         </section>
+
       </div>
     </section>
   </main>

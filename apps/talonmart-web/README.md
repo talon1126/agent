@@ -34,7 +34,7 @@ pnpm install
 The storefront calls the backend product search API through `GET /search?q=milk`.
 
 For local development, the default `VITE_API_BASE_URL=/api` uses the Vite dev proxy and forwards
-requests to `http://localhost:8002`.
+requests to `http://localhost:18002`.
 
 For production, set `VITE_API_BASE_URL` in Netlify to the public HTTPS backend origin, for example:
 

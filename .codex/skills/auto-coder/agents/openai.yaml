@@ -1,0 +1,3 @@
+display_name: Auto Coder
+short_description: DEV_SPEC.md driven autonomous coding workflow.
+default_prompt: 自动开发：同步 DEV_SPEC，查找下一个任务，编码、测试并等待提交确认。

@@ -86,5 +86,143 @@
     "unit": "包",
     "barcode": "6901234567008",
     "shelf_life_days": 1460
+  },
+  {
+    "item_id": "item_grocery_oats",
+    "category_id": "grocery",
+    "item_name": "Organic Rolled Oats",
+    "brand": "Talon Pantry",
+    "spec": "32 oz resealable bag",
+    "price": 6.98,
+    "unit": "bag",
+    "barcode": "6901234567101",
+    "shelf_life_days": 365
+  },
+  {
+    "item_id": "item_grocery_olive_oil",
+    "category_id": "grocery",
+    "item_name": "Extra Virgin Olive Oil",
+    "brand": "Talon Pantry",
+    "spec": "1 L glass bottle",
+    "price": 13.48,
+    "unit": "bottle",
+    "barcode": "6901234567102",
+    "shelf_life_days": 540
+  },
+  {
+    "item_id": "item_clothing_denim_jacket",
+    "category_id": "clothing_shoes_accessories",
+    "item_name": "Classic Denim Jacket",
+    "brand": "Talon Outfitters",
+    "spec": "Unisex medium wash",
+    "price": 34.99,
+    "unit": "piece",
+    "barcode": "6901234567201",
+    "shelf_life_days": 1460
+  },
+  {
+    "item_id": "item_clothing_running_shoes",
+    "category_id": "clothing_shoes_accessories",
+    "item_name": "Lightweight Running Shoes",
+    "brand": "Talon Move",
+    "spec": "Men size 9 breathable mesh",
+    "price": 49.50,
+    "unit": "pair",
+    "barcode": "6901234567202",
+    "shelf_life_days": 1460
+  },
+  {
+    "item_id": "item_baby_diapers",
+    "category_id": "baby_kids",
+    "item_name": "Sensitive Baby Diapers",
+    "brand": "Talon Little",
+    "spec": "Size 3, 72 count",
+    "price": 24.97,
+    "unit": "box",
+    "barcode": "6901234567301",
+    "shelf_life_days": 1095
+  },
+  {
+    "item_id": "item_baby_stroller",
+    "category_id": "baby_kids",
+    "item_name": "Compact Travel Stroller",
+    "brand": "Talon Little",
+    "spec": "One-hand fold, charcoal",
+    "price": 89.00,
+    "unit": "piece",
+    "barcode": "6901234567302",
+    "shelf_life_days": 1460
+  },
+  {
+    "item_id": "item_wireless_earbuds",
+    "category_id": "electronics",
+    "item_name": "Wireless Noise Cancelling Earbuds",
+    "brand": "Talon Audio",
+    "spec": "Bluetooth 5.3, 28-hour case",
+    "price": 59.99,
+    "unit": "set",
+    "barcode": "6901234567401",
+    "shelf_life_days": 1460,
+    "image": "products/electronics/wireless-noise-cancelling-earbuds.jpg"
+  },
+  {
+    "item_id": "item_smart_tv_43",
+    "category_id": "electronics",
+    "item_name": "43-inch 4K Smart TV",
+    "brand": "Talon Vision",
+    "spec": "HDR LED display with voice remote",
+    "price": 249.00,
+    "unit": "piece",
+    "barcode": "6901234567402",
+    "shelf_life_days": 1460,
+    "image": "products/electronics/43-inch-4k-smart-tv.jpg"
+  },
+  {
+    "item_id": "item_xiaomi_air_fryer_6_5l",
+    "category_id": "electronics",
+    "item_name": "Xiaomi Smart Air Fryer 6.5L",
+    "brand": "Xiaomi",
+    "spec": "6.5L smart air fryer with app recipes",
+    "price": 89.99,
+    "unit": "piece",
+    "barcode": "6901234567403",
+    "shelf_life_days": 1460,
+    "image": "products/xiaomi/smart-air-fryer-6-5l.jpg"
+  },
+  {
+    "item_id": "item_xiaomi_robot_vacuum_x20_plus",
+    "category_id": "electronics",
+    "item_name": "Xiaomi Robot Vacuum X20+",
+    "brand": "Xiaomi",
+    "spec": "Robot vacuum and mop with auto-empty station",
+    "price": 399.99,
+    "unit": "piece",
+    "barcode": "6901234567404",
+    "shelf_life_days": 1460,
+    "image": "products/xiaomi/robot-vacuum-x20-plus.jpg"
+  },
+  {
+    "item_id": "item_xiaomi_air_purifier_4",
+    "category_id": "electronics",
+    "item_name": "Xiaomi Smart Air Purifier 4",
+    "brand": "Xiaomi",
+    "spec": "Smart air purifier for rooms up to 48m2",
+    "price": 179.99,
+    "unit": "piece",
+    "barcode": "6901234567405",
+    "shelf_life_days": 1460,
+    "image": "products/xiaomi/smart-air-purifier-4.jpg"
+  },
+  {
+    "item_id": "item_xiaomi_electric_kettle_2",
+    "category_id": "electronics",
+    "item_name": "Xiaomi Electric Kettle 2",
+    "brand": "Xiaomi",
+    "spec": "1.7L stainless steel electric kettle",
+    "price": 34.99,
+    "unit": "piece",
+    "barcode": "6901234567406",
+    "shelf_life_days": 1460,
+    "image": "products/xiaomi/electric-kettle-2.jpg"
   }
 ]

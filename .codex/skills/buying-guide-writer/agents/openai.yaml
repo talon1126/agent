@@ -1,0 +1,5 @@
+interface:
+  display_name: "Buying Guide Writer"
+  short_description: "Generate high-quality, category-specific Chinese product buying guides with decision models, brand examples, and anti-template quality checks."
+  default_prompt: "Create a high-quality product buying guide for {product}, then run the built-in quality gate."
+

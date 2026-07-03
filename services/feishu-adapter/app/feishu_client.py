@@ -47,3 +47,29 @@ def reply_text_message(
     payload = response.json()
     if payload.get("code") not in {0, None}:
         raise RuntimeError(f"Feishu reply failed: {payload}")
+
+
+def send_group_text_message(
+    *,
+    client: httpx.Client,
+    tenant_access_token: str,
+    chat_id: str,
+    text: str,
+    api_base_url: str = FEISHU_API_BASE_URL,
+) -> str:
+    response = client.post(
+        f"{api_base_url}/open-apis/im/v1/messages",
+        params={"receive_id_type": "chat_id"},
+        headers={"Authorization": f"Bearer {tenant_access_token}"},
+        json={
+            "receive_id": chat_id,
+            "msg_type": "text",
+            "content": json.dumps({"text": text}, ensure_ascii=False),
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("code") not in {0, None}:
+        raise RuntimeError(f"Feishu group message send failed: {payload}")
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    return str(data.get("message_id") or "")
