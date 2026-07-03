@@ -1713,27 +1713,36 @@ mock-api / PostgreSQL 业务事实
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py -q`
 
-##### G2：实现 conversation/message/user_memory
+##### G2：实现 conversation/message/user_memory 与 LangChain 会话记忆
 
-目标：保存会话、消息和用户长期偏好。
+目标：保存会话、消息、用户长期偏好，并把 AImodel 的会话状态接入 LangChain/LangGraph 记忆机制。业务消息表继续作为前端历史会话和评估溯源的数据源，LangChain PostgreSQL checkpointer 负责 Agent 运行时的短期上下文续接。
 
 修改文件：
 
 - `services/ai-service/app/routers/AImodel/memory.py`
+- `services/ai-service/app/routers/AImodel/service.py`
+- `services/ai-service/tests/test_aimodel_memory.py`
+- `services/ai-service/tests/test_aimodel_agent.py`
 
 实现类/函数：
 
-- `AImodelMemoryStore.initialize()`：初始化表结构。
-- `create_conversation()`：创建会话。
-- `append_message()`：追加消息。
-- `upsert_user_memory()`：更新用户偏好。
+- `AImodelMemoryStore.initialize()`：初始化 `conversation`、`message`、`message_query_trace`、`user_memory`、`agent_trace` 和 `agent_trace_event` 业务表；LangChain checkpointer 作为 Agent 运行时组件复用，不替代业务消息落库。
+- `ensure_conversation()`：创建或续用会话，返回稳定的数字 `conversation_id`。
+- `append_user_message()` / `append_assistant_message()`：写入业务消息表，保持前端历史会话、评估 answer source 和 RAG trace 溯源能力。
+- `load_user_memories()` / `upsert_user_memory()`：读取和更新用户长期偏好。
+- `get_langchain_checkpointer()`：返回可被 `create_agent(checkpointer=...)` 复用的进程级 LangChain/LangGraph checkpointer；配置 `DATABASE_URL` 时使用 PostgreSQL `PostgresSaver` 并执行 `setup()`，未配置数据库时测试环境使用内存实现。
+- `build_langchain_config()`：以 `conversation_id` 构造 `{"configurable": {"thread_id": str(conversation_id)}}`，确保同一会话复用同一 Agent thread。
+- `stream_chat_events()`：调用 LangChain Agent 时传入 checkpointer 和 thread config；长期用户偏好仍作为显式上下文注入，业务消息落库不由 checkpointer 替代。
 
 验收标准：
 
 - 同一用户可以查询历史会话并继续对话。
+- 同一 `conversation_id` 的多轮 Agent 调用使用同一个 LangChain thread，不再只依赖手动截取最近 5 条消息维持上下文。
+- `conversation` / `message` / `message_query_trace` 仍是前端历史、RAG trace 关联和 Ragas message answer source 的权威业务记录。
+- `user_memory` 继续保存长期偏好，进入 Agent 前以显式上下文注入，不与 LangChain checkpoint 混淆。
+- 未配置 PostgreSQL 时，测试环境使用进程级内存 checkpointer 和 `NoopAiModelMemoryStore` 保持可运行；配置 PostgreSQL 时必须使用 LangGraph `PostgresSaver`。
 
-测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_memory.py -q`
-
+测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_agent.py -q`
 ##### G3：实现商品搜索和详情工具
 
 目标：让 Agent 获取真实商品事实。

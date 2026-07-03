@@ -1,6 +1,8 @@
 from typing import Any
 import importlib
+import sys
 import threading
+import types
 
 import pytest
 
@@ -882,3 +884,91 @@ def test_stream_chat_hides_internal_ids_split_across_stream_chunks(monkeypatch) 
     assert "chunk-secret" not in response_text
     assert "trace_id" not in response_text
     assert "query-secret" not in response_text
+
+
+def test_langchain_agent_stream_uses_conversation_thread_config(monkeypatch) -> None:
+    """LangChain agent calls should use conversation_id as the checkpoint thread."""
+
+    import app.routers.AImodel.service as aimodel_service
+
+    captured: dict[str, Any] = {}
+
+    class FakeAgent:
+        def stream(
+            self,
+            payload: dict[str, Any],
+            *,
+            stream_mode: str,
+            config: dict[str, Any] | None = None,
+        ):
+            captured["payload"] = payload
+            captured["stream_mode"] = stream_mode
+            captured["config"] = config
+            return iter([])
+
+    def fake_create_agent(**kwargs: Any) -> FakeAgent:
+        captured["checkpointer"] = kwargs.get("checkpointer")
+        return FakeAgent()
+
+    def fake_tool(*decorator_args: Any, **_decorator_kwargs: Any):
+        if decorator_args and callable(decorator_args[0]):
+            return decorator_args[0]
+
+        def decorate(func):
+            return func
+
+        return decorate
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["model_kwargs"] = kwargs
+
+    monkeypatch.setitem(
+        sys.modules,
+        "langchain.agents",
+        types.SimpleNamespace(create_agent=fake_create_agent),
+    )
+    monkeypatch.setitem(
+        sys.modules, "langchain.tools", types.SimpleNamespace(tool=fake_tool)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "langchain_openai",
+        types.SimpleNamespace(ChatOpenAI=FakeChatOpenAI),
+    )
+    monkeypatch.setattr(
+        aimodel_service, "get_langchain_checkpointer", lambda: "checkpoint"
+    )
+    monkeypatch.setattr(
+        aimodel_service,
+        "route_aimodel_intent_with_candidates",
+        lambda _message: (
+            AImodelIntentRoute(
+                action="direct",
+                collection="shopping_guides",
+                collections=("shopping_guides",),
+                domain="chat",
+                category="chat_all",
+                intent="greeting",
+                confidence=0.9,
+                reason="test",
+            ),
+            [],
+        ),
+    )
+
+    chunks = list(
+        aimodel_service._run_langchain_agent_stream(
+            AiModelChatRequest(user_id=7, message="你好", links=[]),
+            [],
+            "http://mock-api",
+            None,
+            langchain_config={"configurable": {"thread_id": "123"}},
+        )
+    )
+
+    assert chunks == []
+    assert captured["checkpointer"] == "checkpoint"
+    assert captured["stream_mode"] == "messages"
+    assert captured["config"] == {"configurable": {"thread_id": "123"}}
+    assert captured["payload"]["messages"][-1].content.startswith("用户问题：你好")

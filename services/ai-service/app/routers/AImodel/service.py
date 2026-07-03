@@ -39,8 +39,10 @@ from app.routers.AImodel.memory import (
     AiModelMemoryMessage,
     AiModelMemoryStore,
     AiModelUserMemory,
+    build_langchain_config,
     extract_user_memories_from_text,
     get_aimodel_memory_store,
+    get_langchain_checkpointer,
 )
 from app.routers.AImodel.schemas import (
     AiModelChatRequest,
@@ -158,7 +160,6 @@ def stream_chat_events(
             user_id=request.user_id,
             first_message=request.message,
         )
-        history = memory_store.load_recent_messages(conversation_id, limit=5)
         user_memories = memory_store.load_user_memories(request.user_id, limit=10)
         memory_store.append_user_message(
             conversation_id,
@@ -200,9 +201,9 @@ def stream_chat_events(
                 tool_results,
                 mock_api_url,
                 http_client,
-                history=history,
                 user_memories=user_memories,
                 agent_trace_context=agent_trace_context,
+                langchain_config=build_langchain_config(conversation_id),
             )
         )
         for chunk in chunks:
@@ -354,6 +355,7 @@ def _run_langchain_agent_stream(
     history: list[AiModelMemoryMessage] | None = None,
     user_memories: list[AiModelUserMemory] | None = None,
     agent_trace_context: AgentTraceContext | None = None,
+    langchain_config: dict[str, Any] | None = None,
 ) -> Iterator[str]:
     from langchain.agents import create_agent
     from langchain.tools import tool
@@ -421,15 +423,13 @@ def _run_langchain_agent_stream(
         tools=agent_tools,
         system_prompt=SYSTEM_PROMPT,
         middleware=_agent_trace_middleware(agent_trace_context),
+        checkpointer=get_langchain_checkpointer(),
     )
     # 中文注释：这里只向前端流式输出可见回答文本，不暴露模型内部隐藏推理链路。
     for update in agent.stream(
-        {
-            "messages": _build_langchain_messages(
-                request, history=history, user_memories=user_memories
-            )
-        },
+        {"messages": _build_langchain_messages(request, user_memories=user_memories)},
         stream_mode="messages",
+        config=langchain_config,
     ):
         chunk = _extract_stream_token(update)
         if chunk:

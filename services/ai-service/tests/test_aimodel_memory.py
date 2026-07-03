@@ -1,3 +1,7 @@
+import sys
+import threading
+import types
+
 from app.routers.AImodel.agent_trace import (
     AgentTraceContext,
     LangChainAgentTraceMiddleware,
@@ -10,7 +14,9 @@ from app.routers.AImodel.memory import (
     AiModelMemoryMessage,
     AiModelUserMemory,
     NoopAiModelMemoryStore,
+    build_langchain_config,
     extract_user_memories_from_text,
+    get_langchain_checkpointer,
 )
 
 
@@ -40,12 +46,18 @@ def test_aimodel_memory_schema_uses_integer_ids_without_physical_foreign_keys() 
     )
 
 
-def test_noop_aimodel_memory_store_generates_conversation_id_and_keeps_recent_messages() -> None:
+def test_noop_aimodel_memory_store_generates_conversation_id_and_keeps_recent_messages() -> (
+    None
+):
     store = NoopAiModelMemoryStore()
 
-    conversation_id = store.ensure_conversation(None, user_id=1, first_message="我喜欢小米")
+    conversation_id = store.ensure_conversation(
+        None, user_id=1, first_message="我喜欢小米"
+    )
     for index in range(6):
-        store.append_user_message(conversation_id, user_id=1, content=f"用户消息 {index}", links=[])
+        store.append_user_message(
+            conversation_id, user_id=1, content=f"用户消息 {index}", links=[]
+        )
 
     recent_messages = store.load_recent_messages(conversation_id, limit=5)
 
@@ -65,18 +77,24 @@ def test_extract_user_memories_from_text_detects_price_and_brand_preferences() -
         user_id=1,
     )
 
-    assert AiModelUserMemory(
-        memory_type="brand_preference",
-        memory_value="小米",
-        evidence="用户表达了对小米的品牌偏好。",
-        confidence=0.8,
-    ) in memories
-    assert AiModelUserMemory(
-        memory_type="price_preference",
-        memory_value="高性价比",
-        evidence="用户表达了高性价比或预算敏感偏好。",
-        confidence=0.7,
-    ) in memories
+    assert (
+        AiModelUserMemory(
+            memory_type="brand_preference",
+            memory_value="小米",
+            evidence="用户表达了对小米的品牌偏好。",
+            confidence=0.8,
+        )
+        in memories
+    )
+    assert (
+        AiModelUserMemory(
+            memory_type="price_preference",
+            memory_value="高性价比",
+            evidence="用户表达了高性价比或预算敏感偏好。",
+            confidence=0.7,
+        )
+        in memories
+    )
 
 
 def test_noop_aimodel_memory_store_upserts_user_memory() -> None:
@@ -106,38 +124,51 @@ def test_memory_message_dataclass_shape() -> None:
     assert message.content == "推荐看高性价比商品。"
 
 
-def test_noop_aimodel_memory_store_lists_conversations_and_messages_by_int_user_id() -> None:
+def test_noop_aimodel_memory_store_lists_conversations_and_messages_by_int_user_id() -> (
+    None
+):
     store = NoopAiModelMemoryStore()
     first_id = store.ensure_conversation(None, user_id=1, first_message="第一轮")
     second_id = store.ensure_conversation(None, user_id=1, first_message="第二轮")
     other_user_id = store.ensure_conversation(None, user_id=2, first_message="其他用户")
-    store.append_user_message(first_id, user_id=1, content="第一轮", links=["/items/item_a"])
+    store.append_user_message(
+        first_id, user_id=1, content="第一轮", links=["/items/item_a"]
+    )
     store.append_assistant_message(
         first_id,
         user_id=1,
         content="第一轮回答",
-        recommended_links=[{"item_id": "item_a", "item_name": "商品A", "url": "/items/item_a"}],
+        recommended_links=[
+            {"item_id": "item_a", "item_name": "商品A", "url": "/items/item_a"}
+        ],
     )
 
     conversations = store.list_conversations(user_id=1)
     messages = store.list_messages(first_id, user_id=1)
 
     assert [conversation.id for conversation in conversations] == [second_id, first_id]
-    assert [conversation.title for conversation in conversations] == ["第二轮", "第一轮"]
+    assert [conversation.title for conversation in conversations] == [
+        "第二轮",
+        "第一轮",
+    ]
     assert store.list_messages(other_user_id, user_id=1) == []
     assert [(message.role, message.content) for message in messages] == [
         ("user", "第一轮"),
         ("assistant", "第一轮回答"),
     ]
     assert messages[0].links == ["/items/item_a"]
-    assert messages[1].recommended_links == [{"item_id": "item_a", "item_name": "商品A", "url": "/items/item_a"}]
+    assert messages[1].recommended_links == [
+        {"item_id": "item_a", "item_name": "商品A", "url": "/items/item_a"}
+    ]
 
 
 def test_noop_store_associates_assistant_message_with_multiple_query_traces() -> None:
     """One Agent answer may consume multiple RAG query tool results."""
 
     store = NoopAiModelMemoryStore()
-    conversation_id = store.ensure_conversation(None, user_id=1, first_message="对比商品")
+    conversation_id = store.ensure_conversation(
+        None, user_id=1, first_message="对比商品"
+    )
 
     message_id = store.append_assistant_message(
         conversation_id,
@@ -184,7 +215,9 @@ def test_agent_trace_schema_uses_postgres_tables_without_answer_summary() -> Non
     assert "idx_agent_trace_event_trace_created" in normalized_schema
 
 
-def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payloads() -> None:
+def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payloads() -> (
+    None
+):
     """Agent Trace should preserve routing diagnostics while avoiding raw payload storage."""
 
     context = AgentTraceContext.start(
@@ -241,23 +274,33 @@ def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payl
     assert "answer_summary" not in payload
     intent_event = payload["events"][0]
     assert intent_event["event_type"] == "intent"
-    assert [candidate["intent"] for candidate in intent_event["summary_payload"]["top_candidates"]] == [
+    assert [
+        candidate["intent"]
+        for candidate in intent_event["summary_payload"]["top_candidates"]
+    ] == [
         "operation_guide",
         "troubleshooting",
         "maintenance",
     ]
-    assert [candidate["score"] for candidate in intent_event["summary_payload"]["top_candidates"]] == [
+    assert [
+        candidate["score"]
+        for candidate in intent_event["summary_payload"]["top_candidates"]
+    ] == [
         0.92,
         0.87,
         0.79,
     ]
     assert payload["events"][2]["event_type"] == "tool_call"
-    assert payload["events"][2]["summary_payload"]["input_summary"]["query_chars"] == 1000
+    assert (
+        payload["events"][2]["summary_payload"]["input_summary"]["query_chars"] == 1000
+    )
     assert "x" * 20 not in str(payload["events"][2]["summary_payload"])
     assert "y" * 20 not in str(payload["events"][2]["summary_payload"])
 
 
-def test_langchain_agent_trace_middleware_records_success_and_error_tool_calls() -> None:
+def test_langchain_agent_trace_middleware_records_success_and_error_tool_calls() -> (
+    None
+):
     """The middleware object should record LangChain tool success and failure events."""
 
     context = AgentTraceContext.start(user_query="查 FAQ", conversation_id=1)
@@ -286,3 +329,143 @@ def test_langchain_agent_trace_middleware_records_success_and_error_tool_calls()
 
     assert context.tool_calls[-1].status == "error"
     assert context.tool_calls[-1].error == "RuntimeError: tool failed"
+
+
+def test_langchain_checkpointer_is_process_level_singleton(monkeypatch) -> None:
+    import app.routers.AImodel.memory as aimodel_memory
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+    first = get_langchain_checkpointer()
+    second = get_langchain_checkpointer()
+
+    assert first is second
+    assert hasattr(first, "get_tuple")
+    assert hasattr(first, "put")
+
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+
+def test_build_langchain_config_uses_conversation_id_as_thread_id() -> None:
+    assert build_langchain_config(42) == {"configurable": {"thread_id": "42"}}
+
+    try:
+        build_langchain_config(0)
+    except ValueError as error:
+        assert "conversation_id" in str(error)
+    else:
+        raise AssertionError("build_langchain_config should reject non-positive IDs")
+
+
+def test_langchain_checkpointer_uses_postgres_when_database_url_is_configured(
+    monkeypatch,
+) -> None:
+    import app.routers.AImodel.memory as aimodel_memory
+
+    created: dict[str, object] = {}
+
+    class FakeConnection:
+        @staticmethod
+        def connect(database_url: str, **kwargs: object) -> str:
+            created["database_url"] = database_url
+            created["connect_kwargs"] = kwargs
+            return "connection"
+
+    class FakePostgresSaver:
+        def __init__(self, connection: str) -> None:
+            created["connection"] = connection
+            self.setup_called = False
+
+        def setup(self) -> None:
+            self.setup_called = True
+            created["setup_called"] = True
+
+        def get_tuple(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def put(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    fake_psycopg = types.SimpleNamespace(Connection=FakeConnection)
+    fake_rows = types.SimpleNamespace(dict_row="dict_row")
+    fake_postgres = types.SimpleNamespace(PostgresSaver=FakePostgresSaver)
+    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+    monkeypatch.setitem(sys.modules, "psycopg.rows", fake_rows)
+    monkeypatch.setitem(sys.modules, "langgraph.checkpoint.postgres", fake_postgres)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://agent:agent@db/agent_ops")
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+    checkpointer = get_langchain_checkpointer()
+
+    assert isinstance(checkpointer, FakePostgresSaver)
+    assert created["database_url"] == "postgresql://agent:agent@db/agent_ops"
+    assert created["connection"] == "connection"
+    assert created["setup_called"] is True
+
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+
+def test_langchain_checkpointer_setup_is_serialized_for_concurrent_callers(
+    monkeypatch,
+) -> None:
+    import app.routers.AImodel.memory as aimodel_memory
+
+    created: dict[str, object] = {"setup_calls": 0}
+    setup_entered = threading.Barrier(2)
+    release_setup = threading.Event()
+
+    class FakeConnection:
+        @staticmethod
+        def connect(database_url: str, **kwargs: object) -> str:
+            return "connection"
+
+    class FakePostgresSaver:
+        def __init__(self, connection: str) -> None:
+            created["connection"] = connection
+
+        def setup(self) -> None:
+            created["setup_calls"] = int(created["setup_calls"]) + 1
+            if int(created["setup_calls"]) == 1:
+                setup_entered.wait(timeout=2)
+                release_setup.wait(timeout=2)
+
+        def get_tuple(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def put(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    fake_psycopg = types.SimpleNamespace(Connection=FakeConnection)
+    fake_rows = types.SimpleNamespace(dict_row="dict_row")
+    fake_postgres = types.SimpleNamespace(PostgresSaver=FakePostgresSaver)
+    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+    monkeypatch.setitem(sys.modules, "psycopg.rows", fake_rows)
+    monkeypatch.setitem(sys.modules, "langgraph.checkpoint.postgres", fake_postgres)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://agent:agent@db/agent_ops")
+    aimodel_memory.get_langchain_checkpointer.cache_clear()
+
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def load_checkpointer() -> None:
+        try:
+            results.append(get_langchain_checkpointer())
+        except BaseException as error:
+            errors.append(error)
+
+    first = threading.Thread(target=load_checkpointer)
+    second = threading.Thread(target=load_checkpointer)
+    first.start()
+    setup_entered.wait(timeout=2)
+    second.start()
+    release_setup.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert errors == []
+    assert len(results) == 2
+    assert results[0] is results[1]
+    assert created["setup_calls"] == 1
+
+    aimodel_memory.get_langchain_checkpointer.cache_clear()

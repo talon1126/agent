@@ -7,6 +7,8 @@ from functools import lru_cache
 from typing import Any, Literal, Protocol
 
 
+_LANGCHAIN_CHECKPOINTER_LOCK = threading.Lock()
+
 POSTGRES_AIMODEL_MEMORY_SCHEMA_SQL = [
     """
     CREATE TABLE IF NOT EXISTS conversation (
@@ -181,13 +183,21 @@ class AiModelStoredMessage:
 class AiModelMemoryStore(Protocol):
     def initialize(self) -> None: ...
 
-    def ensure_conversation(self, conversation_id: int | None, *, user_id: int, first_message: str) -> int: ...
+    def ensure_conversation(
+        self, conversation_id: int | None, *, user_id: int, first_message: str
+    ) -> int: ...
 
-    def load_recent_messages(self, conversation_id: int, *, limit: int = 5) -> list[AiModelMemoryMessage]: ...
+    def load_recent_messages(
+        self, conversation_id: int, *, limit: int = 5
+    ) -> list[AiModelMemoryMessage]: ...
 
-    def load_user_memories(self, user_id: int, *, limit: int = 10) -> list[AiModelUserMemory]: ...
+    def load_user_memories(
+        self, user_id: int, *, limit: int = 10
+    ) -> list[AiModelUserMemory]: ...
 
-    def append_user_message(self, conversation_id: int, *, user_id: int, content: str, links: list[str]) -> None: ...
+    def append_user_message(
+        self, conversation_id: int, *, user_id: int, content: str, links: list[str]
+    ) -> None: ...
 
     def append_assistant_message(
         self,
@@ -213,9 +223,13 @@ class AiModelMemoryStore(Protocol):
         confidence: float,
     ) -> None: ...
 
-    def list_conversations(self, *, user_id: int) -> list[AiModelConversationSummary]: ...
+    def list_conversations(
+        self, *, user_id: int
+    ) -> list[AiModelConversationSummary]: ...
 
-    def list_messages(self, conversation_id: int, *, user_id: int) -> list[AiModelStoredMessage]: ...
+    def list_messages(
+        self, conversation_id: int, *, user_id: int
+    ) -> list[AiModelStoredMessage]: ...
 
 
 class NoopAiModelMemoryStore:
@@ -232,36 +246,54 @@ class NoopAiModelMemoryStore:
     def initialize(self) -> None:
         return None
 
-    def ensure_conversation(self, conversation_id: int | None, *, user_id: int, first_message: str) -> int:
+    def ensure_conversation(
+        self, conversation_id: int | None, *, user_id: int, first_message: str
+    ) -> int:
         with self._lock:
             if conversation_id is not None:
                 self._conversations.setdefault(
                     conversation_id,
-                    (user_id, _build_conversation_title(first_message), self._next_sort_order),
+                    (
+                        user_id,
+                        _build_conversation_title(first_message),
+                        self._next_sort_order,
+                    ),
                 )
                 self._next_sort_order += 1
                 self._messages.setdefault(conversation_id, [])
                 return conversation_id
             conversation_id = self._next_conversation_id
             self._next_conversation_id += 1
-            self._conversations[conversation_id] = (user_id, _build_conversation_title(first_message), self._next_sort_order)
+            self._conversations[conversation_id] = (
+                user_id,
+                _build_conversation_title(first_message),
+                self._next_sort_order,
+            )
             self._next_sort_order += 1
             self._messages.setdefault(conversation_id, [])
             return conversation_id
 
-    def load_recent_messages(self, conversation_id: int, *, limit: int = 5) -> list[AiModelMemoryMessage]:
+    def load_recent_messages(
+        self, conversation_id: int, *, limit: int = 5
+    ) -> list[AiModelMemoryMessage]:
         with self._lock:
             return [
                 AiModelMemoryMessage(role=message.role, content=message.content)
                 for message in self._messages.get(conversation_id, [])[-limit:]
             ]
 
-    def load_user_memories(self, user_id: int, *, limit: int = 10) -> list[AiModelUserMemory]:
+    def load_user_memories(
+        self, user_id: int, *, limit: int = 10
+    ) -> list[AiModelUserMemory]:
         with self._lock:
             memories = list(self._memories.get(user_id, {}).values())
-        return sorted(memories, key=lambda memory: memory.confidence, reverse=True)[:limit]
+        return sorted(memories, key=lambda memory: memory.confidence, reverse=True)[
+            :limit
+        ]
 
-    def append_user_message(self, conversation_id: int, *, user_id: int, content: str, links: list[str]) -> None:
+    def append_user_message(
+        self, conversation_id: int, *, user_id: int, content: str, links: list[str]
+    ) -> None:
         with self._lock:
             # 中文注释：Noop store 也保留完整消息结构，保证前端会话历史测试不依赖真实数据库。
             self._messages.setdefault(conversation_id, []).append(
@@ -322,28 +354,44 @@ class NoopAiModelMemoryStore:
         confidence: float,
     ) -> None:
         with self._lock:
-            self._memories.setdefault(user_id, {})[(memory_type, memory_value)] = AiModelUserMemory(
-                memory_type=memory_type,
-                memory_value=memory_value,
-                evidence=evidence,
-                confidence=confidence,
+            self._memories.setdefault(user_id, {})[(memory_type, memory_value)] = (
+                AiModelUserMemory(
+                    memory_type=memory_type,
+                    memory_value=memory_value,
+                    evidence=evidence,
+                    confidence=confidence,
+                )
             )
 
     def list_conversations(self, *, user_id: int) -> list[AiModelConversationSummary]:
         with self._lock:
             conversations = [
                 AiModelConversationSummary(id=conversation_id, title=title)
-                for conversation_id, (stored_user_id, title, _sort_order) in self._conversations.items()
+                for conversation_id, (
+                    stored_user_id,
+                    title,
+                    _sort_order,
+                ) in self._conversations.items()
                 if stored_user_id == user_id
             ]
             sort_orders = {
                 conversation_id: sort_order
-                for conversation_id, (stored_user_id, _title, sort_order) in self._conversations.items()
+                for conversation_id, (
+                    stored_user_id,
+                    _title,
+                    sort_order,
+                ) in self._conversations.items()
                 if stored_user_id == user_id
             }
-        return sorted(conversations, key=lambda conversation: sort_orders[conversation.id], reverse=True)
+        return sorted(
+            conversations,
+            key=lambda conversation: sort_orders[conversation.id],
+            reverse=True,
+        )
 
-    def list_messages(self, conversation_id: int, *, user_id: int) -> list[AiModelStoredMessage]:
+    def list_messages(
+        self, conversation_id: int, *, user_id: int
+    ) -> list[AiModelStoredMessage]:
         with self._lock:
             conversation = self._conversations.get(conversation_id)
             if conversation is None or conversation[0] != user_id:
@@ -353,7 +401,9 @@ class NoopAiModelMemoryStore:
 
 class PostgresAiModelMemoryStore:
     def __init__(self, database_url: str) -> None:
-        self.database_url = database_url.replace("postgresql+psycopg://", "postgresql://")
+        self.database_url = database_url.replace(
+            "postgresql+psycopg://", "postgresql://"
+        )
         self._init_lock = threading.Lock()
         self._initialized = False
 
@@ -368,7 +418,9 @@ class PostgresAiModelMemoryStore:
                 connection.commit()
             self._initialized = True
 
-    def ensure_conversation(self, conversation_id: int | None, *, user_id: int, first_message: str) -> int:
+    def ensure_conversation(
+        self, conversation_id: int | None, *, user_id: int, first_message: str
+    ) -> int:
         self.initialize()
         title = _build_conversation_title(first_message)
         with self._connect() as connection:
@@ -400,7 +452,9 @@ class PostgresAiModelMemoryStore:
             connection.commit()
         return conversation_id
 
-    def load_recent_messages(self, conversation_id: int, *, limit: int = 5) -> list[AiModelMemoryMessage]:
+    def load_recent_messages(
+        self, conversation_id: int, *, limit: int = 5
+    ) -> list[AiModelMemoryMessage]:
         self.initialize()
         with self._connect() as connection:
             with connection.cursor() as cursor:
@@ -421,7 +475,9 @@ class PostgresAiModelMemoryStore:
             if row[0] in {"user", "assistant"}
         ]
 
-    def load_user_memories(self, user_id: int, *, limit: int = 10) -> list[AiModelUserMemory]:
+    def load_user_memories(
+        self, user_id: int, *, limit: int = 10
+    ) -> list[AiModelUserMemory]:
         self.initialize()
         with self._connect() as connection:
             with connection.cursor() as cursor:
@@ -446,7 +502,9 @@ class PostgresAiModelMemoryStore:
             for row in rows
         ]
 
-    def append_user_message(self, conversation_id: int, *, user_id: int, content: str, links: list[str]) -> None:
+    def append_user_message(
+        self, conversation_id: int, *, user_id: int, content: str, links: list[str]
+    ) -> None:
         self.initialize()
         from psycopg.types.json import Jsonb
 
@@ -459,7 +517,10 @@ class PostgresAiModelMemoryStore:
                     """,
                     (conversation_id, user_id, content, Jsonb(links)),
                 )
-                cursor.execute("UPDATE conversation SET updated_at = now() WHERE id = %s", (conversation_id,))
+                cursor.execute(
+                    "UPDATE conversation SET updated_at = now() WHERE id = %s",
+                    (conversation_id,),
+                )
             connection.commit()
 
     def append_assistant_message(
@@ -494,7 +555,10 @@ class PostgresAiModelMemoryStore:
                         """,
                         (message_id, query_trace_id),
                     )
-                cursor.execute("UPDATE conversation SET updated_at = now() WHERE id = %s", (conversation_id,))
+                cursor.execute(
+                    "UPDATE conversation SET updated_at = now() WHERE id = %s",
+                    (conversation_id,),
+                )
             connection.commit()
         return message_id
 
@@ -642,7 +706,9 @@ class PostgresAiModelMemoryStore:
             for row in rows
         ]
 
-    def list_messages(self, conversation_id: int, *, user_id: int) -> list[AiModelStoredMessage]:
+    def list_messages(
+        self, conversation_id: int, *, user_id: int
+    ) -> list[AiModelStoredMessage]:
         self.initialize()
         with self._connect() as connection:
             with connection.cursor() as cursor:
@@ -675,7 +741,9 @@ class PostgresAiModelMemoryStore:
         return psycopg.connect(self.database_url)
 
 
-def extract_user_memories_from_text(text: str, *, user_id: int) -> list[AiModelUserMemory]:
+def extract_user_memories_from_text(
+    text: str, *, user_id: int
+) -> list[AiModelUserMemory]:
     memories: list[AiModelUserMemory] = []
     if any(keyword in text for keyword in ["高性价比", "便宜", "实惠", "预算有限"]):
         memories.append(
@@ -701,10 +769,37 @@ def extract_user_memories_from_text(text: str, *, user_id: int) -> list[AiModelU
 
 
 def _extract_brand_preferences(text: str) -> list[str]:
-    brands = ["小米", "华为", "苹果", "索尼", "戴森", "美的", "海尔", "耐克", "阿迪达斯"]
+    brands = [
+        "小米",
+        "华为",
+        "苹果",
+        "索尼",
+        "戴森",
+        "美的",
+        "海尔",
+        "耐克",
+        "阿迪达斯",
+    ]
     if not any(keyword in text for keyword in ["喜欢", "偏好", "常买", "只看"]):
         return []
-    return [brand for brand in brands if re.search(rf"(喜欢|偏好|常买|只看).{{0,8}}{brand}|{brand}.{{0,8}}(喜欢|偏好|常买|只看)", text)]
+    return [
+        brand
+        for brand in brands
+        if re.search(
+            rf"(喜欢|偏好|常买|只看).{{0,8}}{brand}|{brand}.{{0,8}}(喜欢|偏好|常买|只看)",
+            text,
+        )
+    ]
+
+
+class FallbackLangChainCheckpointer:
+    """Minimal checkpointer shape used when LangGraph is unavailable in tests."""
+
+    def get_tuple(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def put(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
 
 
 def _build_conversation_title(first_message: str) -> str:
@@ -724,6 +819,51 @@ def _normalize_query_trace_ids(query_trace_ids: list[str] | None) -> list[str]:
             normalized.append(trace_id)
             seen.add(trace_id)
     return normalized
+
+
+@lru_cache(maxsize=1)
+def _create_langchain_checkpointer() -> Any:
+    """Create the LangGraph checkpointer for the current process."""
+
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if database_url:
+        import psycopg
+        from langgraph.checkpoint.postgres import PostgresSaver
+        from psycopg.rows import dict_row
+
+        connection = psycopg.Connection.connect(
+            database_url.replace("postgresql+psycopg://", "postgresql://"),
+            autocommit=True,
+            prepare_threshold=0,
+            row_factory=dict_row,
+        )
+        saver = PostgresSaver(connection)
+        saver.setup()
+        return saver
+
+    try:
+        from langgraph.checkpoint.memory import MemorySaver
+    except Exception:
+        return FallbackLangChainCheckpointer()
+    return MemorySaver()
+
+
+def get_langchain_checkpointer() -> Any:
+    """Return the process-level LangGraph checkpointer used by AImodel agents."""
+
+    with _LANGCHAIN_CHECKPOINTER_LOCK:
+        return _create_langchain_checkpointer()
+
+
+get_langchain_checkpointer.cache_clear = _create_langchain_checkpointer.cache_clear  # type: ignore[attr-defined]
+
+
+def build_langchain_config(conversation_id: int) -> dict[str, dict[str, str]]:
+    """Build the LangChain config that binds one conversation to one thread."""
+
+    if conversation_id <= 0:
+        raise ValueError("conversation_id must be a positive integer")
+    return {"configurable": {"thread_id": str(conversation_id)}}
 
 
 @lru_cache(maxsize=1)
