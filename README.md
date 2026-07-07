@@ -1,3 +1,5 @@
+<img width="2560" height="1398" alt="image" src="https://github.com/user-attachments/assets/76c2859d-7992-4091-8abc-a3c162bb022f" />
+
 # TalonMart Agent
 
 TalonMart Agent 是一个本地优先的电商业务 Agent 与企业运营管理系统。项目围绕 TalonMart 电商业务构建前端购物体验、AImodel 对话助手、飞书 ERP 协作后台、n8n 业务 Workflow、mock-api 业务事实 API，以及独立的 RAG 知识服务。
