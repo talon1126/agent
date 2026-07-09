@@ -150,6 +150,38 @@ routers:
       aftersales:
         description: Shipping, return, invoice, account, and service scripts.
         intents:
+          order_status:
+            action: order_api
+            collection: null
+            priority: 130
+            confidence: 0.96
+            rag_enabled: false
+            match:
+              any:
+                - 订单号
+                - 咨询订单号
+                - 订单状态
+                - 订单进展
+                - 我的订单
+                - 这个订单
+                - 物流单号
+                - 快递单号
+                - 服务单号
+                - 查一下
+                - 查询订单
+                - 查下订单
+                - 什么时候发货
+                - 什么时候派送
+                - 到哪里了
+                - 物流更新
+                - 被取消
+                - 取消原因
+              all:
+                - 订单
+              regex:
+                - ".*(订单号|咨询订单号|物流单号|快递单号|服务单号).*"
+                - ".*订单.*(查一下|查询|查下|进展|状态|发货|派送|物流|取消).*"
+                - ".*(查一下|查询|查下).*(订单|快递|物流|包裹).*"
           shipping_policy:
             action: rag
             collection: policies

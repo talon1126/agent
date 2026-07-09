@@ -9,12 +9,14 @@ product APIs, web search, a direct answer, or a refusal path.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import yaml
 
@@ -29,7 +31,7 @@ class AImodelIntentRule:
         category: Domain-local category such as ``presale`` or ``aftersales``.
         intent: Leaf intent name under the category.
         action: Tool action selected by the rule. Supported first-release values
-            are ``rag``, ``product_api``, ``web``, ``direct``, and ``refuse``.
+            are ``rag``, ``product_api``, ``order_api``, ``web``, ``direct``, and ``refuse``.
         collection: Optional RAG collection. It must be set when ``action`` is
             ``rag`` and should be ``None`` for non-RAG actions.
         priority: Human-controlled conflict weight used as a small tie-breaker.
@@ -71,7 +73,7 @@ class AImodelIntentRoute:
 
     Args:
         action: Selected execution path: ``rag``, ``product_api``, ``web``,
-            ``direct``, or ``refuse``.
+            ``order_api``, ``direct``, or ``refuse``.
         collection: Primary target RAG collection for ``rag`` actions.
         collections: Ordered RAG collections selected from high-confidence
             candidates. Multi-collection routes let RAG execute parallel
@@ -121,6 +123,167 @@ class _RuleMatch:
     matched_regex: tuple[str, ...]
 
 
+class AImodelIntentClassifierBackend(Protocol):
+    """Predict AImodel intent routes from a learned classifier backend."""
+
+    def route_with_candidates(
+        self,
+        message: str,
+        *,
+        limit: int = 3,
+    ) -> tuple[AImodelIntentRoute, list[dict[str, Any]]]:
+        """Return one selected route and top candidate diagnostics."""
+
+
+class AImodelIntentSequenceClassifier:
+    """Route AImodel turns with the local Qwen3 sequence-classification LoRA."""
+
+    def __init__(
+        self,
+        *,
+        model_dir: str | Path,
+        base_model: str = "Qwen/Qwen3-1.7B",
+        max_length: int = 256,
+        device: str | None = None,
+    ) -> None:
+        self._model_dir = Path(model_dir)
+        self._base_model = base_model
+        self._max_length = max_length
+        self._device_name = device
+        self._model: Any | None = None
+        self._tokenizer: Any | None = None
+        self._route_by_label: dict[str, dict[str, Any]] = {}
+
+    def route_with_candidates(
+        self,
+        message: str,
+        *,
+        limit: int = 3,
+    ) -> tuple[AImodelIntentRoute, list[dict[str, Any]]]:
+        self._ensure_loaded()
+        assert self._model is not None
+        assert self._tokenizer is not None
+        import torch
+
+        inputs = self._tokenizer(
+            message,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self._max_length,
+        )
+        device = next(self._model.parameters()).device
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+        with torch.inference_mode():
+            logits = self._model(**inputs).logits[0]
+            probabilities = torch.softmax(logits, dim=-1)
+            top_values, top_indices = torch.topk(
+                probabilities,
+                k=min(max(int(limit), 1), probabilities.shape[-1]),
+            )
+        top_candidates = [
+            self._candidate_from_label(
+                label=str(self._model.config.id2label[int(index)]),
+                score=float(value),
+            )
+            for value, index in zip(top_values.tolist(), top_indices.tolist(), strict=False)
+        ]
+        selected = top_candidates[0]
+        route = AImodelIntentRoute(
+            action=str(selected["action"]),
+            collection=selected["collection"] if selected["action"] == "rag" else None,
+            collections=tuple(selected.get("collections") or ()),
+            domain=str(selected["domain"]),
+            category=str(selected["category"]),
+            intent=str(selected["intent"]),
+            confidence=float(selected["score"]),
+            reason=f"lora_seqcls {selected['label']}",
+            matched_rule="lora_seqcls",
+            rag_enabled=selected["action"] == "rag",
+        )
+        return route, top_candidates
+
+    def _ensure_loaded(self) -> None:
+        if self._model is not None and self._tokenizer is not None:
+            return
+        labels_path = self._model_dir / "intent_sequence_labels.json"
+        if not labels_path.exists():
+            raise FileNotFoundError(f"AImodel intent LoRA labels not found: {labels_path}")
+        labels_payload = json.loads(labels_path.read_text(encoding="utf-8"))
+        self._route_by_label = {
+            str(label): dict(route)
+            for label, route in labels_payload.get("route_by_label", {}).items()
+        }
+        label2id = {
+            str(label): int(index)
+            for label, index in labels_payload.get("label2id", {}).items()
+        }
+        id2label = {
+            int(index): str(label)
+            for index, label in labels_payload.get("id2label", {}).items()
+        }
+        if not self._route_by_label or not label2id or not id2label:
+            raise ValueError("AImodel intent LoRA labels are incomplete")
+        try:
+            import torch
+            from peft import PeftModel
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        except ModuleNotFoundError as error:
+            raise RuntimeError("AImodel intent LoRA dependencies are not installed") from error
+
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            self._model_dir,
+            trust_remote_code=True,
+        )
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+        dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+        base_model = AutoModelForSequenceClassification.from_pretrained(
+            self._base_model,
+            num_labels=len(label2id),
+            id2label=id2label,
+            label2id=label2id,
+            torch_dtype=dtype if torch.cuda.is_available() else torch.float32,
+            trust_remote_code=True,
+        )
+        base_model.config.pad_token_id = self._tokenizer.pad_token_id
+        model = PeftModel.from_pretrained(base_model, self._model_dir)
+        target_device = self._device_name or ("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(target_device)
+        model.eval()
+        self._model = model
+
+    def _candidate_from_label(self, *, label: str, score: float) -> dict[str, Any]:
+        route = self._route_by_label[label]
+        action = str(route.get("action") or "rag")
+        domain = str(route.get("domain") or "")
+        category = str(route.get("category") or "")
+        intent = str(route.get("intent") or "")
+        collections = tuple(str(item) for item in route.get("collections") or ())
+        collection = route.get("collection")
+        if domain == "support" and category == "aftersales" and intent == "shipping_policy" and action == "product_api":
+            action = "rag"
+            collection = "policies"
+            collections = ("policies",)
+        if action == "rag" and not collections and collection:
+            collections = (str(collection),)
+        return {
+            "domain": domain,
+            "category": category,
+            "intent": intent,
+            "domain_intent": f"{domain}.{category}.{intent}",
+            "action": action,
+            "collection": str(collection) if action == "rag" and collection else None,
+            "collections": list(collections) if action == "rag" else [],
+            "score": round(float(score), 6),
+            "base_confidence": round(float(score), 6),
+            "priority": 0,
+            "matched_rule": "lora_seqcls",
+            "matched_terms": [],
+            "matched_regex": [],
+            "label": label,
+        }
+
+
 class AImodelIntentRouter:
     """Select AImodel's next tool action for one user message.
 
@@ -136,6 +299,7 @@ class AImodelIntentRouter:
         rules: Sequence[AImodelIntentRule],
         default_collection: str,
         rule_threshold: float = 0.75,
+        classifier_backend: AImodelIntentClassifierBackend | None = None,
     ) -> None:
         """Create a router from preloaded rules.
 
@@ -151,6 +315,7 @@ class AImodelIntentRouter:
         self._rules = tuple(rules)
         self._default_collection = _non_blank(default_collection, "default_collection")
         self._rule_threshold = _validate_threshold(rule_threshold, "rule_threshold")
+        self._classifier_backend = classifier_backend
 
     def route(self, message: str) -> AImodelIntentRoute:
         """Return the selected action and optional RAG collection.
@@ -182,6 +347,15 @@ class AImodelIntentRouter:
             summaries. Candidates are intended for observability events, while
             the route itself remains the compact execution result.
         """
+
+        if self._classifier_backend is not None:
+            try:
+                return self._classifier_backend.route_with_candidates(
+                    message,
+                    limit=limit,
+                )
+            except Exception:
+                pass
 
         normalized_message = _normalize_for_matching(message)
         matches = [
@@ -291,6 +465,32 @@ def default_intent_routes_path() -> Path:
     return Path(__file__).with_name("intent_routes.yaml")
 
 
+def default_intent_lora_model_path() -> Path:
+    """Return the local sequence-classification LoRA model directory."""
+
+    configured = os.getenv("AIMODEL_INTENT_LORA_MODEL_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[3] / "rag" / "data" / "models" / "intent-router-qwen3-1.7b-seqcls"
+
+
+def load_default_intent_classifier_backend() -> AImodelIntentClassifierBackend | None:
+    """Create the preferred LoRA classifier backend when local artifacts exist."""
+
+    if os.getenv("AIMODEL_INTENT_ROUTER_BACKEND", "lora").strip().lower() in {"rule", "rules"}:
+        return None
+    model_dir = default_intent_lora_model_path()
+    if not (model_dir / "adapter_model.safetensors").exists():
+        return None
+    if not (model_dir / "intent_sequence_labels.json").exists():
+        return None
+    return AImodelIntentSequenceClassifier(
+        model_dir=model_dir,
+        base_model=os.getenv("AIMODEL_INTENT_LORA_BASE_MODEL", "Qwen/Qwen3-1.7B"),
+        device=os.getenv("AIMODEL_INTENT_LORA_DEVICE", "").strip() or None,
+    )
+
+
 def load_aimodel_intent_rules(path: str | Path) -> tuple[AImodelIntentRule, ...]:
     """Load tree-shaped AImodel intent rules from YAML.
 
@@ -328,6 +528,7 @@ def load_default_aimodel_intent_router() -> AImodelIntentRouter:
     return AImodelIntentRouter(
         rules=load_aimodel_intent_routes(default_intent_routes_path()),
         default_collection="shopping_guides",
+        classifier_backend=load_default_intent_classifier_backend(),
     )
 
 

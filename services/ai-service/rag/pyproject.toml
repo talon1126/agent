@@ -42,6 +42,15 @@ evaluation = [
 ]
 rerank = [
     "sentence-transformers>=3.0,<6.0",
+    "torch==2.7.1+cu128; sys_platform == 'win32' or sys_platform == 'linux'",
+    "transformers>=4.51,<5.0",
+]
+
+intent-lora = [
+    "accelerate>=1.0,<2.0",
+    "peft>=0.14,<1.0",
+    "torch==2.7.1+cu128; sys_platform == 'win32' or sys_platform == 'linux'",
+    "transformers>=4.51,<5.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -73,3 +82,13 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "W"]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

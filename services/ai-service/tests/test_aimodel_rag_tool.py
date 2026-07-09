@@ -1,3 +1,4 @@
+import json
 from typing import Any
 import importlib
 import sys
@@ -11,6 +12,7 @@ from app.routers.AImodel.schemas import AiModelChatRequest, AiModelToolResult
 from app.routers.AImodel.intent_router import (
     AImodelIntentRoute,
     AImodelIntentRouter,
+    AImodelIntentSequenceClassifier,
     select_rag_collections_by_score,
     load_aimodel_intent_routes,
     load_default_aimodel_intent_router,
@@ -408,6 +410,120 @@ def test_aimodel_intent_router_routes_internal_policy_to_rag_collection() -> Non
     assert route.matched_rule
 
 
+def test_aimodel_intent_router_routes_order_status_to_order_api() -> None:
+    """Order and logistics state questions should use the order API, not RAG."""
+
+    router = AImodelIntentRouter(
+        rules=load_aimodel_intent_rules(
+            "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+        ),
+        default_collection="shopping_guides",
+    )
+
+    route = router.route("咨询订单号 ord_100，帮我查一下这个订单什么时候发货？")
+
+    assert route.action == "order_api"
+    assert route.collection is None
+    assert route.collections == ()
+    assert route.domain == "support"
+    assert route.category == "aftersales"
+    assert route.intent == "order_status"
+    assert route.matched_rule == "support_aftersales_order_status"
+
+
+def test_aimodel_intent_router_prefers_lora_classifier_backend() -> None:
+    """When the classifier is available, AImodel routing should use model scores first."""
+
+    class FakeClassifierBackend:
+        def route_with_candidates(self, message: str, *, limit: int = 3):
+            assert message == "订单为什么被取消？"
+            assert limit == 3
+            return AImodelIntentRoute(
+                action="order_api",
+                collection=None,
+                collections=(),
+                domain="support",
+                category="aftersales",
+                intent="order_status",
+                confidence=0.91,
+                reason="lora_seqcls support.aftersales.order_status.order_api.none",
+                matched_rule="lora_seqcls",
+                rag_enabled=False,
+            ), [
+                {
+                    "domain": "support",
+                    "category": "aftersales",
+                    "intent": "order_status",
+                    "domain_intent": "support.aftersales.order_status",
+                    "action": "order_api",
+                    "collection": None,
+                    "score": 0.91,
+                    "matched_rule": "lora_seqcls",
+                }
+            ]
+
+    router = AImodelIntentRouter(
+        rules=load_aimodel_intent_rules(
+            "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+        ),
+        default_collection="shopping_guides",
+        classifier_backend=FakeClassifierBackend(),
+    )
+
+    route, candidates = router.route_with_candidates("订单为什么被取消？")
+
+    assert route.action == "order_api"
+    assert route.reason.startswith("lora_seqcls")
+    assert route.matched_rule == "lora_seqcls"
+    assert candidates[0]["matched_rule"] == "lora_seqcls"
+
+
+def test_lora_sequence_classifier_normalizes_shipping_policy_to_rag(tmp_path) -> None:
+    """Legacy classifier labels must not route shipping policy questions to product API."""
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "intent_sequence_labels.json").write_text(
+        json.dumps(
+            {
+                "route_by_label": {
+                    "support.aftersales.shipping_policy.product_api.none": {
+                        "domain": "support",
+                        "category": "aftersales",
+                        "intent": "shipping_policy",
+                        "action": "product_api",
+                        "collection": None,
+                        "collections": [],
+                    }
+                },
+                "label2id": {"support.aftersales.shipping_policy.product_api.none": 0},
+                "id2label": {"0": "support.aftersales.shipping_policy.product_api.none"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    classifier = AImodelIntentSequenceClassifier(model_dir=model_dir)
+    classifier._route_by_label = {
+        "support.aftersales.shipping_policy.product_api.none": {
+            "domain": "support",
+            "category": "aftersales",
+            "intent": "shipping_policy",
+            "action": "product_api",
+            "collection": None,
+            "collections": [],
+        }
+    }
+
+    candidate = classifier._candidate_from_label(
+        label="support.aftersales.shipping_policy.product_api.none",
+        score=0.8,
+    )
+
+    assert candidate["action"] == "rag"
+    assert candidate["collection"] == "policies"
+    assert candidate["collections"] == ["policies"]
+
 def test_aimodel_intent_router_routes_presale_explanations_to_shopping_guides() -> None:
     """Broad why/can phrasing should not force buying advice into FAQ."""
 
@@ -625,6 +741,7 @@ def test_agent_tools_for_intent_route_only_exposes_selected_action_tools() -> No
     tool_kwargs = {
         "product_detail_tool": NamedTool("get_product_detail_from_link"),
         "product_search_tool": NamedTool("search_product_catalog"),
+        "order_status_tool": NamedTool("get_order_status"),
         "rag_tool": NamedTool("rag_tool"),
         "web_search_tool": NamedTool("search_web_with_tavily"),
     }
@@ -658,8 +775,22 @@ def test_agent_tools_for_intent_route_only_exposes_selected_action_tools() -> No
         rag_enabled=False,
     )
 
+    order_route = AImodelIntentRoute(
+        action="order_api",
+        collection=None,
+        domain="support",
+        category="aftersales",
+        intent="order_status",
+        confidence=0.9,
+        reason="matched rule",
+        rag_enabled=False,
+    )
+
     assert _tool_names(_agent_tools_for_intent_route(rag_route, **tool_kwargs)) == [
         "rag_tool"
+    ]
+    assert _tool_names(_agent_tools_for_intent_route(order_route, **tool_kwargs)) == [
+        "get_order_status"
     ]
     assert "rag_tool" not in _tool_names(
         _agent_tools_for_intent_route(direct_route, **tool_kwargs)

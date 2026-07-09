@@ -8,6 +8,8 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
+from app.order_status_tool import get_order_status as fetch_order_status
+
 try:
     from langchain_core.messages import AIMessage, HumanMessage
 except ModuleNotFoundError:
@@ -68,12 +70,12 @@ SYSTEM_PROMPT = """
 你是 TalonMart 的 AImodel 购物助手。
 你需要根据用户意图决定是否调用工具，并严格区分信息来源。
 当意图路由命中并且本轮只向你开放某个工具时，该工具就是本轮必用工具；你必须在回答前至少调用一次该工具，不能绕过工具直接用常识回答。
-如果本轮可用工具中只有 rag_tool，必须先调用 rag_tool 再回答；如果只有 search_product_catalog、get_product_detail_from_link 或 search_web_with_tavily，也必须先调用对应工具。未调用本轮必用工具前，不允许直接生成最终答案。
+如果本轮可用工具中只有 rag_tool，必须先调用 rag_tool 再回答；如果只有 search_product_catalog、get_product_detail_from_link、get_order_status 或 search_web_with_tavily，也必须先调用对应工具。未调用本轮必用工具前，不允许直接生成最终答案。
 商品推荐场景：当用户想要商品推荐、购买建议、可购买商品或“有什么值得买”时，必须先使用商品搜索工具获取真实商品后再推荐。
 商品链接对比场景：当用户提供一个或多个商品链接并要求对比、总结或判断时，必须使用商品详情工具获取真实商品信息后再回答。
 内部知识场景：当用户询问怎么选、判断标准、避坑点、参数含义、品类知识、平台政策、FAQ、客服话术、售后、退换货、保修、配送、履约或账号安全时，必须使用 RAG 工具检索内部知识库。
 公开信息场景：当用户询问外部市场趋势、品牌新品背景、公开排行榜或商品库与内部知识库之外的信息时，才使用联网搜索工具。
-商品事实必须来自商品搜索工具或商品详情工具，包括价格、库存、优惠、规格、可购买商品和商品链接。
+商品事实必须来自商品搜索工具或商品详情工具，包括价格、库存、优惠、规格、可购买商品和商品链接。订单状态、物流状态、发货进度、配送进展和取消原因必须来自订单状态工具。
 RAG 工具返回的是可直接用于回答的内部知识上下文，不是最终答案；你需要基于这些上下文组织自然回答。
 不能使用 RAG 内容生成实时商品事实，不能用 RAG 编造价格、库存、优惠、可购买商品或商品链接。
 联网搜索工具不能替代商品搜索工具、商品详情工具或 RAG 工具，不能覆盖平台内部政策、售后规则或客服口径。
@@ -302,6 +304,16 @@ def _run_langchain_agent(
         tool_results.append(result)
         return result.model_dump()
 
+    @tool
+    def get_order_status(order_id: str) -> dict[str, Any]:
+        """根据订单号查询真实订单状态和物流状态。"""
+        return _run_order_status_tool(
+            order_id,
+            tool_results=tool_results,
+            mock_api_url=mock_api_url,
+            http_client=http_client,
+        )
+
     intent_route, intent_candidates = route_aimodel_intent_with_candidates(
         request.message
     )
@@ -318,6 +330,7 @@ def _run_langchain_agent(
         intent_route,
         product_detail_tool=get_product_detail_from_link,
         product_search_tool=search_product_catalog,
+        order_status_tool=get_order_status,
         rag_tool=rag_tool,
         web_search_tool=web_search_tool,
     )
@@ -383,6 +396,16 @@ def _run_langchain_agent_stream(
         tool_results.append(result)
         return result.model_dump()
 
+    @tool
+    def get_order_status(order_id: str) -> dict[str, Any]:
+        """根据订单号查询真实订单状态和物流状态。"""
+        return _run_order_status_tool(
+            order_id,
+            tool_results=tool_results,
+            mock_api_url=mock_api_url,
+            http_client=http_client,
+        )
+
     intent_route, intent_candidates = route_aimodel_intent_with_candidates(
         request.message
     )
@@ -399,6 +422,7 @@ def _run_langchain_agent_stream(
         intent_route,
         product_detail_tool=get_product_detail_from_link,
         product_search_tool=search_product_catalog,
+        order_status_tool=get_order_status,
         rag_tool=rag_tool,
         web_search_tool=web_search_tool,
     )
@@ -478,6 +502,7 @@ def _agent_tools_for_intent_route(
     *,
     product_detail_tool: Any,
     product_search_tool: Any,
+    order_status_tool: Any,
     rag_tool: Any,
     web_search_tool: Any,
 ) -> list[Any]:
@@ -487,6 +512,7 @@ def _agent_tools_for_intent_route(
         intent_route: Routing decision produced before Agent execution.
         product_detail_tool: Tool for resolving product detail links.
         product_search_tool: Tool for searching the internal product catalog.
+        order_status_tool: Tool for querying order and logistics status.
         rag_tool: Tool for querying the internal RAG MCP knowledge service.
         web_search_tool: Tool for public web search.
 
@@ -500,6 +526,8 @@ def _agent_tools_for_intent_route(
         return [rag_tool]
     if intent_route.action == "product_api":
         return [product_detail_tool, product_search_tool]
+    if intent_route.action == "order_api":
+        return [order_status_tool]
     if intent_route.action == "web":
         return [web_search_tool]
     if intent_route.action in {"direct", "refuse"}:
@@ -686,6 +714,48 @@ class _SimpleAImodelTool:
             return self._handler()
         query = payload.get("query", "") if isinstance(payload, dict) else payload
         return self._handler(str(query))
+
+
+def _run_order_status_tool(
+    order_id: str,
+    *,
+    tool_results: list[AiModelToolResult],
+    mock_api_url: str,
+    http_client: httpx.Client | None,
+) -> dict[str, Any]:
+    """Execute ``get_order_status`` and record its public result."""
+
+    normalized_order_id = str(order_id or "").strip()
+    if not normalized_order_id:
+        result = AiModelToolResult(
+            tool="get_order_status",
+            ok=False,
+            input="",
+            error="order_id_required",
+        )
+        tool_results.append(result)
+        return result.model_dump()
+    try:
+        data = fetch_order_status(
+            order_id=normalized_order_id,
+            mock_api_url=mock_api_url,
+            http_client=http_client,
+        )
+        result = AiModelToolResult(
+            tool="get_order_status",
+            ok=True,
+            input=normalized_order_id,
+            data=data,
+        )
+    except Exception as error:
+        result = AiModelToolResult(
+            tool="get_order_status",
+            ok=False,
+            input=normalized_order_id,
+            error=str(error),
+        )
+    tool_results.append(result)
+    return result.model_dump()
 
 
 def _run_web_search_tool(
