@@ -37,6 +37,22 @@
 └──────────────────────────────┘   └────────────────────────────┘
 
 ai-service ── stdio MCP ── services/ai-service/rag
+
+已授权目标网页 + 输入清单
+          |
+          v
+影刀通用网页导出模板 ──> 站点适配子流程 ──> 原始 CSV(dataset_type)
+                                                   |
+                                                   v
+                                      services/data-ops 通用核心
+                                                   |
+                                                   v
+                                         dataset processor 注册表
+                                                   |
+                                                   v
+                                     标准化 CSV + 失败 CSV + 批次清单
+
+首个实现：京东商品 URL ──> 影刀 jd_product 实现 ──> pandas jd_product processor
 ```
 
 ### 5.2 目录结构树
@@ -47,6 +63,7 @@ agent/                                                      # 项目根目录
 ├── README.md                                               # 项目总览说明
 ├── docker-compose.yml                                      # 本地服务编排
 ├── .env.example                                            # 环境变量模板
+├── .gitignore                                              # 忽略 RPA 运行文件和本地敏感数据
 ├── netlify.toml                                            # 前端部署配置
 ├── apps/                                                   # 前端应用目录
 │   └── talonmart-web/                                      # TalonMart Vue 前端
@@ -223,11 +240,40 @@ agent/                                                      # 项目根目录
 │   │       ├── test_feishu_adapter.py                      # 飞书适配测试
 │   │       ├── test_intent_router.py                       # 意图路由测试
 │   │       └── test_view_template_builder.py               # 视图模板测试
+│   ├── data-ops/                                           # RPA 文件数据处理项目
+│   │   ├── pyproject.toml                                  # pandas 和测试依赖
+│   │   ├── uv.lock                                         # data-ops 依赖锁
+│   │   ├── src/                                            # data-ops 源码
+│   │   │   └── data_ops/                                   # 文件处理 Python 包
+│   │   │       ├── __init__.py                             # Python 包标记
+│   │   │       ├── cli.py                                  # CSV 处理命令入口
+│   │   │       ├── core/                                   # 通用文件处理核心
+│   │   │       │   ├── __init__.py                         # Core 包标记
+│   │   │       │   ├── contracts.py                        # Dataset 与 CSV 契约
+│   │   │       │   ├── csv_io.py                           # CSV/XLSX 读取和 UTF-8 CSV 输出
+│   │   │       │   ├── validation.py                       # 通用列与行级校验
+│   │   │       │   └── batch_manifest.py                   # 批次清单、归档和失败信息
+│   │   │       └── processors/                             # 具体 dataset processor
+│   │   │           ├── __init__.py                         # Processor 包标记
+│   │   │           ├── registry.py                         # dataset_type 到 processor 路由
+│   │   │           └── jd_product.py                       # 京东商品首个处理实现
+│   │   └── tests/                                          # data-ops 测试
+│   │       ├── test_core.py                                # 通用读取、契约和校验测试
+│   │       ├── test_processor_registry.py                  # Processor 注册与路由测试
+│   │       ├── test_jd_product_processor.py                # 京东商品处理测试
+│   │       └── test_batch_manifest.py                      # 通用批次和归档测试
 │   └── postgres/                                           # PostgreSQL 镜像
 │       ├── Dockerfile                                      # 数据库镜像构建
 │       └── initdb/                                         # 数据库初始化脚本
 │           ├── 001-create-pg-search.sql                    # pg_search 初始化
 │           └── 002-create-vector.sql                       # pgvector 初始化
+├── rpa/                                                    # 桌面 RPA 资产说明
+│   └── yingdao/                                            # 影刀 RPA 流程目录
+│       ├── README.md                                       # 运行边界、凭据和扩展说明
+│       ├── templates/                                      # 可复用影刀流程模板
+│       │   └── web-page-to-csv.md                          # 通用网页抓取并导出 CSV 模板
+│       └── implementations/                                # 具体网站和页面实现
+│           └── jd-product-export.md                        # 京东商品网页采集实现
 ├── n8n/                                                    # n8n 工作流目录
 │   └── workflows/                                          # 工作流 JSON
 │       ├── warehouse-workflow.json                         # 仓储工作流
@@ -274,11 +320,15 @@ agent/                                                      # 项目根目录
 │   │   ├── order_status_audio_qwen_missing_config.json     # 音频缺配置消息
 │   │   ├── order_status_audio_transcript.json              # 音频转写消息
 │   │   └── order_status_text.json                          # 订单文本消息
+│   ├── rpa/                                                # 脱敏 RPA 文件 fixtures
+│   │   ├── jd_product_urls.csv                             # 京东商品 URL 输入样例
+│   │   └── jd_product_export.csv                           # 影刀京东商品原始 CSV 样例
 │   └── policies/                                           # 政策文档 fixtures
 │       └── policy markdown fixtures                        # 政策 Markdown 集合
 ├── scripts/                                                # 本地辅助脚本
 │   ├── generate_department_workflows.py                    # 生成部门工作流
 │   ├── replay_failed_event.ps1                             # 回放失败事件
+│   ├── run_data_ops.ps1                                    # 执行 RPA CSV 标准化
 │   ├── send_event.ps1                                      # 发送事件 fixture
 │   ├── send_message.ps1                                    # 发送消息 fixture
 │   └── update_multi_domain_workflow.py                     # 更新多领域工作流
@@ -314,6 +364,12 @@ agent/                                                      # 项目根目录
 | 飞书 | `services/feishu-adapter/app/intent_router.py` | 仓储 fast path | 明确同步/视图意图识别 |
 | 飞书 | `services/feishu-adapter/app/view_template_builder.py` | 视图模板 | 受控模板、字段映射、视图计划 |
 | 飞书应用 | 飞书多维表格应用页面配置 | 企业管理后台页面 | 运营驾驶舱、业务操作台、组件绑定和人工验收 |
+| RPA | `rpa/yingdao/templates/web-page-to-csv.md` | 通用网页导出模板 | 输入循环、页面就绪等待、适配子流程调用、结果累积、错误记录和原始 CSV 导出 |
+| RPA | `rpa/yingdao/implementations/jd-product-export.md` | 京东商品首个实现 | 商品 URL 输入、京东详情页状态识别、可见字段采集、失败行和人工验收 |
+| 文件数据处理 | `services/data-ops/src/data_ops/core/csv_io.py` | 通用文件格式统一 | CSV/XLSX 读取、编码处理、UTF-8 CSV 输出和原始文件保护 |
+| 文件数据处理 | `services/data-ops/src/data_ops/processors/registry.py` | Processor 路由 | 根据 dataset_type 解析并调用具体数据处理器 |
+| 文件数据处理 | `services/data-ops/src/data_ops/processors/jd_product.py` | 京东商品处理实现 | 字段校验、类型标准化、重复识别、标准化 CSV 和失败 CSV |
+| 文件数据处理 | `services/data-ops/src/data_ops/core/batch_manifest.py` | 文件批次管理 | 批次清单、输入输出摘要、成功归档、失败隔离和重放 |
 | Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约和采购需求工具 |
 | Workflow | `n8n/workflows/warehouse-purchase-arrival-notify.json` | 采购到货入库通知 | 定时扫描今日到货采购单并触发飞书群通知 |
 | Workflow | `n8n/workflows/order-fulfillment-table-sync.json` | 订单履约表同步 | 每 10 分钟刷新 Order Fulfillment 飞书 read model |
@@ -461,3 +517,42 @@ mock-api / PostgreSQL 业务事实
 - 首页采用“运营驾驶舱 + 待办处理区”的均衡布局。
 - 缺失数据源先以明确空状态呈现，后续通过 H7-H9 任务补齐。
 - 飞书应用中的按钮只触发明确的同步接口、机器人指令或人工操作入口，不直接绕过后端业务规则。
+
+#### 5.4.7 RPA Data Operations 业务流程
+
+```text
+输入清单 + dataset contract
+    |
+    v
+影刀通用网页导出模板
+    |
+    +--> 站点适配子流程
+             |
+             v
+      var/rpa/inbox 原始 CSV(dataset_type)
+    |
+    v
+services/data-ops 通用核心
+    |
+    +--> processor registry
+             |
+             v
+      具体 dataset processor
+    |
+    +--> var/rpa/normalized 标准化 UTF-8 CSV
+    |
+    +--> var/rpa/failed 失败 CSV 和错误摘要
+    |
+    +--> var/rpa/archive 原始文件和批次清单
+
+首个实例：京东商品 URL -> 影刀 jd_product 实现 -> pandas jd_product processor
+```
+
+设计约束：
+
+- 影刀只操作已获授权或允许访问的页面，凭据不得写入仓库、CSV fixture、日志或批次清单。
+- 影刀通用模板只负责输入循环、公共状态、结果收集和 CSV 导出；网站元素、字段解析和页面状态判断由 implementations 下的站点实现负责。
+- 京东商品首个实现按输入 URL 采集一个明确 SKU 的当前可见页面信息，不遍历搜索结果、全部变体，不绕过登录、验证码、访问限制或平台规则。
+- pandas 通用核心不包含京东字段判断；`jd_product` 的列契约和业务校验只存在于对应 processor。
+- 原始文件保持不可变，标准化输出、归档文件和失败文件使用不同目录。
+- `fixtures/rpa` 只保存合成或脱敏数据，`var/rpa` 全目录忽略 Git。

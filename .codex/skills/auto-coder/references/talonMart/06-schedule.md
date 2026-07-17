@@ -18,6 +18,7 @@
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆、AImodel Intent Router、受控联网搜索和 RAG MCP 集成 | [✔] |
 | 阶段 H | 飞书应用与协作后台 | 完成 feishu-adapter、多维表格 read model、主动通知和飞书应用搭建 | [~] |
 | 阶段 I | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
+| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东商品首个端到端实现 | [ ] |
 
 ### 6.2 交付里程碑
 
@@ -31,7 +32,8 @@
 | 阶段 F | 电商项目可用 | 商品、Departments 导购、详情、购物车、秒杀、排行榜、AI 模式 | `pnpm --dir apps/talonmart-web test:unit` | AImodel | 2026-06-17 |
 | 阶段 G | AImodel 持续增强 | 流式聊天、工具调用、会话记忆、AImodel Intent Router、受控联网搜索、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 | 2026-06-29 |
 | 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、业务操作页、订单明细、商品、秒杀 read model 分页同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
-| 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | 发布/演示 |  |
+| 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | RPA Data Operations |  |
+| 阶段 J | 通用网页数据文件流水线可扩展 | 影刀通用模板、pandas processor 框架、京东商品原始/标准/失败 CSV、批次清单和扩展指南 | `uv run --project services/data-ops pytest services\data-ops\tests -q` | 新站点实现或数据入库设计 |  |
 
 ### 6.3 任务跟踪表
 
@@ -146,6 +148,19 @@
 | I6 | 增加演示前健康检查脚本 | [ ] |  | scripts/demo_check.ps1 |
 | I7 | 强化 Docker 启动说明 | [ ] |  | README / compose |
 
+#### 阶段 J：RPA Data Operations
+
+| 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
+| --- | --- | --- | --- | --- |
+| J1 | 定义通用网页 CSV 交付与处理扩展契约 | [ ] |  | dataset_type、RPA hooks、processor contract、目录 |
+| J2 | 建立影刀通用网页导出 CSV 模板 | [ ] |  | 输入循环、页面等待、适配子流程、原始 CSV |
+| J3 | 实现影刀京东商品采集适配器 | [ ] |  | URL 清单、商品页字段、状态与失败行 |
+| J4 | 建立 pandas 通用 CSV 处理框架 | [ ] |  | core、contracts、validation、processor registry |
+| J5 | 实现通用批次、归档与失败重放 | [ ] |  | manifest、archive、failed、replay |
+| J6 | 实现京东商品 pandas processor | [ ] |  | 字段标准化、重复识别、标准/失败 CSV |
+| J7 | 打通京东商品端到端文件链路 | [ ] |  | jd_product 原始 CSV 到标准化结果 |
+| J8 | 实现扩展指南与阶段质量门禁 | [ ] |  | 新站点模板、自动测试、影刀人工验收 |
+
 ### 6.4 总体进度表
 
 | 阶段 | 总任务数 | 已完成 | 进度 |
@@ -159,7 +174,8 @@
 | 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| **总计** | **66** | **59** | **89%** |
+| 阶段 J | 8 | 0 | 0% |
+| **总计** | **74** | **59** | **80%** |
 
 ### 6.5 阶段实施明细
 
@@ -1011,27 +1027,36 @@
 
 测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_agent.py -q`
 
-##### G2：实现 conversation/message/user_memory
+##### G2：实现 conversation/message/user_memory 与 LangChain 会话记忆
 
-目标：保存会话、消息和用户长期偏好。
+目标：保存会话、消息、用户长期偏好，并把 AImodel 的会话状态接入 LangChain/LangGraph 记忆机制。业务消息表继续作为前端历史会话和评估溯源的数据源，LangChain PostgreSQL checkpointer 负责 Agent 运行时的短期上下文续接。
 
 修改文件：
 
 - `services/ai-service/app/routers/AImodel/memory.py`
+- `services/ai-service/app/routers/AImodel/service.py`
+- `services/ai-service/tests/test_aimodel_memory.py`
+- `services/ai-service/tests/test_aimodel_agent.py`
 
 实现类/函数：
 
-- `AImodelMemoryStore.initialize()`：初始化表结构。
-- `create_conversation()`：创建会话。
-- `append_message()`：追加消息。
-- `upsert_user_memory()`：更新用户偏好。
+- `AImodelMemoryStore.initialize()`：初始化 `conversation`、`message`、`message_query_trace`、`user_memory`、`agent_trace` 和 `agent_trace_event` 业务表；LangChain checkpointer 作为 Agent 运行时组件复用，不替代业务消息落库。
+- `ensure_conversation()`：创建或续用会话，返回稳定的数字 `conversation_id`。
+- `append_user_message()` / `append_assistant_message()`：写入业务消息表，保持前端历史会话、评估 answer source 和 RAG trace 溯源能力。
+- `load_user_memories()` / `upsert_user_memory()`：读取和更新用户长期偏好。
+- `get_langchain_checkpointer()`：返回可被 `create_agent(checkpointer=...)` 复用的进程级 LangChain/LangGraph checkpointer；配置 `DATABASE_URL` 时使用 PostgreSQL `PostgresSaver` 并执行 `setup()`，未配置数据库时测试环境使用内存实现。
+- `build_langchain_config()`：以 `conversation_id` 构造 `{"configurable": {"thread_id": str(conversation_id)}}`，确保同一会话复用同一 Agent thread。
+- `stream_chat_events()`：调用 LangChain Agent 时传入 checkpointer 和 thread config；长期用户偏好仍作为显式上下文注入，业务消息落库不由 checkpointer 替代。
 
 验收标准：
 
 - 同一用户可以查询历史会话并继续对话。
+- 同一 `conversation_id` 的多轮 Agent 调用使用同一个 LangChain thread，不再只依赖手动截取最近 5 条消息维持上下文。
+- `conversation` / `message` / `message_query_trace` 仍是前端历史、RAG trace 关联和 Ragas message answer source 的权威业务记录。
+- `user_memory` 继续保存长期偏好，进入 Agent 前以显式上下文注入，不与 LangChain checkpoint 混淆。
+- 未配置 PostgreSQL 时，测试环境使用进程级内存 checkpointer 和 `NoopAiModelMemoryStore` 保持可运行；配置 PostgreSQL 时必须使用 LangGraph `PostgresSaver`。
 
-测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_memory.py -q`
-
+测试方法：`uv run --project services/ai-service pytest services\ai-service\tests\test_aimodel_memory.py services\ai-service\tests\test_aimodel_agent.py -q`
 ##### G3：实现商品搜索和详情工具
 
 目标：让 Agent 获取真实商品事实。
@@ -1887,3 +1912,266 @@
 - 新开发者可按文档启动服务并访问前端/API。
 
 测试方法：`docker compose -p after-sales-implementation up -d --build`
+
+#### 阶段 J：RPA Data Operations
+
+阶段结构：
+
+- **通用能力 A：影刀网页导出 CSV**。通用模板统一输入循环、页面等待、站点适配调用、成功/失败行收集和原始 CSV 导出。
+- **具体实现 A1：京东商品采集**。京东适配子流程从商品 URL 清单采集当前可见商品字段，形成 dataset_type 为 jd_product 的原始 CSV。
+- **通用能力 B：pandas 数据处理**。通用核心统一文件读取、dataset contract、processor 路由、通用校验、标准化输出、批次清单、归档和重放。
+- **具体实现 B1：京东商品处理**。jd_product processor 处理影刀京东商品 CSV，输出标准化 CSV 和失败 CSV。
+
+阶段边界：阶段 J 只交付通用文件能力和京东商品首个实现，不新增数据库表，不修改 items 表结构或数据，不直接写入 PostgreSQL，也不接入 mock-api、Operations Workflow 或飞书 read model。
+
+##### J1：定义通用网页 CSV 交付与处理扩展契约
+
+目标：定义影刀通用模板、站点实现、原始 CSV 和 pandas dataset processor 之间稳定的扩展边界，并固化京东商品首个 dataset contract。
+
+修改文件：
+
+- `DEV_SPEC.md`
+- `rpa/yingdao/README.md`
+- `services/data-ops/src/data_ops/core/contracts.py`
+- `fixtures/rpa/jd_product_urls.csv`
+- `fixtures/rpa/jd_product_export.csv`
+- `tests/test_current_docs.py`
+
+实现类/函数：
+
+- `WebPageExportContract`：定义 dataset_type、输入清单、通用输出列、站点扩展列、页面状态和失败代码。
+- `DatasetContract`：定义 pandas processor 的必填列、可选列、类型、唯一性规则和输出文件名。
+- `ProcessorContract`：定义 processor 接收 DataFrame 和 contract 后返回标准行、失败行及统计摘要。
+- `RuntimeDirectoryContract`：固定 var/rpa/inbox、var/rpa/normalized、var/rpa/archive 和 var/rpa/failed 的职责。
+- `jd_product contract`：定义京东 URL 输入和原始 CSV 字段，不把京东字段放进通用 contract。
+
+验收标准：
+
+- 通用原始 CSV 至少包含 dataset_type、batch_id、input_index、source_url、captured_at、crawl_status 和 error_code。
+- 新站点实现可以追加站点字段，但不能改变通用列语义。
+- 新 dataset processor 可以通过 dataset_type 注册，不修改 CSV 读取和批次核心。
+- jd_product URL fixture 和原始 CSV fixture 只使用合成或脱敏数据。
+- 京东字段、展示价格语义、采集地区和页面状态在 jd_product contract 中明确。
+- 契约明确不执行数据库 DDL、数据库写入或 items 修改。
+
+测试方法：uv run --project services/mock-api pytest tests\test_current_docs.py -q
+
+##### J2：建立影刀通用网页导出 CSV 模板
+
+目标：建立可复用的影刀主流程骨架，使具体网站只实现页面打开、就绪判断和字段提取子流程。
+
+修改文件：
+
+- `影刀 RPA 通用网页导出模板应用`
+- `rpa/yingdao/templates/web-page-to-csv.md`
+- `rpa/yingdao/README.md`
+
+实现类/函数：
+
+- `LoadInputRows`：读取输入 CSV，并为每行分配稳定 input_index。
+- `InvokeSiteAdapter`：按 dataset_type 调用对应站点适配子流程。
+- `AppendExportRow`：无论成功、部分成功或失败都追加一条带通用状态的结果。
+- `ExportRawCsv`：使用固定列头和 batch_id 导出原始 UTF-8 CSV。
+- `StopForManualVerification`：遇到登录、验证码、权限或访问限制时停止并保留现场。
+
+验收标准：
+
+- 模板不包含京东 CSS/XPath、京东字段名或京东页面状态判断。
+- 每个输入行恰好生成一条结果行，单行字段缺失不能静默丢弃输入。
+- 站点适配失败不会破坏已经收集的结果，并产生明确 error_code。
+- 原始文件名包含 dataset_type、batch_id 和采集时间。
+- 凭据、Cookie、Token 和验证码内容不写入 CSV、日志或仓库。
+- 模板只操作已授权或允许访问的页面，不实现验证码或访问限制绕过。
+
+测试方法：使用本地或脱敏测试页面人工运行影刀模板，验证成功、字段缺失、适配失败和人工验证四种结果都能导出 CSV
+
+##### J3：实现影刀京东商品采集适配器
+
+目标：基于 J2 通用模板实现首个站点适配子流程，从京东商品 URL 清单采集当前页面可见商品信息。
+
+修改文件：
+
+- `影刀 RPA 京东商品适配子流程`
+- `rpa/yingdao/implementations/jd-product-export.md`
+- `fixtures/rpa/jd_product_urls.csv`
+- `fixtures/rpa/jd_product_export.csv`
+
+实现类/函数：
+
+- `ParseJdSkuId`：从输入 URL 或当前页面解析京东 SKU。
+- `WaitForJdProductPage`：等待商品标题和核心区域加载，区分页面就绪、下架、无货、登录提示、验证码和超时。
+- `ClassifyJdPageState`：返回 success、partial 或 failed 及稳定 error_code。
+- `ExtractJdProduct`：采集 jd_sku_id、title、display_price、shop_name、primary_image_url 和 capture_region。
+- `BuildJdProductRow`：把京东字段与 J1 通用列合并后返回模板主流程。
+
+验收标准：
+
+- 输入文件只包含 input_index 和 product_url；每个 URL 对应一个明确商品 SKU。
+- 第一版不抓取搜索结果列表，不枚举全部颜色、容量等变体。
+- display_price 表示采集时、当前登录状态和 capture_region 下的页面展示价格，不表达长期或全地区价格。
+- 页面下架、无货、字段部分缺失和 URL 无效均有明确状态，不伪造默认商品值。
+- 遇到登录、验证码或访问限制立即停止并转人工处理，不尝试绕过。
+- 至少使用正常商品、第三方店铺、无货或下架、无效 URL 等样例完成人工验收。
+
+测试方法：影刀人工运行 fixtures\rpa\jd_product_urls.csv，核对输入行数、原始 CSV 行数、页面状态、错误代码和错误截图
+
+##### J4：建立 pandas 通用 CSV 处理框架
+
+目标：建立与具体网站无关的 pandas 文件处理核心，通过 dataset_type 将原始 CSV 路由到对应 processor。
+
+修改文件：
+
+- `services/data-ops/pyproject.toml`
+- `services/data-ops/uv.lock`
+- `services/data-ops/src/data_ops/__init__.py`
+- `services/data-ops/src/data_ops/cli.py`
+- `services/data-ops/src/data_ops/core/__init__.py`
+- `services/data-ops/src/data_ops/core/contracts.py`
+- `services/data-ops/src/data_ops/core/csv_io.py`
+- `services/data-ops/src/data_ops/core/validation.py`
+- `services/data-ops/src/data_ops/processors/__init__.py`
+- `services/data-ops/src/data_ops/processors/registry.py`
+- `services/data-ops/tests/test_core.py`
+- `services/data-ops/tests/test_processor_registry.py`
+
+实现类/函数：
+
+- `DatasetProcessor`：定义 validate、normalize 和 split_results 的 processor 接口。
+- `read_source_file`：读取 CSV/XLSX，显式处理编码、分隔符、Sheet 和字符串列。
+- `validate_common_columns`：验证 J1 规定的通用列、行数和状态值。
+- `register_processor`：注册 dataset_type 到 processor factory 的映射。
+- `get_processor`：按 dataset_type 获取 processor，未知类型返回明确错误。
+- `process_dataset`：执行通用读取、processor 调用、输出写入和统计汇总。
+- `write_canonical_csv`：以 UTF-8、固定列顺序和原子替换方式写出 CSV。
+
+验收标准：
+
+- core 和 registry 不导入京东 processor 的字段常量或页面规则。
+- CLI 必须显式接收 dataset_type、输入路径和输出根目录。
+- 未注册 dataset_type、缺少通用列、文件编码错误和空文件返回非零退出码。
+- 相同输入、contract 和 processor 重复执行时输出内容保持一致。
+- data-ops 不依赖数据库驱动，不包含 PostgreSQL、mock-api 或 items 写入代码。
+
+测试方法：uv run --project services/data-ops pytest services\data-ops\tests\test_core.py services\data-ops\tests\test_processor_registry.py -q
+
+##### J5：实现通用批次、归档与失败重放
+
+目标：用文件系统和 JSON manifest 为所有 dataset_type 提供一致的批次追踪、成功归档、失败隔离和重放能力。
+
+修改文件：
+
+- `services/data-ops/src/data_ops/core/batch_manifest.py`
+- `services/data-ops/src/data_ops/cli.py`
+- `services/data-ops/tests/test_batch_manifest.py`
+- `scripts/run_data_ops.ps1`
+- `.gitignore`
+
+实现类/函数：
+
+- `calculate_file_sha256`：计算原始文件内容摘要。
+- `build_batch_manifest`：记录 batch_id、dataset_type、输入摘要、processor、行数、状态和输出文件。
+- `archive_successful_batch`：成功后归档原始文件、标准化/失败 CSV 和 manifest。
+- `quarantine_failed_batch`：处理失败时保存原始文件、错误摘要和 manifest。
+- `replay_batch`：使用 manifest 中的 dataset_type、输入文件和 contract 重放批次。
+
+验收标准：
+
+- manifest 不包含账号、密码、Cookie、Token 或未脱敏行内容。
+- 不同 dataset_type 使用同一 manifest 结构和目录状态。
+- 只有输出文件和 manifest 原子落盘后，原始文件才进入 archive。
+- 处理失败进入 failed，并保留稳定错误代码和重放入口。
+- 同一文件摘要和 contract 重复处理时可识别重复批次。
+- var/rpa 被 Git 忽略，批次状态不写入数据库。
+
+测试方法：uv run --project services/data-ops pytest services\data-ops\tests\test_batch_manifest.py -q
+
+##### J6：实现京东商品 pandas processor
+
+目标：实现与 J3 原始 CSV 对应的 jd_product processor，输出标准化京东商品 CSV 和失败 CSV。
+
+修改文件：
+
+- `services/data-ops/src/data_ops/processors/jd_product.py`
+- `services/data-ops/src/data_ops/processors/registry.py`
+- `services/data-ops/tests/test_jd_product_processor.py`
+- `fixtures/rpa/jd_product_export.csv`
+
+实现类/函数：
+
+- `JdProductProcessor.validate`：验证通用列及 jd_sku_id、title、display_price、shop_name、primary_image_url 和 capture_region。
+- `JdProductProcessor.normalize`：清理字符串、标准化 SKU、解析展示价格并统一 captured_at。
+- `JdProductProcessor.split_results`：把 success、partial 和 failed 转换为标准化结果与失败结果。
+- `identify_jd_duplicates`：按 input_index 保证输入可追踪，并标记重复 URL 或重复 SKU。
+- `register_jd_product_processor`：以 jd_product 注册 processor。
+
+验收标准：
+
+- processor 只处理 jd_product contract，不在通用 core 中增加京东条件分支。
+- success 行必须保留可追踪 source_url、jd_sku_id、title、capture_region 和 captured_at。
+- 展示价格同时保留原始文本和可解析的数值字段；无法解析时进入 partial 或 failed，不写零价替代。
+- failed CSV 保留 input_index、source_url、crawl_status 和 error_code。
+- 输入行数等于标准化结果、失败结果和显式重复结果的可对账总数。
+- processor 不查询、不更新 items，也不创建商品映射或数据库记录。
+
+测试方法：uv run --project services/data-ops pytest services\data-ops\tests\test_jd_product_processor.py -q
+
+##### J7：打通京东商品端到端文件链路
+
+目标：把影刀京东适配器、原始 CSV、pandas processor、manifest、archive 和 failed 串成首个可演示实例。
+
+修改文件：
+
+- `rpa/yingdao/implementations/jd-product-export.md`
+- `rpa/yingdao/README.md`
+- `scripts/run_data_ops.ps1`
+- `services/data-ops/tests/test_jd_product_processor.py`
+- `services/data-ops/tests/test_batch_manifest.py`
+
+实现类/函数：
+
+- `jd_product RPA handoff`：影刀把原始 CSV 写入 var/rpa/inbox 并返回文件路径和 batch_id。
+- `Invoke-JdProductProcessing`：使用 dataset_type=jd_product 调用 data-ops CLI。
+- `JD product file E2E test`：使用脱敏原始 CSV 验证 processor、输出、manifest 和归档。
+- `JD product replay test`：验证失败文件修正后可使用原 batch contract 重放。
+
+验收标准：
+
+- 输入 URL 数、影刀原始 CSV 行数和 pandas 对账总数一致。
+- 正常行进入标准化 CSV，partial/failed 行保留原因且不静默丢失。
+- 影刀中断后可从未处理 input_index 继续；pandas 失败后可独立重放，不重新抓取网页。
+- 原始 CSV 保持不可变，标准化、失败、manifest 和 archive 文件可通过 batch_id 关联。
+- 端到端流程仍不写数据库、不修改 items、不调用现有业务 API。
+
+测试方法：uv run --project services/data-ops pytest services\data-ops\tests -q；powershell -ExecutionPolicy Bypass -File scripts\run_data_ops.ps1 -InputPath fixtures\rpa\jd_product_export.csv -DatasetType jd_product -OutputRoot D:\tmp\talonmart-rpa-acceptance；影刀京东商品人工验收
+
+##### J8：实现扩展指南与阶段质量门禁
+
+目标：证明阶段 J 的通用性，固化新增站点实现和新增 pandas processor 的步骤，并完成自动测试与影刀人工验收。
+
+修改文件：
+
+- `rpa/yingdao/README.md`
+- `rpa/yingdao/templates/web-page-to-csv.md`
+- `services/data-ops/tests/test_core.py`
+- `services/data-ops/tests/test_processor_registry.py`
+- `services/data-ops/tests/test_jd_product_processor.py`
+- `services/data-ops/tests/test_batch_manifest.py`
+- `tests/test_current_docs.py`
+- `DEV_SPEC.md`
+
+实现类/函数：
+
+- `RPA extension checklist`：定义新增站点实现时必须提供的输入 fixture、页面状态、字段映射、错误代码和人工验收。
+- `Processor extension checklist`：定义新增 dataset processor 时必须提供的 contract、注册项、标准/失败输出和测试。
+- `Boundary assertions`：验证通用模板没有京东字段，通用 pandas core 没有站点字段，data-ops 没有数据库依赖或 items 修改。
+- `Phase J E2E assertions`：验证 jd_product 同时复用了通用影刀模板和通用 pandas 核心。
+
+验收标准：
+
+- 文档能够指导第二个站点实现只新增 implementations 下的适配说明和对应 dataset processor。
+- 通用能力与京东实现的目录、职责、测试和错误边界明确分离。
+- 缺通用列、未知 dataset_type、京东字段缺失、价格不可解析、重复 SKU、空文件和失败重放均有测试。
+- 影刀人工验收包含正常商品、第三方店铺、无货或下架、无效 URL、登录或验证中断等场景。
+- 全文和测试确认阶段 J 未新增数据库表、未修改 items 表结构或数据，也未接入下游系统。
+
+测试方法：uv run --project services/data-ops pytest services\data-ops\tests -q；uv run --project services/mock-api pytest tests\test_current_docs.py -q；影刀通用模板和京东商品适配器人工验收清单

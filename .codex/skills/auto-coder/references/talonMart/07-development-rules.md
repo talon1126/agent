@@ -46,6 +46,7 @@ Python 服务统一通过 uv 执行命令：
 uv run --project services/mock-api pytest services\mock-api\tests -q
 uv run --project services/ai-service pytest services\ai-service\tests -q
 uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q
+uv run --project services/data-ops pytest services\data-ops\tests -q
 uv run --project services/mock-api ruff check services\mock-api
 ```
 

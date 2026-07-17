@@ -26,3 +26,14 @@ AImodel 负责用户购物咨询、商品对比和工具编排，商品事实由
 ### 2.6 全链路测试与可观测
 
 项目同时使用 Python pytest、Vue Vitest、Playwright、workflow 结构测试、run log、RAG trace 关联和 Docker Compose 校验，覆盖代码、工作流和运行配置。
+
+### 2.7 影刀 RPA 与 pandas 文件流水线
+
+阶段 J 建立两块相互独立、通过 CSV 契约协作的通用能力：
+
+1. **影刀网页导出 CSV**：通用模板负责读取输入清单、打开已授权页面、等待页面就绪、调用站点适配子流程、记录成功或失败行并导出原始 CSV。新增目标网站或页面时只增加站点实现，不复制批次循环、错误记录和 CSV 导出骨架。
+2. **pandas 数据处理**：通用核心负责 CSV/XLSX 读取、编码统一、dataset contract 校验、processor 路由、行级错误、标准化输出、批次清单、归档和失败重放。新增数据类型时注册新的 dataset processor，不修改通用读取和批次核心。
+
+首个完整实现使用 `dataset_type=jd_product`。影刀京东商品实现读取京东商品 URL 清单，采集当前页面可见的 SKU、标题、展示价格、店铺、主图和采集状态并导出原始 CSV；对应 pandas processor 校验字段、标准化类型、按输入和 SKU 识别重复记录，并输出标准化 CSV 与失败 CSV。
+
+阶段 J 只交付通用文件能力和京东商品首个实现：**不新增数据库表，不修改 `items` 表结构或数据，不直接写入 PostgreSQL，不改造 mock-api、Operations Workflow 或飞书 read model**。数据入库、商品关联和下游展示方案由阶段 J 完成后另行设计。

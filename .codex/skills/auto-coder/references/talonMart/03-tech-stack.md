@@ -12,6 +12,8 @@
 | 业务 API | FastAPI、Pydantic、SQLAlchemy、psycopg、Redis | 商品、购物车、仓储、采购、物流、秒杀和政策接口 |
 | 飞书适配 | FastAPI、httpx、lark-oapi | 飞书事件、多机器人、回复、多维表格同步 |
 | Workflow | n8n | 部门 Workflow 编排、工具调用和定时任务 |
+| RPA | 影刀 RPA | 通用网页导出 CSV 模板、站点适配子流程、京东商品首个实现、异常截图和人工验收 |
+| 文件数据处理 | Python、pandas | CSV/XLSX 读取、dataset processor 路由、标准化、校验、批次清单和文件归档 |
 | 数据库 | PostgreSQL | 业务事实、会话、记忆和同步状态 |
 | 缓存/原子计数 | Redis | 秒杀库存扣减和补偿 |
 | Python 包管理 | uv | Python 依赖、虚拟环境、测试和脚本统一入口 |
@@ -25,6 +27,7 @@ Python 子项目统一使用 **uv** 执行测试、脚本和静态检查：
 uv run --project services/mock-api pytest services\mock-api\tests -q
 uv run --project services/ai-service pytest services\ai-service\tests -q
 uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q
+uv run --project services/data-ops pytest services\data-ops\tests -q
 uv run --project services/mock-api ruff check services\mock-api
 ```
 
@@ -38,6 +41,8 @@ uv run --project services/mock-api ruff check services\mock-api
 | ai-service | `services/ai-service` | AImodel Agent、会话记忆、工具编排、RAG MCP 调用 |
 | mock-api | `services/mock-api` | 电商业务事实 API 和 fixtures/PostgreSQL fallback |
 | feishu-adapter | `services/feishu-adapter` | 飞书事件、n8n 转发、多维表格同步、飞书应用数据支撑 |
+| data-ops | `services/data-ops` | pandas 驱动的通用 CSV/XLSX 处理核心、dataset processor、批次清单和文件归档 |
+| 影刀 RPA | `rpa/yingdao` | 通用网页导出模板、站点实现、文件下载、错误截图和交付说明 |
 | postgres | `services/postgres` | PostgreSQL 镜像和初始化脚本 |
 | n8n | `n8n/workflows` | Workflow JSON 和定时任务编排 |
 
