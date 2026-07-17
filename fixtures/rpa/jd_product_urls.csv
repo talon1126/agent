@@ -1,0 +1,4 @@
+input_index,product_url
+1,https://item.jd.invalid/100000000001.html
+2,https://item.jd.invalid/100000000002.html
+3,https://item.jd.invalid/not-a-sku

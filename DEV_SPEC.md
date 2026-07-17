@@ -839,7 +839,7 @@ services/data-ops 通用核心
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆、AImodel Intent Router、受控联网搜索和 RAG MCP 集成 | [✔] |
 | 阶段 H | 飞书应用与协作后台 | 完成 feishu-adapter、多维表格 read model、主动通知和飞书应用搭建 | [~] |
 | 阶段 I | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
-| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东商品首个端到端实现 | [ ] |
+| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东商品首个端到端实现 | [~] |
 
 ### 6.2 交付里程碑
 
@@ -973,7 +973,7 @@ services/data-ops 通用核心
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 | --- | --- | --- | --- | --- |
-| J1 | 定义通用网页 CSV 交付与处理扩展契约 | [ ] |  | dataset_type、RPA hooks、processor contract、目录 |
+| J1 | 定义通用网页 CSV 交付与处理扩展契约 | [✔] | 2026-07-17 | dataset_type、RPA hooks、processor contract、目录 |
 | J2 | 建立影刀通用网页导出 CSV 模板 | [ ] |  | 输入循环、页面等待、适配子流程、原始 CSV |
 | J3 | 实现影刀京东商品采集适配器 | [ ] |  | URL 清单、商品页字段、状态与失败行 |
 | J4 | 建立 pandas 通用 CSV 处理框架 | [ ] |  | core、contracts、validation、processor registry |
@@ -995,8 +995,8 @@ services/data-ops 通用核心
 | 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| 阶段 J | 8 | 0 | 0% |
-| **总计** | **74** | **59** | **80%** |
+| 阶段 J | 8 | 1 | 13% |
+| **总计** | **74** | **60** | **81%** |
 
 ### 6.5 阶段实施明细
 

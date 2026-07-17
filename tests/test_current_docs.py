@@ -1,4 +1,13 @@
+import csv
+import importlib.util
+import sys
+from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
+from types import ModuleType
+from urllib.parse import urlsplit
+
+import pytest
 
 
 CURRENT_DOCS = [
@@ -20,6 +29,73 @@ WAREHOUSE_AGENT_DOCS = [
     Path("docs/AGENTS/warehouse-agent/mock-api.md"),
     Path("docs/AGENTS/warehouse-agent/database-tables.md"),
 ]
+
+DATA_OPS_CONTRACTS_PATH = Path(
+    "services/data-ops/src/data_ops/core/contracts.py"
+)
+RPA_README_PATH = Path("rpa/yingdao/README.md")
+JD_PRODUCT_URLS_FIXTURE = Path("fixtures/rpa/jd_product_urls.csv")
+JD_PRODUCT_EXPORT_FIXTURE = Path("fixtures/rpa/jd_product_export.csv")
+
+COMMON_WEB_EXPORT_COLUMNS = (
+    "dataset_type",
+    "batch_id",
+    "input_index",
+    "source_url",
+    "captured_at",
+    "crawl_status",
+    "error_code",
+)
+JD_PRODUCT_SITE_COLUMNS = (
+    "jd_sku_id",
+    "title",
+    "display_price",
+    "shop_name",
+    "primary_image_url",
+    "capture_region",
+)
+
+
+@lru_cache(maxsize=1)
+def _load_data_ops_contracts() -> ModuleType:
+    """Load the standalone J1 contract module before data-ops packaging exists.
+
+    J4 owns the installable data-ops project and package markers. J1 still needs
+    executable contract tests, so this helper loads the module directly from its
+    documented source location without changing the process import path.
+
+    Returns:
+        The loaded contract module.
+
+    Raises:
+        AssertionError: If the module cannot be loaded from the specified path.
+    """
+
+    spec = importlib.util.spec_from_file_location(
+        "talonmart_data_ops_contracts",
+        DATA_OPS_CONTRACTS_PATH,
+    )
+    assert spec is not None and spec.loader is not None
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _read_csv_rows(path: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    """Read one UTF-8 CSV fixture while preserving its declared column order.
+
+    Args:
+        path: Repository-relative CSV fixture path.
+
+    Returns:
+        A tuple containing the ordered header and all data rows.
+    """
+
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        return tuple(reader.fieldnames or ()), list(reader)
 
 
 def test_current_warehouse_docs_use_batch_location_inventory_model() -> None:
@@ -58,3 +134,147 @@ def test_current_warehouse_docs_describe_live_view_templates() -> None:
         assert "location_inventory_view" in text
         assert "batch_risk_view" in text
         assert "replenishment_candidate_view" in text
+
+
+def test_rpa_data_contract_exposes_stable_extension_boundaries() -> None:
+    """Protect the generic CSV contract from site-specific semantic drift."""
+
+    contracts = _load_data_ops_contracts()
+
+    web_contract = contracts.JD_PRODUCT_WEB_EXPORT_CONTRACT
+    assert web_contract.dataset_type == "jd_product"
+    assert web_contract.input_columns == ("input_index", "product_url")
+    assert web_contract.common_output_columns == COMMON_WEB_EXPORT_COLUMNS
+    assert web_contract.site_output_columns == JD_PRODUCT_SITE_COLUMNS
+    assert web_contract.output_columns == (
+        COMMON_WEB_EXPORT_COLUMNS + JD_PRODUCT_SITE_COLUMNS
+    )
+    assert web_contract.crawl_statuses == ("success", "partial", "failed")
+    assert {
+        "invalid_input",
+        "navigation_failed",
+        "page_timeout",
+        "field_missing",
+        "manual_verification_required",
+        "access_restricted",
+        "adapter_error",
+    }.issubset(web_contract.error_codes)
+
+    extension_contract = contracts.WebPageExportContract(
+        dataset_type="example_listing",
+        input_columns=("input_index", "page_url"),
+        site_output_columns=("external_id",),
+        error_codes=contracts.COMMON_ERROR_CODES + ("site_state_unknown",),
+    )
+    assert extension_contract.output_columns == (
+        COMMON_WEB_EXPORT_COLUMNS + ("external_id",)
+    )
+    with pytest.raises(ValueError, match="must not shadow common columns"):
+        contracts.WebPageExportContract(
+            dataset_type="invalid_listing",
+            input_columns=("input_index", "page_url"),
+            site_output_columns=("source_url",),
+        )
+
+    dataset_contract = contracts.JD_PRODUCT_DATASET_CONTRACT
+    assert dataset_contract.dataset_type == "jd_product"
+    assert dataset_contract.required_columns == web_contract.output_columns
+    assert dataset_contract.optional_columns == ()
+    assert set(dataset_contract.column_types) == set(web_contract.output_columns)
+    assert dataset_contract.unique_by == ("batch_id", "input_index")
+    assert (
+        dataset_contract.normalized_filename_template
+        == "{dataset_type}_{batch_id}_normalized.csv"
+    )
+    assert (
+        dataset_contract.failed_filename_template
+        == "{dataset_type}_{batch_id}_failed.csv"
+    )
+
+    directories = contracts.DEFAULT_RUNTIME_DIRECTORIES
+    assert directories.as_mapping() == {
+        "inbox": Path("var/rpa/inbox"),
+        "normalized": Path("var/rpa/normalized"),
+        "archive": Path("var/rpa/archive"),
+        "failed": Path("var/rpa/failed"),
+    }
+
+    class ExampleProcessor:
+        def process(self, frame, contract):
+            return contracts.ProcessorResult(
+                normalized_rows=frame,
+                failed_rows=[],
+                summary={"input_rows": len(frame)},
+            )
+
+    processor = ExampleProcessor()
+    assert isinstance(processor, contracts.ProcessorContract)
+    result = processor.process([{"input_index": "1"}], dataset_contract)
+    assert result.normalized_rows == [{"input_index": "1"}]
+    assert result.failed_rows == []
+    assert result.summary == {"input_rows": 1}
+
+
+def test_rpa_data_contract_fixtures_are_reconcilable_and_desensitized() -> None:
+    """Protect the JD sample handoff from row loss and live URL disclosure."""
+
+    input_header, input_rows = _read_csv_rows(JD_PRODUCT_URLS_FIXTURE)
+    export_header, export_rows = _read_csv_rows(JD_PRODUCT_EXPORT_FIXTURE)
+
+    assert input_header == ("input_index", "product_url")
+    assert export_header == COMMON_WEB_EXPORT_COLUMNS + JD_PRODUCT_SITE_COLUMNS
+    assert len(input_rows) == len(export_rows) >= 3
+    assert [row["input_index"] for row in input_rows] == [
+        row["input_index"] for row in export_rows
+    ]
+
+    input_urls = {row["input_index"]: row["product_url"] for row in input_rows}
+    for row in input_rows:
+        assert int(row["input_index"]) > 0
+        assert (urlsplit(row["product_url"]).hostname or "").endswith(".invalid")
+
+    contracts = _load_data_ops_contracts()
+    for row in export_rows:
+        assert row["dataset_type"] == "jd_product"
+        assert row["source_url"] == input_urls[row["input_index"]]
+        assert row["crawl_status"] in {"success", "partial", "failed"}
+        assert datetime.fromisoformat(row["captured_at"].replace("Z", "+00:00"))
+        if row["crawl_status"] == "success":
+            assert row["error_code"] == ""
+        else:
+            assert row["error_code"] in contracts.JD_PRODUCT_WEB_EXPORT_CONTRACT.error_codes
+        if row["primary_image_url"]:
+            assert (
+                urlsplit(row["primary_image_url"]).hostname or ""
+            ).endswith(".invalid")
+
+
+def test_rpa_data_contract_readme_documents_security_and_data_boundaries() -> None:
+    """Protect the RPA handoff from credential leakage and database scope creep."""
+
+    text = RPA_README_PATH.read_text(encoding="utf-8")
+    required_tokens = (
+        "WebPageExportContract",
+        "DatasetContract",
+        "ProcessorContract",
+        "RuntimeDirectoryContract",
+        "dataset_type",
+        "batch_id",
+        "input_index",
+        "source_url",
+        "captured_at",
+        "crawl_status",
+        "error_code",
+        "jd_product",
+        "display_price",
+        "capture_region",
+        "var/rpa/inbox",
+        "var/rpa/normalized",
+        "var/rpa/archive",
+        "var/rpa/failed",
+        "不新增数据库表",
+        "不修改 `items`",
+        "验证码",
+    )
+    for token in required_tokens:
+        assert token in text
