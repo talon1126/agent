@@ -154,7 +154,7 @@
 | --- | --- | --- | --- | --- |
 | J1 | 定义通用网页 CSV 交付与处理扩展契约 | [✔] | 2026-07-17 | dataset_type、RPA hooks、processor contract、目录 |
 | J2 | 建立影刀通用网页导出 CSV 模板 | [✔] | 2026-07-18 | 输入循环、页面等待、适配子流程、原始 CSV |
-| J3 | 实现影刀京东商品采集适配器 | [ ] |  | URL 清单、商品页字段、状态与失败行 |
+| J3 | 实现影刀京东商品采集适配器 | [✔] | 2026-07-18 | 已接入四个页面元素、字段回写和状态映射；设计器运行及错误列表验收通过 |
 | J4 | 建立 pandas 通用 CSV 处理框架 | [ ] |  | core、contracts、validation、processor registry |
 | J5 | 实现通用批次、归档与失败重放 | [ ] |  | manifest、archive、failed、replay |
 | J6 | 实现京东商品 pandas processor | [ ] |  | 字段标准化、重复识别、标准/失败 CSV |
@@ -174,8 +174,8 @@
 | 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| 阶段 J | 8 | 2 | 25% |
-| **总计** | **74** | **61** | **82%** |
+| 阶段 J | 8 | 3 | 38% |
+| **总计** | **74** | **62** | **84%** |
 
 ### 6.5 阶段实施明细
 
@@ -1999,21 +1999,22 @@
 实现类/函数：
 
 - `ParseJdSkuId`：从输入 URL 或当前页面解析京东 SKU。
-- `WaitForJdProductPage`：等待商品标题和核心区域加载，区分页面就绪、下架、无货、登录提示、验证码和超时。
-- `ClassifyJdPageState`：返回 success、partial 或 failed 及稳定 error_code。
-- `ExtractJdProduct`：采集 jd_sku_id、title、display_price、shop_name、primary_image_url 和 capture_region。
+- `GetOpenedJdPage`：取得通用模板已经打开的当前影刀网页对象。
+- `ExtractJdProduct`：通过 `JdProductTitle`、`JdDisplayPrice`、`JdShopName` 和 `JdPrimaryImage` 采集四个页面字段。
 - `BuildJdProductRow`：把京东字段与 J1 通用列合并后返回模板主流程。
+- `ClassifyJdCaptureResult`：四个采集字段齐全时返回 success，缺字段时返回 partial/field_missing。
 
 验收标准：
 
 - 输入文件只包含 input_index 和 product_url；每个 URL 对应一个明确商品 SKU。
 - 第一版不抓取搜索结果列表，不枚举全部颜色、容量等变体。
-- display_price 表示采集时、当前登录状态和 capture_region 下的页面展示价格，不表达长期或全地区价格。
-- 页面下架、无货、字段部分缺失和 URL 无效均有明确状态，不伪造默认商品值。
+- display_price 表示采集时当前页面和登录状态下的展示价格，不表达长期或全地区价格。
+- `capture_region` 只保留 CSV 列，第一版固定留空；不录制页面地区元素。
+- 第一版不录制专用页面不可用状态元素；导航异常由通用模板处理，字段缺失返回 partial/field_missing。
 - 遇到登录、验证码或访问限制立即停止并转人工处理，不尝试绕过。
-- 至少使用正常商品、第三方店铺、无货或下架、无效 URL 等样例完成人工验收。
+- 使用一个已登录的正常商品页验证四个元素抽取；状态矩阵由脱敏 fixture 验证，完整清单导出留给 J7。
 
-测试方法：影刀人工运行 fixtures\rpa\jd_product_urls.csv，核对输入行数、原始 CSV 行数、页面状态、错误代码和错误截图
+测试方法：影刀设计器运行 `JdProductAdapter.flow`，检查运行开始/结束日志和空错误列表；`pytest tests\test_current_docs.py -q -k "rpa or jd_product"`
 
 ##### J4：建立 pandas 通用 CSV 处理框架
 

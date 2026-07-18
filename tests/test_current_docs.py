@@ -1,5 +1,6 @@
 import csv
 import importlib.util
+import re
 import sys
 from datetime import datetime
 from functools import lru_cache
@@ -36,6 +37,9 @@ DATA_OPS_CONTRACTS_PATH = Path(
 RPA_README_PATH = Path("rpa/yingdao/README.md")
 RPA_WEB_PAGE_TEMPLATE_PATH = Path(
     "rpa/yingdao/templates/web-page-to-csv.md"
+)
+RPA_JD_PRODUCT_IMPLEMENTATION_PATH = Path(
+    "rpa/yingdao/implementations/jd-product-export.md"
 )
 JD_PRODUCT_URLS_FIXTURE = Path("fixtures/rpa/jd_product_urls.csv")
 JD_PRODUCT_EXPORT_FIXTURE = Path("fixtures/rpa/jd_product_export.csv")
@@ -365,3 +369,104 @@ def test_rpa_web_page_template_documents_safe_export_and_acceptance_matrix() -> 
     )
     for token in readme_tokens:
         assert token in readme_text
+
+
+def test_jd_product_adapter_documents_flow_contract_and_safe_failures() -> None:
+    """Protect the first site adapter from fake values and access-control bypasses."""
+
+    text = RPA_JD_PRODUCT_IMPLEMENTATION_PATH.read_text(encoding="utf-8")
+    required_tokens = (
+        "ParseJdSkuId",
+        "GetOpenedJdPage",
+        "ExtractJdProduct",
+        "BuildJdProductRow",
+        "ClassifyJdCaptureResult",
+        "JdProductTitle",
+        "JdDisplayPrice",
+        "JdShopName",
+        "JdPrimaryImage",
+        "jd_sku_id",
+        "title",
+        "display_price",
+        "shop_name",
+        "primary_image_url",
+        "capture_region",
+        "success",
+        "partial",
+        "failed",
+        "invalid_input",
+        "navigation_failed",
+        "page_timeout",
+        "field_missing",
+        "manual_verification_required",
+        "access_restricted",
+        "验证码",
+        "不尝试绕过",
+        "错误截图",
+        "var/rpa/failed",
+        "每个输入行",
+        "恰好一条",
+    )
+    for token in required_tokens:
+        assert token in text
+
+    assert "JdCaptureRegion" not in text
+    assert "JdUnavailableState" not in text
+    assert text.index("ParseJdSkuId") < text.index("GetOpenedJdPage")
+    assert text.index("GetOpenedJdPage") < text.index("ExtractJdProduct")
+    assert text.index("ExtractJdProduct") < text.index("BuildJdProductRow")
+    assert text.index("BuildJdProductRow") < text.index("ClassifyJdCaptureResult")
+
+
+def test_jd_product_adapter_fixtures_cover_four_desensitized_outcomes() -> None:
+    """Protect the J3 handoff matrix and one-output-row-per-input invariant."""
+
+    input_header, input_rows = _read_csv_rows(JD_PRODUCT_URLS_FIXTURE)
+    export_header, export_rows = _read_csv_rows(JD_PRODUCT_EXPORT_FIXTURE)
+
+    assert input_header == ("input_index", "product_url")
+    assert export_header == COMMON_WEB_EXPORT_COLUMNS + JD_PRODUCT_SITE_COLUMNS
+    assert len(input_rows) == len(export_rows) == 4
+    assert [row["input_index"] for row in input_rows] == ["1", "2", "3", "4"]
+    assert [row["input_index"] for row in export_rows] == ["1", "2", "3", "4"]
+
+    rows_by_index = {row["input_index"]: row for row in export_rows}
+    assert (rows_by_index["1"]["crawl_status"], rows_by_index["1"]["error_code"]) == (
+        "success",
+        "",
+    )
+    assert (rows_by_index["2"]["crawl_status"], rows_by_index["2"]["error_code"]) == (
+        "partial",
+        "field_missing",
+    )
+    assert (rows_by_index["3"]["crawl_status"], rows_by_index["3"]["error_code"]) == (
+        "failed",
+        "navigation_failed",
+    )
+    assert (rows_by_index["4"]["crawl_status"], rows_by_index["4"]["error_code"]) == (
+        "failed",
+        "invalid_input",
+    )
+
+    for index in ("1", "2", "3"):
+        match = re.fullmatch(
+            r"https://item\.jd\.invalid/(?P<sku>\d+)\.html",
+            input_rows[int(index) - 1]["product_url"],
+        )
+        assert match is not None
+        assert rows_by_index[index]["jd_sku_id"] == match.group("sku")
+
+    assert input_rows[3]["product_url"].endswith("/not-a-sku")
+    for index in ("3", "4"):
+        assert all(
+            rows_by_index[index][column] == ""
+            for column in (
+                "title",
+                "display_price",
+                "shop_name",
+                "primary_image_url",
+                "capture_region",
+            )
+        )
+
+    assert all(row["capture_region"] == "" for row in export_rows)

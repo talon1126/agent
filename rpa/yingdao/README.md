@@ -55,16 +55,16 @@
 | --- | --- |
 | `jd_sku_id` | 从输入 URL 或当前商品页解析的 SKU |
 | `title` | 采集时页面可见商品标题 |
-| `display_price` | 采集时、当前登录状态和 `capture_region` 下的原始展示价格文本，不代表长期或全部地区价格 |
+| `display_price` | 采集时、当前页面和登录状态下的原始展示价格文本，不代表长期或全部地区价格 |
 | `shop_name` | 页面可见店铺名称 |
 | `primary_image_url` | 页面可见主图地址 |
-| `capture_region` | 采集价格与库存上下文所使用的地区标识 |
+| `capture_region` | 预留的采集地区字段；第一版不录制页面地区元素，固定留空 |
 
 对应原始输出样例为 `fixtures/rpa/jd_product_export.csv`。fixture 同时覆盖 `success`、`partial` 和 `failed`，所有 URL、商品、店铺、价格和时间均为合成数据。人工运行影刀时应在本地输入文件中替换为已获授权的真实 URL，不得把真实会话信息提交到仓库。
 
 ## pandas processor 交付
 
-`JD_PRODUCT_DATASET_CONTRACT` 要求原始 CSV 完整声明通用列和京东站点列，并使用 `batch_id + input_index` 作为输入行唯一键。字段存在不代表字段值一定非空；`partial` 或 `failed` 的空值与业务规则由 `jd_product` processor 在后续任务中处理。
+`JD_PRODUCT_DATASET_CONTRACT` 要求原始 CSV 完整声明通用列和京东站点列，并使用 `batch_id + input_index` 作为输入行唯一键。字段存在不代表字段值一定非空；第一版 `capture_region` 固定为空，`partial` 或 `failed` 的其他空值与业务规则由 `jd_product` processor 在后续任务中处理。
 
 `ProcessorContract.process(frame, contract)` 返回：
 
