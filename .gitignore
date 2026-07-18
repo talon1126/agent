@@ -9,5 +9,6 @@ AGENTS.md
 pytest-cache-files-*/
 __pycache__/
 services/ai-service/rag/data/
+var/rpa/
 .tmp/
 docker-compose.override.yml

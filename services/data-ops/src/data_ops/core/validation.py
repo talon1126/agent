@@ -8,12 +8,15 @@ semantics.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
 
 from data_ops.core.contracts import COMMON_CRAWL_STATUSES, COMMON_WEB_EXPORT_COLUMNS
+
+_SAFE_BATCH_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +145,15 @@ def validate_single_batch(frame: pd.DataFrame) -> tuple[ValidationIssue, ...]:
             ValidationIssue(
                 code="multiple_batch_ids",
                 message="source file must contain exactly one batch_id",
+                column="batch_id",
+            ),
+        )
+    batch_id = next(iter(batch_ids))
+    if _SAFE_BATCH_ID_PATTERN.fullmatch(batch_id) is None:
+        return (
+            ValidationIssue(
+                code="invalid_batch_id",
+                message="batch_id contains unsafe path characters",
                 column="batch_id",
             ),
         )

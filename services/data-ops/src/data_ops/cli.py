@@ -9,12 +9,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import pandas as pd
 
+from data_ops.core.batch_manifest import (
+    BatchManifest,
+    BatchManifestError,
+    DuplicateBatchError,
+    archive_successful_batch,
+    build_batch_manifest,
+    calculate_file_sha256,
+    quarantine_failed_batch,
+)
 from data_ops.core.contracts import ProcessorResult
 from data_ops.core.csv_io import (
     CanonicalWriteError,
@@ -30,6 +40,8 @@ from data_ops.core.validation import (
     validate_single_batch,
 )
 from data_ops.processors.registry import ProcessorRegistryError, get_processor
+
+_SAFE_BATCH_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def _raise_for_issues(issues: Sequence[ValidationIssue]) -> None:
@@ -166,6 +178,170 @@ def process_dataset(
     return result
 
 
+def _processor_name(processor: object) -> str:
+    """Return a stable qualified class name without instance state."""
+
+    processor_type = type(processor)
+    return f"{processor_type.__module__}.{processor_type.__qualname__}"
+
+
+def _failure_code(exc: Exception) -> str:
+    """Map controlled and unexpected failures to stable manifest error codes."""
+
+    if isinstance(exc, DatasetValidationError):
+        return exc.issues[0].code
+    if isinstance(exc, SourceFileError):
+        return "source_file_error"
+    if isinstance(exc, CanonicalWriteError):
+        return "output_write_error"
+    if isinstance(exc, BatchManifestError):
+        return "batch_manifest_error"
+    return "processing_error"
+
+
+def _safe_failure_batch_id(candidate: str, source_hash: str) -> str:
+    """Use a valid source batch ID or a deterministic hash-based fallback."""
+
+    if _SAFE_BATCH_ID_PATTERN.fullmatch(candidate):
+        return candidate
+    return f"failed-{source_hash[:12]}"
+
+
+def _output_paths(
+    dataset_type: str,
+    batch_id: str,
+    output_root: Path,
+    processor: object,
+) -> tuple[Path, Path]:
+    """Return normalized and failed output paths for one processor contract."""
+
+    contract = processor.contract
+    values = {"dataset_type": dataset_type, "batch_id": batch_id}
+    return (
+        output_root / contract.normalized_filename_template.format(**values),
+        output_root / contract.failed_filename_template.format(**values),
+    )
+
+
+def process_batch(
+    dataset_type: str,
+    input_path: str | Path,
+    runtime_root: str | Path,
+    *,
+    encoding: str = "utf-8-sig",
+    delimiter: str = ",",
+    sheet_name: str | int = 0,
+) -> BatchManifest:
+    """Process and transition one source file into archive or failed storage.
+
+    Args:
+        dataset_type: Explicit registered processor routing key.
+        input_path: Immutable source CSV or XLSX path.
+        runtime_root: Root containing normalized, archive, and failed states.
+        encoding: Explicit CSV encoding.
+        delimiter: Explicit CSV delimiter.
+        sheet_name: XLSX sheet name or position.
+
+    Returns:
+        The success manifest published under archive.
+
+    Raises:
+        ProcessorRegistryError: If dataset_type is not registered.
+        DuplicateBatchError: If source bytes and contract were already archived.
+        BatchManifestError: If processing failed after the processor resolved;
+            the source is quarantined before this error is raised.
+
+    Side Effects:
+        Writes canonical outputs, publishes one manifest directory, and moves
+        the source into archive or failed storage.
+    """
+
+    source = Path(input_path)
+    root = Path(runtime_root)
+    processor = get_processor(dataset_type)
+    source_hash = calculate_file_sha256(source)
+    processor_name = _processor_name(processor)
+    frame: pd.DataFrame | None = None
+    batch_id = f"failed-{source_hash[:12]}"
+    expected_outputs: tuple[Path, Path] = ()
+    try:
+        frame = read_source_file(
+            source,
+            encoding=encoding,
+            delimiter=delimiter,
+            sheet_name=sheet_name,
+        )
+        if "batch_id" in frame and not frame.empty:
+            candidates = {str(value).strip() for value in frame["batch_id"].tolist()}
+            if len(candidates) == 1:
+                batch_id = _safe_failure_batch_id(candidates.pop(), source_hash)
+        expected_outputs = _output_paths(
+            dataset_type,
+            batch_id,
+            root / "normalized",
+            processor,
+        )
+        result = process_dataset(
+            dataset_type,
+            source,
+            root / "normalized",
+            encoding=encoding,
+            delimiter=delimiter,
+            sheet_name=sheet_name,
+        )
+        manifest = build_batch_manifest(
+            batch_id=batch_id,
+            dataset_type=dataset_type,
+            input_path=source,
+            contract=processor.contract,
+            processor=processor_name,
+            row_counts=result.summary,
+            status="success",
+            output_files=expected_outputs,
+        )
+        archive_successful_batch(
+            manifest,
+            source_path=source,
+            output_paths=expected_outputs,
+            archive_root=root / "archive",
+        )
+        return manifest
+    except DuplicateBatchError:
+        raise
+    except Exception as exc:
+        if not source.is_file():
+            raise BatchManifestError(
+                "batch failed after source transition and cannot be quarantined"
+            ) from exc
+        existing_outputs = tuple(path for path in expected_outputs if path.is_file())
+        error_code = _failure_code(exc)
+        manifest = build_batch_manifest(
+            batch_id=_safe_failure_batch_id(batch_id, source_hash),
+            dataset_type=dataset_type,
+            input_path=source,
+            contract=processor.contract,
+            processor=processor_name,
+            row_counts={
+                "input_rows": len(frame) if frame is not None else 0,
+                "normalized_rows": 0,
+                "failed_rows": len(frame) if frame is not None else 0,
+            },
+            status="failed",
+            output_files=existing_outputs,
+            error_code=error_code,
+            error_summary=f"{error_code}: {type(exc).__name__}",
+        )
+        failed_path = quarantine_failed_batch(
+            manifest,
+            source_path=source,
+            failed_root=root / "failed",
+            output_paths=existing_outputs,
+        )
+        raise BatchManifestError(
+            f"{error_code}: batch quarantined at {failed_path}"
+        ) from exc
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the stable command-line contract for file processing."""
 
@@ -190,7 +366,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = _build_parser().parse_args(argv)
     try:
-        result = process_dataset(
+        manifest = process_batch(
             args.dataset_type,
             args.input_path,
             args.output_root,
@@ -201,12 +377,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (
         CanonicalWriteError,
         DatasetValidationError,
+        DuplicateBatchError,
+        BatchManifestError,
         ProcessorRegistryError,
         SourceFileError,
     ) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    print(json.dumps(dict(result.summary), ensure_ascii=True, sort_keys=True))
+    print(json.dumps(manifest.to_dict(), ensure_ascii=True, sort_keys=True))
     return 0
 
 
