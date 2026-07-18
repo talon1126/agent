@@ -186,8 +186,9 @@ def test_rpa_data_contract_exposes_stable_extension_boundaries() -> None:
     dataset_contract = contracts.JD_PRODUCT_DATASET_CONTRACT
     assert dataset_contract.dataset_type == "jd_product"
     assert dataset_contract.required_columns == web_contract.output_columns
-    assert dataset_contract.optional_columns == ()
-    assert set(dataset_contract.column_types) == set(web_contract.output_columns)
+    assert dataset_contract.optional_columns == ("display_price_amount",)
+    assert dataset_contract.column_types["display_price_amount"] == "decimal"
+    assert set(dataset_contract.column_types) == set(dataset_contract.all_columns)
     assert dataset_contract.unique_by == ("batch_id", "input_index")
     assert (
         dataset_contract.normalized_filename_template

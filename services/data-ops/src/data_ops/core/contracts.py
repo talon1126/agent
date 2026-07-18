@@ -62,6 +62,7 @@ JD_PRODUCT_SITE_COLUMNS = (
     "primary_image_url",
     "capture_region",
 )
+JD_PRODUCT_NORMALIZED_COLUMNS = ("display_price_amount",)
 
 _DATASET_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 _SUPPORTED_COLUMN_TYPES = frozenset(
@@ -364,7 +365,7 @@ JD_PRODUCT_WEB_EXPORT_CONTRACT = WebPageExportContract(
 JD_PRODUCT_DATASET_CONTRACT = DatasetContract(
     dataset_type="jd_product",
     required_columns=JD_PRODUCT_WEB_EXPORT_CONTRACT.output_columns,
-    optional_columns=(),
+    optional_columns=JD_PRODUCT_NORMALIZED_COLUMNS,
     column_types={
         **COMMON_WEB_EXPORT_COLUMN_TYPES,
         "jd_sku_id": "string",
@@ -373,6 +374,7 @@ JD_PRODUCT_DATASET_CONTRACT = DatasetContract(
         "shop_name": "string",
         "primary_image_url": "url",
         "capture_region": "string",
+        "display_price_amount": "decimal",
     },
     unique_by=("batch_id", "input_index"),
     normalized_filename_template="{dataset_type}_{batch_id}_normalized.csv",
@@ -391,6 +393,7 @@ __all__ = [
     "DEFAULT_RUNTIME_DIRECTORIES",
     "JD_PRODUCT_DATASET_CONTRACT",
     "JD_PRODUCT_INPUT_COLUMNS",
+    "JD_PRODUCT_NORMALIZED_COLUMNS",
     "JD_PRODUCT_SITE_COLUMNS",
     "JD_PRODUCT_WEB_EXPORT_CONTRACT",
     "ProcessorContract",

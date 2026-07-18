@@ -157,7 +157,7 @@
 | J3 | 实现影刀京东商品采集适配器 | [✔] | 2026-07-18 | 已接入四个页面元素、字段回写和状态映射；设计器运行及错误列表验收通过 |
 | J4 | 建立 pandas 通用 CSV 处理框架 | [✔] | 2026-07-18 | CSV/XLSX 读取、公共校验、processor registry、原子 CSV 输出与 CLI |
 | J5 | 实现通用批次、归档与失败重放 | [✔] | 2026-07-18 | SHA-256 去重、原子归档、失败隔离、contract 校验与重放 |
-| J6 | 实现京东商品 pandas processor | [ ] |  | 字段标准化、重复识别、标准/失败 CSV |
+| J6 | 实现京东商品 pandas processor | [✔] | 2026-07-19 | 字段标准化、重复识别、标准/失败 CSV |
 | J7 | 打通京东商品端到端文件链路 | [ ] |  | jd_product 原始 CSV 到标准化结果 |
 | J8 | 实现扩展指南与阶段质量门禁 | [ ] |  | 新站点模板、自动测试、影刀人工验收 |
 
@@ -174,8 +174,8 @@
 | 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| 阶段 J | 8 | 5 | 63% |
-| **总计** | **74** | **64** | **86%** |
+| 阶段 J | 8 | 6 | 75% |
+| **总计** | **74** | **65** | **88%** |
 
 ### 6.5 阶段实施明细
 
@@ -2092,15 +2092,15 @@
 
 修改文件：
 
+- `services/data-ops/src/data_ops/core/contracts.py`
 - `services/data-ops/src/data_ops/processors/jd_product.py`
-- `services/data-ops/src/data_ops/processors/registry.py`
 - `services/data-ops/tests/test_jd_product_processor.py`
-- `fixtures/rpa/jd_product_export.csv`
+- `tests/test_current_docs.py`
 
 实现类/函数：
 
 - `JdProductProcessor.validate`：验证通用列及 jd_sku_id、title、display_price、shop_name、primary_image_url 和 capture_region。
-- `JdProductProcessor.normalize`：清理字符串、标准化 SKU、解析展示价格并统一 captured_at。
+- `JdProductProcessor.normalize`：清理字符串、标准化 SKU、保留 display_price 原文、解析 display_price_amount 数值并统一 captured_at。
 - `JdProductProcessor.split_results`：把 success、partial 和 failed 转换为标准化结果与失败结果。
 - `identify_jd_duplicates`：按 input_index 保证输入可追踪，并标记重复 URL 或重复 SKU。
 - `register_jd_product_processor`：以 jd_product 注册 processor。
@@ -2109,7 +2109,7 @@
 
 - processor 只处理 jd_product contract，不在通用 core 中增加京东条件分支。
 - success 行必须保留可追踪 source_url、jd_sku_id、title、capture_region 和 captured_at。
-- 展示价格同时保留原始文本和可解析的数值字段；无法解析时进入 partial 或 failed，不写零价替代。
+- 展示价格原文保留在 display_price，可解析数值写入 display_price_amount；无法解析时进入 partial 或 failed，不写零价替代。
 - failed CSV 保留 input_index、source_url、crawl_status 和 error_code。
 - 输入行数等于标准化结果、失败结果和显式重复结果的可对账总数。
 - processor 不查询、不更新 items，也不创建商品映射或数据库记录。
