@@ -34,6 +34,9 @@ DATA_OPS_CONTRACTS_PATH = Path(
     "services/data-ops/src/data_ops/core/contracts.py"
 )
 RPA_README_PATH = Path("rpa/yingdao/README.md")
+RPA_WEB_PAGE_TEMPLATE_PATH = Path(
+    "rpa/yingdao/templates/web-page-to-csv.md"
+)
 JD_PRODUCT_URLS_FIXTURE = Path("fixtures/rpa/jd_product_urls.csv")
 JD_PRODUCT_EXPORT_FIXTURE = Path("fixtures/rpa/jd_product_export.csv")
 
@@ -278,3 +281,87 @@ def test_rpa_data_contract_readme_documents_security_and_data_boundaries() -> No
     )
     for token in required_tokens:
         assert token in text
+
+
+def test_rpa_web_page_template_defines_generic_one_row_per_input_flow() -> None:
+    """Protect the reusable Yingdao flow from site coupling and silent row loss."""
+
+    text = RPA_WEB_PAGE_TEMPLATE_PATH.read_text(encoding="utf-8")
+    required_tokens = (
+        "LoadInputRows",
+        "InvokeSiteAdapter",
+        "AppendExportRow",
+        "ExportRawCsv",
+        "StopForManualVerification",
+        "dataset_type",
+        "source_url_column",
+        "site_output_columns",
+        "dataset_type,batch_id,input_index,source_url,captured_at,crawl_status,error_code",
+        "success",
+        "partial",
+        "failed",
+        "invalid_input",
+        "adapter_error",
+        "manual_verification_required",
+        "Python 模式",
+        "PART_SyntaxEditor",
+        "adapter_process_result.adapter_result",
+        "list(export_rows[0].keys())",
+        "每个输入行",
+        "恰好一条",
+    )
+    for token in required_tokens:
+        assert token in text
+
+    assert text.index("LoadInputRows") < text.index("InvokeSiteAdapter")
+    assert text.index("InvokeSiteAdapter") < text.index("AppendExportRow")
+    assert text.index("AppendExportRow") < text.index("ExportRawCsv")
+
+    lowered = text.casefold()
+    for site_specific_token in (
+        "jd_product",
+        "jd_sku_id",
+        "display_price",
+        "shop_name",
+        "primary_image_url",
+        "capture_region",
+        "item.jd",
+        "京东",
+    ):
+        assert site_specific_token not in lowered
+
+
+def test_rpa_web_page_template_documents_safe_export_and_acceptance_matrix() -> None:
+    """Protect J2 export naming, secret handling, and four acceptance outcomes."""
+
+    template_text = RPA_WEB_PAGE_TEMPLATE_PATH.read_text(encoding="utf-8")
+    readme_text = RPA_README_PATH.read_text(encoding="utf-8")
+
+    template_tokens = (
+        "UTF-8",
+        "{dataset_type}_{batch_id}_{captured_at}.csv",
+        "凭据",
+        "Cookie",
+        "Token",
+        "验证码",
+        "不得写入 CSV",
+        "成功场景",
+        "字段缺失场景",
+        "适配失败场景",
+        "人工验证场景",
+        "保留当前页面",
+    )
+    for token in template_tokens:
+        assert token in template_text
+
+    readme_tokens = (
+        "templates/web-page-to-csv.md",
+        "TalonMart - Web Page to CSV",
+        "LoadInputRows",
+        "InvokeSiteAdapter",
+        "AppendExportRow",
+        "ExportRawCsv",
+        "StopForManualVerification",
+    )
+    for token in readme_tokens:
+        assert token in readme_text

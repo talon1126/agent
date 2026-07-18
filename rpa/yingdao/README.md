@@ -74,6 +74,26 @@
 
 标准输出文件模板为 `{dataset_type}_{batch_id}_normalized.csv`，失败输出文件模板为 `{dataset_type}_{batch_id}_failed.csv`。
 
+## 影刀通用模板应用
+
+J2 的影刀应用名称统一为 `TalonMart - Web Page to CSV`，完整搭建契约见 [`templates/web-page-to-csv.md`](templates/web-page-to-csv.md)。应用包含一个 Main 流程和五个稳定子流程：
+
+- `LoadInputRows`：读取输入 CSV，并产生稳定 `input_index`。
+- `InvokeSiteAdapter`：按 `dataset_type` 路由到站点适配流程。
+- `AppendExportRow`：保证每个输入行恰好追加一条结果。
+- `ExportRawCsv`：按固定通用列和站点扩展列导出 UTF-8 CSV。
+- `StopForManualVerification`：检查点导出后保留页面并停止，等待人工处理。
+
+在影刀中搭建：
+
+1. 新建 PC 自动化应用并命名为 `TalonMart - Web Page to CSV`。
+2. 添加上述五个子流程，按模板文档声明输入和输出参数。
+3. Main 只实现批次初始化、输入循环、异常边界、结果追加和导出。
+4. 为目标网站新增独立适配流程，并在 `InvokeSiteAdapter` 注册 `dataset_type` 路由。
+5. 使用模板文档中的四场景矩阵完成人工验收，再接入真实站点。
+
+影刀云端应用 ID、账号信息、捕获元素、页面截图和导出的应用包都可能包含环境信息，未完成脱敏审查前不得提交仓库。仓库中的 Markdown 契约是应用搭建和复核的版本化来源。
+
 ## 运行目录
 
 | 目录 | 职责 |
