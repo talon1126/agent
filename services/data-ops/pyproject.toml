@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "talonmart-data-ops"
+version = "0.1.0"
+description = "File-based CSV and XLSX processing for TalonMart RPA exports"
+requires-python = ">=3.12"
+dependencies = [
+    "openpyxl>=3.1,<4.0",
+    "pandas>=2.2,<4.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3,<9.0",
+    "ruff>=0.11,<1.0",
+]
+
+[project.scripts]
+talonmart-data-ops = "data_ops.cli:entrypoint"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/data_ops"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "W"]

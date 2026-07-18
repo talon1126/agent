@@ -9,10 +9,14 @@ read files, import pandas, create directories, or interact with a database.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Generic, Literal, Mapping, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, TypeVar, runtime_checkable
+
+if TYPE_CHECKING:
+    from data_ops.core.validation import ValidationIssue
 
 
 ColumnType = Literal["string", "integer", "decimal", "datetime", "url"]
@@ -239,7 +243,7 @@ class DatasetContract:
 
 
 @dataclass(frozen=True, slots=True)
-class ProcessorResult(Generic[FrameT]):
+class ProcessorResult[FrameT]:
     """Carry normalized rows, failed rows, and reconciliation statistics."""
 
     normalized_rows: FrameT
@@ -270,6 +274,38 @@ class ProcessorContract(Protocol[FrameT]):
         Returns:
             Normalized rows, failed rows, and integer reconciliation metrics.
         """
+
+        ...
+
+
+@runtime_checkable
+class DatasetProcessor(Protocol[FrameT]):
+    """Define the staged processing interface used by the generic J4 runtime.
+
+    Implementations own one dataset contract and its row-level business rules.
+    The generic core calls the stages in order and never imports concrete
+    processor modules or site-specific field constants.
+    """
+
+    dataset_type: str
+    contract: DatasetContract
+
+    def validate(self, frame: FrameT) -> Sequence[ValidationIssue]:
+        """Return row-level issues without mutating the source frame."""
+
+        ...
+
+    def normalize(self, frame: FrameT) -> FrameT:
+        """Return a canonical table while preserving reconciliation columns."""
+
+        ...
+
+    def split_results(
+        self,
+        frame: FrameT,
+        issues: Sequence[ValidationIssue],
+    ) -> ProcessorResult[FrameT]:
+        """Split normalized and failed rows with integer summary totals."""
 
         ...
 
@@ -350,6 +386,7 @@ __all__ = [
     "COMMON_CRAWL_STATUSES",
     "COMMON_ERROR_CODES",
     "COMMON_WEB_EXPORT_COLUMNS",
+    "DatasetProcessor",
     "DatasetContract",
     "DEFAULT_RUNTIME_DIRECTORIES",
     "JD_PRODUCT_DATASET_CONTRACT",
