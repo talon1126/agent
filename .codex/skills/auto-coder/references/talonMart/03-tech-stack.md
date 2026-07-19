@@ -14,6 +14,7 @@
 | Workflow | n8n | 部门 Workflow 编排、工具调用和定时任务 |
 | RPA | 影刀 RPA | 通用网页导出 CSV 模板、站点适配子流程、京东商品首个实现、异常截图和人工验收 |
 | 文件数据处理 | Python、pandas | CSV/XLSX 读取、dataset processor 路由、标准化、校验、批次清单和文件归档 |
+| URL 发现与自动编排 | Python、Playwright、PowerShell | 京东列表页 URL 发现、影刀 API/命令行启动、文件交接、pandas 串联和统一结果码 |
 | 数据库 | PostgreSQL | 业务事实、会话、记忆和同步状态 |
 | 缓存/原子计数 | Redis | 秒杀库存扣减和补偿 |
 | Python 包管理 | uv | Python 依赖、虚拟环境、测试和脚本统一入口 |

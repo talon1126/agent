@@ -11,4 +11,5 @@ __pycache__/
 services/ai-service/rag/data/
 var/rpa/
 .tmp/
+.playwright-cli/
 docker-compose.override.yml

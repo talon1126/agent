@@ -31,7 +31,7 @@ dataset_type,batch_id,input_index,source_url,captured_at,crawl_status,error_code
 `adapter_error` 和 `site_output_columns` 空值，不引入京东字段。第一版京东逻辑按以下顺序执行：
 
 1. `ParseJdSkuId`
-2. `GetOpenedJdPage`
+2. `OpenJdProductPage`
 3. `ExtractJdProduct`
 4. `BuildJdProductRow`
 5. `ClassifyJdCaptureResult`
@@ -47,11 +47,12 @@ dataset_type,batch_id,input_index,source_url,captured_at,crawl_status,error_code
 解析成功返回数字字符串 `jd_sku_id`。任何条件不满足时直接构建
 `crawl_status=failed,error_code=invalid_input`，不打开页面。
 
-### `GetOpenedJdPage`
+### `OpenJdProductPage`
 
-通用模板负责打开 `source_url` 和处理导航异常。适配器通过影刀的“获取已打开的网页对象”取得
-当前商品页对象，再把该对象传给四个“获取元素信息(web)”节点。元素必须保存在影刀元素库中，
-并优先使用稳定的 id、class、属性和局部相对路径，禁止依赖完整绝对 XPath。
+适配器使用影刀的“打开网页”指令在已登录的影刀浏览器中打开本轮 `source_url`，把网页对象保存为
+`web_page`，再传给四个“获取元素信息(web)”节点。网页地址必须使用 Python 表达式模式接收流程
+参数，不能把变量名当成普通字符串。元素必须保存在影刀元素库中，并优先使用稳定的 id、class、
+属性和局部相对路径，禁止依赖完整绝对 XPath。
 
 浏览器导航失败由通用模板映射为 `failed/navigation_failed`，等待超时映射为
 `failed/page_timeout`，登录或验证码映射为 `failed/manual_verification_required`，访问限制映射为
@@ -139,18 +140,36 @@ Cookie 或 Token。
 `batch_id`。不得向已经交接或归档的原始 CSV 追加行；多个批次通过 input_index 与原始 URL
 清单共同对账。
 
+## J9 自动启动参数
+
+自动流水线运行前，在影刀应用中声明 `batch_id`、`input_csv` 和 `raw_output_csv` 三个字符串
+入参。支持导出应用包的环境通过 `.shr` 与 `--app-params` 接收同名 JSON；企业 OpenAPI 通过应用
+params 接收同名字符串；不具备这两种能力时由操作员在设计器主流程中设置同名参数并生成文件交接。
+Main 开始时必须完成以下赋值，后续流程不得继续使用设计器中的固定测试路径：
+
+1. 用 `input_csv` 覆盖 `LoadInputRows` 的输入文件路径。
+2. 用 `batch_id` 覆盖 Main 初始化的批次 ID，并在所有输出行中原样保留。
+3. 用 `raw_output_csv` 覆盖 `ExportRawCsv` 的完整目标文件路径。
+4. 任一参数缺失、文件不存在或目标目录不可写时，返回 `failed/invalid_input`，不打开京东页面。
+
+影刀正常结束前必须确认 `raw_output_csv` 已存在、表头与 `jd_product` 契约一致，且导出行数等于
+输入行数。登录、验证码或访问限制仍按 `manual_verification_required` 停止；J9 runner 只负责
+启动和等待，不输入账号、Cookie、Token，也不尝试绕过页面控制。
+
 ## 当前实施状态
 
-截至 2026-07-18，影刀应用中已经建立 `JdProductAdapter.flow`，并从
+截至 2026-07-19，影刀应用中已经建立 `JdProductAdapter.flow`，并从
 `InvokeSiteAdapter.flow` 接入。调用参数为 `dataset_type`、`source_row`、
 `source_url`、`precheck_error` 和 `site_output_columns`；返回包装值通过
 `adapter_process_result.adapter_result` 写回 `adapter_result`。设计器错误列表为
 “暂无错误数据”。
 
 当前流程已接入 `JdProductTitle`、`JdDisplayPrice`、`JdShopName` 和
-`JdPrimaryImage` 四个元素：前三个读取文本，主图读取 `src` 属性。采集值写回
-`site_fields`，随后覆盖 `crawl_status` 和 `error_code`；`capture_region` 固定留空。
+`JdPrimaryImage` 四个元素：前三个读取文本，主图读取 `src` 属性。每轮使用 `source_url` 打开商品
+页，采集值以字典变量写回 `site_fields`；调用流程边界全部使用 Python 表达式模式，
+`AppendExportRow` 在声明列为空时从 `site_fields` 键回退生成站点列，`capture_region` 固定留空。
 
-2026-07-18 已在登录后的影刀浏览器中打开京东商品页，保存流程并完成设计器运行验收；运行日志显示
-“开始执行”和“执行结束”，错误列表为“暂无错误数据”。J3 适配器实现完成。输入清单循环、原始 CSV
-导出和 pandas 处理使用下述文件交接契约与 `rpa/yingdao/README.md` 中的运行命令验收。
+2026-07-19 已使用登录后的影刀浏览器处理 5 个真实商品 URL，导出 13 列、5 行成功原始 CSV；
+同一批次经 J9 PowerShell 入口续跑后得到 5 行标准化结果、0 行失败结果、成功 manifest 和
+`pipeline_result.json`，进程退出码为 0。输入清单循环、原始 CSV 导出和 pandas 处理使用下述
+文件交接契约与 `rpa/yingdao/README.md` 中的运行命令验收。

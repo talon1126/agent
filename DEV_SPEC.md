@@ -75,14 +75,14 @@ AImodel 负责用户购物咨询、商品对比和工具编排，商品事实由
 
 ### 2.7 影刀 RPA 与 pandas 文件流水线
 
-阶段 J 建立两块相互独立、通过 CSV 契约协作的通用能力：
+阶段 J 建立两块相互独立、通过 CSV 契约协作的通用能力，并以京东商品自动采集流水线完成首个自动编排实例：
 
 1. **影刀网页导出 CSV**：通用模板负责读取输入清单、打开已授权页面、等待页面就绪、调用站点适配子流程、记录成功或失败行并导出原始 CSV。新增目标网站或页面时只增加站点实现，不复制批次循环、错误记录和 CSV 导出骨架。
 2. **pandas 数据处理**：通用核心负责 CSV/XLSX 读取、编码统一、dataset contract 校验、processor 路由、行级错误、标准化输出、批次清单、归档和失败重放。新增数据类型时注册新的 dataset processor，不修改通用读取和批次核心。
 
-首个完整实现使用 `dataset_type=jd_product`。影刀京东商品实现读取京东商品 URL 清单，采集当前页面可见的 SKU、标题、展示价格、店铺、主图和采集状态并导出原始 CSV；对应 pandas processor 校验字段、标准化类型、按输入和 SKU 识别重复记录，并输出标准化 CSV 与失败 CSV。
+首个完整实现使用 `dataset_type=jd_product`。京东 URL 发现脚本从关键词或已授权的搜索/分类入口发现商品详情 URL，按 SKU 规范化、去重并生成输入清单；自动编排器把输入清单交给影刀京东商品实现，采集当前页面可见的 SKU、标题、展示价格、店铺、主图和采集状态并导出原始 CSV，再调用对应 pandas processor 输出标准化 CSV、失败 CSV、批次清单和统一流水线结果。
 
-阶段 J 只交付通用文件能力和京东商品首个实现：**不新增数据库表，不修改 `items` 表结构或数据，不直接写入 PostgreSQL，不改造 mock-api、Operations Workflow 或飞书 read model**。数据入库、商品关联和下游展示方案由阶段 J 完成后另行设计。
+阶段 J 只交付通用文件能力和京东商品自动文件流水线：**不新增数据库表，不修改 `items` 表结构或数据，不直接写入 PostgreSQL，不改造 mock-api、Operations Workflow 或飞书 read model**。数据入库、商品关联和下游展示方案由阶段 J 完成后另行设计。
 
 
 
@@ -99,6 +99,7 @@ AImodel 负责用户购物咨询、商品对比和工具编排，商品事实由
 | Workflow | n8n | 部门 Workflow 编排、工具调用和定时任务 |
 | RPA | 影刀 RPA | 通用网页导出 CSV 模板、站点适配子流程、京东商品首个实现、异常截图和人工验收 |
 | 文件数据处理 | Python、pandas | CSV/XLSX 读取、dataset processor 路由、标准化、校验、批次清单和文件归档 |
+| URL 发现与自动编排 | Python、Playwright、PowerShell | 京东列表页 URL 发现、影刀 API/命令行启动、文件交接、pandas 串联和统一结果码 |
 | 数据库 | PostgreSQL | 业务事实、会话、记忆和同步状态 |
 | 缓存/原子计数 | Redis | 秒杀库存扣减和补偿 |
 | Python 包管理 | uv | Python 依赖、虚拟环境、测试和脚本统一入口 |
@@ -316,7 +317,16 @@ ai-service ── stdio MCP ── services/ai-service/rag
                                                    v
                                      标准化 CSV + 失败 CSV + 批次清单
 
-首个实现：京东商品 URL ──> 影刀 jd_product 实现 ──> pandas jd_product processor
+首个实现：京东搜索/分类入口 ──> URL 发现脚本 ──> 京东商品 URL 清单
+                                                    |
+                                                    v
+                             自动启动影刀 jd_product 实现 ──> 原始 CSV
+                                                                       |
+                                                                       v
+                                                        pandas jd_product processor
+                                                                       |
+                                                                       v
+                                                标准/失败 CSV + manifest + result.json
 ```
 
 ### 5.2 目录结构树
@@ -505,7 +515,7 @@ agent/                                                      # 项目根目录
 │   │       ├── test_intent_router.py                       # 意图路由测试
 │   │       └── test_view_template_builder.py               # 视图模板测试
 │   ├── data-ops/                                           # RPA 文件数据处理项目
-│   │   ├── pyproject.toml                                  # pandas 和测试依赖
+│   │   ├── pyproject.toml                                  # pandas、Playwright 和测试依赖
 │   │   ├── uv.lock                                         # data-ops 依赖锁
 │   │   ├── src/                                            # data-ops 源码
 │   │   │   └── data_ops/                                   # 文件处理 Python 包
@@ -518,6 +528,13 @@ agent/                                                      # 项目根目录
 │   │   │       │   ├── csv_io.py                           # CSV/XLSX 读取和 UTF-8 CSV 输出
 │   │   │       │   ├── validation.py                       # 通用列与行级校验
 │   │   │       │   └── batch_manifest.py                   # 批次清单、归档和失败信息
+│   │   │       ├── discovery/                              # 站点 URL 发现实现
+│   │   │       │   ├── __init__.py                         # Discovery 包标记
+│   │   │       │   └── jd_product_urls.py                  # 京东商品 URL 发现、规范化和去重
+│   │   │       ├── orchestration/                          # RPA 与 pandas 自动编排
+│   │   │       │   ├── __init__.py                         # Orchestration 包标记
+│   │   │       │   ├── yingdao_runner.py                   # 影刀 API/命令行启动适配
+│   │   │       │   └── jd_product_pipeline.py              # 京东发现、采集和处理流水线
 │   │   │       └── processors/                             # 具体 dataset processor
 │   │   │           ├── __init__.py                         # Processor 包标记
 │   │   │           ├── registry.py                         # dataset_type 到 processor 路由
@@ -527,7 +544,9 @@ agent/                                                      # 项目根目录
 │   │       ├── test_core.py                                # 通用读取、契约和校验测试
 │   │       ├── test_processor_registry.py                  # Processor 注册与路由测试
 │   │       ├── test_jd_product_processor.py                # 京东商品处理测试
-│   │       └── test_batch_manifest.py                      # 通用批次和归档测试
+│   │       ├── test_batch_manifest.py                      # 通用批次和归档测试
+│   │       ├── test_jd_product_url_discovery.py             # 京东 URL 发现与去重测试
+│   │       └── test_jd_product_pipeline.py                  # 影刀和 pandas 自动编排测试
 │   └── postgres/                                           # PostgreSQL 镜像
 │       ├── Dockerfile                                      # 数据库镜像构建
 │       └── initdb/                                         # 数据库初始化脚本
@@ -595,6 +614,7 @@ agent/                                                      # 项目根目录
 │   ├── generate_department_workflows.py                    # 生成部门工作流
 │   ├── replay_failed_event.ps1                             # 回放失败事件
 │   ├── run_data_ops.ps1                                    # 执行 RPA CSV 标准化
+│   ├── run_jd_product_pipeline.ps1                          # 执行京东 URL 发现、影刀采集和 pandas 处理
 │   ├── send_event.ps1                                      # 发送事件 fixture
 │   ├── send_message.ps1                                    # 发送消息 fixture
 │   └── update_multi_domain_workflow.py                     # 更新多领域工作流
@@ -633,6 +653,9 @@ agent/                                                      # 项目根目录
 | RPA | `rpa/yingdao/templates/web-page-to-csv.md` | 通用网页导出模板 | 输入循环、页面就绪等待、适配子流程调用、结果累积、错误记录和原始 CSV 导出 |
 | RPA | `rpa/yingdao/implementations/jd-product-export.md` | 京东商品首个实现 | 商品 URL 输入、京东详情页状态识别、可见字段采集、失败行和人工验收 |
 | 文件数据处理 | `services/data-ops/src/data_ops/app.py` | 应用组合入口 | 注册内置具体 processor，并把命令参数交给不感知站点的通用 CLI |
+| URL 发现 | `services/data-ops/src/data_ops/discovery/jd_product_urls.py` | 京东商品 URL 发现 | 从关键词或搜索/分类入口提取详情 URL，按 SKU 规范化和去重并输出输入 CSV |
+| 自动编排 | `services/data-ops/src/data_ops/orchestration/yingdao_runner.py` | 影刀启动适配 | 通过配置选择开放 API 或本地命令行启动影刀，传递批次与文件参数并等待结果 |
+| 自动编排 | `services/data-ops/src/data_ops/orchestration/jd_product_pipeline.py` | 京东自动文件流水线 | 串联 URL 发现、影刀采集、pandas 处理，输出结果 JSON 和稳定退出码 |
 | 文件数据处理 | `services/data-ops/src/data_ops/core/csv_io.py` | 通用文件格式统一 | CSV/XLSX 读取、编码处理、UTF-8 CSV 输出和原始文件保护 |
 | 文件数据处理 | `services/data-ops/src/data_ops/processors/registry.py` | Processor 路由 | 根据 dataset_type 解析并调用具体数据处理器 |
 | 文件数据处理 | `services/data-ops/src/data_ops/processors/jd_product_contract.py` | 京东文件契约 | 京东输入列、站点扩展列、标准化价格列和输出文件名 |
@@ -813,14 +836,18 @@ services/data-ops 通用核心
     |
     +--> var/rpa/archive 原始文件和批次清单
 
-首个实例：京东商品 URL -> 影刀 jd_product 实现 -> pandas jd_product processor
+首个实例：关键词/搜索或分类入口 -> 京东 URL 发现 -> 商品 URL 清单
+                                       -> 自动启动影刀 jd_product 实现
+                                       -> pandas jd_product processor
+                                       -> pipeline_result.json + 退出码
 ```
 
 设计约束：
 
 - 影刀只操作已获授权或允许访问的页面，凭据不得写入仓库、CSV fixture、日志或批次清单。
 - 影刀通用模板只负责输入循环、公共状态、结果收集和 CSV 导出；网站元素、字段解析和页面状态判断由 implementations 下的站点实现负责。
-- 京东商品首个实现按输入 URL 采集一个明确 SKU 的当前可见页面信息，不遍历搜索结果、全部变体，不绕过登录、验证码、访问限制或平台规则。
+- 京东 URL 发现脚本只遍历用户指定的搜索/分类入口和受控页数，从当前可访问页面提取商品详情 URL；京东详情页适配器仍只按输入 URL 采集一个明确 SKU，不枚举全部变体。
+- URL 发现和影刀采集均不得绕过登录、验证码、访问限制或平台规则；遇到人工验证时停止并返回稳定错误状态。
 - pandas 通用核心不包含京东字段判断；`jd_product` 的列契约和业务校验只存在于对应 processor。
 - 原始文件保持不可变，标准化输出、归档文件和失败文件使用不同目录。
 - `fixtures/rpa` 只保存合成或脱敏数据，`var/rpa` 全目录忽略 Git。
@@ -843,7 +870,7 @@ services/data-ops 通用核心
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆、AImodel Intent Router、受控联网搜索和 RAG MCP 集成 | [✔] |
 | 阶段 H | 飞书应用与协作后台 | 完成 feishu-adapter、多维表格 read model、主动通知和飞书应用搭建 | [~] |
 | 阶段 I | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
-| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东商品首个端到端实现 | [✔] |
+| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东 URL 发现、影刀采集和 pandas 处理的自动流水线 | [✔] |
 
 ### 6.2 交付里程碑
 
@@ -858,7 +885,7 @@ services/data-ops 通用核心
 | 阶段 G | AImodel 持续增强 | 流式聊天、工具调用、会话记忆、AImodel Intent Router、受控联网搜索、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 | 2026-06-29 |
 | 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、业务操作页、订单明细、商品、秒杀 read model 分页同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
 | 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | RPA Data Operations |  |
-| 阶段 J | 通用网页数据文件流水线可扩展 | 影刀通用模板、pandas processor 框架、京东商品原始/标准/失败 CSV、批次清单和扩展指南 | `uv run --project services/data-ops pytest services\data-ops\tests -q` | 新站点实现或数据入库设计 |  |
+| 阶段 J | 京东商品文件流水线已完成并可扩展 | URL 发现、影刀采集、pandas 标准化、失败 CSV、manifest、pipeline result 和断点续跑 | `uv run --project services/data-ops pytest services\data-ops\tests -q` | 数据入库与商品关联另行设计 | 2026-07-19 |
 
 ### 6.3 任务跟踪表
 
@@ -985,6 +1012,7 @@ services/data-ops 通用核心
 | J6 | 实现京东商品 pandas processor | [✔] | 2026-07-19 | 字段标准化、重复识别、标准/失败 CSV |
 | J7 | 打通京东商品端到端文件链路 | [✔] | 2026-07-19 | jd_product 原始 CSV 到标准化结果 |
 | J8 | 实现扩展指南与阶段质量门禁 | [✔] | 2026-07-19 | 新站点模板、自动测试、影刀人工验收 |
+| J9 | 实现京东商品 URL 发现与自动采集处理流水线 | [✔] | 2026-07-19 | 真实影刀批次 5/5 标准化、pipeline result 退出码 0，并支持无 runner 的 pandas 续跑 |
 
 ### 6.4 总体进度表
 
@@ -999,8 +1027,8 @@ services/data-ops 通用核心
 | 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| 阶段 J | 8 | 8 | 100% |
-| **总计** | **74** | **67** | **91%** |
+| 阶段 J | 9 | 9 | 100% |
+| **总计** | **75** | **68** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -2746,8 +2774,9 @@ services/data-ops 通用核心
 - **具体实现 A1：京东商品采集**。京东适配子流程从商品 URL 清单采集当前可见商品字段，形成 dataset_type 为 jd_product 的原始 CSV。
 - **通用能力 B：pandas 数据处理**。通用核心统一文件读取、dataset contract、processor 路由、通用校验、标准化输出、批次清单、归档和重放。
 - **具体实现 B1：京东商品处理**。jd_product processor 处理影刀京东商品 CSV，输出标准化 CSV 和失败 CSV。
+- **具体实现 C1：京东 URL 发现与自动编排**。Playwright 从用户指定的京东搜索/分类入口发现详情 URL，编排器自动启动影刀采集并调用 pandas 处理，最后返回可机器读取的结果 JSON 和退出码。
 
-阶段边界：阶段 J 只交付通用文件能力和京东商品首个实现，不新增数据库表，不修改 items 表结构或数据，不直接写入 PostgreSQL，也不接入 mock-api、Operations Workflow 或飞书 read model。
+阶段边界：阶段 J 只交付通用文件能力和京东商品自动文件流水线，不新增数据库表，不修改 items 表结构或数据，不直接写入 PostgreSQL，也不接入 mock-api、Operations Workflow 或飞书 read model。
 
 ##### J1：定义通用网页 CSV 交付与处理扩展契约
 
@@ -2824,7 +2853,7 @@ services/data-ops 通用核心
 实现类/函数：
 
 - `ParseJdSkuId`：从输入 URL 或当前页面解析京东 SKU。
-- `GetOpenedJdPage`：取得通用模板已经打开的当前影刀网页对象。
+- `OpenJdProductPage`：使用本轮 `source_url` 打开已授权的影刀浏览器商品页并返回网页对象。
 - `ExtractJdProduct`：通过 `JdProductTitle`、`JdDisplayPrice`、`JdShopName` 和 `JdPrimaryImage` 采集四个页面字段。
 - `BuildJdProductRow`：把京东字段与 J1 通用列合并后返回模板主流程。
 - `ClassifyJdCaptureResult`：四个采集字段齐全时返回 success，缺字段时返回 partial/field_missing。
@@ -2832,7 +2861,7 @@ services/data-ops 通用核心
 验收标准：
 
 - 输入文件只包含 input_index 和 product_url；每个 URL 对应一个明确商品 SKU。
-- 第一版不抓取搜索结果列表，不枚举全部颜色、容量等变体。
+- J3 详情页适配器不抓取搜索结果列表，不枚举全部颜色、容量等变体；搜索/分类入口的 URL 发现由 J9 独立脚本负责。
 - display_price 表示采集时当前页面和登录状态下的展示价格，不表达长期或全地区价格。
 - `capture_region` 只保留 CSV 列，第一版固定留空；不录制页面地区元素。
 - 第一版不录制专用页面不可用状态元素；导航异常由通用模板处理，字段缺失返回 partial/field_missing。
@@ -2978,13 +3007,13 @@ services/data-ops 通用核心
 
 目标：证明阶段 J 的通用性，固化新增站点实现和新增 pandas processor 的步骤，并完成自动测试与影刀人工验收。
 
-- `services/data-ops/src/data_ops/core/contracts.py`
-- `services/data-ops/src/data_ops/processors/jd_product_contract.py`
-- `services/data-ops/src/data_ops/processors/jd_product.py`
 修改文件：
 
 - `rpa/yingdao/README.md`
 - `rpa/yingdao/templates/web-page-to-csv.md`
+- `services/data-ops/src/data_ops/core/contracts.py`
+- `services/data-ops/src/data_ops/processors/jd_product_contract.py`
+- `services/data-ops/src/data_ops/processors/jd_product.py`
 - `services/data-ops/tests/test_core.py`
 - `services/data-ops/tests/test_processor_registry.py`
 - `services/data-ops/tests/test_jd_product_processor.py`
@@ -2992,11 +3021,11 @@ services/data-ops 通用核心
 - `tests/test_current_docs.py`
 - `DEV_SPEC.md`
 
-- `Site contract isolation`：把站点输入列、扩展列和输出字段保存在具体 processor 目录，通用 core 只保留可复用契约类型。
 实现类/函数：
 
 - `RPA extension checklist`：定义新增站点实现时必须提供的输入 fixture、页面状态、字段映射、错误代码和人工验收。
 - `Processor extension checklist`：定义新增 dataset processor 时必须提供的 contract、注册项、标准/失败输出和测试。
+- `Site contract isolation`：把站点输入列、扩展列和输出字段保存在具体 processor 目录，通用 core 只保留可复用契约类型。
 - `Boundary assertions`：验证通用模板没有京东字段，通用 pandas core 没有站点字段，data-ops 没有数据库依赖或 items 修改。
 - `Phase J E2E assertions`：验证 jd_product 同时复用了通用影刀模板和通用 pandas 核心。
 
@@ -3009,6 +3038,52 @@ services/data-ops 通用核心
 - 全文和测试确认阶段 J 未新增数据库表、未修改 items 表结构或数据，也未接入下游系统。
 
 测试方法：uv run --project services/data-ops pytest services\data-ops\tests -q；uv run --project services/mock-api pytest tests\test_current_docs.py -q；影刀通用模板和京东商品适配器人工验收清单
+
+##### J9：实现京东商品 URL 发现与自动采集处理流水线
+
+目标：把京东商品 URL 发现、影刀自动启动与采集、现有 pandas jd_product processor 和批次结果汇总合并为一个可独立执行、可恢复、可验收的文件流水线任务。
+
+修改文件：
+
+- `.gitignore`
+- `DEV_SPEC.md`
+- `rpa/yingdao/README.md`
+- `rpa/yingdao/implementations/jd-product-export.md`
+- `services/data-ops/pyproject.toml`
+- `services/data-ops/uv.lock`
+- `services/data-ops/src/data_ops/discovery/__init__.py`
+- `services/data-ops/src/data_ops/discovery/jd_product_urls.py`
+- `services/data-ops/src/data_ops/orchestration/__init__.py`
+- `services/data-ops/src/data_ops/orchestration/yingdao_runner.py`
+- `services/data-ops/src/data_ops/orchestration/jd_product_pipeline.py`
+- `services/data-ops/tests/test_jd_product_url_discovery.py`
+- `services/data-ops/tests/test_jd_product_pipeline.py`
+- `scripts/run_jd_product_pipeline.ps1`
+- `tests/test_current_docs.py`
+
+实现类/函数：
+
+- `canonicalize_jd_product_url`：从京东桌面/移动商品链接或搜索卡片客服链接的 `pid` 解析数字 SKU，并统一为 `https://item.jd.com/{sku}.html`。
+- `discover_jd_product_urls`：使用 Playwright 打开关键词对应搜索页或显式搜索/分类入口，在最大页数和最大商品数约束内处理分页与懒加载，按 SKU 去重并输出 `input_index,product_url` CSV。
+- `YingdaoRunner`：定义 `start_capture` 和 `wait_for_capture` 接口，通过配置选择开放 API 或本地命令行模式，向影刀传入 batch_id、输入 CSV 和原始输出 CSV 路径。
+- `run_jd_product_pipeline`：依次执行 URL 发现、影刀采集等待和现有 `jd_product` pandas 处理；阶段失败时停止后续步骤并保留已经生成的文件。
+- `write_pipeline_result`：写出 `pipeline_result.json`，记录 batch_id、阶段状态、发现/采集/标准化/失败数量、输出路径、错误代码和可重试阶段。
+- `Invoke-JdProductPipeline`：PowerShell 一键入口，负责参数检查、环境配置、Python 流水线调用和进程退出码透传。
+
+验收标准：
+
+- 调用者可以传入关键词或一个明确的京东搜索/分类入口，并必须设置 `max_pages`、`max_items` 和输出根目录；普通自动测试必须打开真实京东搜索/分类页，不使用合成 HTML、网络 mock 或本地 fixture 替代真实访问。
+- 真实京东自动测试必须至少发现一个可解析数字 SKU 的商品详情 URL；结果按 SKU 去重，`input_index` 从 1 连续递增，所有链接统一为 `https://item.jd.com/{sku}.html`。
+- 真实京东网络不可达、页面结构变化、登录失效、验证码或访问限制必须使测试明确失败并输出对应阶段原因，不得静默跳过、降级为 fixture 或绕过平台限制。
+- 影刀启动参数只传递 batch_id 和文件路径；账号、access key、secret、Cookie 和登录信息只从环境或影刀本地登录态读取，不进入命令行日志、CSV、manifest 或仓库。
+- API 模式使用 jobUuid 查询运行结果；命令行模式使用配置的影刀可执行文件和应用参数。启动能力不可用、客户端掉线、登录失效或出现人工验证时返回影刀阶段失败，不使用桌面点击脚本伪造启动，也不尝试绕过限制。
+- 影刀成功生成原始 CSV 后才调用现有 `dataset_type=jd_product` pandas 处理；输入 URL 数、影刀原始行数和 pandas 对账总数可以通过 batch_id 关联。
+- `pipeline_result.json` 至少包含 `status`、`exit_code`、`batch_id`、各阶段计数和结果文件路径；退出码固定为 0 全部成功、10 部分商品失败但存在有效结果、20 URL 发现失败、30 影刀启动/采集失败、40 pandas 处理失败。
+- 已完成的 URL 发现或影刀原始 CSV 可以按 batch_id 从失败阶段继续，不强制重新抓取前序页面；同一 batch 不并发启动两个影刀采集实例。
+- discovery CSV 与原始 CSV 已存在时，CLI 和 PowerShell 入口直接进入 pandas 阶段，不要求配置影刀 runner、`.shr` 或企业凭据；缺少原始 CSV 时仍必须使用可用的自动启动方式。
+- 全链路只生成和处理文件，不新增数据表，不查询或修改 `items`，不调用 mock-api、Operations Workflow 或飞书接口。
+
+测试方法：`uv run --project services/data-ops pytest services\data-ops\tests\test_jd_product_url_discovery.py services\data-ops\tests\test_jd_product_pipeline.py -q`，其中 URL discovery 测试以 `max_pages=1`、受控 `max_items` 访问真实京东并断言发现结果；`uv run --project services/data-ops pytest services\data-ops\tests -q`；使用已登录影刀、同一受控京东入口人工执行 `scripts\run_jd_product_pipeline.ps1`，核对 URL CSV、影刀原始 CSV、标准/失败 CSV、manifest、pipeline_result.json 和进程退出码
 
 ## 7. 开发规范
 

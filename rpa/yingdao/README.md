@@ -130,6 +130,79 @@ pandas 批次失败时，原始 source 会进入 `failed/jd_product/{batch_id}`�
 副本，并调用 `replay_batch(manifest_path, output_root=..., source_path=corrected_copy)`；
 重放会验证 dataset contract 和 batch_id，不修改失败归档中的 source，也不重新访问网页。
 
+## 京东 URL 发现与自动编排
+
+J9 使用 `scripts/run_jd_product_pipeline.ps1` 串联真实京东 URL 发现、影刀采集和 pandas
+处理。URL discovery 由 Playwright 打开调用者指定的京东关键词、搜索页或分类页，在
+`MaxPages` 和 `MaxItems` 边界内处理懒加载与分页，从商品详情链接或搜索卡片客服链接的
+`pid` 提取数字 SKU，并统一输出：
+
+```text
+input_index,product_url
+1,https://item.jd.com/{sku}.html
+```
+
+自动测试直接访问真实京东，不读取合成列表页 HTML，也不使用网络 mock。网络不可达、京东页面
+结构变化、登录失效或跳转验证页会明确失败；流程不尝试绕过验证码或访问限制。
+需要复用已授权的京东登录态时，将本机 Playwright 状态文件路径放入
+`JD_PLAYWRIGHT_STORAGE_STATE`。该文件包含登录状态，只能保存在仓库外的受控临时目录，
+不得提交、写入日志或复制到批次产物；未配置时仍会真实访问京东，并在登录或验证受限时明确失败。
+
+影刀主流程必须从应用入参或“获取应用参数”读取三个字符串，并覆盖 J2/J7 中的本地默认值：
+
+| 参数 | 用途 |
+| --- | --- |
+| `batch_id` | 当前流水线批次 ID，原样写入每条原始 CSV 行 |
+| `input_csv` | J9 discovery 生成的绝对输入路径 |
+| `raw_output_csv` | 影刀必须写出的原始 CSV 绝对路径 |
+
+能够导出 `.shr` 的影刀环境可以使用本地命令方式，脚本通过
+`ShadowBot.exe --mode=robot --app-file=... --app-params=...` 启动；企业版可以使用 OpenAPI，
+凭据只从 `YINGDAO_ACCESS_KEY_ID` 和 `YINGDAO_ACCESS_KEY_SECRET` 环境变量读取。当前客户端或
+账号没有 `.shr`/OpenAPI 能力时，在设计器中手工运行主流程并生成约定的 discovery CSV 与
+`raw_output_csv`，随后使用同一 `batch_id` 重新执行脚本。脚本检测到两个交接文件后会直接进入
+pandas 阶段，不再要求 runner、应用包或企业凭据。所有模式都不得把凭据写入 CSV、manifest、
+命令日志或仓库。
+
+个人版示例：
+
+```powershell
+$env:YINGDAO_APP_FILE = "D:\rpa\TalonMart-Web-Page-to-CSV.shr"
+powershell -ExecutionPolicy Bypass -File scripts\run_jd_product_pipeline.ps1 `
+  -Keyword "手机" `
+  -BatchId jd_phone_001 `
+  -OutputRoot D:\tmp\talonmart-jd-pipeline `
+  -MaxPages 1 `
+  -MaxItems 20 `
+  -YingdaoMode command
+```
+
+企业版在环境变量中配置 access key/secret，并传入 `YingdaoAccountName` 和
+`YingdaoRobotUuid`。最终结果保存在 `results/{batch_id}/pipeline_result.json`，退出码固定为：
+
+| 退出码 | 状态 |
+| ---: | --- |
+| `0` | 全部成功 |
+| `10` | 有有效标准化结果，同时存在失败商品 |
+| `20` | URL 发现失败 |
+| `30` | 影刀启动、采集、人工验证或输出失败 |
+| `40` | pandas 处理失败 |
+
+discovery CSV 或影刀原始 CSV 已存在时，相同 batch 可以从后续阶段继续；批次锁保证同一
+batch 不会并发启动两个影刀实例。全链路只生成文件，不新增数据库表，也不查询或修改 `items`。
+
+手工影刀交接完成后的续跑命令不需要设置 `YINGDAO_APP_FILE`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_jd_product_pipeline.ps1 `
+  -SeedUrl "https://search.jd.com/Search?keyword=手机" `
+  -BatchId jd_phone_001 `
+  -OutputRoot D:\tmp\talonmart-jd-pipeline `
+  -MaxPages 1 `
+  -MaxItems 20 `
+  -YingdaoMode command
+```
+
 ## 新增站点实现检查清单
 
 1. 选择稳定且唯一的 `dataset_type`，并在 `implementations/` 下新增一份站点适配说明。

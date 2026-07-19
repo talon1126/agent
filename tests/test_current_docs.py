@@ -40,6 +40,16 @@ RPA_WEB_PAGE_TEMPLATE_PATH = Path(
 RPA_JD_PRODUCT_IMPLEMENTATION_PATH = Path(
     "rpa/yingdao/implementations/jd-product-export.md"
 )
+JD_PRODUCT_DISCOVERY_PATH = Path(
+    "services/data-ops/src/data_ops/discovery/jd_product_urls.py"
+)
+JD_PRODUCT_PIPELINE_PATH = Path(
+    "services/data-ops/src/data_ops/orchestration/jd_product_pipeline.py"
+)
+YINGDAO_RUNNER_PATH = Path(
+    "services/data-ops/src/data_ops/orchestration/yingdao_runner.py"
+)
+JD_PRODUCT_PIPELINE_SCRIPT = Path("scripts/run_jd_product_pipeline.ps1")
 JD_PRODUCT_URLS_FIXTURE = Path("fixtures/rpa/jd_product_urls.csv")
 JD_PRODUCT_EXPORT_FIXTURE = Path("fixtures/rpa/jd_product_export.csv")
 
@@ -366,7 +376,7 @@ def test_jd_product_adapter_documents_flow_contract_and_safe_failures() -> None:
     text = RPA_JD_PRODUCT_IMPLEMENTATION_PATH.read_text(encoding="utf-8")
     required_tokens = (
         "ParseJdSkuId",
-        "GetOpenedJdPage",
+        "OpenJdProductPage",
         "ExtractJdProduct",
         "BuildJdProductRow",
         "ClassifyJdCaptureResult",
@@ -401,8 +411,8 @@ def test_jd_product_adapter_documents_flow_contract_and_safe_failures() -> None:
 
     assert "JdCaptureRegion" not in text
     assert "JdUnavailableState" not in text
-    assert text.index("ParseJdSkuId") < text.index("GetOpenedJdPage")
-    assert text.index("GetOpenedJdPage") < text.index("ExtractJdProduct")
+    assert text.index("ParseJdSkuId") < text.index("OpenJdProductPage")
+    assert text.index("OpenJdProductPage") < text.index("ExtractJdProduct")
     assert text.index("ExtractJdProduct") < text.index("BuildJdProductRow")
     assert text.index("BuildJdProductRow") < text.index("ClassifyJdCaptureResult")
 
@@ -506,3 +516,52 @@ def test_phase_j_documents_extension_and_manual_acceptance_checklists() -> None:
         in spec
     )
     assert "jd_product_contract.py" in spec
+
+
+def test_j9_documents_real_jd_discovery_and_file_only_automation() -> None:
+    """J9 must use live JD, start Yingdao, and preserve the no-database boundary."""
+
+    spec = Path("DEV_SPEC.md").read_text(encoding="utf-8")
+    readme = RPA_README_PATH.read_text(encoding="utf-8")
+    implementation = RPA_JD_PRODUCT_IMPLEMENTATION_PATH.read_text(encoding="utf-8")
+
+    for path in (
+        JD_PRODUCT_DISCOVERY_PATH,
+        JD_PRODUCT_PIPELINE_PATH,
+        YINGDAO_RUNNER_PATH,
+        JD_PRODUCT_PIPELINE_SCRIPT,
+    ):
+        assert path.is_file()
+
+    for token in (
+        "真实京东",
+        "不使用合成 HTML、网络 mock 或本地 fixture",
+        "pipeline_result.json",
+        "退出码固定为 0",
+        "不查询或修改 `items`",
+    ):
+        assert token in spec
+    assert "jd_search_results.html" not in spec
+
+    for token in (
+        "scripts/run_jd_product_pipeline.ps1",
+        "batch_id",
+        "input_csv",
+        "raw_output_csv",
+        "--mode=robot",
+        "--app-file",
+        "--app-params",
+        "YINGDAO_ACCESS_KEY_ID",
+        "JD_PLAYWRIGHT_STORAGE_STATE",
+        "`pid`",
+        "pipeline_result.json",
+        "不再要求 runner、应用包或企业凭据",
+    ):
+        assert token in readme
+
+    script = JD_PRODUCT_PIPELINE_SCRIPT.read_text(encoding="utf-8")
+    for token in ("canResumeWithoutYingdao", "manifest.json", "rawCsvPath"):
+        assert token in script
+
+    for token in ("batch_id", "input_csv", "raw_output_csv", "J9 自动启动参数"):
+        assert token in implementation

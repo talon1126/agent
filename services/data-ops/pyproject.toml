@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "openpyxl>=3.1,<4.0",
     "pandas>=2.2,<4.0",
+    "playwright>=1.52,<2.0",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,7 @@ test = [
 
 [project.scripts]
 talonmart-data-ops = "data_ops.app:entrypoint"
+talonmart-jd-pipeline = "data_ops.orchestration.jd_product_pipeline:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/data_ops"]

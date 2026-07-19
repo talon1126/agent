@@ -52,7 +52,16 @@ ai-service ── stdio MCP ── services/ai-service/rag
                                                    v
                                      标准化 CSV + 失败 CSV + 批次清单
 
-首个实现：京东商品 URL ──> 影刀 jd_product 实现 ──> pandas jd_product processor
+首个实现：京东搜索/分类入口 ──> URL 发现脚本 ──> 京东商品 URL 清单
+                                                    |
+                                                    v
+                             自动启动影刀 jd_product 实现 ──> 原始 CSV
+                                                                       |
+                                                                       v
+                                                        pandas jd_product processor
+                                                                       |
+                                                                       v
+                                                标准/失败 CSV + manifest + result.json
 ```
 
 ### 5.2 目录结构树
@@ -241,7 +250,7 @@ agent/                                                      # 项目根目录
 │   │       ├── test_intent_router.py                       # 意图路由测试
 │   │       └── test_view_template_builder.py               # 视图模板测试
 │   ├── data-ops/                                           # RPA 文件数据处理项目
-│   │   ├── pyproject.toml                                  # pandas 和测试依赖
+│   │   ├── pyproject.toml                                  # pandas、Playwright 和测试依赖
 │   │   ├── uv.lock                                         # data-ops 依赖锁
 │   │   ├── src/                                            # data-ops 源码
 │   │   │   └── data_ops/                                   # 文件处理 Python 包
@@ -254,6 +263,13 @@ agent/                                                      # 项目根目录
 │   │   │       │   ├── csv_io.py                           # CSV/XLSX 读取和 UTF-8 CSV 输出
 │   │   │       │   ├── validation.py                       # 通用列与行级校验
 │   │   │       │   └── batch_manifest.py                   # 批次清单、归档和失败信息
+│   │   │       ├── discovery/                              # 站点 URL 发现实现
+│   │   │       │   ├── __init__.py                         # Discovery 包标记
+│   │   │       │   └── jd_product_urls.py                  # 京东商品 URL 发现、规范化和去重
+│   │   │       ├── orchestration/                          # RPA 与 pandas 自动编排
+│   │   │       │   ├── __init__.py                         # Orchestration 包标记
+│   │   │       │   ├── yingdao_runner.py                   # 影刀 API/命令行启动适配
+│   │   │       │   └── jd_product_pipeline.py              # 京东发现、采集和处理流水线
 │   │   │       └── processors/                             # 具体 dataset processor
 │   │   │           ├── __init__.py                         # Processor 包标记
 │   │   │           ├── registry.py                         # dataset_type 到 processor 路由
@@ -263,7 +279,9 @@ agent/                                                      # 项目根目录
 │   │       ├── test_core.py                                # 通用读取、契约和校验测试
 │   │       ├── test_processor_registry.py                  # Processor 注册与路由测试
 │   │       ├── test_jd_product_processor.py                # 京东商品处理测试
-│   │       └── test_batch_manifest.py                      # 通用批次和归档测试
+│   │       ├── test_batch_manifest.py                      # 通用批次和归档测试
+│   │       ├── test_jd_product_url_discovery.py             # 京东 URL 发现与去重测试
+│   │       └── test_jd_product_pipeline.py                  # 影刀和 pandas 自动编排测试
 │   └── postgres/                                           # PostgreSQL 镜像
 │       ├── Dockerfile                                      # 数据库镜像构建
 │       └── initdb/                                         # 数据库初始化脚本
@@ -331,6 +349,7 @@ agent/                                                      # 项目根目录
 │   ├── generate_department_workflows.py                    # 生成部门工作流
 │   ├── replay_failed_event.ps1                             # 回放失败事件
 │   ├── run_data_ops.ps1                                    # 执行 RPA CSV 标准化
+│   ├── run_jd_product_pipeline.ps1                          # 执行京东 URL 发现、影刀采集和 pandas 处理
 │   ├── send_event.ps1                                      # 发送事件 fixture
 │   ├── send_message.ps1                                    # 发送消息 fixture
 │   └── update_multi_domain_workflow.py                     # 更新多领域工作流
@@ -369,6 +388,9 @@ agent/                                                      # 项目根目录
 | RPA | `rpa/yingdao/templates/web-page-to-csv.md` | 通用网页导出模板 | 输入循环、页面就绪等待、适配子流程调用、结果累积、错误记录和原始 CSV 导出 |
 | RPA | `rpa/yingdao/implementations/jd-product-export.md` | 京东商品首个实现 | 商品 URL 输入、京东详情页状态识别、可见字段采集、失败行和人工验收 |
 | 文件数据处理 | `services/data-ops/src/data_ops/app.py` | 应用组合入口 | 注册内置具体 processor，并把命令参数交给不感知站点的通用 CLI |
+| URL 发现 | `services/data-ops/src/data_ops/discovery/jd_product_urls.py` | 京东商品 URL 发现 | 从关键词或搜索/分类入口提取详情 URL，按 SKU 规范化和去重并输出输入 CSV |
+| 自动编排 | `services/data-ops/src/data_ops/orchestration/yingdao_runner.py` | 影刀启动适配 | 通过配置选择开放 API 或本地命令行启动影刀，传递批次与文件参数并等待结果 |
+| 自动编排 | `services/data-ops/src/data_ops/orchestration/jd_product_pipeline.py` | 京东自动文件流水线 | 串联 URL 发现、影刀采集、pandas 处理，输出结果 JSON 和稳定退出码 |
 | 文件数据处理 | `services/data-ops/src/data_ops/core/csv_io.py` | 通用文件格式统一 | CSV/XLSX 读取、编码处理、UTF-8 CSV 输出和原始文件保护 |
 | 文件数据处理 | `services/data-ops/src/data_ops/processors/registry.py` | Processor 路由 | 根据 dataset_type 解析并调用具体数据处理器 |
 | 文件数据处理 | `services/data-ops/src/data_ops/processors/jd_product_contract.py` | 京东文件契约 | 京东输入列、站点扩展列、标准化价格列和输出文件名 |
@@ -549,14 +571,18 @@ services/data-ops 通用核心
     |
     +--> var/rpa/archive 原始文件和批次清单
 
-首个实例：京东商品 URL -> 影刀 jd_product 实现 -> pandas jd_product processor
+首个实例：关键词/搜索或分类入口 -> 京东 URL 发现 -> 商品 URL 清单
+                                       -> 自动启动影刀 jd_product 实现
+                                       -> pandas jd_product processor
+                                       -> pipeline_result.json + 退出码
 ```
 
 设计约束：
 
 - 影刀只操作已获授权或允许访问的页面，凭据不得写入仓库、CSV fixture、日志或批次清单。
 - 影刀通用模板只负责输入循环、公共状态、结果收集和 CSV 导出；网站元素、字段解析和页面状态判断由 implementations 下的站点实现负责。
-- 京东商品首个实现按输入 URL 采集一个明确 SKU 的当前可见页面信息，不遍历搜索结果、全部变体，不绕过登录、验证码、访问限制或平台规则。
+- 京东 URL 发现脚本只遍历用户指定的搜索/分类入口和受控页数，从当前可访问页面提取商品详情 URL；京东详情页适配器仍只按输入 URL 采集一个明确 SKU，不枚举全部变体。
+- URL 发现和影刀采集均不得绕过登录、验证码、访问限制或平台规则；遇到人工验证时停止并返回稳定错误状态。
 - pandas 通用核心不包含京东字段判断；`jd_product` 的列契约和业务校验只存在于对应 processor。
 - 原始文件保持不可变，标准化输出、归档文件和失败文件使用不同目录。
 - `fixtures/rpa` 只保存合成或脱敏数据，`var/rpa` 全目录忽略 Git。
