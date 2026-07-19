@@ -436,35 +436,52 @@ def replay_batch(
     manifest_path: str | Path,
     *,
     output_root: str | Path,
+    source_path: str | Path | None = None,
 ) -> ProcessorResult[Any]:
-    """Replay archived source data through the currently registered processor.
+    """Replay archived or corrected source through the registered processor.
 
     Args:
         manifest_path: Published manifest in archive or failed storage.
         output_root: Directory that receives replayed normalized and failed CSV.
+        source_path: Optional corrected source copy. When omitted, replay uses
+            the immutable source stored beside the manifest.
 
     Returns:
         The generic processor result.
 
     Raises:
-        BatchManifestError: If replay is disabled, source is missing, or the
-            registered contract differs from the archived identity.
+        BatchManifestError: If replay is disabled, source is missing, its batch
+            identifier differs from the manifest, or the registered contract
+            differs from the archived identity.
     """
 
     manifest_file = Path(manifest_path)
     manifest = load_batch_manifest(manifest_file)
     if not manifest.replayable:
         raise BatchManifestError("manifest is not replayable")
-    source = manifest_file.parent / manifest.input_file
+    source = (
+        Path(source_path)
+        if source_path is not None
+        else manifest_file.parent / manifest.input_file
+    )
     if not source.is_file():
         raise BatchManifestError("manifest replay source is missing")
 
     from data_ops.cli import process_dataset
+    from data_ops.core.csv_io import read_source_file
     from data_ops.processors.registry import get_processor
 
     processor = get_processor(manifest.dataset_type)
     if calculate_contract_sha256(processor.contract) != manifest.contract_sha256:
         raise BatchManifestError("manifest contract does not match current processor")
+    frame = read_source_file(source)
+    source_batch_ids = (
+        {str(value).strip() for value in frame["batch_id"].tolist()}
+        if "batch_id" in frame
+        else set()
+    )
+    if source_batch_ids != {manifest.batch_id}:
+        raise BatchManifestError("replay source batch_id does not match manifest")
     return process_dataset(
         manifest.dataset_type,
         source,

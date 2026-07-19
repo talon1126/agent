@@ -158,7 +158,7 @@
 | J4 | 建立 pandas 通用 CSV 处理框架 | [✔] | 2026-07-18 | CSV/XLSX 读取、公共校验、processor registry、原子 CSV 输出与 CLI |
 | J5 | 实现通用批次、归档与失败重放 | [✔] | 2026-07-18 | SHA-256 去重、原子归档、失败隔离、contract 校验与重放 |
 | J6 | 实现京东商品 pandas processor | [✔] | 2026-07-19 | 字段标准化、重复识别、标准/失败 CSV |
-| J7 | 打通京东商品端到端文件链路 | [ ] |  | jd_product 原始 CSV 到标准化结果 |
+| J7 | 打通京东商品端到端文件链路 | [✔] | 2026-07-19 | jd_product 原始 CSV 到标准化结果 |
 | J8 | 实现扩展指南与阶段质量门禁 | [ ] |  | 新站点模板、自动测试、影刀人工验收 |
 
 ### 6.4 总体进度表
@@ -174,8 +174,8 @@
 | 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| 阶段 J | 8 | 6 | 75% |
-| **总计** | **74** | **65** | **88%** |
+| 阶段 J | 8 | 7 | 88% |
+| **总计** | **74** | **66** | **89%** |
 
 ### 6.5 阶段实施明细
 
@@ -2125,22 +2125,26 @@
 - `rpa/yingdao/implementations/jd-product-export.md`
 - `rpa/yingdao/README.md`
 - `scripts/run_data_ops.ps1`
+- `services/data-ops/pyproject.toml`
+- `services/data-ops/src/data_ops/app.py`
+- `services/data-ops/src/data_ops/core/batch_manifest.py`
 - `services/data-ops/tests/test_jd_product_processor.py`
 - `services/data-ops/tests/test_batch_manifest.py`
 
 实现类/函数：
 
 - `jd_product RPA handoff`：影刀把原始 CSV 写入 var/rpa/inbox 并返回文件路径和 batch_id。
-- `Invoke-JdProductProcessing`：使用 dataset_type=jd_product 调用 data-ops CLI。
+- `data-ops application entrypoint`：只在应用组合层注册 jd_product processor，再调用不感知站点的通用 CLI。
+- `Invoke-JdProductProcessing`：外部输入先复制到 OutputRoot/inbox，再使用 dataset_type=jd_product 调用 data-ops CLI；已经位于目标 inbox 的输入直接处理。
 - `JD product file E2E test`：使用脱敏原始 CSV 验证 processor、输出、manifest 和归档。
-- `JD product replay test`：验证失败文件修正后可使用原 batch contract 重放。
+- `JD product replay test`：验证失败文件的修正副本可使用原 batch contract 重放，失败归档中的原始 source 保持不变。
 
 验收标准：
 
 - 输入 URL 数、影刀原始 CSV 行数和 pandas 对账总数一致。
 - 正常行进入标准化 CSV，partial/failed 行保留原因且不静默丢失。
 - 影刀中断后可从未处理 input_index 继续；pandas 失败后可独立重放，不重新抓取网页。
-- 原始 CSV 保持不可变，标准化、失败、manifest 和 archive 文件可通过 batch_id 关联。
+- 外部输入或仓库 fixture 不被生命周期移动；处理发生在 inbox 副本上，失败归档 source 保持字节不变，标准化、失败、manifest 和 archive 文件可通过 batch_id 关联。
 - 端到端流程仍不写数据库、不修改 items、不调用现有业务 API。
 
 测试方法：uv run --project services/data-ops pytest services\data-ops\tests -q；powershell -ExecutionPolicy Bypass -File scripts\run_data_ops.ps1 -InputPath fixtures\rpa\jd_product_export.csv -DatasetType jd_product -OutputRoot D:\tmp\talonmart-rpa-acceptance；影刀京东商品人工验收

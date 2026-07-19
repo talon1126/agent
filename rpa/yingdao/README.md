@@ -64,7 +64,7 @@
 
 ## pandas processor 交付
 
-`JD_PRODUCT_DATASET_CONTRACT` 要求原始 CSV 完整声明通用列和京东站点列，并使用 `batch_id + input_index` 作为输入行唯一键。字段存在不代表字段值一定非空；第一版 `capture_region` 固定为空，`partial` 或 `failed` 的其他空值与业务规则由 `jd_product` processor 在后续任务中处理。
+`JD_PRODUCT_DATASET_CONTRACT` 要求原始 CSV 完整声明通用列和京东站点列，并使用 `batch_id + input_index` 作为输入行唯一键。字段存在不代表字段值一定非空；第一版 `capture_region` 固定为空，`jd_product` processor 会把通过校验的行写入标准化 CSV，并把 `partial`、`failed`、重复或字段异常行保留在失败 CSV。
 
 `ProcessorContract.process(frame, contract)` 返回：
 
@@ -103,7 +103,32 @@ J2 的影刀应用名称统一为 `TalonMart - Web Page to CSV`，完整搭建�
 | `var/rpa/archive` | 保存已完成批次的原始文件、输出和 manifest |
 | `var/rpa/failed` | 隔离失败批次并提供重放输入 |
 
-运行目录不得保存账号凭据，批次文件不得写入数据库。目录创建、原子写入、归档和重放属于后续 data-ops 任务。
+运行目录不得保存账号凭据，批次文件不得写入数据库。
+
+## 京东端到端文件链路
+
+影刀完整导出时把 `output_directory` 指向 `<repo>/var/rpa/inbox`，并记录
+`ExportRawCsv` 返回的 `input_path`、`batch_id`、输入行数和导出行数。已位于目标 inbox 的
+文件可以直接交给脚本；fixture 或其他外部文件会先复制到 `OutputRoot/inbox`，避免生命周期
+归档移动原文件：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_data_ops.ps1 `
+  -InputPath fixtures\rpa\jd_product_export.csv `
+  -DatasetType jd_product `
+  -OutputRoot D:\tmp\talonmart-rpa-acceptance
+```
+
+成功后检查：
+
+- `normalized/` 中同时存在标准化 CSV 和保留 partial/failed 行的失败 CSV。
+- `archive/jd_product/{batch_id}/` 中存在 `source.csv`、两份输出和 `manifest.json`。
+- manifest 的 `input_rows` 等于影刀原始 CSV 行数，且等于 normalized 与 failed 行数之和。
+- 仓库 fixture 或其他外部 `InputPath` 仍存在且字节未改变。
+
+pandas 批次失败时，原始 source 会进入 `failed/jd_product/{batch_id}`。修正数据时创建独立
+副本，并调用 `replay_batch(manifest_path, output_root=..., source_path=corrected_copy)`；
+重放会验证 dataset contract 和 batch_id，不修改失败归档中的 source，也不重新访问网页。
 
 ## 扩展规则
 

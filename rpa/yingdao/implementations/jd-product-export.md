@@ -110,9 +110,34 @@ Cookie 或 Token。
 3. 商品下架或页面失效：`failed/navigation_failed`。
 4. 非法商品 URL：`failed/invalid_input`。
 
-J3 真实页面验收使用一个已登录的正常商品页核对四个元素抽取、运行日志和错误列表。输入清单、
-输出行数、页面状态、错误代码和错误截图的端到端验收属于 J7。真实 URL、页面截图、Cookie 和
-账号信息均不得写入仓库。
+真实页面验收使用一个已登录的正常商品页核对四个元素抽取、运行日志和错误列表。输入清单、
+输出行数、页面状态、错误代码和错误截图按下述文件交接契约验收。真实 URL、页面截图、Cookie
+和账号信息均不得写入仓库。
+
+## J7 文件交接与续跑
+
+完整运行时把通用模板的 `output_directory` 设置为仓库运行根目录下的
+`var/rpa/inbox`。`ExportRawCsv` 校验表头和行数后返回以下交接结果，供操作员或后续本地脚本使用：
+
+```text
+{
+  dataset_type: "jd_product",
+  batch_id: batch_id,
+  input_path: exported_csv_path,
+  input_rows: len(input_rows),
+  exported_rows: len(export_rows),
+  last_input_index: export_rows[-1]["input_index"]
+}
+```
+
+正常完成时 `input_rows` 必须等于 `exported_rows`。操作员把 `input_path` 和
+`batch_id` 记录到运行日志，然后执行 `scripts/run_data_ops.ps1`；脚本处理 inbox 文件并把
+不可变原始字节、标准化 CSV、失败 CSV 和 manifest 发布到相同 `batch_id` 的 archive 目录。
+
+人工验证或应用中断时，先按通用模板导出包含已完成行的检查点 CSV。续跑输入由原输入清单移除
+检查点中已经存在的 `input_index` 后生成，保留剩余行原有的 `input_index`，并开启一个新
+`batch_id`。不得向已经交接或归档的原始 CSV 追加行；多个批次通过 input_index 与原始 URL
+清单共同对账。
 
 ## 当前实施状态
 
@@ -128,4 +153,4 @@ J3 真实页面验收使用一个已登录的正常商品页核对四个元素�
 
 2026-07-18 已在登录后的影刀浏览器中打开京东商品页，保存流程并完成设计器运行验收；运行日志显示
 “开始执行”和“执行结束”，错误列表为“暂无错误数据”。J3 适配器实现完成。输入清单循环、原始 CSV
-导出和 pandas 处理的完整端到端验收属于 J7。
+导出和 pandas 处理使用下述文件交接契约与 `rpa/yingdao/README.md` 中的运行命令验收。

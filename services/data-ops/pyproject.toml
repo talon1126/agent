@@ -19,7 +19,7 @@ test = [
 ]
 
 [project.scripts]
-talonmart-data-ops = "data_ops.cli:entrypoint"
+talonmart-data-ops = "data_ops.app:entrypoint"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/data_ops"]

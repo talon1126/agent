@@ -8,12 +8,19 @@ between JD rules and the generic data-ops core.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from data_ops.cli import process_dataset
+from data_ops.cli import process_batch, process_dataset
+from data_ops.core.batch_manifest import (
+    BatchManifestError,
+    calculate_file_sha256,
+    load_batch_manifest,
+    replay_batch,
+)
 from data_ops.core.contracts import JD_PRODUCT_DATASET_CONTRACT
 from data_ops.core.csv_io import read_source_file
 from data_ops.processors.jd_product import (
@@ -25,6 +32,7 @@ from data_ops.processors.registry import get_processor
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 JD_FIXTURE = REPO_ROOT / "fixtures" / "rpa" / "jd_product_export.csv"
+JD_URL_FIXTURE = REPO_ROOT / "fixtures" / "rpa" / "jd_product_urls.csv"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -117,6 +125,109 @@ def test_process_fixture_writes_traceable_normalized_and_failed_csvs(
         failed.columns
     )
     assert JD_FIXTURE.read_bytes() == original_bytes
+
+
+def test_jd_product_file_e2e_archives_immutable_source_and_outputs(
+    tmp_path: Path,
+) -> None:
+    """One inbox handoff publishes linked JD outputs, manifest, and source."""
+
+    runtime_root = tmp_path / "runtime"
+    inbox = runtime_root / "inbox"
+    inbox.mkdir(parents=True)
+    source = inbox / "jd_product_handoff.csv"
+    shutil.copy2(JD_FIXTURE, source)
+    fixture_hash = calculate_file_sha256(JD_FIXTURE)
+    input_urls = read_source_file(JD_URL_FIXTURE)
+    raw_rows = read_source_file(JD_FIXTURE)
+
+    manifest = process_batch("jd_product", source, runtime_root)
+
+    archive = (
+        runtime_root
+        / "archive"
+        / "jd_product"
+        / "jd_demo_20260717T000000Z"
+    )
+    archived_manifest = load_batch_manifest(archive / "manifest.json")
+    normalized_name = (
+        "jd_product_jd_demo_20260717T000000Z_normalized.csv"
+    )
+    failed_name = "jd_product_jd_demo_20260717T000000Z_failed.csv"
+    normalized = read_source_file(archive / normalized_name, encoding="utf-8")
+    failed = read_source_file(archive / failed_name, encoding="utf-8")
+
+    assert len(input_urls) == len(raw_rows) == manifest.row_counts["input_rows"] == 4
+    assert manifest == archived_manifest
+    assert manifest.status == "success"
+    assert manifest.row_counts == {
+        "input_rows": 4,
+        "normalized_rows": 1,
+        "failed_rows": 3,
+        "duplicate_rows": 0,
+    }
+    assert manifest.output_files == (normalized_name, failed_name)
+    assert not source.exists()
+    assert calculate_file_sha256(archive / "source.csv") == fixture_hash
+    assert calculate_file_sha256(JD_FIXTURE) == fixture_hash
+    assert len(normalized) + len(failed) == len(raw_rows)
+    assert (runtime_root / "normalized" / normalized_name).exists()
+    assert (runtime_root / "normalized" / failed_name).exists()
+
+
+def test_jd_failed_batch_replays_corrected_copy_without_mutating_archive(
+    tmp_path: Path,
+) -> None:
+    """A corrected local copy replays under the failed batch's contract hash."""
+
+    runtime_root = tmp_path / "runtime"
+    inbox = runtime_root / "inbox"
+    inbox.mkdir(parents=True)
+    broken_source = inbox / "jd_product_broken.csv"
+    broken = read_source_file(JD_FIXTURE).drop(columns=["crawl_status"])
+    broken.to_csv(broken_source, index=False)
+
+    with pytest.raises(BatchManifestError, match="missing_common_columns"):
+        process_batch("jd_product", broken_source, runtime_root)
+
+    failed_batch = (
+        runtime_root
+        / "failed"
+        / "jd_product"
+        / "jd_demo_20260717T000000Z"
+    )
+    manifest_path = failed_batch / "manifest.json"
+    archived_source = failed_batch / "source.csv"
+    archived_hash = calculate_file_sha256(archived_source)
+    corrected_source = tmp_path / "corrected_jd_product.csv"
+    shutil.copy2(JD_FIXTURE, corrected_source)
+    corrected_hash = calculate_file_sha256(corrected_source)
+
+    result = replay_batch(
+        manifest_path,
+        output_root=tmp_path / "replayed",
+        source_path=corrected_source,
+    )
+
+    assert result.summary == {
+        "input_rows": 4,
+        "normalized_rows": 1,
+        "failed_rows": 3,
+        "duplicate_rows": 0,
+    }
+    assert calculate_file_sha256(archived_source) == archived_hash
+    assert calculate_file_sha256(corrected_source) == corrected_hash
+    assert corrected_source.exists()
+    assert (
+        tmp_path
+        / "replayed"
+        / "jd_product_jd_demo_20260717T000000Z_normalized.csv"
+    ).exists()
+    assert (
+        tmp_path
+        / "replayed"
+        / "jd_product_jd_demo_20260717T000000Z_failed.csv"
+    ).exists()
 
 
 def test_normalize_preserves_price_text_and_parses_amount_without_zero_fallback() -> None:

@@ -382,9 +382,17 @@ def test_process_batch_archives_success_and_script_uses_uv(
     ).exists()
     script = Path("scripts/run_data_ops.ps1").read_text(encoding="utf-8")
     assert "uv run --project services/data-ops talonmart-data-ops" in script
+    assert "function Invoke-JdProductProcessing" in script
+    assert "function Invoke-DataOpsProcessing" in script
+    assert "Copy-Item -LiteralPath" in script
+    assert 'Join-Path $runtimeRoot "inbox"' in script
+    assert "--dataset-type $DatasetType" in script
+    assert "Unsupported DatasetType" not in script
     assert "InputPath" in script
     assert "DatasetType" in script
     assert "OutputRoot" in script
+    project = Path("services/data-ops/pyproject.toml").read_text(encoding="utf-8")
+    assert 'talonmart-data-ops = "data_ops.app:entrypoint"' in project
     assert "var/rpa/" in Path(".gitignore").read_text(encoding="utf-8")
 
 
