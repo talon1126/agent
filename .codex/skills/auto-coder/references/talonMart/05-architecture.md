@@ -246,6 +246,7 @@ agent/                                                      # 项目根目录
 │   │   ├── src/                                            # data-ops 源码
 │   │   │   └── data_ops/                                   # 文件处理 Python 包
 │   │   │       ├── __init__.py                             # Python 包标记
+│   │   │       ├── app.py                                  # 具体 processor 注册与 CLI 应用组合入口
 │   │   │       ├── cli.py                                  # CSV 处理命令入口
 │   │   │       ├── core/                                   # 通用文件处理核心
 │   │   │       │   ├── __init__.py                         # Core 包标记
@@ -256,6 +257,7 @@ agent/                                                      # 项目根目录
 │   │   │       └── processors/                             # 具体 dataset processor
 │   │   │           ├── __init__.py                         # Processor 包标记
 │   │   │           ├── registry.py                         # dataset_type 到 processor 路由
+│   │   │           ├── jd_product_contract.py              # 京东原始与标准化 CSV 契约
 │   │   │           └── jd_product.py                       # 京东商品首个处理实现
 │   │   └── tests/                                          # data-ops 测试
 │   │       ├── test_core.py                                # 通用读取、契约和校验测试
@@ -366,8 +368,10 @@ agent/                                                      # 项目根目录
 | 飞书应用 | 飞书多维表格应用页面配置 | 企业管理后台页面 | 运营驾驶舱、业务操作台、组件绑定和人工验收 |
 | RPA | `rpa/yingdao/templates/web-page-to-csv.md` | 通用网页导出模板 | 输入循环、页面就绪等待、适配子流程调用、结果累积、错误记录和原始 CSV 导出 |
 | RPA | `rpa/yingdao/implementations/jd-product-export.md` | 京东商品首个实现 | 商品 URL 输入、京东详情页状态识别、可见字段采集、失败行和人工验收 |
+| 文件数据处理 | `services/data-ops/src/data_ops/app.py` | 应用组合入口 | 注册内置具体 processor，并把命令参数交给不感知站点的通用 CLI |
 | 文件数据处理 | `services/data-ops/src/data_ops/core/csv_io.py` | 通用文件格式统一 | CSV/XLSX 读取、编码处理、UTF-8 CSV 输出和原始文件保护 |
 | 文件数据处理 | `services/data-ops/src/data_ops/processors/registry.py` | Processor 路由 | 根据 dataset_type 解析并调用具体数据处理器 |
+| 文件数据处理 | `services/data-ops/src/data_ops/processors/jd_product_contract.py` | 京东文件契约 | 京东输入列、站点扩展列、标准化价格列和输出文件名 |
 | 文件数据处理 | `services/data-ops/src/data_ops/processors/jd_product.py` | 京东商品处理实现 | 字段校验、类型标准化、重复识别、标准化 CSV 和失败 CSV |
 | 文件数据处理 | `services/data-ops/src/data_ops/core/batch_manifest.py` | 文件批次管理 | 批次清单、输入输出摘要、成功归档、失败隔离和重放 |
 | Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约和采购需求工具 |

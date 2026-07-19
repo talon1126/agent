@@ -205,6 +205,16 @@ ExportRawCsv(export_rows)
 
 禁止在 `try` 和 `catch` 分支分别追加结果；所有路径统一在 `finally` 中追加，避免重复行和丢失行。
 
+## 新站点扩展检查清单
+
+1. 在 `implementations/` 下新增站点说明，选择唯一 `dataset_type`，不修改 Main 流程。
+2. 提供合成或脱敏的输入 fixture，明确 URL 列、`input_index` 和预期输出行数。
+3. 声明固定 `site_output_columns`，记录每个字段映射的页面来源和允许空值。
+4. 定义页面就绪、字段缺失、导航失败、访问限制和人工验证状态，不绕过登录或验证码。
+5. 在 `InvokeSiteAdapter` 增加路由，普通异常映射到稳定错误代码，站点字段不进入通用列。
+6. 使用成功、字段缺失、适配失败和人工验证四类人工验收矩阵验证一行输入对应一行输出。
+7. 核对 CSV 表头、UTF-8 编码、batch_id、检查点和日志脱敏后，再交付 pandas processor。
+
 ## 人工验收矩阵
 
 验收使用本地 `data:` 页面或经过脱敏的测试页面，并建立临时 `acceptance_stub` 适配流程。该流程只用于验证模板状态机，不进入生产站点实现目录。

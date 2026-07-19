@@ -7,6 +7,8 @@ incorrect common-column validation, or a broken CLI error boundary.
 
 from __future__ import annotations
 
+import ast
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -50,6 +52,17 @@ CORE_CONTRACT = DatasetContract(
     unique_by=("batch_id", "input_index"),
     normalized_filename_template="{dataset_type}_{batch_id}_normalized.csv",
     failed_filename_template="{dataset_type}_{batch_id}_failed.csv",
+)
+
+DATA_OPS_SOURCE_ROOT = Path("services/data-ops/src/data_ops")
+GENERIC_DATA_OPS_MODULES = (
+    DATA_OPS_SOURCE_ROOT / "cli.py",
+    DATA_OPS_SOURCE_ROOT / "core" / "__init__.py",
+    DATA_OPS_SOURCE_ROOT / "core" / "contracts.py",
+    DATA_OPS_SOURCE_ROOT / "core" / "csv_io.py",
+    DATA_OPS_SOURCE_ROOT / "core" / "validation.py",
+    DATA_OPS_SOURCE_ROOT / "core" / "batch_manifest.py",
+    DATA_OPS_SOURCE_ROOT / "processors" / "registry.py",
 )
 
 
@@ -351,3 +364,61 @@ def test_cli_returns_nonzero_for_unknown_dataset_type(
 
     assert exit_code != 0
     assert "not_registered" in capsys.readouterr().err
+
+
+def test_generic_core_has_no_jd_site_fields_or_concrete_imports() -> None:
+    """Generic orchestration must not own JD routing keys or field constants."""
+
+    forbidden_tokens = (
+        "jd_product",
+        "jd_sku_id",
+        "display_price",
+        "shop_name",
+        "primary_image_url",
+        "capture_region",
+        "item.jd",
+    )
+
+    for path in GENERIC_DATA_OPS_MODULES:
+        source = path.read_text(encoding="utf-8").casefold()
+        for token in forbidden_tokens:
+            assert token not in source, f"{path} contains site token {token}"
+
+
+def test_data_ops_has_no_database_dependencies_or_items_mutation() -> None:
+    """Phase J source stays file-only and cannot import database clients."""
+
+    forbidden_imports = {
+        "asyncpg",
+        "psycopg",
+        "psycopg2",
+        "sqlalchemy",
+        "sqlite3",
+    }
+    imported_roots: set[str] = set()
+    source_text = ""
+    for path in DATA_OPS_SOURCE_ROOT.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        source_text += text.casefold()
+        tree = ast.parse(text, filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_roots.add(node.module.split(".", 1)[0])
+
+    project = tomllib.loads(
+        Path("services/data-ops/pyproject.toml").read_text(encoding="utf-8")
+    )
+    dependencies = " ".join(project["project"]["dependencies"]).casefold()
+
+    assert forbidden_imports.isdisjoint(imported_roots)
+    assert all(name not in dependencies for name in forbidden_imports)
+    for mutation in (
+        "create table",
+        "alter table",
+        "insert into items",
+        "update items",
+        "delete from items",
+    ):
+        assert mutation not in source_text

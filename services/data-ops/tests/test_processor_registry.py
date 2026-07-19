@@ -112,3 +112,18 @@ def test_get_processor_rejects_factory_with_mismatched_contract() -> None:
 
     with pytest.raises(InvalidProcessorError, match="registry_mismatch"):
         get_processor("registry_mismatch")
+
+
+def test_second_processor_extension_requires_only_contract_and_registration() -> None:
+    """A second dataset type plugs in without changing generic core behavior."""
+
+    class SecondSiteProcessor(ExampleProcessor):
+        dataset_type = "registry_second_site"
+        contract = _contract(dataset_type)
+
+    register_processor(SecondSiteProcessor.dataset_type, SecondSiteProcessor)
+
+    resolved = get_processor(SecondSiteProcessor.dataset_type)
+
+    assert isinstance(resolved, SecondSiteProcessor)
+    assert resolved.contract.dataset_type == "registry_second_site"

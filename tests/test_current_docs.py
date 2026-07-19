@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import pytest
 
 
-CURRENT_DOCS = [
+LEGACY_DOC_PATHS = (
     Path("docs/architecture.md"),
     Path("docs/architecture.zh.md"),
     Path("docs/demo-script.md"),
@@ -22,17 +22,16 @@ CURRENT_DOCS = [
     Path("docs/warehouse-inventory-table-sync.zh.md"),
     Path("docs/warehouse-view-template-builder.md"),
     Path("docs/warehouse-view-template-builder.zh.md"),
-]
-
-WAREHOUSE_AGENT_DOCS = [
     Path("docs/AGENTS/warehouse-agent/README.md"),
     Path("docs/AGENTS/warehouse-agent/business-boundary.md"),
     Path("docs/AGENTS/warehouse-agent/mock-api.md"),
     Path("docs/AGENTS/warehouse-agent/database-tables.md"),
-]
+    Path("AGENTS.md"),
+)
 
-DATA_OPS_CONTRACTS_PATH = Path(
-    "services/data-ops/src/data_ops/core/contracts.py"
+DATA_OPS_CONTRACTS_PATH = Path("services/data-ops/src/data_ops/core/contracts.py")
+DATA_OPS_JD_PRODUCT_CONTRACT_PATH = Path(
+    "services/data-ops/src/data_ops/processors/jd_product_contract.py"
 )
 RPA_README_PATH = Path("rpa/yingdao/README.md")
 RPA_WEB_PAGE_TEMPLATE_PATH = Path(
@@ -65,11 +64,7 @@ JD_PRODUCT_SITE_COLUMNS = (
 
 @lru_cache(maxsize=1)
 def _load_data_ops_contracts() -> ModuleType:
-    """Load the standalone J1 contract module before data-ops packaging exists.
-
-    J4 owns the installable data-ops project and package markers. J1 still needs
-    executable contract tests, so this helper loads the module directly from its
-    documented source location without changing the process import path.
+    """Load generic contracts without importing pandas or the data-ops app.
 
     Returns:
         The loaded contract module.
@@ -84,6 +79,30 @@ def _load_data_ops_contracts() -> ModuleType:
     )
     assert spec is not None and spec.loader is not None
 
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@lru_cache(maxsize=1)
+def _load_jd_product_contracts() -> ModuleType:
+    """Load the isolated JD contract against the standalone generic module."""
+
+    generic_contracts = _load_data_ops_contracts()
+    data_ops_package = sys.modules.setdefault("data_ops", ModuleType("data_ops"))
+    if not hasattr(data_ops_package, "__path__"):
+        data_ops_package.__path__ = []
+    core_package = sys.modules.setdefault("data_ops.core", ModuleType("data_ops.core"))
+    if not hasattr(core_package, "__path__"):
+        core_package.__path__ = []
+    sys.modules["data_ops.core.contracts"] = generic_contracts
+
+    spec = importlib.util.spec_from_file_location(
+        "talonmart_jd_product_contracts",
+        DATA_OPS_JD_PRODUCT_CONTRACT_PATH,
+    )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -105,50 +124,19 @@ def _read_csv_rows(path: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
         return tuple(reader.fieldnames or ()), list(reader)
 
 
-def test_current_warehouse_docs_use_batch_location_inventory_model() -> None:
-    for path in CURRENT_DOCS:
-        text = path.read_text(encoding="utf-8")
-        assert "item_vinda_tissue" in text or "batch + location" in text or "批次 + 库位" in text
+def test_removed_legacy_docs_are_not_reintroduced() -> None:
+    """Repository cleanup keeps retired docs and root AGENTS.md absent."""
 
-    split_docs_text = "\n".join(path.read_text(encoding="utf-8") for path in WAREHOUSE_AGENT_DOCS)
-    assert "item_vinda_tissue" in split_docs_text or "batch + location" in split_docs_text or "批次 + 库位" in split_docs_text
-
-    for path in CURRENT_DOCS + WAREHOUSE_AGENT_DOCS:
-        text = path.read_text(encoding="utf-8")
-        assert "sku_bag_1" not in text
-        assert "SKU + Warehouse" not in text
-        assert '"SKU"' not in text
-        assert '"Available"' not in text
-
-
-def test_root_agents_doc_routes_to_split_warehouse_docs() -> None:
-    text = Path("AGENTS.md").read_text(encoding="utf-8")
-
-    assert "docs/AGENTS/warehouse-agent/README.md" in text
-    assert "docs/AGENTS/warehouse-agent/mock-api.md" in text
-    assert "sku_bag_1" not in text
-    assert "SKU + Warehouse" not in text
-
-
-def test_current_warehouse_docs_describe_live_view_templates() -> None:
-    english = Path("docs/warehouse-view-template-builder.md").read_text(encoding="utf-8")
-    chinese = Path("docs/warehouse-view-template-builder.zh.md").read_text(encoding="utf-8")
-
-    for text in (english, chinese):
-        assert "category_inventory_view" in text
-        assert "low_stock_view" in text
-        assert "expiring_inventory_view" in text
-        assert "location_inventory_view" in text
-        assert "batch_risk_view" in text
-        assert "replenishment_candidate_view" in text
+    assert all(not path.exists() for path in LEGACY_DOC_PATHS)
 
 
 def test_rpa_data_contract_exposes_stable_extension_boundaries() -> None:
     """Protect the generic CSV contract from site-specific semantic drift."""
 
     contracts = _load_data_ops_contracts()
+    jd_contracts = _load_jd_product_contracts()
 
-    web_contract = contracts.JD_PRODUCT_WEB_EXPORT_CONTRACT
+    web_contract = jd_contracts.JD_PRODUCT_WEB_EXPORT_CONTRACT
     assert web_contract.dataset_type == "jd_product"
     assert web_contract.input_columns == ("input_index", "product_url")
     assert web_contract.common_output_columns == COMMON_WEB_EXPORT_COLUMNS
@@ -183,7 +171,7 @@ def test_rpa_data_contract_exposes_stable_extension_boundaries() -> None:
             site_output_columns=("source_url",),
         )
 
-    dataset_contract = contracts.JD_PRODUCT_DATASET_CONTRACT
+    dataset_contract = jd_contracts.JD_PRODUCT_DATASET_CONTRACT
     assert dataset_contract.dataset_type == "jd_product"
     assert dataset_contract.required_columns == web_contract.output_columns
     assert dataset_contract.optional_columns == ("display_price_amount",)
@@ -241,7 +229,7 @@ def test_rpa_data_contract_fixtures_are_reconcilable_and_desensitized() -> None:
         assert int(row["input_index"]) > 0
         assert (urlsplit(row["product_url"]).hostname or "").endswith(".invalid")
 
-    contracts = _load_data_ops_contracts()
+    contracts = _load_jd_product_contracts()
     for row in export_rows:
         assert row["dataset_type"] == "jd_product"
         assert row["source_url"] == input_urls[row["input_index"]]
@@ -471,3 +459,50 @@ def test_jd_product_adapter_fixtures_cover_four_desensitized_outcomes() -> None:
         )
 
     assert all(row["capture_region"] == "" for row in export_rows)
+
+
+def test_phase_j_documents_extension_and_manual_acceptance_checklists() -> None:
+    """Phase J must be repeatable for another site and auditable for JD states."""
+
+    readme = RPA_README_PATH.read_text(encoding="utf-8")
+    template = RPA_WEB_PAGE_TEMPLATE_PATH.read_text(encoding="utf-8")
+    spec = Path("DEV_SPEC.md").read_text(encoding="utf-8")
+
+    for token in (
+        "新增站点实现检查清单",
+        "新增 pandas processor 检查清单",
+        "输入 fixture",
+        "页面状态",
+        "字段映射",
+        "错误代码",
+        "人工验收",
+        "DatasetContract",
+        "register_processor",
+        "标准化 CSV",
+        "失败 CSV",
+    ):
+        assert token in readme
+
+    for token in (
+        "新站点扩展检查清单",
+        "implementations/",
+        "site_output_columns",
+        "输入 fixture",
+        "人工验收矩阵",
+    ):
+        assert token in template
+
+    for scenario in (
+        "正常商品",
+        "第三方店铺",
+        "无货或下架",
+        "无效 URL",
+        "登录或验证中断",
+    ):
+        assert scenario in readme
+
+    assert (
+        "| 文件数据处理 | `services/data-ops/src/data_ops/app.py` |"
+        in spec
+    )
+    assert "jd_product_contract.py" in spec

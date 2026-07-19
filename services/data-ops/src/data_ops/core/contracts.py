@@ -53,17 +53,6 @@ COMMON_ERROR_CODES = (
     "adapter_error",
 )
 
-JD_PRODUCT_INPUT_COLUMNS = ("input_index", "product_url")
-JD_PRODUCT_SITE_COLUMNS = (
-    "jd_sku_id",
-    "title",
-    "display_price",
-    "shop_name",
-    "primary_image_url",
-    "capture_region",
-)
-JD_PRODUCT_NORMALIZED_COLUMNS = ("display_price_amount",)
-
 _DATASET_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 _SUPPORTED_COLUMN_TYPES = frozenset(
     {"string", "integer", "decimal", "datetime", "url"}
@@ -356,46 +345,17 @@ class RuntimeDirectoryContract:
         }
 
 
-JD_PRODUCT_WEB_EXPORT_CONTRACT = WebPageExportContract(
-    dataset_type="jd_product",
-    input_columns=JD_PRODUCT_INPUT_COLUMNS,
-    site_output_columns=JD_PRODUCT_SITE_COLUMNS,
-)
-
-JD_PRODUCT_DATASET_CONTRACT = DatasetContract(
-    dataset_type="jd_product",
-    required_columns=JD_PRODUCT_WEB_EXPORT_CONTRACT.output_columns,
-    optional_columns=JD_PRODUCT_NORMALIZED_COLUMNS,
-    column_types={
-        **COMMON_WEB_EXPORT_COLUMN_TYPES,
-        "jd_sku_id": "string",
-        "title": "string",
-        "display_price": "string",
-        "shop_name": "string",
-        "primary_image_url": "url",
-        "capture_region": "string",
-        "display_price_amount": "decimal",
-    },
-    unique_by=("batch_id", "input_index"),
-    normalized_filename_template="{dataset_type}_{batch_id}_normalized.csv",
-    failed_filename_template="{dataset_type}_{batch_id}_failed.csv",
-)
-
 DEFAULT_RUNTIME_DIRECTORIES = RuntimeDirectoryContract()
 
 
 __all__ = [
     "COMMON_CRAWL_STATUSES",
     "COMMON_ERROR_CODES",
+    "COMMON_WEB_EXPORT_COLUMN_TYPES",
     "COMMON_WEB_EXPORT_COLUMNS",
     "DatasetProcessor",
     "DatasetContract",
     "DEFAULT_RUNTIME_DIRECTORIES",
-    "JD_PRODUCT_DATASET_CONTRACT",
-    "JD_PRODUCT_INPUT_COLUMNS",
-    "JD_PRODUCT_NORMALIZED_COLUMNS",
-    "JD_PRODUCT_SITE_COLUMNS",
-    "JD_PRODUCT_WEB_EXPORT_CONTRACT",
     "ProcessorContract",
     "ProcessorResult",
     "RuntimeDirectoryContract",

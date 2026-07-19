@@ -510,6 +510,7 @@ agent/                                                      # 项目根目录
 │   │   ├── src/                                            # data-ops 源码
 │   │   │   └── data_ops/                                   # 文件处理 Python 包
 │   │   │       ├── __init__.py                             # Python 包标记
+│   │   │       ├── app.py                                  # 具体 processor 注册与 CLI 应用组合入口
 │   │   │       ├── cli.py                                  # CSV 处理命令入口
 │   │   │       ├── core/                                   # 通用文件处理核心
 │   │   │       │   ├── __init__.py                         # Core 包标记
@@ -520,6 +521,7 @@ agent/                                                      # 项目根目录
 │   │   │       └── processors/                             # 具体 dataset processor
 │   │   │           ├── __init__.py                         # Processor 包标记
 │   │   │           ├── registry.py                         # dataset_type 到 processor 路由
+│   │   │           ├── jd_product_contract.py              # 京东原始与标准化 CSV 契约
 │   │   │           └── jd_product.py                       # 京东商品首个处理实现
 │   │   └── tests/                                          # data-ops 测试
 │   │       ├── test_core.py                                # 通用读取、契约和校验测试
@@ -630,8 +632,10 @@ agent/                                                      # 项目根目录
 | 飞书应用 | 飞书多维表格应用页面配置 | 企业管理后台页面 | 运营驾驶舱、业务操作台、组件绑定和人工验收 |
 | RPA | `rpa/yingdao/templates/web-page-to-csv.md` | 通用网页导出模板 | 输入循环、页面就绪等待、适配子流程调用、结果累积、错误记录和原始 CSV 导出 |
 | RPA | `rpa/yingdao/implementations/jd-product-export.md` | 京东商品首个实现 | 商品 URL 输入、京东详情页状态识别、可见字段采集、失败行和人工验收 |
+| 文件数据处理 | `services/data-ops/src/data_ops/app.py` | 应用组合入口 | 注册内置具体 processor，并把命令参数交给不感知站点的通用 CLI |
 | 文件数据处理 | `services/data-ops/src/data_ops/core/csv_io.py` | 通用文件格式统一 | CSV/XLSX 读取、编码处理、UTF-8 CSV 输出和原始文件保护 |
 | 文件数据处理 | `services/data-ops/src/data_ops/processors/registry.py` | Processor 路由 | 根据 dataset_type 解析并调用具体数据处理器 |
+| 文件数据处理 | `services/data-ops/src/data_ops/processors/jd_product_contract.py` | 京东文件契约 | 京东输入列、站点扩展列、标准化价格列和输出文件名 |
 | 文件数据处理 | `services/data-ops/src/data_ops/processors/jd_product.py` | 京东商品处理实现 | 字段校验、类型标准化、重复识别、标准化 CSV 和失败 CSV |
 | 文件数据处理 | `services/data-ops/src/data_ops/core/batch_manifest.py` | 文件批次管理 | 批次清单、输入输出摘要、成功归档、失败隔离和重放 |
 | Workflow | `n8n/workflows/warehouse-workflow.json` | Warehouse 编排 | 库存、履约和采购需求工具 |
@@ -839,7 +843,7 @@ services/data-ops 通用核心
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆、AImodel Intent Router、受控联网搜索和 RAG MCP 集成 | [✔] |
 | 阶段 H | 飞书应用与协作后台 | 完成 feishu-adapter、多维表格 read model、主动通知和飞书应用搭建 | [~] |
 | 阶段 I | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
-| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东商品首个端到端实现 | [~] |
+| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东商品首个端到端实现 | [✔] |
 
 ### 6.2 交付里程碑
 
@@ -980,7 +984,7 @@ services/data-ops 通用核心
 | J5 | 实现通用批次、归档与失败重放 | [✔] | 2026-07-18 | SHA-256 去重、原子归档、失败隔离、contract 校验与重放 |
 | J6 | 实现京东商品 pandas processor | [✔] | 2026-07-19 | 字段标准化、重复识别、标准/失败 CSV |
 | J7 | 打通京东商品端到端文件链路 | [✔] | 2026-07-19 | jd_product 原始 CSV 到标准化结果 |
-| J8 | 实现扩展指南与阶段质量门禁 | [ ] |  | 新站点模板、自动测试、影刀人工验收 |
+| J8 | 实现扩展指南与阶段质量门禁 | [✔] | 2026-07-19 | 新站点模板、自动测试、影刀人工验收 |
 
 ### 6.4 总体进度表
 
@@ -995,8 +999,8 @@ services/data-ops 通用核心
 | 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| 阶段 J | 8 | 7 | 88% |
-| **总计** | **74** | **66** | **89%** |
+| 阶段 J | 8 | 8 | 100% |
+| **总计** | **74** | **67** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -2974,6 +2978,9 @@ services/data-ops 通用核心
 
 目标：证明阶段 J 的通用性，固化新增站点实现和新增 pandas processor 的步骤，并完成自动测试与影刀人工验收。
 
+- `services/data-ops/src/data_ops/core/contracts.py`
+- `services/data-ops/src/data_ops/processors/jd_product_contract.py`
+- `services/data-ops/src/data_ops/processors/jd_product.py`
 修改文件：
 
 - `rpa/yingdao/README.md`
@@ -2985,6 +2992,7 @@ services/data-ops 通用核心
 - `tests/test_current_docs.py`
 - `DEV_SPEC.md`
 
+- `Site contract isolation`：把站点输入列、扩展列和输出字段保存在具体 processor 目录，通用 core 只保留可复用契约类型。
 实现类/函数：
 
 - `RPA extension checklist`：定义新增站点实现时必须提供的输入 fixture、页面状态、字段映射、错误代码和人工验收。

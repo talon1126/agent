@@ -522,3 +522,46 @@ def test_replay_rejects_manifest_contract_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(BatchManifestError, match="contract"):
         replay_batch(batch_path / "manifest.json", output_root=tmp_path / "replayed")
+
+
+def test_replay_rejects_corrected_source_from_another_batch(tmp_path: Path) -> None:
+    """Corrected replay input must retain the failed manifest's batch identity."""
+
+    class IdentityProcessor(BatchProcessor):
+        dataset_type = "batch_replay_identity"
+        contract = _contract(dataset_type)
+
+    register_processor(IdentityProcessor.dataset_type, IdentityProcessor)
+    source = tmp_path / "source.csv"
+    _source_frame(IdentityProcessor.dataset_type, "batch_identity_001").to_csv(
+        source,
+        index=False,
+    )
+    manifest = build_batch_manifest(
+        batch_id="batch_identity_001",
+        dataset_type=IdentityProcessor.dataset_type,
+        input_path=source,
+        contract=IdentityProcessor.contract,
+        processor="tests.IdentityProcessor",
+        row_counts={"input_rows": 1, "normalized_rows": 0, "failed_rows": 1},
+        status="failed",
+        error_code="processing_error",
+        error_summary="retry with corrected copy",
+    )
+    failed_batch = quarantine_failed_batch(
+        manifest,
+        source_path=source,
+        failed_root=tmp_path / "failed",
+    )
+    corrected = tmp_path / "corrected.csv"
+    _source_frame(IdentityProcessor.dataset_type, "batch_identity_002").to_csv(
+        corrected,
+        index=False,
+    )
+
+    with pytest.raises(BatchManifestError, match="batch_id"):
+        replay_batch(
+            failed_batch / "manifest.json",
+            output_root=tmp_path / "replayed",
+            source_path=corrected,
+        )

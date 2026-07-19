@@ -18,7 +18,7 @@
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆、AImodel Intent Router、受控联网搜索和 RAG MCP 集成 | [✔] |
 | 阶段 H | 飞书应用与协作后台 | 完成 feishu-adapter、多维表格 read model、主动通知和飞书应用搭建 | [~] |
 | 阶段 I | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
-| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东商品首个端到端实现 | [~] |
+| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东商品首个端到端实现 | [✔] |
 
 ### 6.2 交付里程碑
 
@@ -159,7 +159,7 @@
 | J5 | 实现通用批次、归档与失败重放 | [✔] | 2026-07-18 | SHA-256 去重、原子归档、失败隔离、contract 校验与重放 |
 | J6 | 实现京东商品 pandas processor | [✔] | 2026-07-19 | 字段标准化、重复识别、标准/失败 CSV |
 | J7 | 打通京东商品端到端文件链路 | [✔] | 2026-07-19 | jd_product 原始 CSV 到标准化结果 |
-| J8 | 实现扩展指南与阶段质量门禁 | [ ] |  | 新站点模板、自动测试、影刀人工验收 |
+| J8 | 实现扩展指南与阶段质量门禁 | [✔] | 2026-07-19 | 新站点模板、自动测试、影刀人工验收 |
 
 ### 6.4 总体进度表
 
@@ -174,8 +174,8 @@
 | 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| 阶段 J | 8 | 7 | 88% |
-| **总计** | **74** | **66** | **89%** |
+| 阶段 J | 8 | 8 | 100% |
+| **总计** | **74** | **67** | **91%** |
 
 ### 6.5 阶段实施明细
 
@@ -2157,6 +2157,9 @@
 
 - `rpa/yingdao/README.md`
 - `rpa/yingdao/templates/web-page-to-csv.md`
+- `services/data-ops/src/data_ops/core/contracts.py`
+- `services/data-ops/src/data_ops/processors/jd_product_contract.py`
+- `services/data-ops/src/data_ops/processors/jd_product.py`
 - `services/data-ops/tests/test_core.py`
 - `services/data-ops/tests/test_processor_registry.py`
 - `services/data-ops/tests/test_jd_product_processor.py`
@@ -2168,6 +2171,7 @@
 
 - `RPA extension checklist`：定义新增站点实现时必须提供的输入 fixture、页面状态、字段映射、错误代码和人工验收。
 - `Processor extension checklist`：定义新增 dataset processor 时必须提供的 contract、注册项、标准/失败输出和测试。
+- `Site contract isolation`：把站点输入列、扩展列和输出字段保存在具体 processor 目录，通用 core 只保留可复用契约类型。
 - `Boundary assertions`：验证通用模板没有京东字段，通用 pandas core 没有站点字段，data-ops 没有数据库依赖或 items 修改。
 - `Phase J E2E assertions`：验证 jd_product 同时复用了通用影刀模板和通用 pandas 核心。
 

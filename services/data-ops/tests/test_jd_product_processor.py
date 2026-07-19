@@ -21,13 +21,13 @@ from data_ops.core.batch_manifest import (
     load_batch_manifest,
     replay_batch,
 )
-from data_ops.core.contracts import JD_PRODUCT_DATASET_CONTRACT
 from data_ops.core.csv_io import read_source_file
 from data_ops.processors.jd_product import (
     JdProductProcessor,
     identify_jd_duplicates,
     register_jd_product_processor,
 )
+from data_ops.processors.jd_product_contract import JD_PRODUCT_DATASET_CONTRACT
 from data_ops.processors.registry import get_processor
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -369,3 +369,24 @@ def test_validate_reports_missing_schema_and_invalid_success_fields() -> None:
         "field_missing",
         "invalid_primary_image_url",
     }.issubset({issue.code for issue in row_issues})
+
+
+def test_missing_jd_column_reconciles_every_row_into_failed_output(
+    tmp_path: Path,
+) -> None:
+    """A site-schema omission writes explicit failures instead of losing rows."""
+
+    source = tmp_path / "missing-shop.csv"
+    missing_shop = read_source_file(JD_FIXTURE).drop(columns=["shop_name"])
+    missing_shop.to_csv(source, index=False)
+
+    result = process_dataset("jd_product", source, tmp_path / "output")
+
+    assert result.summary == {
+        "input_rows": 4,
+        "normalized_rows": 0,
+        "failed_rows": 4,
+        "duplicate_rows": 0,
+    }
+    assert set(result.failed_rows["error_code"]) == {"missing_jd_columns"}
+    assert result.failed_rows["input_index"].tolist() == ["1", "2", "3", "4"]

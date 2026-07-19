@@ -130,13 +130,34 @@ pandas 批次失败时，原始 source 会进入 `failed/jd_product/{batch_id}`�
 副本，并调用 `replay_batch(manifest_path, output_root=..., source_path=corrected_copy)`；
 重放会验证 dataset contract 和 batch_id，不修改失败归档中的 source，也不重新访问网页。
 
-## 扩展规则
+## 新增站点实现检查清单
 
-新增站点或数据类型时：
+1. 选择稳定且唯一的 `dataset_type`，并在 `implementations/` 下新增一份站点适配说明。
+2. 提供只含合成或脱敏数据的输入 fixture，明确 URL 列、`input_index` 和预期行数。
+3. 列出页面状态和停止策略，至少覆盖正常、字段缺失、导航失败、访问限制和人工验证。
+4. 固定 `site_output_columns` 的字段映射、顺序、来源元素以及空值语义。
+5. 声明站点错误代码；通用错误代码保持原语义，不把异常页面内容写入错误信息。
+6. 在 `InvokeSiteAdapter` 注册路由，不复制 Main、输入循环、`AppendExportRow` 或导出骨架。
+7. 完成人工验收矩阵，保存 batch_id、输入/输出行数和稳定状态，不保存凭据或真实会话。
 
-1. 选择稳定且唯一的 `dataset_type`。
-2. 保留七个通用输出列及其语义和顺序。
-3. 只在站点实现中追加页面字段和站点错误代码。
-4. 注册独立 `DatasetContract` 和 processor，不在通用读取核心中增加网站条件分支。
-5. 提供合成或脱敏输入、原始 CSV fixture 和人工验收记录。
-6. 明确登录、验证码、权限和访问限制的人工停止策略。
+## 新增 pandas processor 检查清单
+
+1. 在 `processors/` 下建立具体 `DatasetContract`，站点字段不得放入通用 core。
+2. 实现 `validate`、`normalize` 和 `split_results`，并通过 `register_processor` 注册。
+3. 固定标准化 CSV 和失败 CSV 的列顺序、文件名以及 `batch_id + input_index` 对账规则。
+4. 失败 CSV 必须保留 `input_index`、`source_url`、`crawl_status` 和 `error_code`。
+5. 为缺通用列、未知 dataset_type、站点字段缺失、类型解析失败、重复数据、空文件和失败重放编写测试。
+6. 确认 processor 不导入数据库驱动、不查询或修改 `items`，也不调用业务 API 或下游系统。
+7. 使用 `scripts/run_data_ops.ps1` 验证 inbox、normalized、failed、archive 和 manifest 全链路。
+
+## 京东人工验收清单
+
+| 场景 | 操作 | 预期结果 |
+| --- | --- | --- |
+| 正常商品 | 在已登录浏览器打开字段完整的商品页 | `success`，SKU、标题、展示价格、店铺和主图非空 |
+| 第三方店铺 | 打开可访问的第三方店铺商品页 | 字段完整时 `success`；缺字段时 `partial/field_missing` |
+| 无货或下架 | 打开无货、已下架或失效商品页 | 可访问但字段缺失时 `partial/field_missing`；导航失败时 `failed/navigation_failed` |
+| 无效 URL | 输入非商品页或无法解析 SKU 的 URL | 不打开页面，返回 `failed/invalid_input` |
+| 登录或验证中断 | 使用需要登录、验证码或人工确认的页面 | 先导出检查点，再返回 `failed/manual_verification_required` 并停止 |
+
+每次人工验收都要确认输入行数等于导出行数，日志不包含 Cookie、Token、账号或验证码内容。

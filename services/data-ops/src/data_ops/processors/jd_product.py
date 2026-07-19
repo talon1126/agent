@@ -15,16 +15,14 @@ from urllib.parse import urlparse
 
 import pandas as pd
 
-from data_ops.core.contracts import (
-    JD_PRODUCT_DATASET_CONTRACT,
-    ProcessorResult,
-)
+from data_ops.core.contracts import ProcessorResult
 from data_ops.core.validation import (
     ValidationIssue,
     validate_common_columns,
     validate_dataset_selection,
     validate_single_batch,
 )
+from data_ops.processors.jd_product_contract import JD_PRODUCT_DATASET_CONTRACT
 from data_ops.processors.registry import register_processor
 
 _JD_SKU_PATTERN = re.compile(r"^[0-9]+$")
