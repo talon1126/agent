@@ -1,5 +1,14 @@
 <img width="2560" height="1398" alt="image" src="https://github.com/user-attachments/assets/76c2859d-7992-4091-8abc-a3c162bb022f" />
 
+主导 TalonMart Agent 电商智能运营系统开发：基于 `Vue3 + FastAPI + PostgreSQL + 飞书 + n8n + Docker Compose` 搭建全栈电商 Agent 系统，服务于某电商机构的智能电商平台
+
+- **实现 Agent 工具编排与可观测能力**：基于 LangChain 设计 Agent，接入订单搜索、商品详情、RAG MCP等工具；基于 Qwen3-1.7B 构建意图识别模型，采用 **CSDS数据集**、**LoRA 微调**平均耗时`58ms` 正确率提升`35%`、工具调用门禁和原始用户问题绑定；结合 LangGraph  checkpoint 实现会话续接，会话压缩采取截取最近`20000tokens`拼接证据抽取化压缩，长期记忆提取偏好 ，通过 Agent Trace 记录意图、授权工具、工具调用、RAG trace 关联和错误信息
+- **完成模块化 RAG 知识服务建设**：使用planner-generator-evaluator 从 0 到 1 实现独立 RAG 子系统，工厂模式所有组件可插拔，覆盖 Markdown/PDF 摄取、智能分块、图片 caption、BM25 + Dense 混合检索、CrossEncoder预热 首次query耗时降低 ` 21.3%` 、`RAG trace` 从 `12.66s` 降到 `1.72s`，降低 `86.4%`、引用 **Self-RAG论文**设计Self-RAG Judge 引入模型反思提高响应质量
+
+- **建立 RAG 评估与量化优化闭环**：构建 golden set、Ragas 生成指标和自定义检索指标体系；基于多知识库并行检索架构优化 RAG 查询链路实现平均响应时间 `282.11ms`、P95 `403.50ms`；golden50 文档级检索评估中达到 `Hit@5=1.0000`、`MRR@5=0.9833`、`NDCG@5=0.9721`；引入 Intent Router 后，准确率提升`30%`，`Context Recall` 从 `0.5888` 提升到 `0.7435`，`Faithfulness` 从 `0.5397` 提升到 `0.6920`，并将样本级指标、错误和 trace 写入 PostgreSQL 便于持续诊断
+
+- **设计并实现飞书 ERP 运营后台**：将飞书扩展为企业运营管理后台，基于 `feishu-adapter + 飞书多维表格 + n8n` 实现订单、库存、流水、采购单、商品主数据、秒杀活动等 10+ 类 read model 同步；支持 `table_id` 持久化定位、分页同步、图片上传、按钮触发后端接口，并支撑运营驾驶舱、业务操作页、发货/退货/采购到仓等人工协作流程
+- 
 # TalonMart Agent
 
 TalonMart Agent 是一个本地优先的电商业务 Agent 与企业运营管理系统。项目围绕 TalonMart 电商业务构建前端购物体验、AImodel 对话助手、飞书 ERP 协作后台、n8n 业务 Workflow、mock-api 业务事实 API，以及独立的 RAG 知识服务。
