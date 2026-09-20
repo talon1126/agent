@@ -35,8 +35,9 @@ Completion index:
 - A1：冻结现有 Agent 基线 ✔️
 - A2：建立购物任务 Golden Set v1 ✔️
 - A3：扩展请求上下文协议 ✔️
+- A4：建立结构化响应协议 ✔️
 
-Independent rerun deferred by user direction: A1, A2, A3.
+Independent rerun deferred by user direction: A1, A2, A3, A4.
 
 ## Required task flow
 
