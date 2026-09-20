@@ -77,6 +77,9 @@ def test_explicit_acceptance_paths_do_not_lock_implementation_tests(
     acceptance_dir.mkdir(parents=True)
     acceptance_file = acceptance_dir / "test_contract.py"
     acceptance_file.write_text("def test_contract(): pass\n", encoding="utf-8")
+    bytecode_dir = acceptance_dir / "__pycache__"
+    bytecode_dir.mkdir()
+    (bytecode_dir / "test_contract.cpython-312.pyc").write_bytes(b"generated")
     implementation_test = tmp_path / "services" / "ai-service" / "tests"
     implementation_test.mkdir(parents=True)
     (implementation_test / "test_aimodel_agent.py").write_text(

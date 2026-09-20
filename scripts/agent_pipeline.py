@@ -382,7 +382,13 @@ def discover_acceptance_files(
         if path.is_file():
             files.add(path)
         elif path.is_dir():
-            files.update(item for item in path.rglob("*") if item.is_file())
+            files.update(
+                item
+                for item in path.rglob("*")
+                if item.is_file()
+                and "__pycache__" not in item.parts
+                and item.suffix not in {".pyc", ".pyo"}
+            )
         else:
             missing.append(candidate)
     return sorted(files), missing
