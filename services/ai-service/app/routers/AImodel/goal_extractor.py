@@ -71,6 +71,26 @@ class GoalValueMutation(BaseModel):
         DeltaAction.CONFIRM,
     ]
     item: GoalValueItem
+    source_span: ShortText
+
+    @model_validator(mode="after")
+    def validate_source_span(self) -> Self:
+        evidence = self.item.evidence
+        if (
+            evidence.source_type
+            in {
+                GoalSourceType.USER_TURN,
+                GoalSourceType.PAGE_CONTEXT,
+            }
+            and self.source_span != evidence.quote
+        ):
+            raise ValueError("rule source_span must equal its evidence quote")
+        if (
+            evidence.source_type is GoalSourceType.MODEL_INFERENCE
+            and evidence.quote is not None
+        ):
+            raise ValueError("model inference must not store source_span as a quote")
+        return self
 
 
 class GoalRemoveMutation(BaseModel):
@@ -256,6 +276,10 @@ _BRAND_TEXT = "|".join(re.escape(name) for name in _BRANDS)
 _BRAND_EXCLUSION = re.compile(
     rf"(?P<span>(?:不要|排除|不考虑|不买)\s*(?P<brand>{_BRAND_TEXT}))"
 )
+_BRAND_EXCLUSION_POSTFIX = re.compile(
+    rf"(?P<span>(?P<brand>{_BRAND_TEXT})\s*(?:不要|排除|不考虑|不买)(?:了)?)"
+    r"(?=\s*[，。！？]?\s*$)"
+)
 _BRAND_HARD_INCLUDE = re.compile(
     rf"(?P<span>(?:只看|只要|认准|必须(?:选择)?|就要)\s*(?P<brand>{_BRAND_TEXT}))"
 )
@@ -291,9 +315,19 @@ _QUANTITY = re.compile(
     r"(?P<span>(?P<value>\d{1,3}|[一二两三四五六七八九十])\s*"
     r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
 )
+_QUANTITY_CORRECTION = re.compile(
+    r"(?P<span>不是\s*(?:\d{1,3}|[一二两三四五六七八九十])\s*"
+    r"(?:个|件|台|部|箱|盒|副|辆)\s*[,，]?\s*(?:是|改成|改为)\s*"
+    r"(?P<value>\d{1,3}|[一二两三四五六七八九十])\s*"
+    r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
+)
 _CAPACITY_SPEC = re.compile(
     r"(?P<span>容量[^\d]{0,8}?(?P<minimum>至少|不低于)?\s*"
     r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>L|l|升))"
+)
+_CAPACITY_CORRECTION = re.compile(
+    r"(?P<span>容量\s*不是\s*\d+(?:\.\d+)?\s*(?:L|l|升)\s*[,，]?\s*"
+    r"(?:是|改成|改为)\s*(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>L|l|升))"
 )
 _AREA_SPEC = re.compile(
     r"(?P<span>(?:适合\s*)?(?P<value>\d+(?:\.\d+)?)\s*(?:平方米|平米))"
@@ -313,7 +347,10 @@ _SCENARIO_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"通勤(?:使用|用)?"), "通勤"),
     (re.compile(r"送人|送礼"), "送礼"),
 )
-_DEICTIC_REFERENCE = re.compile(r"这款|这台|这辆|这个|该款|它")
+_DEICTIC_REFERENCE = re.compile(
+    r"(?:这款|这台|这辆|这个|该款|它)(?:的)?"
+    r"(?:容量|规格|尺寸|价格|适用|怎么样|能买吗|好不好)"
+)
 _CONFIRMATION_PREFIX = re.compile(r"^(?:是[,，。]?|确认)")
 _FIELD_REPLACEMENT_PATTERNS: dict[GoalField, re.Pattern[str]] = {
     GoalField.CATEGORY: re.compile(r"(?:品类|类别|商品)\S{0,8}(?:改成|改为|调整为)"),
@@ -343,6 +380,21 @@ _FIELD_CONFIRMATION_PATTERNS: dict[GoalField, re.Pattern[str]] = {
     GoalField.DELIVERY_DEADLINE: re.compile(r"(?:配送|送达|时间).*(?:仍然|还是)"),
     GoalField.QUANTITY: re.compile(r"(?:数量|件数).*(?:仍然|还是)"),
 }
+_FIELD_CONFIRMATION_ANSWER_PATTERNS: dict[GoalField, re.Pattern[str]] = {
+    GoalField.CATEGORY: re.compile(r"品类|类别|商品"),
+    GoalField.USAGE_SCENARIO: re.compile(r"场景|用途|使用"),
+    GoalField.BUDGET_MIN: re.compile(r"预算|价格|总价"),
+    GoalField.BUDGET_MAX: re.compile(r"预算|价格|总价"),
+    GoalField.BRAND: re.compile(r"品牌|牌子"),
+    GoalField.SPECIFICATION: re.compile(r"规格|容量|面积|尺寸|内存|存储"),
+    GoalField.DELIVERY_DEADLINE: re.compile(r"不能晚于|送达|送到|配送|到货|收到"),
+    GoalField.QUANTITY: re.compile(r"数量|件数"),
+}
+_CATEGORY_NEGATION_PREFIX = re.compile(r"(?:不要|不买|排除|不考虑)\s*$")
+_CATEGORY_NEGATION_SUFFIX = re.compile(
+    r"^\s*(?:不要|不买|排除|不考虑)(?:了)?\s*[，。！？]?\s*$"
+)
+_DELIVERY_INTENT = re.compile(r"不能晚于|送达|送到|配送|到货|收到")
 _CHINESE_NUMBER = {
     "一": 1,
     "二": 2,
@@ -367,9 +419,13 @@ def _action_for(text: str, field: GoalField) -> DeltaAction:
     if replacement is not None and replacement.search(text):
         return DeltaAction.REPLACE
     confirmation = _FIELD_CONFIRMATION_PATTERNS.get(field)
-    if _CONFIRMATION_PREFIX.search(text) or (
-        confirmation is not None and confirmation.search(text)
-    ):
+    answer_pattern = _FIELD_CONFIRMATION_ANSWER_PATTERNS.get(field)
+    explicit_answer = (
+        _CONFIRMATION_PREFIX.search(text) is not None
+        and answer_pattern is not None
+        and answer_pattern.search(text) is not None
+    )
+    if explicit_answer or (confirmation is not None and confirmation.search(text)):
         return DeltaAction.CONFIRM
     return DeltaAction.ADD
 
@@ -431,13 +487,23 @@ def _append_value(
     *,
     action: DeltaAction,
     item: GoalValueItem,
+    source_span: str | None = None,
 ) -> None:
     key = (item.kind, item.semantic_key)
     for existing in operations:
         if isinstance(existing, GoalValueMutation):
             if (existing.item.kind, existing.item.semantic_key) == key:
                 return
-    operations.append(GoalValueMutation(action=action, item=item))
+    resolved_span = source_span or item.evidence.quote
+    if not resolved_span:
+        raise ValueError("goal value mutation requires a source_span")
+    operations.append(
+        GoalValueMutation(
+            action=action,
+            item=item,
+            source_span=resolved_span,
+        )
+    )
 
 
 def _extract_categories(
@@ -451,6 +517,31 @@ def _extract_categories(
     for pattern, category_id in _CATEGORY_PATTERNS:
         match = pattern.search(text)
         if match:
+            prefix = text[: match.start()]
+            suffix = text[match.end() :]
+            prefix_negation = _CATEGORY_NEGATION_PREFIX.search(prefix)
+            suffix_negation = _CATEGORY_NEGATION_SUFFIX.search(suffix)
+            if prefix_negation or suffix_negation:
+                if prefix_negation:
+                    quote = text[prefix_negation.start() : match.end()]
+                else:
+                    quote = text[match.start() : match.end() + suffix_negation.end()]
+                _append_value(
+                    operations,
+                    action=DeltaAction.ADD,
+                    item=Exclusion(
+                        field=GoalField.CATEGORY,
+                        value=match.group(0),
+                        evidence=_evidence(
+                            source_type=GoalSourceType.USER_TURN,
+                            source_turn=source_turn,
+                            quote=quote,
+                            confidence=1.0,
+                            observed_at=observed_at,
+                        ),
+                    ),
+                )
+                return
             _append_value(
                 operations,
                 action=_action_for(text, GoalField.CATEGORY),
@@ -604,6 +695,27 @@ def _extract_brands(
             ),
         )
 
+    for match in _BRAND_EXCLUSION_POSTFIX.finditer(text):
+        if any(start <= match.start("brand") < end for start, end in consumed_spans):
+            continue
+        consumed_spans.append(match.span("brand"))
+        brand = _BRANDS[match.group("brand")]
+        _append_value(
+            operations,
+            action=DeltaAction.ADD,
+            item=Exclusion(
+                field=GoalField.BRAND,
+                value=brand,
+                evidence=_evidence(
+                    source_type=GoalSourceType.USER_TURN,
+                    source_turn=source_turn,
+                    quote=match.group("span"),
+                    confidence=1.0,
+                    observed_at=observed_at,
+                ),
+            ),
+        )
+
     for match in _BRAND_HARD_INCLUDE.finditer(text):
         if any(start <= match.start("brand") < end for start, end in consumed_spans):
             continue
@@ -647,8 +759,23 @@ def _extract_quantity_specs_and_scenario(
     observed_at: datetime,
     operations: list[GoalMutation],
 ) -> None:
-    quantity = _QUANTITY.search(text)
-    if quantity:
+    quantity_correction = _QUANTITY_CORRECTION.search(text)
+    quantity = None if quantity_correction else _QUANTITY.search(text)
+    if quantity_correction:
+        raw_value = quantity_correction.group("value")
+        value = int(raw_value) if raw_value.isdigit() else _CHINESE_NUMBER[raw_value]
+        _append_value(
+            operations,
+            action=DeltaAction.REPLACE,
+            item=_constraint(
+                GoalField.QUANTITY,
+                value,
+                quote=quantity_correction.group("span"),
+                source_turn=source_turn,
+                observed_at=observed_at,
+            ),
+        )
+    elif quantity:
         raw_value = quantity.group("value")
         value = int(raw_value) if raw_value.isdigit() else _CHINESE_NUMBER[raw_value]
         _append_value(
@@ -663,8 +790,23 @@ def _extract_quantity_specs_and_scenario(
             ),
         )
 
-    capacity = _CAPACITY_SPEC.search(text)
-    if capacity:
+    capacity_correction = _CAPACITY_CORRECTION.search(text)
+    capacity = None if capacity_correction else _CAPACITY_SPEC.search(text)
+    if capacity_correction:
+        unit = "L" if capacity_correction.group("unit").lower() == "l" else "升"
+        _append_value(
+            operations,
+            action=DeltaAction.REPLACE,
+            item=_constraint(
+                GoalField.SPECIFICATION,
+                f"{capacity_correction.group('value')}{unit}",
+                attribute="capacity",
+                quote=capacity_correction.group("span"),
+                source_turn=source_turn,
+                observed_at=observed_at,
+            ),
+        )
+    elif capacity:
         prefix = "至少 " if capacity.group("minimum") else ""
         unit = "L" if capacity.group("unit").lower() == "l" else "升"
         _append_value(
@@ -752,6 +894,8 @@ def _extract_delivery(
     observed_at: datetime,
     operations: list[GoalMutation],
 ) -> None:
+    if not _DELIVERY_INTENT.search(text):
+        return
     hours = _DELIVERY_HOURS.search(text)
     if hours:
         raw_hours = hours.group("hours")
@@ -915,7 +1059,11 @@ def _extract_model_operations(
                 )
             if item.semantic_key in existing_keys:
                 raise ValueError("model suggestion duplicates a rule field")
-            operation = GoalValueMutation(action=DeltaAction.ADD, item=item)
+            operation = GoalValueMutation(
+                action=DeltaAction.ADD,
+                item=item,
+                source_span=suggestion.source_span,
+            )
         except (ValidationError, TypeError, ValueError):
             rejected.append(rejected_name)
             continue
@@ -1088,6 +1236,9 @@ def evaluate_goal_extraction_fixture(
     for case in cases:
         if not isinstance(case, dict):
             raise ValueError("invalid extraction case")
+        case_id = str(case.get("case_id") or "")
+        if not case_id:
+            raise ValueError("extraction case requires case_id")
         result = extract_goal_delta(
             str(case["text"]),
             source_turn=int(case["source_turn"]),
@@ -1096,10 +1247,10 @@ def evaluate_goal_extraction_fixture(
         )
         for expected in case.get("expected", []):
             field, token = _expected_token(expected)
-            expected_by_field[field][token] += 1
+            expected_by_field[field][f"{case_id}\0{token}"] += 1
         for operation in result.operations:
             field, token = _operation_token(operation)
-            predicted_by_field[field][token] += 1
+            predicted_by_field[field][f"{case_id}\0{token}"] += 1
 
     fields = sorted(set(expected_by_field) | set(predicted_by_field))
     metrics: dict[str, GoalExtractionFieldMetrics] = {}

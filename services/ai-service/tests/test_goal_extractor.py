@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime
 from decimal import Decimal
@@ -96,11 +97,33 @@ def test_budget_correction_prevents_stale_old_value() -> None:
     assert values(result)[0].item.value == Decimal("500")
 
 
+def test_quantity_and_capacity_corrections_keep_only_new_value() -> None:
+    quantity = values(extract("不是两台，是一台"))
+    capacity = [
+        value
+        for value in values(extract("容量不是6.5L，是5L"))
+        if value.item.field is GoalField.SPECIFICATION
+    ]
+    assert len(quantity) == 1
+    assert quantity[0].action is DeltaAction.REPLACE
+    assert quantity[0].item.value == 1
+    assert len(capacity) == 1
+    assert capacity[0].action is DeltaAction.REPLACE
+    assert capacity[0].item.value == "5L"
+
+
 def test_replacement_action_does_not_bleed_into_new_fields() -> None:
     result = extract("预算改成 500，再加小米偏好")
     actions = {value.item.field: value.action for value in values(result)}
     assert actions[GoalField.BUDGET_MAX] is DeltaAction.REPLACE
     assert actions[GoalField.BRAND] is DeltaAction.ADD
+
+
+def test_confirmation_action_does_not_bleed_into_new_quantity() -> None:
+    result = extract("是，预算上限仍然是500，再买两盒")
+    actions = {value.item.field: value.action for value in values(result)}
+    assert actions[GoalField.BUDGET_MAX] is DeltaAction.CONFIRM
+    assert actions[GoalField.QUANTITY] is DeltaAction.ADD
 
 
 def test_brand_plain_mention_is_soft_but_only_is_hard() -> None:
@@ -117,6 +140,13 @@ def test_brand_exclusion_does_not_duplicate_soft_preference() -> None:
     ]
     assert len(brands) == 1
     assert brands[0].kind == "exclude"
+
+
+def test_postfix_brand_and_category_negation_never_become_positive() -> None:
+    brand = item(extract("苹果不要"), GoalField.BRAND)
+    category = item(extract("不要手机"), GoalField.CATEGORY)
+    assert brand.kind == "exclude"
+    assert category.kind == "exclude"
 
 
 def test_brand_remove_carries_only_current_turn_evidence() -> None:
@@ -169,6 +199,19 @@ def test_deictic_context_is_validated_before_use() -> None:
             "这款怎么样",
             page_context={"page_type": "search", "inventory": 20},
         )
+
+
+def test_dismissed_deictic_reference_does_not_inject_page_category() -> None:
+    result = extract(
+        "这个先不说，预算500以内",
+        page_context={"page_type": "search", "search_query": "无线耳机"},
+    )
+    assert {value.item.field for value in values(result)} == {GoalField.BUDGET_MAX}
+
+
+def test_calendar_word_without_delivery_intent_is_ignored() -> None:
+    result = extract("明天再聊")
+    assert result.operations == ()
 
 
 class FakeModel:
@@ -285,6 +328,29 @@ def test_model_unknown_becomes_b1_open_slot() -> None:
     assert item(result, GoalField.BUDGET_MAX).kind == "unknown"
 
 
+def test_model_source_span_survives_delta_serialization_without_forged_quote() -> None:
+    result = extract(
+        "希望长时间戴着舒服",
+        model_extractor=FakeModel(
+            {
+                "suggestions": [
+                    {
+                        "kind": "soft",
+                        "field": "freeform_preference",
+                        "value": "适合长时间佩戴",
+                        "source_span": "长时间戴着舒服",
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+        ),
+    )
+    operation = values(result)[0]
+    assert operation.source_span == "长时间戴着舒服"
+    assert operation.item.evidence.quote is None
+    assert "长时间戴着舒服" in result.model_dump_json()
+
+
 def test_model_exception_does_not_retain_error_text() -> None:
     result = extract(
         "预算 20",
@@ -326,3 +392,43 @@ def test_evaluation_fixture_is_perfect_and_serializable() -> None:
     )
     assert report.micro.correct == report.micro.expected == report.micro.predicted
     assert report.model_validate_json(report.model_dump_json()) == report
+
+
+def test_evaluation_does_not_cancel_errors_across_cases(tmp_path: Path) -> None:
+    fixture = {
+        "schema_version": 1,
+        "metadata": {
+            "name": "case-aware-regression",
+            "version": "1.0.0",
+            "reference_time": NOW.isoformat(),
+        },
+        "cases": [
+            {
+                "case_id": "missing_prediction",
+                "source_turn": 1,
+                "text": "你好",
+                "page_context": {"page_type": "none"},
+                "expected": [
+                    {
+                        "action": "add",
+                        "kind": "hard",
+                        "field": "budget_max",
+                        "value": "50",
+                    }
+                ],
+            },
+            {
+                "case_id": "wrong_extra_prediction",
+                "source_turn": 1,
+                "text": "预算50以内",
+                "page_context": {"page_type": "none"},
+                "expected": [],
+            },
+        ],
+    }
+    path = tmp_path / "case-aware.json"
+    path.write_text(json.dumps(fixture, ensure_ascii=False), encoding="utf-8")
+    report = evaluate_goal_extraction_fixture(path)
+    assert report.micro.correct == 0
+    assert report.micro.precision == 0
+    assert report.micro.recall == 0
