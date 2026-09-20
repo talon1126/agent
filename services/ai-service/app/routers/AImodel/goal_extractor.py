@@ -346,6 +346,11 @@ _CAPACITY_CORRECTION = re.compile(
     rf"(?:只?要|是|改成|改为)\s*(?P<value>{_RULE_NUMERIC_TOKEN})\s*"
     r"(?P<unit>L|l|升))"
 )
+_CAPACITY_VALUE_CORRECTION = re.compile(
+    rf"(?P<span>容量\s*(?:从|由)?\s*{_RULE_NUMERIC_TOKEN}\s*(?:L|l|升)"
+    rf"\s*(?:改成|改为|调整为|换成)\s*(?P<value>{_RULE_NUMERIC_TOKEN})"
+    r"\s*(?P<unit>L|l|升))"
+)
 _AREA_SPEC = re.compile(
     rf"(?P<span>(?:适合\s*)?(?P<value>{_RULE_NUMERIC_TOKEN})\s*"
     r"(?:平方米|平米))"
@@ -358,9 +363,12 @@ _DELIVERY_HOURS = re.compile(
 _DAY_PERIOD_TOKEN = r"(?:凌晨|早上|上午|中午|下午|傍晚|晚上)"
 _DELIVERY_DAY = re.compile(
     rf"(?P<span>(?P<day>今天|明天|后天)(?:\s*(?P<period>{_DAY_PERIOD_TOKEN})?"
-    rf"\s*(?P<hour>{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})\s*点)?)"
+    rf"\s*(?P<hour>{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})\s*点"
+    rf"(?:\s*(?P<half>半)|\s*(?P<minute>{_RULE_NUMERIC_TOKEN}|"
+    rf"{_CHINESE_INTEGER_TOKEN})\s*分?)?)?)"
     rf"(?!\s*(?:{_DAY_PERIOD_TOKEN})?\s*(?:{_RULE_NUMERIC_TOKEN}|"
-    rf"{_CHINESE_INTEGER_TOKEN})\s*(?:点|[:：]))"
+    rf"{_CHINESE_INTEGER_TOKEN})\s*(?:点|[:：])|\s*(?:半|"
+    rf"{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})\s*分?)"
 )
 _UNSUPPORTED_DELIVERY_CLOCK = re.compile(
     rf"(?:今天|明天|后天)\s*(?:{_DAY_PERIOD_TOKEN})?\s*"
@@ -370,6 +378,7 @@ _VALID_BUDGET_NUMBER = re.compile(r"(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?")
 _MAX_CAPACITY = Decimal("100000")
 _MAX_ROOM_AREA = Decimal("1000000")
 _MAX_SCREEN_SIZE = 1000
+_SPEC_CORRECTION_LINK = re.compile(r"改成|改为|调整为|换成|而不是|不是.*是")
 _CHEAP_PREFERENCE = re.compile(r"越便宜越好|尽量便宜|价格越低越好")
 _SCENARIO_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"宿舍(?:里)?打游戏"), "宿舍打游戏"),
@@ -628,6 +637,49 @@ def _bounded_positive_decimal(raw: str, *, maximum: Decimal) -> Decimal | None:
     except InvalidOperation:
         return None
     return value if value.is_finite() and 0 < value <= maximum else None
+
+
+def _select_spec_candidate(
+    text: str,
+    pattern: re.Pattern[str],
+    *,
+    normalize: Callable[[re.Match[str]], str | None],
+    rejected_fields: list[str],
+) -> tuple[re.Match[str], str, DeltaAction] | None:
+    selected: tuple[re.Match[str], str, DeltaAction] | None = None
+    previous: re.Match[str] | None = None
+    for candidate in pattern.finditer(text):
+        linked_correction = previous is not None and _SPEC_CORRECTION_LINK.search(
+            text[previous.end("span") : candidate.start("span")]
+        )
+        value = normalize(candidate)
+        if value is None or len(candidate.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH:
+            rejected_fields.append(GoalField.SPECIFICATION.value)
+            if linked_correction:
+                selected = None
+        else:
+            internal_prefix = text[candidate.start("span") : candidate.start("value")]
+            is_negated = _span_is_negated(
+                text,
+                candidate.start("span"),
+                candidate.end("span"),
+            ) or _NEGATION_BEFORE_SPAN.search(internal_prefix)
+            if is_negated:
+                previous = candidate
+                continue
+            action = (
+                DeltaAction.REPLACE
+                if linked_correction
+                else _action_for(
+                    text,
+                    GoalField.SPECIFICATION,
+                    span_start=candidate.start("span"),
+                    span_end=candidate.end("span"),
+                )
+            )
+            selected = candidate, value, action
+        previous = candidate
+    return selected
 
 
 def _append_value(
@@ -1038,8 +1090,9 @@ def _extract_quantity_specs_and_scenario(
             ),
         )
 
-    capacity_correction = _CAPACITY_CORRECTION.search(text)
-    capacity = None if capacity_correction else _CAPACITY_SPEC.search(text)
+    capacity_correction = _CAPACITY_CORRECTION.search(
+        text
+    ) or _CAPACITY_VALUE_CORRECTION.search(text)
     if capacity_correction:
         unit = "L" if capacity_correction.group("unit").lower() == "l" else "升"
         numeric_value = _bounded_positive_decimal(
@@ -1065,30 +1118,31 @@ def _extract_quantity_specs_and_scenario(
                     observed_at=observed_at,
                 ),
             )
-    elif capacity and not _span_is_negated(
-        text, capacity.start("span"), capacity.end("span")
-    ):
-        prefix = "至少 " if capacity.group("minimum") else ""
-        unit = "L" if capacity.group("unit").lower() == "l" else "升"
-        numeric_value = _bounded_positive_decimal(
-            capacity.group("value"),
-            maximum=_MAX_CAPACITY,
+
+    else:
+
+        def normalize_capacity(candidate: re.Match[str]) -> str | None:
+            numeric_value = _bounded_positive_decimal(
+                candidate.group("value"),
+                maximum=_MAX_CAPACITY,
+            )
+            if numeric_value is None:
+                return None
+            prefix = "至少 " if candidate.group("minimum") else ""
+            unit = "L" if candidate.group("unit").lower() == "l" else "升"
+            return f"{prefix}{numeric_value}{unit}"
+
+        selected_capacity = _select_spec_candidate(
+            text,
+            _CAPACITY_SPEC,
+            normalize=normalize_capacity,
+            rejected_fields=rejected_fields,
         )
-        if (
-            numeric_value is None
-            or len(capacity.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
-        ):
-            rejected_fields.append(GoalField.SPECIFICATION.value)
-        else:
-            value = f"{prefix}{numeric_value}{unit}"
+        if selected_capacity is not None:
+            capacity, value, action = selected_capacity
             _append_value(
                 operations,
-                action=_action_for(
-                    text,
-                    GoalField.SPECIFICATION,
-                    span_start=capacity.start("span"),
-                    span_end=capacity.end("span"),
-                ),
+                action=action,
                 item=_constraint(
                     GoalField.SPECIFICATION,
                     value,
@@ -1099,61 +1153,62 @@ def _extract_quantity_specs_and_scenario(
                 ),
             )
 
-    area = _AREA_SPEC.search(text)
-    if area and not _span_is_negated(text, area.start("span"), area.end("span")):
+    def normalize_area(candidate: re.Match[str]) -> str | None:
         numeric_value = _bounded_positive_decimal(
-            area.group("value"),
+            candidate.group("value"),
             maximum=_MAX_ROOM_AREA,
         )
-        if numeric_value is None or len(area.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH:
-            rejected_fields.append(GoalField.SPECIFICATION.value)
-        else:
-            value = f"至少 {numeric_value} 平方米"
-            _append_value(
-                operations,
-                action=_action_for(
-                    text,
-                    GoalField.SPECIFICATION,
-                    span_start=area.start("span"),
-                    span_end=area.end("span"),
-                ),
-                item=_constraint(
-                    GoalField.SPECIFICATION,
-                    value,
-                    attribute="room_area",
-                    quote=area.group("span"),
-                    source_turn=source_turn,
-                    observed_at=observed_at,
-                ),
-            )
+        return f"至少 {numeric_value} 平方米" if numeric_value is not None else None
 
-    screen = _SCREEN_SPEC.search(text)
-    if screen and not _span_is_negated(text, screen.start("span"), screen.end("span")):
+    selected_area = _select_spec_candidate(
+        text,
+        _AREA_SPEC,
+        normalize=normalize_area,
+        rejected_fields=rejected_fields,
+    )
+    if selected_area is not None:
+        area, value, action = selected_area
+        _append_value(
+            operations,
+            action=action,
+            item=_constraint(
+                GoalField.SPECIFICATION,
+                value,
+                attribute="room_area",
+                quote=area.group("span"),
+                source_turn=source_turn,
+                observed_at=observed_at,
+            ),
+        )
+
+    def normalize_screen(candidate: re.Match[str]) -> str | None:
         numeric_value = _bounded_integer(
-            screen.group("value"),
+            candidate.group("value"),
             minimum=1,
             maximum=_MAX_SCREEN_SIZE,
         )
-        if numeric_value is None:
-            rejected_fields.append(GoalField.SPECIFICATION.value)
-        else:
-            _append_value(
-                operations,
-                action=_action_for(
-                    text,
-                    GoalField.SPECIFICATION,
-                    span_start=screen.start("span"),
-                    span_end=screen.end("span"),
-                ),
-                item=_constraint(
-                    GoalField.SPECIFICATION,
-                    f"{numeric_value} 英寸",
-                    attribute="screen_size",
-                    quote=screen.group("span"),
-                    source_turn=source_turn,
-                    observed_at=observed_at,
-                ),
-            )
+        return f"{numeric_value} 英寸" if numeric_value is not None else None
+
+    selected_screen = _select_spec_candidate(
+        text,
+        _SCREEN_SPEC,
+        normalize=normalize_screen,
+        rejected_fields=rejected_fields,
+    )
+    if selected_screen is not None:
+        screen, value, action = selected_screen
+        _append_value(
+            operations,
+            action=action,
+            item=_constraint(
+                GoalField.SPECIFICATION,
+                value,
+                attribute="screen_size",
+                quote=screen.group("span"),
+                source_turn=source_turn,
+                observed_at=observed_at,
+            ),
+        )
 
     for pattern, normalized in _SCENARIO_RULES:
         scenario = pattern.search(text)
@@ -1265,6 +1320,7 @@ def _extract_delivery(
         else:
             raw_hour = candidate.group("hour")
             period = candidate.group("period")
+            raw_minute = candidate.group("minute")
             hour = (
                 _bounded_integer(
                     raw_hour,
@@ -1274,7 +1330,21 @@ def _extract_delivery(
                 if raw_hour is not None
                 else 23
             )
-            if hour is None:
+            if raw_hour is None:
+                minute = 59
+                second = 59
+            else:
+                minute = (
+                    30
+                    if candidate.group("half") is not None
+                    else (
+                        _bounded_integer(raw_minute, minimum=0, maximum=59)
+                        if raw_minute is not None
+                        else 0
+                    )
+                )
+                second = 0
+            if hour is None or minute is None:
                 deadline = None
             else:
                 if period in {"中午", "下午", "傍晚", "晚上"} and hour < 12:
@@ -1283,8 +1353,6 @@ def _extract_delivery(
                     hour = 0
                 offset = {"今天": 0, "明天": 1, "后天": 2}[candidate.group("day")]
                 deadline_date = (observed_at + timedelta(days=offset)).date()
-                minute = 0 if raw_hour is not None else 59
-                second = 0 if raw_hour is not None else 59
                 deadline = datetime.combine(
                     deadline_date,
                     datetime.min.time(),

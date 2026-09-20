@@ -198,6 +198,57 @@ def test_spec_replacement_is_bound_to_its_attribute_clause() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("text", "attribute", "expected"),
+    [
+        ("容量从6L改成5L", "capacity", "5L"),
+        ("原来40平米，面积改成30平米", "room_area", "至少 30 平方米"),
+        ("43英寸改成55英寸", "screen_size", "55 英寸"),
+    ],
+)
+def test_spec_correction_selects_the_new_value(
+    text: str,
+    attribute: str,
+    expected: str,
+) -> None:
+    specifications = [
+        value
+        for value in values(extract(text))
+        if value.item.field is GoalField.SPECIFICATION
+    ]
+    assert len(specifications) == 1
+    assert specifications[0].action is DeltaAction.REPLACE
+    assert specifications[0].item.attribute == attribute
+    assert specifications[0].item.value == expected
+
+
+def test_invalid_old_spec_does_not_discard_valid_correction() -> None:
+    result = extract("容量-5L，容量改成6L")
+    specifications = [
+        value for value in values(result) if value.item.field is GoalField.SPECIFICATION
+    ]
+    assert len(specifications) == 1
+    assert specifications[0].action is DeltaAction.REPLACE
+    assert specifications[0].item.value == "6L"
+    assert result.trace.rejected_fields == (GoalField.SPECIFICATION.value,)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "容量从6L改成-5L",
+        "40平米改成-30平米",
+        "43英寸改成-55英寸",
+    ],
+)
+def test_invalid_new_spec_does_not_fall_back_to_old_value(text: str) -> None:
+    result = extract(text)
+    assert all(
+        value.item.field is not GoalField.SPECIFICATION for value in values(result)
+    )
+    assert result.trace.rejected_fields == (GoalField.SPECIFICATION.value,)
+
+
 def test_brand_plain_mention_is_soft_but_only_is_hard() -> None:
     soft = item(extract("想看看小米手机"), GoalField.BRAND)
     hard = item(extract("只要小米手机"), GoalField.BRAND)
@@ -391,6 +442,23 @@ def test_delivery_supports_chinese_day_period(
     assert deadline.value.isoformat() == (f"2026-09-21T{expected_hour:02d}:00:00+08:00")
 
 
+@pytest.mark.parametrize(
+    ("spoken_time", "expected"),
+    [
+        ("两点半", "2026-09-21T02:30:00+08:00"),
+        ("两点三十分", "2026-09-21T02:30:00+08:00"),
+        ("下午两点半", "2026-09-21T14:30:00+08:00"),
+        ("2点05分", "2026-09-21T02:05:00+08:00"),
+    ],
+)
+def test_delivery_supports_spoken_minutes(spoken_time: str, expected: str) -> None:
+    deadline = item(
+        extract(f"明天{spoken_time}送到"),
+        GoalField.DELIVERY_DEADLINE,
+    )
+    assert deadline.value.isoformat() == expected
+
+
 def test_deictic_context_is_validated_before_use() -> None:
     result = extract(
         "这款容量 6.5L",
@@ -513,6 +581,7 @@ def test_delivery_correction_is_ordered_across_date_and_hour_representations(
         "明天二十四点送到",
         "明天二百点送到",
         "明天下午十三点送到",
+        "明天两点七十分送到",
         "明天2:30送到",
         "1.5小时内送到",
         "-2小时内送到",
