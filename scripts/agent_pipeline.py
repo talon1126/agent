@@ -57,11 +57,16 @@ def sha256_bytes(value: bytes) -> str:
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    raw = path.read_bytes()
+    if b"\x00" not in raw:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        else:
+            canonical = text.replace("\r\n", "\n").replace("\r", "\n")
+            raw = canonical.encode("utf-8")
+    return sha256_bytes(raw)
 
 
 def load_structured(path: Path) -> dict[str, Any]:
