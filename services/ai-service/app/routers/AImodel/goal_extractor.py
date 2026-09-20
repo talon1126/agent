@@ -319,44 +319,57 @@ _BUDGET_MIN = re.compile(
     r"(?P<value>[+\-]?[\d,.]+))(?:\s*元)?"
 )
 _RULE_NUMERIC_TOKEN = r"(?:[+\-]\s*)?[\d.,]+"
+_CHINESE_INTEGER_TOKEN = r"[零〇一二两三四五六七八九十百千万]{1,8}"
 _QUANTITY = re.compile(
-    rf"(?P<span>(?P<value>{_RULE_NUMERIC_TOKEN}|[一二两三四五六七八九十])"
+    rf"(?P<span>(?P<value>{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})"
     r"\s*(?P<unit>个|件|台|部|箱|盒|副|辆))"
 )
 _QUANTITY_CORRECTION = re.compile(
     rf"(?P<span>(?:(?:我)?(?:不需要|不要|不是|不买)\s*"
-    rf"(?:{_RULE_NUMERIC_TOKEN}|[一二两三四五六七八九十])\s*"
+    rf"(?:{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})\s*"
     r"(?:个|件|台|部|箱|盒|副|辆)|"
-    rf"(?:{_RULE_NUMERIC_TOKEN}|[一二两三四五六七八九十])\s*"
+    rf"(?:{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})\s*"
     r"(?:个|件|台|部|箱|盒|副|辆)"
     r"\s*(?:不要|不需要)(?:了)?)\s*(?:[,，;；]|然后)?\s*"
     r"(?:只?买|只?要|是|改成|改为)\s*"
-    rf"(?P<value>{_RULE_NUMERIC_TOKEN}|[一二两三四五六七八九十])\s*"
+    rf"(?P<value>{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})\s*"
     r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
 )
 _CAPACITY_SPEC = re.compile(
-    r"(?P<span>容量[^\d]{0,8}?(?P<minimum>至少|不低于)?\s*"
-    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>L|l|升))"
+    rf"(?P<span>容量[^+\-\d.,]{{0,8}}?(?P<minimum>至少|不低于)?\s*"
+    rf"(?P<value>{_RULE_NUMERIC_TOKEN})\s*(?P<unit>L|l|升))"
 )
 _CAPACITY_CORRECTION = re.compile(
-    r"(?P<span>容量\s*(?:不需要|不要|不是)\s*\d+(?:\.\d+)?\s*(?:L|l|升)"
+    rf"(?P<span>容量\s*(?:不需要|不要|不是)\s*{_RULE_NUMERIC_TOKEN}\s*"
+    r"(?:L|l|升)"
     r"\s*[,，;；]?\s*(?:然后|但(?:是)?|可是|不过)?\s*"
-    r"(?:只?要|是|改成|改为)\s*(?P<value>\d+(?:\.\d+)?)\s*"
+    rf"(?:只?要|是|改成|改为)\s*(?P<value>{_RULE_NUMERIC_TOKEN})\s*"
     r"(?P<unit>L|l|升))"
 )
 _AREA_SPEC = re.compile(
-    r"(?P<span>(?:适合\s*)?(?P<value>\d+(?:\.\d+)?)\s*(?:平方米|平米))"
+    rf"(?P<span>(?:适合\s*)?(?P<value>{_RULE_NUMERIC_TOKEN})\s*"
+    r"(?:平方米|平米))"
 )
-_SCREEN_SPEC = re.compile(r"(?P<span>(?P<value>(?<!\d)\d{2,3}(?!\d))\s*英寸)")
+_SCREEN_SPEC = re.compile(rf"(?P<span>(?P<value>{_RULE_NUMERIC_TOKEN})\s*英寸)")
 _DELIVERY_HOURS = re.compile(
-    rf"(?P<span>(?P<hours>{_RULE_NUMERIC_TOKEN}|一|两|二|三|四|五|六|七|八|九|十)\s*"
+    rf"(?P<span>(?P<hours>{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})\s*"
     r"(?:个)?小时内)"
 )
+_DAY_PERIOD_TOKEN = r"(?:凌晨|早上|上午|中午|下午|傍晚|晚上)"
 _DELIVERY_DAY = re.compile(
-    rf"(?P<span>(?P<day>今天|明天|后天)(?:\s*(?P<hour>{_RULE_NUMERIC_TOKEN})"
-    r"\s*点)?)(?!\s*(?:[+\-]\s*)?[\d.,]+\s*点)"
+    rf"(?P<span>(?P<day>今天|明天|后天)(?:\s*(?P<period>{_DAY_PERIOD_TOKEN})?"
+    rf"\s*(?P<hour>{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})\s*点)?)"
+    rf"(?!\s*(?:{_DAY_PERIOD_TOKEN})?\s*(?:{_RULE_NUMERIC_TOKEN}|"
+    rf"{_CHINESE_INTEGER_TOKEN})\s*(?:点|[:：]))"
+)
+_UNSUPPORTED_DELIVERY_CLOCK = re.compile(
+    rf"(?:今天|明天|后天)\s*(?:{_DAY_PERIOD_TOKEN})?\s*"
+    rf"(?:{_RULE_NUMERIC_TOKEN}|{_CHINESE_INTEGER_TOKEN})\s*[:：]"
 )
 _VALID_BUDGET_NUMBER = re.compile(r"(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?")
+_MAX_CAPACITY = Decimal("100000")
+_MAX_ROOM_AREA = Decimal("1000000")
+_MAX_SCREEN_SIZE = 1000
 _CHEAP_PREFERENCE = re.compile(r"越便宜越好|尽量便宜|价格越低越好")
 _SCENARIO_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"宿舍(?:里)?打游戏"), "宿舍打游戏"),
@@ -434,6 +447,8 @@ _DELIVERY_CORRECTION_ACCEPTANCE = re.compile(
     r"(?:也行|可以|改成|改为|换成|调整为|就按|那就)"
 )
 _CHINESE_NUMBER = {
+    "零": 0,
+    "〇": 0,
     "一": 1,
     "二": 2,
     "两": 2,
@@ -570,10 +585,26 @@ def _bounded_integer(raw: str, *, minimum: int, maximum: int) -> int | None:
             return None
         value = int(raw)
     else:
-        value = _CHINESE_NUMBER.get(raw)
+        value = _parse_chinese_integer(raw)
         if value is None:
             return None
     return value if minimum <= value <= maximum else None
+
+
+def _parse_chinese_integer(raw: str) -> int | None:
+    direct = _CHINESE_NUMBER.get(raw)
+    if direct is not None:
+        return direct
+    if raw.count("十") != 1 or any(unit in raw for unit in "百千万"):
+        return None
+    tens, ones = raw.split("十")
+    if len(tens) > 1 or len(ones) > 1:
+        return None
+    tens_value = 1 if not tens else _CHINESE_NUMBER.get(tens)
+    ones_value = 0 if not ones else _CHINESE_NUMBER.get(ones)
+    if tens_value in {None, 0} or ones_value is None:
+        return None
+    return tens_value * 10 + ones_value
 
 
 def _bounded_budget(raw: str) -> Decimal | None:
@@ -587,6 +618,16 @@ def _bounded_budget(raw: str) -> Decimal | None:
     except InvalidOperation:
         return None
     return value if value.is_finite() and 0 <= value <= MAX_BUDGET else None
+
+
+def _bounded_positive_decimal(raw: str, *, maximum: Decimal) -> Decimal | None:
+    if len(raw) > MAX_GOAL_TEXT_LENGTH or _VALID_BUDGET_NUMBER.fullmatch(raw) is None:
+        return None
+    try:
+        value = _decimal(raw)
+    except InvalidOperation:
+        return None
+    return value if value.is_finite() and 0 < value <= maximum else None
 
 
 def _append_value(
@@ -1001,13 +1042,17 @@ def _extract_quantity_specs_and_scenario(
     capacity = None if capacity_correction else _CAPACITY_SPEC.search(text)
     if capacity_correction:
         unit = "L" if capacity_correction.group("unit").lower() == "l" else "升"
-        value = f"{capacity_correction.group('value')}{unit}"
+        numeric_value = _bounded_positive_decimal(
+            capacity_correction.group("value"),
+            maximum=_MAX_CAPACITY,
+        )
         if (
-            len(value) > MAX_GOAL_TEXT_LENGTH
+            numeric_value is None
             or len(capacity_correction.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
         ):
             rejected_fields.append(GoalField.SPECIFICATION.value)
         else:
+            value = f"{numeric_value}{unit}"
             _append_value(
                 operations,
                 action=DeltaAction.REPLACE,
@@ -1025,13 +1070,17 @@ def _extract_quantity_specs_and_scenario(
     ):
         prefix = "至少 " if capacity.group("minimum") else ""
         unit = "L" if capacity.group("unit").lower() == "l" else "升"
-        value = f"{prefix}{capacity.group('value')}{unit}"
+        numeric_value = _bounded_positive_decimal(
+            capacity.group("value"),
+            maximum=_MAX_CAPACITY,
+        )
         if (
-            len(value) > MAX_GOAL_TEXT_LENGTH
+            numeric_value is None
             or len(capacity.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
         ):
             rejected_fields.append(GoalField.SPECIFICATION.value)
         else:
+            value = f"{prefix}{numeric_value}{unit}"
             _append_value(
                 operations,
                 action=_action_for(
@@ -1052,13 +1101,14 @@ def _extract_quantity_specs_and_scenario(
 
     area = _AREA_SPEC.search(text)
     if area and not _span_is_negated(text, area.start("span"), area.end("span")):
-        value = f"至少 {area.group('value')} 平方米"
-        if (
-            len(value) > MAX_GOAL_TEXT_LENGTH
-            or len(area.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
-        ):
+        numeric_value = _bounded_positive_decimal(
+            area.group("value"),
+            maximum=_MAX_ROOM_AREA,
+        )
+        if numeric_value is None or len(area.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH:
             rejected_fields.append(GoalField.SPECIFICATION.value)
         else:
+            value = f"至少 {numeric_value} 平方米"
             _append_value(
                 operations,
                 action=_action_for(
@@ -1079,23 +1129,31 @@ def _extract_quantity_specs_and_scenario(
 
     screen = _SCREEN_SPEC.search(text)
     if screen and not _span_is_negated(text, screen.start("span"), screen.end("span")):
-        _append_value(
-            operations,
-            action=_action_for(
-                text,
-                GoalField.SPECIFICATION,
-                span_start=screen.start("span"),
-                span_end=screen.end("span"),
-            ),
-            item=_constraint(
-                GoalField.SPECIFICATION,
-                f"{screen.group('value')} 英寸",
-                attribute="screen_size",
-                quote=screen.group("span"),
-                source_turn=source_turn,
-                observed_at=observed_at,
-            ),
+        numeric_value = _bounded_integer(
+            screen.group("value"),
+            minimum=1,
+            maximum=_MAX_SCREEN_SIZE,
         )
+        if numeric_value is None:
+            rejected_fields.append(GoalField.SPECIFICATION.value)
+        else:
+            _append_value(
+                operations,
+                action=_action_for(
+                    text,
+                    GoalField.SPECIFICATION,
+                    span_start=screen.start("span"),
+                    span_end=screen.end("span"),
+                ),
+                item=_constraint(
+                    GoalField.SPECIFICATION,
+                    f"{numeric_value} 英寸",
+                    attribute="screen_size",
+                    quote=screen.group("span"),
+                    source_turn=source_turn,
+                    observed_at=observed_at,
+                ),
+            )
 
     for pattern, normalized in _SCENARIO_RULES:
         scenario = pattern.search(text)
@@ -1158,6 +1216,14 @@ def _extract_delivery(
         *(("day", candidate) for candidate in _DELIVERY_DAY.finditer(text)),
     ]
     candidates.sort(key=lambda item: item[1].start("span"))
+    for unsupported_clock in _UNSUPPORTED_DELIVERY_CLOCK.finditer(text):
+        clause, _ = _clause_context(
+            text,
+            unsupported_clock.start(),
+            unsupported_clock.end(),
+        )
+        if _DELIVERY_INTENT.search(clause):
+            rejected_fields.append(GoalField.DELIVERY_DEADLINE.value)
 
     rejected_deadline = False
     selected = None
@@ -1198,14 +1264,23 @@ def _extract_delivery(
                 deadline = None
         else:
             raw_hour = candidate.group("hour")
+            period = candidate.group("period")
             hour = (
-                _bounded_integer(raw_hour, minimum=0, maximum=23)
+                _bounded_integer(
+                    raw_hour,
+                    minimum=1 if period else 0,
+                    maximum=12 if period else 23,
+                )
                 if raw_hour is not None
                 else 23
             )
             if hour is None:
                 deadline = None
             else:
+                if period in {"中午", "下午", "傍晚", "晚上"} and hour < 12:
+                    hour += 12
+                elif period == "凌晨" and hour == 12:
+                    hour = 0
                 offset = {"今天": 0, "明天": 1, "后天": 2}[candidate.group("day")]
                 deadline_date = (observed_at + timedelta(days=offset)).date()
                 minute = 0 if raw_hour is not None else 59

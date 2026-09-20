@@ -323,9 +323,72 @@ def test_oversized_specification_is_rejected_without_losing_other_fields() -> No
     assert result.trace.rejected_fields == (GoalField.SPECIFICATION.value,)
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "容量-5L，预算500以内",
+        "容量+5L，预算500以内",
+        "容量.5L，预算500以内",
+        "容量1..5L，预算500以内",
+        "容量0L，预算500以内",
+        "适合-40平米，预算500以内",
+        "适合1,00平米，预算500以内",
+        "适合0平米，预算500以内",
+        "看-43英寸电视，预算500以内",
+        "看+43英寸电视，预算500以内",
+        "看43.5英寸电视，预算500以内",
+        "看1001英寸电视，预算500以内",
+    ],
+)
+def test_invalid_spec_numeric_token_is_rejected_without_suffix_parsing(
+    text: str,
+) -> None:
+    result = extract(text)
+    fields = {value.item.field for value in values(result)}
+    assert GoalField.BUDGET_MAX in fields
+    assert GoalField.SPECIFICATION not in fields
+    assert result.trace.rejected_fields == (GoalField.SPECIFICATION.value,)
+
+
 def test_delivery_without_hour_uses_end_of_day() -> None:
     deadline = item(extract("后天送到"), GoalField.DELIVERY_DEADLINE).value
     assert deadline.isoformat() == "2026-09-22T23:59:59+08:00"
+
+
+@pytest.mark.parametrize(
+    ("spoken_hour", "expected_hour"),
+    [("两", 2), ("十一", 11), ("二十三", 23)],
+)
+def test_delivery_supports_chinese_spoken_clock(
+    spoken_hour: str,
+    expected_hour: int,
+) -> None:
+    deadline = item(
+        extract(f"明天{spoken_hour}点送到"),
+        GoalField.DELIVERY_DEADLINE,
+    )
+    assert deadline.value.isoformat() == (f"2026-09-21T{expected_hour:02d}:00:00+08:00")
+
+
+@pytest.mark.parametrize(
+    ("period", "spoken_hour", "expected_hour"),
+    [
+        ("早上", "八", 8),
+        ("下午", "两", 14),
+        ("晚上", "八", 20),
+        ("凌晨", "十二", 0),
+    ],
+)
+def test_delivery_supports_chinese_day_period(
+    period: str,
+    spoken_hour: str,
+    expected_hour: int,
+) -> None:
+    deadline = item(
+        extract(f"明天{period}{spoken_hour}点送到"),
+        GoalField.DELIVERY_DEADLINE,
+    )
+    assert deadline.value.isoformat() == (f"2026-09-21T{expected_hour:02d}:00:00+08:00")
 
 
 def test_deictic_context_is_validated_before_use() -> None:
@@ -447,6 +510,10 @@ def test_delivery_correction_is_ordered_across_date_and_hour_representations(
         "明天25点送到",
         "明天-1点送到",
         "明天2.5点送到",
+        "明天二十四点送到",
+        "明天二百点送到",
+        "明天下午十三点送到",
+        "明天2:30送到",
         "1.5小时内送到",
         "-2小时内送到",
         "999999999999小时内送到",
