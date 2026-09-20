@@ -83,6 +83,12 @@ def test_decimal_commas_are_normalized() -> None:
     )
 
 
+def test_invalid_budget_is_rejected_without_losing_other_rule_fields() -> None:
+    result = extract("预算1000000001以内，买耳机")
+    assert {value.item.field for value in values(result)} == {GoalField.CATEGORY}
+    assert result.trace.rejected_fields == (GoalField.BUDGET_MAX.value,)
+
+
 def test_budget_range_uses_one_shared_exact_span() -> None:
     result = extract("预算大约 3000-5000 元")
     minimum = item(result, GoalField.BUDGET_MIN)
@@ -269,6 +275,26 @@ def test_quantity_supports_common_chinese_and_arabic_numbers(
     assert item(extract(f"买{raw}盒中性笔"), GoalField.QUANTITY).value == expected
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "买0件",
+        "买1000件",
+        f"不要{'9' * 600}件，只买1件",
+    ],
+)
+def test_invalid_quantity_is_rejected_without_raising(text: str) -> None:
+    result = extract(text)
+    assert result.operations == ()
+    assert result.trace.rejected_fields == (GoalField.QUANTITY.value,)
+
+
+def test_invalid_quantity_does_not_discard_other_valid_fields() -> None:
+    result = extract("买0件，预算500以内")
+    assert {value.item.field for value in values(result)} == {GoalField.BUDGET_MAX}
+    assert result.trace.rejected_fields == (GoalField.QUANTITY.value,)
+
+
 def test_capacity_area_and_screen_specs_have_distinct_attributes() -> None:
     result = extract("空气炸锅容量至少 6.5L，放在 40 平方米客厅，看 43 英寸电视")
     specs = {
@@ -281,6 +307,12 @@ def test_capacity_area_and_screen_specs_have_distinct_attributes() -> None:
         "room_area": "至少 40 平方米",
         "screen_size": "43 英寸",
     }
+
+
+def test_oversized_specification_is_rejected_without_losing_other_fields() -> None:
+    result = extract(f"容量{'9' * 600}L，预算500以内")
+    assert {value.item.field for value in values(result)} == {GoalField.BUDGET_MAX}
+    assert result.trace.rejected_fields == (GoalField.SPECIFICATION.value,)
 
 
 def test_delivery_without_hour_uses_end_of_day() -> None:
@@ -376,6 +408,42 @@ def test_negated_delivery_date_is_replaced_by_valid_later_date() -> None:
     assert len(deadlines) == 1
     assert deadlines[0].action is DeltaAction.REPLACE
     assert deadlines[0].item.value.isoformat() == "2026-09-22T23:59:59+08:00"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected", "quote"),
+    [
+        ("不要明天送到，两小时内也行", "2026-09-20T12:00:00+08:00", "两小时内"),
+        ("明天不用送到；两小时内可以", "2026-09-20T12:00:00+08:00", "两小时内"),
+        ("不要2小时内送到，明天也行", "2026-09-21T23:59:59+08:00", "明天"),
+    ],
+)
+def test_delivery_correction_is_ordered_across_date_and_hour_representations(
+    text: str,
+    expected: str,
+    quote: str,
+) -> None:
+    operation = next(
+        value
+        for value in values(extract(text))
+        if value.item.field is GoalField.DELIVERY_DEADLINE
+    )
+    assert operation.action is DeltaAction.REPLACE
+    assert operation.item.value.isoformat() == expected
+    assert operation.item.evidence.quote == quote
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "明天25点送到",
+        "999999999999小时内送到",
+    ],
+)
+def test_invalid_delivery_value_is_rejected_without_raising(text: str) -> None:
+    result = extract(text)
+    assert result.operations == ()
+    assert result.trace.rejected_fields == (GoalField.DELIVERY_DEADLINE.value,)
 
 
 @pytest.mark.parametrize("connector", ["再来", "再添", "再选"])

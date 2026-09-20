@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
@@ -26,6 +26,10 @@ from pydantic import (
 
 from app.routers.AImodel.schemas import AiModelPageContext
 from app.routers.AImodel.shopping_goal import (
+    MAX_BUDGET,
+    MAX_EVIDENCE_QUOTE_LENGTH,
+    MAX_GOAL_TEXT_LENGTH,
+    MAX_QUANTITY,
     Constraint,
     Exclusion,
     GoalEvidence,
@@ -312,16 +316,16 @@ _BUDGET_MIN = re.compile(
     r"(?P<value>[\d,.]+))(?:\s*元)?"
 )
 _QUANTITY = re.compile(
-    r"(?P<span>(?P<value>\d{1,3}|[一二两三四五六七八九十])\s*"
+    r"(?P<span>(?P<value>\d+|[一二两三四五六七八九十])\s*"
     r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
 )
 _QUANTITY_CORRECTION = re.compile(
     r"(?P<span>(?:(?:我)?(?:不需要|不要|不是|不买)\s*"
-    r"(?:\d{1,3}|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)|"
-    r"(?:\d{1,3}|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)"
+    r"(?:\d+|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)|"
+    r"(?:\d+|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)"
     r"\s*(?:不要|不需要)(?:了)?)\s*(?:[,，;；]|然后)?\s*"
     r"(?:只?买|只?要|是|改成|改为)\s*"
-    r"(?P<value>\d{1,3}|[一二两三四五六七八九十])\s*"
+    r"(?P<value>\d+|[一二两三四五六七八九十])\s*"
     r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
 )
 _CAPACITY_SPEC = re.compile(
@@ -337,7 +341,7 @@ _CAPACITY_CORRECTION = re.compile(
 _AREA_SPEC = re.compile(
     r"(?P<span>(?:适合\s*)?(?P<value>\d+(?:\.\d+)?)\s*(?:平方米|平米))"
 )
-_SCREEN_SPEC = re.compile(r"(?P<span>(?P<value>\d{2,3})\s*英寸)")
+_SCREEN_SPEC = re.compile(r"(?P<span>(?P<value>(?<!\d)\d{2,3}(?!\d))\s*英寸)")
 _DELIVERY_HOURS = re.compile(
     r"(?P<span>(?P<hours>\d+|一|两|二|三|四|五|六|七|八|九|十)\s*"
     r"(?:个)?小时内)"
@@ -552,6 +556,28 @@ def _decimal(raw: str) -> Decimal:
     return Decimal(raw.replace(",", ""))
 
 
+def _bounded_integer(raw: str, *, minimum: int, maximum: int) -> int | None:
+    if raw.isdigit():
+        if len(raw) > len(str(maximum)):
+            return None
+        value = int(raw)
+    else:
+        value = _CHINESE_NUMBER.get(raw)
+        if value is None:
+            return None
+    return value if minimum <= value <= maximum else None
+
+
+def _bounded_budget(raw: str) -> Decimal | None:
+    if len(raw) > MAX_EVIDENCE_QUOTE_LENGTH:
+        return None
+    try:
+        value = _decimal(raw)
+    except InvalidOperation:
+        return None
+    return value if value.is_finite() and 0 <= value <= MAX_BUDGET else None
+
+
 def _append_value(
     operations: list[GoalMutation],
     *,
@@ -666,15 +692,20 @@ def _extract_budget(
     source_turn: int,
     observed_at: datetime,
     operations: list[GoalMutation],
+    rejected_fields: list[str],
 ) -> None:
     correction = _BUDGET_CORRECTION.search(text)
     if correction:
+        value = _bounded_budget(correction.group("value"))
+        if value is None or len(correction.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH:
+            rejected_fields.append(GoalField.BUDGET_MAX.value)
+            return
         _append_value(
             operations,
             action=DeltaAction.REPLACE,
             item=_constraint(
                 GoalField.BUDGET_MAX,
-                _decimal(correction.group("value")),
+                value,
                 quote=correction.group("span"),
                 source_turn=source_turn,
                 observed_at=observed_at,
@@ -684,9 +715,22 @@ def _extract_budget(
 
     budget_range = _BUDGET_RANGE.search(text)
     if budget_range:
-        for field, group in (
-            (GoalField.BUDGET_MIN, "minimum"),
-            (GoalField.BUDGET_MAX, "maximum"),
+        minimum_value = _bounded_budget(budget_range.group("minimum"))
+        maximum_value = _bounded_budget(budget_range.group("maximum"))
+        invalid_range = (
+            minimum_value is None
+            or maximum_value is None
+            or minimum_value > maximum_value
+            or len(budget_range.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
+        )
+        if invalid_range:
+            rejected_fields.extend(
+                [GoalField.BUDGET_MIN.value, GoalField.BUDGET_MAX.value]
+            )
+            return
+        for field, value in (
+            (GoalField.BUDGET_MIN, minimum_value),
+            (GoalField.BUDGET_MAX, maximum_value),
         ):
             _append_value(
                 operations,
@@ -698,7 +742,7 @@ def _extract_budget(
                 ),
                 item=_constraint(
                     field,
-                    _decimal(budget_range.group(group)),
+                    value,
                     quote=budget_range.group("span"),
                     source_turn=source_turn,
                     observed_at=observed_at,
@@ -710,28 +754,36 @@ def _extract_budget(
     if minimum and not _span_is_negated(
         text, minimum.start("span"), minimum.end("span")
     ):
-        _append_value(
-            operations,
-            action=_action_for(
-                text,
-                GoalField.BUDGET_MIN,
-                span_start=minimum.start("span"),
-                span_end=minimum.end("span"),
-            ),
-            item=_constraint(
-                GoalField.BUDGET_MIN,
-                _decimal(minimum.group("value")),
-                quote=minimum.group("span"),
-                source_turn=source_turn,
-                observed_at=observed_at,
-            ),
-        )
+        value = _bounded_budget(minimum.group("value"))
+        if value is None or len(minimum.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH:
+            rejected_fields.append(GoalField.BUDGET_MIN.value)
+        else:
+            _append_value(
+                operations,
+                action=_action_for(
+                    text,
+                    GoalField.BUDGET_MIN,
+                    span_start=minimum.start("span"),
+                    span_end=minimum.end("span"),
+                ),
+                item=_constraint(
+                    GoalField.BUDGET_MIN,
+                    value,
+                    quote=minimum.group("span"),
+                    source_turn=source_turn,
+                    observed_at=observed_at,
+                ),
+            )
 
     for pattern in _BUDGET_MAX_PATTERNS:
         maximum = pattern.search(text)
         if maximum and not _span_is_negated(
             text, maximum.start("span"), maximum.end("span")
         ):
+            value = _bounded_budget(maximum.group("value"))
+            if value is None or len(maximum.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH:
+                rejected_fields.append(GoalField.BUDGET_MAX.value)
+                return
             _append_value(
                 operations,
                 action=_action_for(
@@ -742,7 +794,7 @@ def _extract_budget(
                 ),
                 item=_constraint(
                     GoalField.BUDGET_MAX,
-                    _decimal(maximum.group("value")),
+                    value,
                     quote=maximum.group("span"),
                     source_turn=source_turn,
                     observed_at=observed_at,
@@ -867,12 +919,22 @@ def _extract_quantity_specs_and_scenario(
     source_turn: int,
     observed_at: datetime,
     operations: list[GoalMutation],
+    rejected_fields: list[str],
 ) -> None:
     quantity_correction = _QUANTITY_CORRECTION.search(text)
     quantity = None
+    quantity_value = None
     rejected_quantity = False
     if quantity_correction is None:
         for candidate in _QUANTITY.finditer(text):
+            candidate_value = _bounded_integer(
+                candidate.group("value"),
+                minimum=1,
+                maximum=MAX_QUANTITY,
+            )
+            if candidate_value is None:
+                rejected_fields.append(GoalField.QUANTITY.value)
+                continue
             if _span_is_negated(
                 text,
                 candidate.start("span"),
@@ -881,23 +943,28 @@ def _extract_quantity_specs_and_scenario(
                 rejected_quantity = True
                 continue
             quantity = candidate
+            quantity_value = candidate_value
     if quantity_correction:
         raw_value = quantity_correction.group("value")
-        value = int(raw_value) if raw_value.isdigit() else _CHINESE_NUMBER[raw_value]
-        _append_value(
-            operations,
-            action=DeltaAction.REPLACE,
-            item=_constraint(
-                GoalField.QUANTITY,
-                value,
-                quote=quantity_correction.group("span"),
-                source_turn=source_turn,
-                observed_at=observed_at,
-            ),
-        )
-    elif quantity:
-        raw_value = quantity.group("value")
-        value = int(raw_value) if raw_value.isdigit() else _CHINESE_NUMBER[raw_value]
+        value = _bounded_integer(raw_value, minimum=1, maximum=MAX_QUANTITY)
+        if (
+            value is None
+            or len(quantity_correction.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
+        ):
+            rejected_fields.append(GoalField.QUANTITY.value)
+        else:
+            _append_value(
+                operations,
+                action=DeltaAction.REPLACE,
+                item=_constraint(
+                    GoalField.QUANTITY,
+                    value,
+                    quote=quantity_correction.group("span"),
+                    source_turn=source_turn,
+                    observed_at=observed_at,
+                ),
+            )
+    elif quantity is not None and quantity_value is not None:
         _append_value(
             operations,
             action=(
@@ -912,7 +979,7 @@ def _extract_quantity_specs_and_scenario(
             ),
             item=_constraint(
                 GoalField.QUANTITY,
-                value,
+                quantity_value,
                 quote=quantity.group("span"),
                 source_turn=source_turn,
                 observed_at=observed_at,
@@ -923,60 +990,81 @@ def _extract_quantity_specs_and_scenario(
     capacity = None if capacity_correction else _CAPACITY_SPEC.search(text)
     if capacity_correction:
         unit = "L" if capacity_correction.group("unit").lower() == "l" else "升"
-        _append_value(
-            operations,
-            action=DeltaAction.REPLACE,
-            item=_constraint(
-                GoalField.SPECIFICATION,
-                f"{capacity_correction.group('value')}{unit}",
-                attribute="capacity",
-                quote=capacity_correction.group("span"),
-                source_turn=source_turn,
-                observed_at=observed_at,
-            ),
-        )
+        value = f"{capacity_correction.group('value')}{unit}"
+        if (
+            len(value) > MAX_GOAL_TEXT_LENGTH
+            or len(capacity_correction.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
+        ):
+            rejected_fields.append(GoalField.SPECIFICATION.value)
+        else:
+            _append_value(
+                operations,
+                action=DeltaAction.REPLACE,
+                item=_constraint(
+                    GoalField.SPECIFICATION,
+                    value,
+                    attribute="capacity",
+                    quote=capacity_correction.group("span"),
+                    source_turn=source_turn,
+                    observed_at=observed_at,
+                ),
+            )
     elif capacity and not _span_is_negated(
         text, capacity.start("span"), capacity.end("span")
     ):
         prefix = "至少 " if capacity.group("minimum") else ""
         unit = "L" if capacity.group("unit").lower() == "l" else "升"
-        _append_value(
-            operations,
-            action=_action_for(
-                text,
-                GoalField.SPECIFICATION,
-                span_start=capacity.start("span"),
-                span_end=capacity.end("span"),
-            ),
-            item=_constraint(
-                GoalField.SPECIFICATION,
-                f"{prefix}{capacity.group('value')}{unit}",
-                attribute="capacity",
-                quote=capacity.group("span"),
-                source_turn=source_turn,
-                observed_at=observed_at,
-            ),
-        )
+        value = f"{prefix}{capacity.group('value')}{unit}"
+        if (
+            len(value) > MAX_GOAL_TEXT_LENGTH
+            or len(capacity.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
+        ):
+            rejected_fields.append(GoalField.SPECIFICATION.value)
+        else:
+            _append_value(
+                operations,
+                action=_action_for(
+                    text,
+                    GoalField.SPECIFICATION,
+                    span_start=capacity.start("span"),
+                    span_end=capacity.end("span"),
+                ),
+                item=_constraint(
+                    GoalField.SPECIFICATION,
+                    value,
+                    attribute="capacity",
+                    quote=capacity.group("span"),
+                    source_turn=source_turn,
+                    observed_at=observed_at,
+                ),
+            )
 
     area = _AREA_SPEC.search(text)
     if area and not _span_is_negated(text, area.start("span"), area.end("span")):
-        _append_value(
-            operations,
-            action=_action_for(
-                text,
-                GoalField.SPECIFICATION,
-                span_start=area.start("span"),
-                span_end=area.end("span"),
-            ),
-            item=_constraint(
-                GoalField.SPECIFICATION,
-                f"至少 {area.group('value')} 平方米",
-                attribute="room_area",
-                quote=area.group("span"),
-                source_turn=source_turn,
-                observed_at=observed_at,
-            ),
-        )
+        value = f"至少 {area.group('value')} 平方米"
+        if (
+            len(value) > MAX_GOAL_TEXT_LENGTH
+            or len(area.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
+        ):
+            rejected_fields.append(GoalField.SPECIFICATION.value)
+        else:
+            _append_value(
+                operations,
+                action=_action_for(
+                    text,
+                    GoalField.SPECIFICATION,
+                    span_start=area.start("span"),
+                    span_end=area.end("span"),
+                ),
+                item=_constraint(
+                    GoalField.SPECIFICATION,
+                    value,
+                    attribute="room_area",
+                    quote=area.group("span"),
+                    source_turn=source_turn,
+                    observed_at=observed_at,
+                ),
+            )
 
     screen = _SCREEN_SPEC.search(text)
     if screen and not _span_is_negated(text, screen.start("span"), screen.end("span")):
@@ -1049,60 +1137,22 @@ def _extract_delivery(
     source_turn: int,
     observed_at: datetime,
     operations: list[GoalMutation],
+    rejected_fields: list[str],
 ) -> None:
     if not _DELIVERY_INTENT.search(text):
         return
-    rejected_deadline = False
-    hours = None
-    for candidate in _DELIVERY_HOURS.finditer(text):
-        clause, _ = _clause_context(
-            text,
-            candidate.start("span"),
-            candidate.end("span"),
-        )
-        has_local_intent = _DELIVERY_INTENT.search(clause) is not None
-        if has_local_intent and _span_is_negated(
-            text,
-            candidate.start("span"),
-            candidate.end("span"),
-        ):
-            rejected_deadline = True
-            continue
-        is_explicit_correction = (
-            rejected_deadline
-            and _DELIVERY_CORRECTION_ACCEPTANCE.search(clause) is not None
-        )
-        if not has_local_intent and not is_explicit_correction:
-            continue
-        hours = candidate
-    if hours is not None:
-        raw_hours = hours.group("hours")
-        count = int(raw_hours) if raw_hours.isdigit() else _CHINESE_NUMBER[raw_hours]
-        deadline = observed_at + timedelta(hours=count)
-        _append_value(
-            operations,
-            action=(
-                DeltaAction.REPLACE
-                if rejected_deadline
-                else _action_for(
-                    text,
-                    GoalField.DELIVERY_DEADLINE,
-                    span_start=hours.start("span"),
-                    span_end=hours.end("span"),
-                )
-            ),
-            item=_constraint(
-                GoalField.DELIVERY_DEADLINE,
-                deadline,
-                quote=hours.group("span"),
-                source_turn=source_turn,
-                observed_at=observed_at,
-            ),
-        )
-        return
 
-    day = None
-    for candidate in _DELIVERY_DAY.finditer(text):
+    candidates = [
+        *(("hours", candidate) for candidate in _DELIVERY_HOURS.finditer(text)),
+        *(("day", candidate) for candidate in _DELIVERY_DAY.finditer(text)),
+    ]
+    candidates.sort(key=lambda item: item[1].start("span"))
+
+    rejected_deadline = False
+    selected = None
+    selected_deadline = None
+    selected_replaces_rejected = False
+    for candidate_kind, candidate in candidates:
         clause, _ = _clause_context(
             text,
             candidate.start("span"),
@@ -1122,32 +1172,60 @@ def _extract_delivery(
         )
         if not has_local_intent and not is_explicit_correction:
             continue
-        day = candidate
-    if day is None:
+
+        if candidate_kind == "hours":
+            count = _bounded_integer(
+                candidate.group("hours"),
+                minimum=1,
+                maximum=999_999_999,
+            )
+            try:
+                deadline = (
+                    observed_at + timedelta(hours=count) if count is not None else None
+                )
+            except (OverflowError, ValueError):
+                deadline = None
+        else:
+            raw_hour = candidate.group("hour")
+            hour = int(raw_hour) if raw_hour is not None else 23
+            if not 0 <= hour <= 23:
+                deadline = None
+            else:
+                offset = {"今天": 0, "明天": 1, "后天": 2}[candidate.group("day")]
+                deadline_date = (observed_at + timedelta(days=offset)).date()
+                minute = 0 if raw_hour is not None else 59
+                second = 0 if raw_hour is not None else 59
+                deadline = datetime.combine(
+                    deadline_date,
+                    datetime.min.time(),
+                    observed_at.tzinfo,
+                ).replace(hour=hour, minute=minute, second=second)
+
+        if deadline is None:
+            rejected_fields.append(GoalField.DELIVERY_DEADLINE.value)
+            continue
+        selected = candidate
+        selected_deadline = deadline
+        selected_replaces_rejected = rejected_deadline
+
+    if selected is None or selected_deadline is None:
         return
-    offset = {"今天": 0, "明天": 1, "后天": 2}[day.group("day")]
-    deadline_date = (observed_at + timedelta(days=offset)).date()
-    hour = int(day.group("hour")) if day.group("hour") else 23
-    minute = 0 if day.group("hour") else 59
-    second = 0 if day.group("hour") else 59
-    deadline = datetime.combine(deadline_date, datetime.min.time(), observed_at.tzinfo)
-    deadline = deadline.replace(hour=hour, minute=minute, second=second)
     _append_value(
         operations,
         action=(
             DeltaAction.REPLACE
-            if rejected_deadline
+            if selected_replaces_rejected
             else _action_for(
                 text,
                 GoalField.DELIVERY_DEADLINE,
-                span_start=day.start("span"),
-                span_end=day.end("span"),
+                span_start=selected.start("span"),
+                span_end=selected.end("span"),
             )
         ),
         item=_constraint(
             GoalField.DELIVERY_DEADLINE,
-            deadline,
-            quote=day.group("span"),
+            selected_deadline,
+            quote=selected.group("span"),
             source_turn=source_turn,
             observed_at=observed_at,
         ),
@@ -1160,8 +1238,9 @@ def _rule_extract(
     source_turn: int,
     page_context: AiModelPageContext | None,
     observed_at: datetime,
-) -> list[GoalMutation]:
+) -> tuple[list[GoalMutation], list[str]]:
     operations: list[GoalMutation] = []
+    rejected_fields: list[str] = []
     _extract_categories(
         text,
         source_turn=source_turn,
@@ -1174,6 +1253,7 @@ def _rule_extract(
         source_turn=source_turn,
         observed_at=observed_at,
         operations=operations,
+        rejected_fields=rejected_fields,
     )
     _extract_brands(
         text,
@@ -1186,14 +1266,16 @@ def _rule_extract(
         source_turn=source_turn,
         observed_at=observed_at,
         operations=operations,
+        rejected_fields=rejected_fields,
     )
     _extract_delivery(
         text,
         source_turn=source_turn,
         observed_at=observed_at,
         operations=operations,
+        rejected_fields=rejected_fields,
     )
-    return operations
+    return operations, rejected_fields
 
 
 def _operation_field(operation: GoalMutation) -> str:
@@ -1324,7 +1406,7 @@ def extract_goal_delta(
     if observed_at.tzinfo is None or observed_at.utcoffset() is None:
         raise ValueError("reference_time must include a timezone")
 
-    rule_operations = _rule_extract(
+    rule_operations, rule_rejected_fields = _rule_extract(
         normalized_text,
         source_turn=source_turn,
         page_context=context,
@@ -1332,7 +1414,7 @@ def extract_goal_delta(
     )
     operations = list(rule_operations)
     model_fields: list[str] = []
-    rejected_fields: list[str] = []
+    rejected_fields = list(rule_rejected_fields)
     model_status: str = "not_requested"
     model_error_code: str | None = None
 
@@ -1349,7 +1431,7 @@ def extract_goal_delta(
                 request,
                 timeout_seconds=model_timeout_seconds,
             )
-            additions, model_fields, rejected_fields = _extract_model_operations(
+            additions, model_fields, model_rejected_fields = _extract_model_operations(
                 raw_response,
                 text=normalized_text,
                 source_turn=source_turn,
@@ -1357,7 +1439,8 @@ def extract_goal_delta(
                 existing=operations,
             )
             operations.extend(additions)
-            model_status = "invalid" if rejected_fields else "success"
+            rejected_fields.extend(model_rejected_fields)
+            model_status = "invalid" if model_rejected_fields else "success"
         except TimeoutError:
             model_status = "timeout"
             model_error_code = "model_timeout"
