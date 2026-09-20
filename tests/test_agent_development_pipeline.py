@@ -20,6 +20,11 @@ from agent_pipeline import (  # noqa: E402
     validate_changed_paths,
     verify_taskbook_lock,
 )
+from task_audit import (  # noqa: E402
+    MAX_AUDIT_ROUNDS,
+    scan_added_secrets,
+    syntax_findings,
+)
 
 
 def _passing_quality_report(quality_config: dict, profile_id: str) -> dict:
@@ -176,9 +181,31 @@ def test_agents_instructions_bind_ai_work_to_the_pipeline() -> None:
         "freeze_acceptance.py",
         "task_preflight.py",
         "task_verify.py",
+        "task_audit.py",
         "verify_phase_gate.py",
         "one task ID at a time",
         "Never edit `apps/talonmart-web`",
         "Do not add task status fields",
     ):
         assert token in text
+
+
+def test_task_audit_has_two_round_limit_and_detects_added_secrets() -> None:
+    assert MAX_AUDIT_ROUNDS == 2
+    assert scan_added_secrets("+token = 'ghp_123456789012345678901234567890'") == [
+        "github_token"
+    ]
+    assert scan_added_secrets(" context\n-token = 'ghp_old'\n+token = 'test-key'") == []
+
+
+def test_task_audit_parses_changed_python_and_json(tmp_path: Path) -> None:
+    (tmp_path / "valid.py").write_text("answer = 42\n", encoding="utf-8")
+    (tmp_path / "valid.json").write_text('{"ok": true}\n', encoding="utf-8")
+
+    assert syntax_findings(tmp_path, ["valid.py", "valid.json"]) == []
+
+    (tmp_path / "invalid.py").write_text("def broken(:\n", encoding="utf-8")
+    findings = syntax_findings(tmp_path, ["invalid.py"])
+
+    assert len(findings) == 1
+    assert findings[0].startswith("invalid.py:")

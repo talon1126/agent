@@ -38,6 +38,9 @@ jobs:
       - name: Validate pipeline configuration
         run: python scripts/task_preflight.py --check-config
 
+      - name: Run two-layer task audit
+        run: python scripts/task_audit.py --task "${{ inputs.task_id }}" --target-ref HEAD
+
       - name: Verify selected task
         shell: pwsh
         env:
@@ -56,4 +59,3 @@ jobs:
           name: agent-task-${{ inputs.task_id }}-evidence
           path: artifacts/task-evidence/${{ inputs.task_id }}/
           if-no-files-found: error
-
