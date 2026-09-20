@@ -1,0 +1,10 @@
+{
+  "files": {
+    "tests/acceptance/b2/test_b2_goal_extractor_contract.py": "274933d2b520b31f0d42a476766fafda6b735b088b56ee28b38065631c454adf"
+  },
+  "generated_at": "2026-09-20T14:58:12Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "B2",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}
