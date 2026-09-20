@@ -228,6 +228,12 @@ class Preference(_GoalValue):
 
     kind: Literal["soft"] = "soft"
 
+    @model_validator(mode="after")
+    def validate_preference_source(self) -> Self:
+        if self.evidence.source_type is GoalSourceType.SYSTEM_DEFAULT:
+            raise ValueError("system_default evidence is only valid for open slots")
+        return self
+
 
 class Exclusion(_GoalValue):
     """An explicit value that must be removed from candidate consideration."""
@@ -378,32 +384,37 @@ class ShoppingGoal(BaseModel):
 
     def transition_to(
         self,
-        target: DecisionStage,
+        target: DecisionStage | str,
         *,
         clarification_reason: str | None = None,
     ) -> ShoppingGoal:
         """Return the next immutable state after validating lifecycle movement."""
 
-        if target is self.decision_stage:
+        try:
+            target_stage = DecisionStage(target)
+        except ValueError as exc:
+            raise InvalidGoalTransition(f"unknown decision stage: {target}") from exc
+        if target_stage is self.decision_stage:
             return self
-        if target not in _ALLOWED_TRANSITIONS[self.decision_stage]:
+        if target_stage not in _ALLOWED_TRANSITIONS[self.decision_stage]:
             raise InvalidGoalTransition(
-                f"cannot transition from {self.decision_stage.value} to {target.value}"
+                "cannot transition from "
+                f"{self.decision_stage.value} to {target_stage.value}"
             )
         normalized_reason = (
             clarification_reason.strip() if clarification_reason is not None else None
         )
-        if target is DecisionStage.CLARIFYING and not normalized_reason:
+        if target_stage is DecisionStage.CLARIFYING and not normalized_reason:
             raise InvalidGoalTransition(
                 "transition to clarifying requires clarification_reason"
             )
-        return self.model_copy(
-            update={
-                "decision_stage": target,
-                "stage_reason": normalized_reason,
-                "revision": self.revision + 1,
-            }
+        payload = self.model_dump()
+        payload.update(
+            decision_stage=target_stage,
+            stage_reason=normalized_reason,
+            revision=self.revision + 1,
         )
+        return type(self).model_validate(payload)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> ShoppingGoal:

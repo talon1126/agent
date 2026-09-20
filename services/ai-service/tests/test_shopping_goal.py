@@ -16,6 +16,7 @@ from app.routers.AImodel.shopping_goal import (
     GoalField,
     GoalSourceType,
     InvalidGoalTransition,
+    MAX_GOAL_TEXT_LENGTH,
     OpenSlot,
     Preference,
     ShoppingGoal,
@@ -168,6 +169,19 @@ def test_hard_constraint_requires_authoritative_evidence(
         )
 
 
+def test_system_default_cannot_create_a_preference() -> None:
+    with pytest.raises(ValidationError, match="only valid for open slots"):
+        Preference(
+            field=GoalField.FREEFORM_PREFERENCE,
+            value="系统猜测的偏好",
+            evidence=evidence(
+                GoalSourceType.SYSTEM_DEFAULT,
+                quote=None,
+                turn=None,
+            ),
+        )
+
+
 def test_specification_identity_includes_attribute() -> None:
     goal = ShoppingGoal(
         hard_constraints=(
@@ -313,6 +327,27 @@ def test_return_to_clarifying_requires_and_records_reason() -> None:
         clarification_reason="候选均超出硬预算",
     )
     assert result.stage_reason == "候选均超出硬预算"
+
+
+def test_string_transition_target_cannot_bypass_clarification_reason() -> None:
+    goal = ShoppingGoal(decision_stage=DecisionStage.SEARCHING)
+    with pytest.raises(InvalidGoalTransition, match="clarification_reason"):
+        goal.transition_to("clarifying")
+
+    result = goal.transition_to(
+        "clarifying",
+        clarification_reason="缺少关键规格",
+    )
+    assert result.decision_stage is DecisionStage.CLARIFYING
+
+
+def test_transition_revalidates_stage_reason_length() -> None:
+    goal = ShoppingGoal(decision_stage=DecisionStage.SEARCHING)
+    with pytest.raises(ValidationError):
+        goal.transition_to(
+            DecisionStage.CLARIFYING,
+            clarification_reason="过" * (MAX_GOAL_TEXT_LENGTH + 1),
+        )
 
 
 def test_extra_fields_are_forbidden_at_every_level() -> None:
