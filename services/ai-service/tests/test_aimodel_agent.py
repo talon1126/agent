@@ -1,5 +1,6 @@
 import importlib
 import json
+from pathlib import Path
 
 import httpx
 from fastapi.testclient import TestClient
@@ -16,11 +17,13 @@ from app.routers.AImodel.memory import (
     NoopAiModelMemoryStore,
 )
 from app.routers.AImodel.service import (
+    _agent_tools_for_intent_route,
     _build_langchain_messages,
     _extract_answer,
     _extract_stream_token,
     build_web_search_tool,
     handle_chat,
+    route_aimodel_intent_with_candidates,
     stream_chat_events,
 )
 from app.routers.AImodel.tools import (
@@ -33,6 +36,24 @@ from app.routers.AImodel.tools import (
 )
 
 aimodel_router = importlib.import_module("app.routers.AImodel.router")
+ROOT = Path(__file__).resolve().parents[3]
+AGENT_BASELINE_PATH = ROOT / "fixtures" / "evals" / "shopping_agent_baseline.json"
+
+
+def _load_agent_baseline() -> dict:
+    return json.loads(AGENT_BASELINE_PATH.read_text(encoding="utf-8"))
+
+
+def _parse_sse_event(raw_event: str) -> tuple[str, dict]:
+    lines = raw_event.strip().splitlines()
+    event = lines[0].removeprefix("event: ")
+    data = json.loads(lines[1].removeprefix("data: "))
+    return event, data
+
+
+class _NamedTool:
+    def __init__(self, name: str) -> None:
+        self.name = name
 
 
 def test_parse_item_id_from_frontend_product_link() -> None:
@@ -266,6 +287,197 @@ def test_build_web_search_tool_invokes_tavily_adapter_and_tracks_result(
         "result_count": 1,
     }
     assert [result.tool for result in tool_results] == ["search_web_with_tavily"]
+
+
+def test_agent_baseline_fixture_routes_are_deterministic() -> None:
+    route_cases = _load_agent_baseline()["route_cases"]
+
+    for case in route_cases:
+        first_route, first_candidates = route_aimodel_intent_with_candidates(
+            case["input"]
+        )
+        second_route, second_candidates = route_aimodel_intent_with_candidates(
+            case["input"]
+        )
+        actual_route = (
+            f"{first_route.domain}.{first_route.category}.{first_route.intent}"
+        )
+
+        assert actual_route == case["expected_route"], case["case_id"]
+        assert first_route.action == case["expected_action"], case["case_id"]
+        assert first_route.collection == case["expected_collection"], case["case_id"]
+        assert list(first_route.collections) == case["expected_collections"], case[
+            "case_id"
+        ]
+        assert first_route == second_route, case["case_id"]
+        assert first_candidates == second_candidates, case["case_id"]
+
+
+def test_agent_baseline_allowed_tools_match_route_action() -> None:
+    available_tools = {
+        "product_detail_tool": _NamedTool("get_product_detail_from_link"),
+        "product_search_tool": _NamedTool("search_product_catalog"),
+        "order_status_tool": _NamedTool("get_order_status"),
+        "rag_tool": _NamedTool("rag_tool"),
+        "web_search_tool": _NamedTool("search_web_with_tavily"),
+    }
+
+    for case in _load_agent_baseline()["route_cases"]:
+        route, _candidates = route_aimodel_intent_with_candidates(case["input"])
+        selected = _agent_tools_for_intent_route(route, **available_tools)
+
+        assert [tool.name for tool in selected] == case["allowed_tools"], case[
+            "case_id"
+        ]
+
+
+def test_handle_chat_baseline_product_link_and_mock_api_error(monkeypatch) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    observed_results: list[list[AiModelToolResult]] = []
+
+    def fake_agent_runner(
+        request: AiModelChatRequest, tool_results: list[AiModelToolResult]
+    ) -> str:
+        observed_results.append(list(tool_results))
+        if tool_results[0].ok:
+            return "商品详情已读取。"
+        return "商品服务暂时不可用，请稍后重试。"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/ip/item_milk_pure":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "item": {
+                        "item_id": "item_milk_pure",
+                        "item_name": "纯牛奶",
+                        "price": 12.5,
+                    },
+                },
+            )
+        return httpx.Response(503, json={"ok": False, "error": "upstream_busy"})
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="http://mock-api"
+    )
+    success = handle_chat(
+        AiModelChatRequest(
+            user_id=1,
+            message="总结这个商品",
+            links=["https://shop.example.com/items/item_milk_pure"],
+        ),
+        mock_api_url="http://mock-api",
+        http_client=client,
+        agent_runner=fake_agent_runner,
+    )
+    degraded = handle_chat(
+        AiModelChatRequest(
+            user_id=1,
+            message="总结这个失效商品",
+            links=["https://shop.example.com/items/item_missing"],
+        ),
+        mock_api_url="http://mock-api",
+        http_client=client,
+        agent_runner=fake_agent_runner,
+    )
+
+    assert success.answer == "商品详情已读取。"
+    assert [link.item_id for link in success.recommended_links] == ["item_milk_pure"]
+    assert observed_results[0][0].ok is True
+    assert degraded.answer == "商品服务暂时不可用，请稍后重试。"
+    assert degraded.recommended_links == []
+    assert observed_results[1][0].ok is False
+    assert observed_results[1][0].error == "mock_api_status_503"
+
+
+def test_stream_chat_baseline_sse_contract(monkeypatch) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    memory_store = NoopAiModelMemoryStore()
+    leaked_tool_json = (
+        '{"tool":"get_product_detail_from_link","ok":true,'
+        '"data":{"trace_id":"private-trace","chunk_id":"private-chunk"}}'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "item": {
+                    "item_id": "item_milk_pure",
+                    "item_name": "纯牛奶",
+                    "price": 12.5,
+                },
+            },
+        )
+
+    def fake_streaming_agent_runner(
+        request: AiModelChatRequest, tool_results: list[AiModelToolResult]
+    ) -> list[str]:
+        assert tool_results[0].item_id == "item_milk_pure"
+        return [leaked_tool_json, "推荐纯牛奶。"]
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="http://mock-api"
+    )
+    raw_events = list(
+        stream_chat_events(
+            AiModelChatRequest(
+                user_id=1,
+                message="总结这个商品",
+                links=["https://shop.example.com/items/item_milk_pure"],
+            ),
+            mock_api_url="http://mock-api",
+            http_client=client,
+            streaming_agent_runner=fake_streaming_agent_runner,
+            memory_store=memory_store,
+        )
+    )
+    events = [_parse_sse_event(raw_event) for raw_event in raw_events]
+    event_names = [event for event, _data in events]
+    done_payload = [data for event, data in events if event == "done"]
+
+    assert event_names.count("done") == 1
+    assert event_names[-1] == "done"
+    assert event_names.index("status") < event_names.index("delta")
+    assert event_names.index("delta") < event_names.index("done")
+    assert done_payload[0]["answer"] == "推荐纯牛奶。"
+    assert done_payload[0]["recommended_links"][0]["item_id"] == "item_milk_pure"
+    assert all(
+        marker not in "".join(raw_events)
+        for marker in ("private-trace", "private-chunk", '"tool"')
+    )
+    stored = memory_store.list_messages(1, user_id=1)
+    assert [message.role for message in stored] == ["user", "assistant"]
+    assert stored[-1].content == "推荐纯牛奶。"
+
+
+def test_stream_chat_baseline_generation_error_event(monkeypatch) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+
+    def failing_runner(
+        request: AiModelChatRequest, tool_results: list[AiModelToolResult]
+    ) -> list[str]:
+        raise RuntimeError("controlled generation failure")
+
+    events = [
+        _parse_sse_event(raw_event)
+        for raw_event in stream_chat_events(
+            AiModelChatRequest(user_id=1, message="你好", links=[]),
+            mock_api_url="http://mock-api",
+            streaming_agent_runner=failing_runner,
+            memory_store=NoopAiModelMemoryStore(),
+        )
+    ]
+    event_names = [event for event, _data in events]
+
+    assert event_names[-1] == "error"
+    assert event_names.count("error") == 1
+    assert "done" not in event_names
+    assert events[-1][1] == {
+        "content": "AImodel generation failed: controlled generation failure"
+    }
 
 
 def test_handle_chat_returns_503_when_dashscope_api_key_is_missing(monkeypatch) -> None:
