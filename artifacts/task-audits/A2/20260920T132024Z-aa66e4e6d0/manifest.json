@@ -1,0 +1,106 @@
+{
+  "acceptance_lock_sha256": "2c56a95eb72a74db2bf8b7c22a08108297cb9b7cf2b1328639d38d34bb9214e5",
+  "baseline_commit": "e4eaa597ac431a507c14c8f42504ec31eca713cb",
+  "changed_files": [
+    ".github/workflows/agent-task-gate.yml",
+    "AGENTS.md",
+    "docs/shopping_agent_scenario_coverage.md",
+    "fixtures/evals/shopping_agent_scenarios.json",
+    "scripts/task_audit.py",
+    "scripts/validate_shopping_agent_scenarios.py",
+    "services/ai-service/tests/test_shopping_agent_scenarios.py",
+    "tests/test_agent_development_pipeline.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "80bfa949fa9920c34fdf9f6a60e7e23f2cd800df820bfd67c375a34e36559d72"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "177f260a5645724013185e4b140c7045cc39e56c0c97b120f5cb23599f85f0de"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "8 changed files",
+            "findings": [
+              "protected path changed: .github/workflows/agent-task-gate.yml",
+              "protected path changed: AGENTS.md",
+              "path is outside task scope: tests/test_agent_development_pipeline.py"
+            ],
+            "name": "task_scope",
+            "passed": false
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [
+              "github_token"
+            ],
+            "name": "added_secret_scan",
+            "passed": false
+          },
+          {
+            "command": "git diff --check e4eaa597ac431a507c14c8f42504ec31eca713cb..aa66e4e6d003d7dce2f3c8b5e62d9fc6bb60227f",
+            "duration_seconds": 0.078,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check scripts/task_audit.py scripts/validate_shopping_agent_scenarios.py services/ai-service/tests/test_shopping_agent_scenarios.py tests/test_agent_development_pipeline.py",
+            "duration_seconds": 1.719,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check scripts/task_audit.py scripts/validate_shopping_agent_scenarios.py services/ai-service/tests/test_shopping_agent_scenarios.py tests/test_agent_development_pipeline.py",
+            "duration_seconds": 0.64,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": false
+      },
+      "layer_2": null,
+      "passed": false,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-20T13:20:31Z",
+  "result": "failed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "aa66e4e6d003d7dce2f3c8b5e62d9fc6bb60227f",
+  "task_id": "A2",
+  "task_title": "建立购物任务 Golden Set v1"
+}

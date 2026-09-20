@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -160,3 +161,12 @@ def test_frozen_pipeline_thresholds_build_the_complete_m3_dictionary() -> None:
         f"M3-{index:02d}" for index in range(1, 11)
     }
     assert all(metric.window == "rolling_7d" for metric in config.metrics)
+    expected_hash = hashlib.sha256(
+        json.dumps(
+            raw_config,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    assert config.canonical_sha256() == expected_hash

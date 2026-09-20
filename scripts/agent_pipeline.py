@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import io
 import json
 import os
 import re
 import subprocess
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -67,6 +69,18 @@ def sha256_file(path: Path) -> str:
             canonical = text.replace("\r\n", "\n").replace("\r", "\n")
             raw = canonical.encode("utf-8")
     return sha256_bytes(raw)
+
+
+def sha256_mapping(value: Mapping[str, Any]) -> str:
+    """Hash structured data independently of source formatting."""
+
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256_bytes(payload)
 
 
 def load_structured(path: Path) -> dict[str, Any]:
@@ -164,6 +178,11 @@ def validate_pipeline_config(
         raise PipelineError(
             "config/agent_quality_gates.yaml has an unsupported schema_version"
         )
+    if (
+        not isinstance(quality_config.get("config_version"), str)
+        or not str(quality_config["config_version"]).strip()
+    ):
+        raise PipelineError("agent_quality_gates.yaml must define config_version")
 
     configured_tasks = task_config.get("tasks")
     phases = task_config.get("phases")
@@ -177,6 +196,22 @@ def validate_pipeline_config(
         raise PipelineError(
             "agent_quality_gates.yaml must define milestones and metrics"
         )
+
+    for metric_id, metric in metrics.items():
+        if not isinstance(metric, dict) or not isinstance(metric.get("checks"), list):
+            raise PipelineError(f"quality metric {metric_id} must define checks")
+        if re.fullmatch(r"M3-(?:0[1-9]|10)", str(metric_id)):
+            for field in (
+                "target",
+                "denominator",
+                "window",
+                "applicable_milestones",
+            ):
+                value = metric.get(field)
+                if value is None or value == "" or value == []:
+                    raise PipelineError(
+                        f"quality metric {metric_id} must define {field}"
+                    )
 
     configured_ids = set(configured_tasks)
     taskbook_ids = set(taskbook)
@@ -336,6 +371,39 @@ def git(root: Path, *args: str, check: bool = True) -> str:
         detail = result.stderr.strip() or result.stdout.strip()
         raise PipelineError(f"git {' '.join(args)} failed: {detail}")
     return result.stdout.strip()
+
+
+def extract_git_snapshot(root: Path, target_commit: str, destination: Path) -> None:
+    """Extract one committed revision without copying working-tree changes."""
+
+    archive = subprocess.run(
+        ["git", "archive", "--format=tar", target_commit],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as bundle:
+        bundle.extractall(destination, filter="data")
+
+
+def runner_metadata(*, require_independent: bool = False) -> dict[str, Any]:
+    """Return explicit runner identity and reject anonymous independent claims."""
+
+    ci = os.environ.get("CI", "").lower() == "true"
+    verifier_id = os.environ.get("AGENT_VERIFIER_ID", "").strip() or None
+    independent = ci or os.environ.get("AGENT_INDEPENDENT_REVIEW", "").lower() == "true"
+    if independent and verifier_id is None:
+        raise PipelineError("independent verification requires AGENT_VERIFIER_ID")
+    if require_independent and not independent:
+        raise PipelineError(
+            "this verification must run in CI or with "
+            "AGENT_INDEPENDENT_REVIEW=true and AGENT_VERIFIER_ID set"
+        )
+    return {
+        "ci": ci,
+        "independent": independent,
+        "verifier_id": verifier_id,
+    }
 
 
 def ensure_clean_worktree(root: Path) -> None:
@@ -503,6 +571,24 @@ def changed_files(root: Path, baseline_commit: str) -> list[str]:
     )
 
 
+def committed_changed_files(
+    root: Path, baseline_commit: str, target_commit: str = "HEAD"
+) -> list[str]:
+    """Return only files committed between two revisions."""
+
+    return sorted(
+        path.replace("\\", "/")
+        for path in git(
+            root,
+            "diff",
+            "--name-only",
+            "--diff-filter=ACDMRTUXB",
+            f"{baseline_commit}..{target_commit}",
+        ).splitlines()
+        if path
+    )
+
+
 def expand_pattern(pattern: str, task_id: str) -> str:
     return pattern.format(
         task_id=task_id,
@@ -555,8 +641,12 @@ def validate_changed_paths(
 
 def is_generated_evidence_path(path: str) -> bool:
     normalized = path.replace("\\", "/").lstrip("./")
-    return normalized.startswith("artifacts/task-evidence/") or normalized.startswith(
-        "artifacts/phase-evidence/"
+    return normalized.startswith(
+        (
+            "artifacts/task-audits/",
+            "artifacts/task-evidence/",
+            "artifacts/phase-evidence/",
+        )
     )
 
 
@@ -568,8 +658,46 @@ def latest_manifest(root: Path, category: str, item_id: str) -> Path | None:
     return manifests[0] if manifests else None
 
 
+def verify_task_audit(
+    root: Path, task_id: str, *, target_commit: str | None = None
+) -> dict[str, Any]:
+    """Validate the latest two-layer audit and optionally bind it to a commit."""
+
+    manifest_path = latest_manifest(root, "task-audits", task_id)
+    if manifest_path is None:
+        raise PipelineError(f"task {task_id} has no audit evidence")
+    manifest = load_structured(manifest_path)
+    if manifest.get("task_id") != task_id or manifest.get("result") != "passed":
+        raise PipelineError(f"latest audit did not pass: {manifest_path}")
+    if target_commit is not None and manifest.get("target_commit") != target_commit:
+        raise PipelineError(
+            f"latest audit for {task_id} does not cover commit {target_commit}"
+        )
+    task_config = load_structured(root / "config/agent_tasks.yaml")
+    lock_path = acceptance_lock_path(root, task_config, task_id)
+    if manifest.get("acceptance_lock_sha256") != sha256_file(lock_path):
+        raise PipelineError(f"audit uses a stale acceptance lock: {manifest_path}")
+    for artifact in manifest.get("evidence_files", []):
+        relative = artifact.get("path")
+        expected_hash = artifact.get("sha256")
+        if not relative or not expected_hash:
+            raise PipelineError(f"malformed audit evidence entry: {manifest_path}")
+        evidence_file = manifest_path.parent / relative
+        if not evidence_file.is_file() or sha256_file(evidence_file) != expected_hash:
+            raise PipelineError(
+                f"audit evidence is missing or changed: {evidence_file}"
+            )
+    return manifest
+
+
 def validate_evidence_manifest(
-    root: Path, manifest_path: Path, expected_id: str, id_field: str
+    root: Path,
+    manifest_path: Path,
+    expected_id: str,
+    id_field: str,
+    *,
+    require_independent: bool = False,
+    allow_quality_gate_drift: bool = False,
 ) -> dict[str, Any]:
     manifest = load_structured(manifest_path)
     lock = verify_taskbook_lock(root)
@@ -577,13 +705,32 @@ def validate_evidence_manifest(
         raise PipelineError(f"evidence identity mismatch: {manifest_path}")
     if manifest.get("verification_result") != "passed":
         raise PipelineError(f"latest evidence did not pass: {manifest_path}")
-    for field in (
-        "taskbook_sha256",
-        "task_config_sha256",
-        "quality_gates_sha256",
-    ):
+    lock_fields = ["taskbook_sha256", "task_config_sha256"]
+    if not allow_quality_gate_drift:
+        lock_fields.append("quality_gates_sha256")
+    for field in lock_fields:
         if manifest.get(field) != lock.get(field):
             raise PipelineError(f"stale evidence {manifest_path}: {field}")
+    if require_independent:
+        runner = manifest.get("runner")
+        if not isinstance(runner, dict) or not runner.get("independent"):
+            raise PipelineError(
+                f"evidence is not independently verified: {manifest_path}"
+            )
+        if not runner.get("verifier_id"):
+            raise PipelineError(
+                f"independent evidence has no verifier: {manifest_path}"
+            )
+    commit = manifest.get("commit")
+    if commit:
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", str(commit), "HEAD"],
+            cwd=root,
+        )
+        if ancestor.returncode != 0:
+            raise PipelineError(
+                f"evidence commit is not an ancestor of HEAD: {manifest_path}"
+            )
     if id_field == "task_id":
         task_config = load_structured(root / "config/agent_tasks.yaml")
         current_acceptance_path = acceptance_lock_path(root, task_config, expected_id)
@@ -613,7 +760,13 @@ def validate_evidence_manifest(
                 raise PipelineError(
                     f"milestone evidence references missing task run: {task_id}/{run_id}"
                 )
-            validate_evidence_manifest(root, task_manifest, task_id, "task_id")
+            validate_evidence_manifest(
+                root,
+                task_manifest,
+                task_id,
+                "task_id",
+                allow_quality_gate_drift=True,
+            )
         for milestone_id, run_id in manifest.get("milestone_evidence", {}).items():
             milestone_manifest = (
                 root
@@ -628,7 +781,11 @@ def validate_evidence_manifest(
                     f"{milestone_id}/{run_id}"
                 )
             validate_evidence_manifest(
-                root, milestone_manifest, milestone_id, "milestone_id"
+                root,
+                milestone_manifest,
+                milestone_id,
+                "milestone_id",
+                require_independent=True,
             )
     for artifact in manifest.get("evidence_files", []):
         relative = artifact.get("path")
@@ -645,18 +802,59 @@ def verify_task_dependency(root: Path, task_id: str) -> dict[str, Any]:
     manifest_path = latest_manifest(root, "task-evidence", task_id)
     if manifest_path is None:
         raise PipelineError(f"dependency {task_id} has no evidence")
-    return validate_evidence_manifest(root, manifest_path, task_id, "task_id")
+    raw_manifest = load_structured(manifest_path)
+    runner = raw_manifest.get("runner")
+    if isinstance(runner, dict) and runner.get("independent"):
+        return validate_evidence_manifest(
+            root,
+            manifest_path,
+            task_id,
+            "task_id",
+            require_independent=True,
+        )
+
+    task_config = load_structured(root / "config/agent_tasks.yaml")
+    phase = str(task_config["tasks"][task_id]["phase"])
+    phase_path = latest_manifest(root, "phase-evidence", phase)
+    if phase_path is None:
+        raise PipelineError(
+            f"dependency {task_id} has no independent task or phase evidence"
+        )
+    phase_manifest = validate_evidence_manifest(
+        root,
+        phase_path,
+        phase,
+        "milestone_id",
+        require_independent=True,
+    )
+    if task_id not in phase_manifest.get("task_evidence", {}):
+        raise PipelineError(
+            f"independent phase evidence {phase} does not cover task {task_id}"
+        )
+    return validate_evidence_manifest(
+        root,
+        manifest_path,
+        task_id,
+        "task_id",
+        allow_quality_gate_drift=True,
+    )
 
 
 def verify_milestone_dependency(root: Path, milestone_id: str) -> dict[str, Any]:
     manifest_path = latest_manifest(root, "phase-evidence", milestone_id)
     if manifest_path is None:
         raise PipelineError(f"milestone {milestone_id} has no evidence")
-    return validate_evidence_manifest(root, manifest_path, milestone_id, "milestone_id")
+    return validate_evidence_manifest(
+        root,
+        manifest_path,
+        milestone_id,
+        "milestone_id",
+        require_independent=True,
+    )
 
 
 def run_preflight(root: Path, task_id: str, prepare: bool = False) -> dict[str, Any]:
-    task_config, _, taskbook = load_pipeline(root)
+    task_config, quality_config, taskbook = load_pipeline(root)
     lock = verify_taskbook_lock(root)
     if task_id not in taskbook:
         raise PipelineError(f"unknown task: {task_id}")
@@ -667,8 +865,16 @@ def run_preflight(root: Path, task_id: str, prepare: bool = False) -> dict[str, 
             latest_manifest(root, "task-evidence", dependency) or ""
         )
         verify_task_dependency(root, dependency)
+    phase_milestones = (
+        quality_config["milestones"]
+        .get(task["phase"], {})
+        .get("required_milestones", [])
+    )
+    required_milestones = dict.fromkeys(
+        [*task.get("required_milestones", []), *phase_milestones]
+    )
     milestones = {}
-    for milestone in task.get("required_milestones", []):
+    for milestone in required_milestones:
         milestones[milestone] = str(
             latest_manifest(root, "phase-evidence", milestone) or ""
         )
@@ -700,9 +906,13 @@ def evaluate_quality_profile(
     if (
         report.get("schema_version") != SCHEMA_VERSION
         or report.get("profile_id") != profile_id
+        or report.get("config_version") != quality_config.get("config_version")
+        or report.get("config_sha256") != sha256_mapping(quality_config)
         or not isinstance(report_metrics, dict)
     ):
-        raise PipelineError("quality report has an invalid schema")
+        raise PipelineError(
+            "quality report must bind the current config_version and config_sha256"
+        )
     results: list[dict[str, Any]] = []
     for metric_id in milestone.get("metric_ids", []):
         metric = quality_config["metrics"][metric_id]

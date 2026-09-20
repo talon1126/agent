@@ -7,23 +7,27 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 from agent_pipeline import (
     PipelineError,
-    changed_files,
+    committed_changed_files,
     evaluate_quality_profile,
     evidence_file_entries,
+    extract_git_snapshot,
     git,
     is_generated_evidence_path,
     load_pipeline,
     load_structured,
     new_run_id,
     repository_root,
+    runner_metadata,
     run_preflight,
     utc_now,
     validate_changed_paths,
+    verify_task_audit,
     verify_taskbook_lock,
     write_json,
 )
@@ -65,9 +69,16 @@ def main() -> int:
         preflight = run_preflight(root, task_id, prepare=False)
         task_config, quality_config, taskbook = load_pipeline(root)
         lock = verify_taskbook_lock(root)
+        target_commit = git(root, "rev-parse", "HEAD")
+        verify_task_audit(root, task_id, target_commit=target_commit)
+        worktree_dirty = bool(
+            git(root, "status", "--porcelain=v1", "--untracked-files=all")
+        )
         paths = [
             path
-            for path in changed_files(root, preflight["baseline_commit"])
+            for path in committed_changed_files(
+                root, preflight["baseline_commit"], target_commit
+            )
             if not is_generated_evidence_path(path)
         ]
         if not paths:
@@ -84,14 +95,19 @@ def main() -> int:
         command_directory.mkdir(parents=True, exist_ok=False)
 
         command_results = []
-        for index, command in enumerate(taskbook[task_id].verification_commands, 1):
-            result = run_command(
-                command,
-                root,
-                command_directory / f"{index:02d}.log",
-                task_id,
-            )
-            command_results.append(result)
+        with tempfile.TemporaryDirectory(
+            prefix=f"agent-verify-{task_id.lower()}-"
+        ) as raw:
+            snapshot = Path(raw)
+            extract_git_snapshot(root, target_commit, snapshot)
+            for index, command in enumerate(taskbook[task_id].verification_commands, 1):
+                result = run_command(
+                    command,
+                    snapshot,
+                    command_directory / f"{index:02d}.log",
+                    task_id,
+                )
+                command_results.append(result)
 
         quality_profile = task_config["tasks"][task_id].get("quality_profile")
         quality_results = []
@@ -128,9 +144,10 @@ def main() -> int:
             "run_id": run_id,
             "recorded_at": utc_now(),
             "verification_result": result,
-            "commit": git(root, "rev-parse", "HEAD"),
+            "commit": target_commit,
             "baseline_commit": preflight["baseline_commit"],
-            "working_tree_dirty": bool(git(root, "status", "--porcelain=v1")),
+            "working_tree_dirty": worktree_dirty,
+            "verification_workspace": "git_archive",
             "taskbook_sha256": lock["taskbook_sha256"],
             "task_config_sha256": lock["task_config_sha256"],
             "quality_gates_sha256": lock["quality_gates_sha256"],
@@ -140,10 +157,7 @@ def main() -> int:
             "commands": command_results,
             "quality_profile": quality_profile,
             "quality_results": quality_results,
-            "runner": {
-                "ci": os.environ.get("CI", "").lower() == "true",
-                "verifier_id": os.environ.get("AGENT_VERIFIER_ID"),
-            },
+            "runner": runner_metadata(),
             "evidence_files": evidence_file_entries(run_directory, evidence_paths),
         }
         write_json(run_directory / "manifest.json", manifest)

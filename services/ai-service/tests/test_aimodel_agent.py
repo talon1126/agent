@@ -22,6 +22,7 @@ from app.routers.AImodel.service import (
     _extract_answer,
     _extract_stream_token,
     build_web_search_tool,
+    get_memory_persist_failure_count,
     handle_chat,
     route_aimodel_intent_with_candidates,
     stream_chat_events,
@@ -632,6 +633,42 @@ def test_stream_chat_persists_agent_trace_without_answer_summary(monkeypatch) ->
         and event["related_ids"]["query_trace_id_1"] == "query-agent-1"
         for event in trace["events"]
     )
+
+
+def test_stream_chat_observes_post_response_memory_failure(monkeypatch, caplog) -> None:
+    """Preference write failures keep the answer but close an error trace."""
+
+    class FailingMemoryStore(NoopAiModelMemoryStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_traces: list[dict] = []
+
+        def persist_agent_trace(self, trace_record: dict) -> None:
+            self.agent_traces.append(trace_record)
+
+        def upsert_user_memory(self, *_args, **_kwargs) -> None:
+            raise RuntimeError("memory database unavailable")
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    store = FailingMemoryStore()
+    before = get_memory_persist_failure_count()
+
+    events = [
+        _parse_sse_event(item)
+        for item in stream_chat_events(
+            AiModelChatRequest(user_id=1, message="我喜欢苹果，推荐耳机"),
+            mock_api_url="http://mock-api",
+            streaming_agent_runner=lambda _request, _results: ["推荐结果"],
+            memory_store=store,
+        )
+    ]
+
+    assert events[-1][0] == "done"
+    assert get_memory_persist_failure_count() == before + 1
+    assert "Agent memory persistence failed" in caplog.text
+    assert len(store.agent_traces) == 1
+    assert store.agent_traces[0]["status"] == "error"
+    assert store.agent_traces[0]["events"][-1]["summary"]["reason"] == "RuntimeError"
 
 
 def test_stream_chat_records_cancellation_after_first_status(monkeypatch) -> None:

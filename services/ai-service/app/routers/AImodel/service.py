@@ -93,6 +93,8 @@ RAG 返回引用时可以在回答中展示引用标题或章节，但不能编�
 _LOGGER = logging.getLogger(__name__)
 _TRACE_PERSIST_FAILURE_LOCK = threading.Lock()
 _TRACE_PERSIST_FAILURE_COUNT = 0
+_MEMORY_PERSIST_FAILURE_LOCK = threading.Lock()
+_MEMORY_PERSIST_FAILURE_COUNT = 0
 
 
 def handle_chat(
@@ -305,11 +307,6 @@ def _stream_chat_events_impl(
             query_trace_ids=query_trace_ids,
             structured_response=done_payload,
         )
-        agent_trace_context.complete(
-            message_id=message_id,
-            query_trace_ids=query_trace_ids,
-        )
-        _persist_agent_trace_safely(memory_store, agent_trace_context)
         for memory in extract_user_memories_from_text(
             request.message, user_id=request.user_id
         ):
@@ -322,7 +319,14 @@ def _stream_chat_events_impl(
             )
     except Exception as error:
         # 中文注释：assistant 记忆写入失败不阻断已经生成给用户的回答，避免前端丢失本轮结果。
+        _record_memory_persist_failure(error)
         agent_trace_context.fail(error)
+        _persist_agent_trace_safely(memory_store, agent_trace_context)
+    else:
+        agent_trace_context.complete(
+            message_id=message_id,
+            query_trace_ids=query_trace_ids,
+        )
         _persist_agent_trace_safely(memory_store, agent_trace_context)
 
     yield done_event
@@ -568,6 +572,26 @@ def get_trace_persist_failure_count() -> int:
 
     with _TRACE_PERSIST_FAILURE_LOCK:
         return _TRACE_PERSIST_FAILURE_COUNT
+
+
+def _record_memory_persist_failure(error: Exception) -> None:
+    """Count and log a non-fatal post-response memory write failure."""
+
+    global _MEMORY_PERSIST_FAILURE_COUNT
+
+    with _MEMORY_PERSIST_FAILURE_LOCK:
+        _MEMORY_PERSIST_FAILURE_COUNT += 1
+    _LOGGER.exception(
+        "Agent memory persistence failed",
+        extra={"error_type": error.__class__.__name__},
+    )
+
+
+def get_memory_persist_failure_count() -> int:
+    """Return the process-local count of failed post-response memory writes."""
+
+    with _MEMORY_PERSIST_FAILURE_LOCK:
+        return _MEMORY_PERSIST_FAILURE_COUNT
 
 
 def _agent_tools_for_intent_route(

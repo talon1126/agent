@@ -11,6 +11,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -28,56 +29,58 @@ class QualityMetricDefinition:
     applicable_milestones: tuple[str, ...]
 
 
-M3_METRIC_DICTIONARY: dict[str, QualityMetricDefinition] = {
-    "M3-01": QualityMetricDefinition(
-        "Shopping task success", "eligible shopping tasks", "rolling_7d", ("M3",)
-    ),
-    "M3-02": QualityMetricDefinition(
-        "No hard constraint violations",
-        "evaluated recommendations",
-        "rolling_7d",
-        ("M3",),
-    ),
-    "M3-03": QualityMetricDefinition(
-        "Accurate product facts", "checked product claims", "rolling_7d", ("M3",)
-    ),
-    "M3-04": QualityMetricDefinition(
-        "Evidence-backed key claims",
-        "key recommendation claims",
-        "rolling_7d",
-        ("M3",),
-    ),
-    "M3-05": QualityMetricDefinition(
-        "Ask required clarifications",
-        "requests requiring clarification",
-        "rolling_7d",
-        ("M3",),
-    ),
-    "M3-06": QualityMetricDefinition(
-        "Valid structured responses",
-        "completed Agent responses",
-        "rolling_7d",
-        ("M3",),
-    ),
-    "M3-07": QualityMetricDefinition(
-        "No unauthorized tool calls", "Agent tool calls", "rolling_7d", ("M3",)
-    ),
-    "M3-08": QualityMetricDefinition(
-        "Confirm every side effect", "side-effect attempts", "rolling_7d", ("M3",)
-    ),
-    "M3-09": QualityMetricDefinition(
-        "Recover from dependency failures",
-        "recoverable dependency failures",
-        "rolling_7d",
-        ("M3",),
-    ),
-    "M3-10": QualityMetricDefinition(
-        "Bound complete response latency",
-        "completed Agent responses",
-        "rolling_7d",
-        ("M3",),
-    ),
-}
+M3_METRIC_IDS = tuple(f"M3-{index:02d}" for index in range(1, 11))
+
+
+def _metric_dictionary(
+    raw_config: Mapping[str, Any],
+) -> dict[str, QualityMetricDefinition]:
+    raw_metrics = raw_config.get("metrics")
+    if not isinstance(raw_metrics, Mapping):
+        raise ValueError("quality gate source must define metrics")
+    definitions: dict[str, QualityMetricDefinition] = {}
+    for metric_id in M3_METRIC_IDS:
+        raw_metric = raw_metrics.get(metric_id)
+        if not isinstance(raw_metric, Mapping):
+            raise ValueError(f"quality gate source is missing metric {metric_id}")
+        try:
+            definitions[metric_id] = QualityMetricDefinition(
+                target=str(raw_metric["target"]),
+                denominator=str(raw_metric["denominator"]),
+                window=str(raw_metric["window"]),
+                applicable_milestones=tuple(raw_metric["applicable_milestones"]),
+            )
+        except (KeyError, TypeError) as exc:
+            raise ValueError(
+                f"quality gate metric {metric_id} has incomplete lineage metadata"
+            ) from exc
+    return definitions
+
+
+class _ConfigBackedM3Dictionary(Mapping[str, QualityMetricDefinition]):
+    """Compatibility view whose values always come from the gate config."""
+
+    @staticmethod
+    def _load() -> dict[str, QualityMetricDefinition]:
+        for parent in Path(__file__).resolve().parents:
+            path = parent / "config" / "agent_quality_gates.yaml"
+            if path.is_file():
+                return _metric_dictionary(json.loads(path.read_text(encoding="utf-8")))
+        raise RuntimeError("config/agent_quality_gates.yaml is unavailable")
+
+    def __getitem__(self, key: str) -> QualityMetricDefinition:
+        return self._load()[key]
+
+    def __iter__(self):
+        return iter(self._load())
+
+    def __len__(self) -> int:
+        return len(self._load())
+
+
+M3_METRIC_DICTIONARY: Mapping[str, QualityMetricDefinition] = (
+    _ConfigBackedM3Dictionary()
+)
 
 
 class AgentQualityCheck(BaseModel):
@@ -127,6 +130,11 @@ class AgentQualityGateConfig(BaseModel):
     config_version: str = Field(min_length=1)
     milestones: tuple[str, ...] = Field(min_length=1)
     metrics: tuple[AgentQualityMetric, ...] = Field(min_length=1)
+    source_config_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude=True,
+    )
 
     @model_validator(mode="after")
     def _validate_identity_and_milestones(self) -> AgentQualityGateConfig:
@@ -145,6 +153,9 @@ class AgentQualityGateConfig(BaseModel):
 
     def canonical_sha256(self) -> str:
         """Hash canonical JSON so reports bind to exact metric semantics."""
+
+        if self.source_config_sha256 is not None:
+            return self.source_config_sha256
 
         payload = json.dumps(
             self.model_dump(mode="json"),
@@ -245,7 +256,7 @@ def build_m3_quality_gate_config(
     if not isinstance(m3, Mapping):
         raise ValueError("quality gate source must define milestone M3")
     metric_ids = tuple(m3.get("metric_ids") or ())
-    expected_ids = set(M3_METRIC_DICTIONARY)
+    expected_ids = set(M3_METRIC_IDS)
     if set(metric_ids) != expected_ids or len(metric_ids) != len(expected_ids):
         raise ValueError("M3 metric IDs do not match the frozen dictionary")
 
@@ -254,14 +265,13 @@ def build_m3_quality_gate_config(
         raw_metric = raw_metrics.get(metric_id)
         if not isinstance(raw_metric, Mapping):
             raise ValueError(f"quality gate source is missing metric {metric_id}")
-        metadata = M3_METRIC_DICTIONARY[metric_id]
         definitions.append(
             {
                 "metric_id": metric_id,
-                "target": metadata.target,
-                "denominator": metadata.denominator,
-                "window": metadata.window,
-                "applicable_milestones": metadata.applicable_milestones,
+                "target": raw_metric.get("target"),
+                "denominator": raw_metric.get("denominator"),
+                "window": raw_metric.get("window"),
+                "applicable_milestones": raw_metric.get("applicable_milestones"),
                 "checks": raw_metric.get("checks"),
             }
         )
@@ -269,9 +279,17 @@ def build_m3_quality_gate_config(
     return AgentQualityGateConfig.model_validate(
         {
             "schema_version": schema_version,
-            "config_version": f"agent-quality-gates-v{schema_version}",
+            "config_version": raw_config.get("config_version"),
             "milestones": tuple(raw_milestones),
             "metrics": definitions,
+            "source_config_sha256": hashlib.sha256(
+                json.dumps(
+                    raw_config,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
         }
     )
 

@@ -5,7 +5,11 @@ on:
     inputs:
       task_id:
         description: Taskbook task ID, for example G1
-        required: true
+        required: false
+        type: string
+      milestone_id:
+        description: Phase or milestone ID, for example A or M3
+        required: false
         type: string
       quality_report:
         description: Repository-relative quality report for F5/G5/H5/I5
@@ -14,7 +18,10 @@ on:
   workflow_call:
     inputs:
       task_id:
-        required: true
+        required: false
+        type: string
+      milestone_id:
+        required: false
         type: string
       quality_report:
         required: false
@@ -38,10 +45,20 @@ jobs:
       - name: Validate pipeline configuration
         run: python scripts/task_preflight.py --check-config
 
+      - name: Validate requested gate
+        shell: pwsh
+        run: |
+          $selected = @("${{ inputs.task_id }}", "${{ inputs.milestone_id }}") | Where-Object { $_ }
+          if ($selected.Count -ne 1) {
+            throw "Provide exactly one of task_id or milestone_id."
+          }
+
       - name: Run two-layer task audit
+        if: inputs.task_id != ''
         run: python scripts/task_audit.py --task "${{ inputs.task_id }}" --target-ref HEAD
 
       - name: Verify selected task
+        if: inputs.task_id != ''
         shell: pwsh
         env:
           AGENT_VERIFIER_ID: github-actions
@@ -52,10 +69,31 @@ jobs:
           }
           python @arguments
 
-      - name: Upload verification evidence
-        if: always()
+      - name: Independently verify current milestone
+        if: inputs.milestone_id != ''
+        shell: pwsh
+        env:
+          AGENT_VERIFIER_ID: github-actions
+          AGENT_INDEPENDENT_REVIEW: "true"
+        run: |
+          $arguments = @("scripts/verify_phase_gate.py", "--milestone", "${{ inputs.milestone_id }}")
+          if ("${{ inputs.quality_report }}") {
+            $arguments += @("--quality-report", "${{ inputs.quality_report }}")
+          }
+          python @arguments
+
+      - name: Upload task verification evidence
+        if: always() && inputs.task_id != ''
         uses: actions/upload-artifact@v4
         with:
           name: agent-task-${{ inputs.task_id }}-evidence
           path: artifacts/task-evidence/${{ inputs.task_id }}/
+          if-no-files-found: error
+
+      - name: Upload phase verification evidence
+        if: always() && inputs.milestone_id != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-phase-${{ inputs.milestone_id }}-evidence
+          path: artifacts/phase-evidence/${{ inputs.milestone_id }}/
           if-no-files-found: error

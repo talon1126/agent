@@ -10,7 +10,7 @@ handled separately and must not be hidden inside a taskbook task.
   verification commands, and task boundaries.
 - `config/agent_tasks.yaml` defines executable dependencies and file scopes.
 - `config/agent_quality_gates.yaml` is the only machine-readable source for
-  numeric release thresholds.
+  release metric semantics, lineage, versions, and numeric thresholds.
 - `config/taskbook.lock.json` binds the three sources above. Never work around a
   stale lock; stop and use the approved change procedure.
 - Do not add task status fields to the taskbook. Completion is derived from
@@ -38,7 +38,7 @@ Completion index:
 - A4：建立结构化响应协议 ✔️
 - A5：扩展 Trace 与指标字典 ✔️
 
-Independent rerun deferred by user direction: A1, A2, A3, A4, A5.
+Stage A awaits the independent current-commit closure run described below.
 
 ## Required task flow
 
@@ -60,9 +60,14 @@ Work on exactly one task ID at a time.
 7. Run `python scripts/task_verify.py --task <TASK_ID>`. F5, G5, H5, and I5 also
    require `--quality-report <path>`.
 8. A reviewer or CI runner independent from the implementing agent reruns the
-   same verification. An agent's written claim is not completion evidence.
-9. At a stage boundary run `python scripts/verify_phase_gate.py --milestone <ID>`.
-   `I-DATA-READY` additionally requires its machine-readable quality report.
+   same verification. Local reviewers set `AGENT_INDEPENDENT_REVIEW=true` and a
+   stable `AGENT_VERIFIER_ID`; CI supplies the verifier ID. Anonymous or local
+   implementing-agent evidence is not completion evidence.
+9. At a stage boundary the independent reviewer runs
+   `python scripts/verify_phase_gate.py --milestone <ID>`. The gate extracts the
+   current Git commit into a clean snapshot and reruns every required task's
+   frozen acceptance and verification commands. `I-DATA-READY` and metric-bearing
+   milestones additionally require their machine-readable quality report.
 
 ## Non-negotiable constraints
 
@@ -83,6 +88,8 @@ Work on exactly one task ID at a time.
   migration behavior unless the selected task requires it.
 - Do not use simulated exposure or labels to claim M6-B readiness.
 - Do not auto-merge, auto-release, or deploy to production from these scripts.
+- Never set the independent-review environment variables for your own
+  implementation run. They are an explicit reviewer attestation, not a bypass.
 
 ## Change control
 

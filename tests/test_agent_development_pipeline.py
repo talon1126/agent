@@ -16,8 +16,11 @@ from agent_pipeline import (  # noqa: E402
     evaluate_quality_profile,
     is_generated_evidence_path,
     load_pipeline,
+    runner_metadata,
     sha256_file,
+    sha256_mapping,
     validate_changed_paths,
+    verify_task_audit,
     verify_taskbook_lock,
 )
 from task_audit import (  # noqa: E402
@@ -26,6 +29,7 @@ from task_audit import (  # noqa: E402
     scan_added_secrets,
     syntax_findings,
 )
+from verify_phase_gate import build_stage_verification_commands  # noqa: E402
 
 
 def _passing_quality_report(quality_config: dict, profile_id: str) -> dict:
@@ -42,7 +46,13 @@ def _passing_quality_report(quality_config: dict, profile_id: str) -> dict:
                 value = threshold
             values[check["field"]] = value
         metrics[metric_id] = values
-    return {"schema_version": 1, "profile_id": profile_id, "metrics": metrics}
+    return {
+        "schema_version": 1,
+        "profile_id": profile_id,
+        "config_version": quality_config["config_version"],
+        "config_sha256": sha256_mapping(quality_config),
+        "metrics": metrics,
+    }
 
 
 def test_task_registry_matches_all_taskbook_sections_and_commands() -> None:
@@ -140,6 +150,7 @@ def test_scope_rules_block_frontend_and_pipeline_mutation() -> None:
 
 
 def test_generated_evidence_is_distinct_from_implementation_changes() -> None:
+    assert is_generated_evidence_path("artifacts/task-audits/A1/run/manifest.json")
     assert is_generated_evidence_path("artifacts/task-evidence/A1/run/manifest.json")
     assert is_generated_evidence_path("artifacts/phase-evidence/M3/run/manifest.json")
     assert not is_generated_evidence_path("artifacts/recommendation/model.bin")
@@ -165,6 +176,20 @@ def test_quality_profile_rejects_a_missing_metric() -> None:
         evaluate_quality_profile(quality_config, "M3", report)
 
 
+def test_quality_profile_rejects_unbound_or_stale_config() -> None:
+    _, quality_config, _ = load_pipeline(ROOT)
+    report = _passing_quality_report(quality_config, "M3")
+    report.pop("config_sha256")
+
+    with pytest.raises(PipelineError, match="bind the current"):
+        evaluate_quality_profile(quality_config, "M3", report)
+
+    report = _passing_quality_report(quality_config, "M3")
+    report["config_version"] = "stale-version"
+    with pytest.raises(PipelineError, match="bind the current"):
+        evaluate_quality_profile(quality_config, "M3", report)
+
+
 def test_quality_profile_rejects_boolean_values_for_numeric_gates() -> None:
     _, quality_config, _ = load_pipeline(ROOT)
     report = _passing_quality_report(quality_config, "M3")
@@ -187,6 +212,7 @@ def test_agents_instructions_bind_ai_work_to_the_pipeline() -> None:
         "one task ID at a time",
         "Never edit `apps/talonmart-web`",
         "Do not add task status fields",
+        "AGENT_INDEPENDENT_REVIEW",
     ):
         assert token in text
 
@@ -226,3 +252,53 @@ def test_task_audit_ignores_only_its_generated_evidence(
     monkeypatch.setattr("task_audit.git", fake_git)
 
     assert _non_audit_worktree_changes(tmp_path) == ["services/ai-service/app/main.py"]
+
+
+def test_m3_metric_semantics_have_one_machine_readable_source() -> None:
+    _, quality_config, _ = load_pipeline(ROOT)
+
+    for metric_id in (f"M3-{index:02d}" for index in range(1, 11)):
+        metric = quality_config["metrics"][metric_id]
+        assert metric["target"]
+        assert metric["denominator"]
+        assert metric["window"]
+        assert metric["applicable_milestones"] == ["M3"]
+
+
+def test_independent_runner_requires_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("AGENT_INDEPENDENT_REVIEW", "true")
+    monkeypatch.delenv("AGENT_VERIFIER_ID", raising=False)
+
+    with pytest.raises(PipelineError, match="AGENT_VERIFIER_ID"):
+        runner_metadata(require_independent=True)
+
+    monkeypatch.setenv("AGENT_VERIFIER_ID", "reviewer-1")
+    assert runner_metadata(require_independent=True) == {
+        "ci": False,
+        "independent": True,
+        "verifier_id": "reviewer-1",
+    }
+
+
+def test_stage_gate_reruns_acceptance_and_task_verification() -> None:
+    task_config, _, taskbook = load_pipeline(ROOT)
+    commands = build_stage_verification_commands(
+        ROOT,
+        task_config,
+        taskbook,
+        ["A1", "A2"],
+    )
+
+    assert {item["kind"] for item in commands} == {
+        "frozen_acceptance",
+        "task_verification",
+    }
+    assert {item["task_id"] for item in commands} == {"A1", "A2"}
+
+
+@pytest.mark.parametrize("task_id", ["A1", "A2", "A3", "A4", "A5"])
+def test_completed_stage_a_tasks_have_passing_audits(task_id: str) -> None:
+    manifest = verify_task_audit(ROOT, task_id)
+
+    assert manifest["result"] == "passed"

@@ -109,6 +109,41 @@ def _added_diff(root: Path, baseline_commit: str, target_commit: str) -> str:
     )
 
 
+def _changes_from_commits(
+    root: Path, change_commits: Sequence[str]
+) -> tuple[list[str], str]:
+    """Return the union of files and patches introduced by selected commits."""
+
+    paths: set[str] = set()
+    patches: list[str] = []
+    for commit in change_commits:
+        paths.update(
+            path.replace("\\", "/")
+            for path in git(
+                root,
+                "diff-tree",
+                "--root",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                commit,
+            ).splitlines()
+            if path and not is_generated_evidence_path(path)
+        )
+        patches.append(
+            git(
+                root,
+                "show",
+                "--format=",
+                "--unified=0",
+                "--no-ext-diff",
+                commit,
+                "--",
+            )
+        )
+    return sorted(paths), "\n".join(patches)
+
+
 def scan_added_secrets(diff_text: str) -> list[str]:
     """Return secret categories found only in added diff lines."""
 
@@ -169,6 +204,7 @@ def _run_static_layer(
     target_commit: str,
     changed_paths: list[str],
     acceptance_files: dict[str, str],
+    added_diff: str,
     log_directory: Path,
 ) -> dict[str, Any]:
     task_config, _, _ = load_pipeline(root)
@@ -196,7 +232,7 @@ def _run_static_layer(
     checks.append(
         _record_check(
             "added_secret_scan",
-            scan_added_secrets(_added_diff(root, baseline_commit, target_commit)),
+            scan_added_secrets(added_diff),
         )
     )
 
@@ -384,6 +420,7 @@ def run_task_audit(
     target_ref: str = "HEAD",
     fix: bool = False,
     max_rounds: int = MAX_AUDIT_ROUNDS,
+    change_refs: Sequence[str] = (),
 ) -> tuple[dict[str, Any], Path]:
     if not 1 <= max_rounds <= MAX_AUDIT_ROUNDS:
         raise PipelineError(f"max_rounds must be between 1 and {MAX_AUDIT_ROUNDS}")
@@ -409,7 +446,29 @@ def run_task_audit(
                 + ", ".join(unrelated_changes)
             )
 
-    changed_paths = _target_changed_paths(root, baseline_commit, target_commit)
+    change_commits = tuple(
+        git(root, "rev-parse", f"{ref}^{{commit}}") for ref in change_refs
+    )
+    if change_commits:
+        if target_commit not in change_commits:
+            raise PipelineError("historical change refs must include the target commit")
+        for commit in change_commits:
+            within_range = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", baseline_commit, commit],
+                cwd=root,
+            )
+            before_target = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", commit, target_commit],
+                cwd=root,
+            )
+            if within_range.returncode != 0 or before_target.returncode != 0:
+                raise PipelineError(
+                    f"historical change commit is outside the task range: {commit}"
+                )
+        changed_paths, added_diff = _changes_from_commits(root, change_commits)
+    else:
+        changed_paths = _target_changed_paths(root, baseline_commit, target_commit)
+        added_diff = _added_diff(root, baseline_commit, target_commit)
     if not changed_paths:
         raise PipelineError("target has no task changes after its acceptance baseline")
 
@@ -435,6 +494,7 @@ def run_task_audit(
                 target_commit=target_commit,
                 changed_paths=changed_paths,
                 acceptance_files=acceptance["files"],
+                added_diff=added_diff,
                 log_directory=log_directory,
             )
             behavior_layer: dict[str, Any] | None = None
@@ -488,6 +548,7 @@ def run_task_audit(
             acceptance_lock_path(root, task_config, task_id)
         ),
         "changed_files": changed_paths,
+        "change_commits": list(change_commits),
         "max_rounds": max_rounds,
         "rounds_executed": len(rounds),
         "safe_repairs": sorted(set(repaired_files)),
@@ -509,6 +570,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--target-ref", default="HEAD")
     parser.add_argument("--fix", action="store_true")
     parser.add_argument("--max-rounds", type=int, default=MAX_AUDIT_ROUNDS)
+    parser.add_argument(
+        "--change-ref",
+        action="append",
+        default=[],
+        help="task-owned commit for a historical interleaved audit; repeat as needed",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -518,6 +585,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             target_ref=args.target_ref,
             fix=args.fix,
             max_rounds=args.max_rounds,
+            change_refs=args.change_ref,
         )
     except (PipelineError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
