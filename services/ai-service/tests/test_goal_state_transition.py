@@ -148,6 +148,77 @@ def test_user_remove_beats_page_context_independent_of_operation_order(
     assert result.goal.decision_stage is DecisionStage.DISCOVERING
 
 
+@pytest.mark.parametrize("confirm_first", [True, False])
+def test_user_confirm_beats_page_add_independent_of_operation_order(
+    confirm_first: bool,
+) -> None:
+    historical = hard(GoalField.CATEGORY, "手机", quote="之前买手机")
+    page = hard(
+        GoalField.CATEGORY,
+        "耳机",
+        turn=2,
+        quote="耳机列表",
+        source_type=GoalSourceType.PAGE_CONTEXT,
+    )
+    confirmed = hard(
+        GoalField.CATEGORY,
+        "手机",
+        turn=2,
+        quote="确认还是手机",
+    )
+    page_add = value_operation(page)
+    user_confirm = value_operation(confirmed, DeltaAction.CONFIRM)
+    operations = (user_confirm, page_add) if confirm_first else (page_add, user_confirm)
+
+    result = merge_goal_delta(
+        ShoppingGoal(hard_constraints=(historical,)),
+        change(2, *operations),
+        reference_time=NOW,
+    )
+
+    assert result.goal.hard_constraints == (confirmed,)
+    assert result.goal.decision_stage is DecisionStage.SEARCHING
+    assert result.conflicts == ()
+    outcomes = {event.action: event.outcome for event in result.events}
+    assert outcomes == {
+        DeltaAction.ADD: MergeEventOutcome.IGNORED_LOWER_PRIORITY,
+        DeltaAction.CONFIRM: MergeEventOutcome.APPLIED,
+    }
+
+
+def test_different_source_priority_permutations_return_the_same_result() -> None:
+    historical = hard(GoalField.CATEGORY, "手机", quote="之前买手机")
+    page = hard(
+        GoalField.CATEGORY,
+        "耳机",
+        turn=2,
+        quote="耳机列表",
+        source_type=GoalSourceType.PAGE_CONTEXT,
+    )
+    confirmed = hard(
+        GoalField.CATEGORY,
+        "手机",
+        turn=2,
+        quote="确认还是手机",
+    )
+    page_add = value_operation(page)
+    user_confirm = value_operation(confirmed, DeltaAction.CONFIRM)
+    current = ShoppingGoal(hard_constraints=(historical,))
+
+    page_first = merge_goal_delta(
+        current,
+        change(2, page_add, user_confirm),
+        reference_time=NOW,
+    )
+    user_first = merge_goal_delta(
+        current,
+        change(2, user_confirm, page_add),
+        reference_time=NOW,
+    )
+
+    assert page_first == user_first
+
+
 def test_long_term_preference_only_fills_an_unoccupied_slot() -> None:
     remembered = Preference(
         field=GoalField.BRAND,

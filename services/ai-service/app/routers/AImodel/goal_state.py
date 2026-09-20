@@ -278,6 +278,20 @@ def _apply_value_mutation(
     before = _collection_snapshot(collections, key)
     same_kind = next((value for value in before if value.kind == item.kind), None)
 
+    rank_key = (item.kind, key)
+    incoming_rank = _source_rank(item.evidence, historical=False)
+    existing_rank = winner_rank.get(rank_key, 200 if same_kind is not None else -1)
+    if incoming_rank < existing_rank:
+        return GoalChangeEvent(
+            action=operation.action,
+            field=item.field,
+            attribute=item.attribute,
+            source_turn=source_turn,
+            before=before,
+            after=before,
+            outcome=MergeEventOutcome.IGNORED_LOWER_PRIORITY,
+        )
+
     if operation.action is DeltaAction.CONFIRM and same_kind is not None:
         if not _same_semantic_value(same_kind, item):
             return GoalChangeEvent(
@@ -302,20 +316,6 @@ def _apply_value_mutation(
             outcome=MergeEventOutcome.IGNORED_LOWER_PRIORITY,
         )
     if item.kind == "unknown" and any(value.kind in _KNOWN_KINDS for value in before):
-        return GoalChangeEvent(
-            action=operation.action,
-            field=item.field,
-            attribute=item.attribute,
-            source_turn=source_turn,
-            before=before,
-            after=before,
-            outcome=MergeEventOutcome.IGNORED_LOWER_PRIORITY,
-        )
-
-    rank_key = (item.kind, key)
-    incoming_rank = _source_rank(item.evidence, historical=False)
-    existing_rank = winner_rank.get(rank_key, 200 if same_kind is not None else -1)
-    if incoming_rank < existing_rank:
         return GoalChangeEvent(
             action=operation.action,
             field=item.field,
@@ -388,6 +388,15 @@ def _apply_remove_mutation(
         after=(),
         outcome=outcome,
     )
+
+
+def _operation_rank(operation: GoalValueMutation | GoalRemoveMutation) -> int:
+    evidence = (
+        operation.item.evidence
+        if isinstance(operation, GoalValueMutation)
+        else operation.evidence
+    )
+    return _source_rank(evidence, historical=False)
 
 
 def _conflict(
@@ -706,8 +715,12 @@ def merge_goal_delta(
                 item.evidence, historical=True
             )
 
+    indexed_operations = sorted(
+        enumerate(delta.operations),
+        key=lambda indexed: (-_operation_rank(indexed[1]), indexed[0]),
+    )
     events: list[GoalChangeEvent] = []
-    for operation in delta.operations:
+    for _, operation in indexed_operations:
         if isinstance(operation, GoalValueMutation):
             event = _apply_value_mutation(
                 collections,
