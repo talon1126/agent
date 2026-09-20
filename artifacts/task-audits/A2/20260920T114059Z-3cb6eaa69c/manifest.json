@@ -1,0 +1,95 @@
+{
+  "acceptance_lock_sha256": "2c56a95eb72a74db2bf8b7c22a08108297cb9b7cf2b1328639d38d34bb9214e5",
+  "baseline_commit": "e4eaa597ac431a507c14c8f42504ec31eca713cb",
+  "changed_files": [
+    "docs/shopping_agent_scenario_coverage.md",
+    "fixtures/evals/shopping_agent_scenarios.json",
+    "scripts/validate_shopping_agent_scenarios.py",
+    "services/ai-service/tests/test_shopping_agent_scenarios.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "56ae65d645139ee3e4eff48e17d971ab1916aeaac0f227c080cf27134ee03433"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "c215f5daa482fa392d290738afab3d57061ec9720f24c0095119d847af5a0cb0"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "4 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check e4eaa597ac431a507c14c8f42504ec31eca713cb..3cb6eaa69c758cbae8562efc761e66fc9e9841d4",
+            "duration_seconds": 0.062,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check scripts/validate_shopping_agent_scenarios.py services/ai-service/tests/test_shopping_agent_scenarios.py",
+            "duration_seconds": 1.875,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check scripts/validate_shopping_agent_scenarios.py services/ai-service/tests/test_shopping_agent_scenarios.py",
+            "duration_seconds": 0.484,
+            "exit_code": 1,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": false
+          }
+        ],
+        "name": "static_and_security",
+        "passed": false
+      },
+      "layer_2": null,
+      "passed": false,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-20T11:41:05Z",
+  "result": "failed",
+  "rounds_executed": 1,
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "3cb6eaa69c758cbae8562efc761e66fc9e9841d4",
+  "task_id": "A2",
+  "task_title": "建立购物任务 Golden Set v1"
+}
