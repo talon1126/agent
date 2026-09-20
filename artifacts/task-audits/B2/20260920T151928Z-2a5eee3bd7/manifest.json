@@ -1,0 +1,122 @@
+{
+  "acceptance_lock_sha256": "3a1ee8174214f42ae42d18d113fdbad0f24e13748de783c6826505db9ebfa7e3",
+  "baseline_commit": "bdbe9cc0af08ec06a45677a215011666ded78544",
+  "change_commits": [],
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/goal_extractor.py",
+    "services/ai-service/tests/test_goal_extractor.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "7f040565e57bdb25908454b3554447399bcce9c4a07ee2969f91e39d30f95c07"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "239cd7065c8d9e7e410267d537d529c4fd61103ebf82676390d76df7e2dd1a5b"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "37d4a0e71670745bf81b977222888c3c6a6d986a723800a11b36b88b47ed7f79"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "2 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check bdbe9cc0af08ec06a45677a215011666ded78544..2a5eee3bd7cf769d1a2fdde6b37221b67f2834ea",
+            "duration_seconds": 0.062,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/goal_extractor.py services/ai-service/tests/test_goal_extractor.py",
+            "duration_seconds": 1.781,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/goal_extractor.py services/ai-service/tests/test_goal_extractor.py",
+            "duration_seconds": 0.516,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/b2/test_b2_goal_extractor_contract.py -q",
+            "duration_seconds": 1.344,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_goal_extractor.py -q",
+            "duration_seconds": 1.359,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-20T15:19:37Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "2a5eee3bd7cf769d1a2fdde6b37221b67f2834ea",
+  "task_id": "B2",
+  "task_title": "实现目标抽取器"
+}
