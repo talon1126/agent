@@ -64,9 +64,7 @@ def test_scenario_document_validates_canonical_fixture() -> None:
 
 def test_validator_rejects_duplicate_scenario_ids(tmp_path: Path) -> None:
     payload = _raw_document()
-    payload["scenarios"][1]["scenario_id"] = payload["scenarios"][0][
-        "scenario_id"
-    ]
+    payload["scenarios"][1]["scenario_id"] = payload["scenarios"][0]["scenario_id"]
 
     with pytest.raises(ValidationError, match="globally unique"):
         _validate(payload)
@@ -126,9 +124,7 @@ def test_coverage_report_matches_generated_output() -> None:
             "sensitive-looking",
         ),
         (
-            lambda payload: payload["scenarios"][-1].update(
-                {"failure_mode": "none"}
-            ),
+            lambda payload: payload["scenarios"][-1].update({"failure_mode": "none"}),
             "failure_mode for tool_failure",
         ),
     ],

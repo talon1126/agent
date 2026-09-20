@@ -179,7 +179,9 @@ class ShoppingScenario(BaseModel):
             raise ValueError("scenario turn roles must alternate")
         is_multi_turn = len(self.turns) > 1
         if is_multi_turn != ("multi_turn" in self.tags):
-            raise ValueError("multi-turn scenarios must carry exactly one multi_turn tag")
+            raise ValueError(
+                "multi-turn scenarios must carry exactly one multi_turn tag"
+            )
         expected_failure_mode = {
             "constraint_conflict": "constraint_conflict",
             "no_candidates": "no_candidates",
@@ -255,7 +257,9 @@ def _validate_coverage(document: ShoppingScenarioDocument) -> None:
     if missing_tags:
         raise ScenarioValidationError(f"required tags are missing: {missing_tags}")
 
-    multi_turn = [scenario for scenario in document.scenarios if len(scenario.turns) > 1]
+    multi_turn = [
+        scenario for scenario in document.scenarios if len(scenario.turns) > 1
+    ]
     if len(multi_turn) < 10:
         raise ScenarioValidationError("at least 10 multi-turn scenarios are required")
     for tag in ("modify_budget", "withdraw_preference", "add_exclusion"):
@@ -317,7 +321,9 @@ def coverage_summary(document: ShoppingScenarioDocument) -> dict[str, Any]:
     scenarios = document.scenarios
     return {
         "total_scenarios": len(scenarios),
-        "categories": dict(sorted(Counter(item.category for item in scenarios).items())),
+        "categories": dict(
+            sorted(Counter(item.category for item in scenarios).items())
+        ),
         "tags": dict(
             sorted(Counter(tag for item in scenarios for tag in item.tags).items())
         ),
@@ -358,9 +364,7 @@ def render_coverage_report(document: ShoppingScenarioDocument) -> str:
     ]
     lines.extend(_coverage_table("Category Coverage", summary["categories"]))
     lines.extend(_coverage_table("Tag Coverage", summary["tags"]))
-    lines.extend(
-        _coverage_table("Response Type Coverage", summary["response_types"])
-    )
+    lines.extend(_coverage_table("Response Type Coverage", summary["response_types"]))
     lines.extend(_coverage_table("Failure Mode Coverage", summary["failure_modes"]))
     lines.extend(
         [
@@ -406,13 +410,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         report = render_coverage_report(document)
         if args.check_report:
-            if not args.report.is_file() or args.report.read_text(encoding="utf-8") != report:
+            if (
+                not args.report.is_file()
+                or args.report.read_text(encoding="utf-8") != report
+            ):
                 raise ScenarioValidationError(
                     f"coverage report is stale; regenerate {args.report}"
                 )
         else:
             _write_text(args.report, report)
-    except (OSError, json.JSONDecodeError, ValidationError, ScenarioValidationError) as exc:
+    except (
+        OSError,
+        json.JSONDecodeError,
+        ValidationError,
+        ScenarioValidationError,
+    ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
