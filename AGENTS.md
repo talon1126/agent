@@ -30,6 +30,14 @@ handled separately and must not be hidden inside a taskbook task.
 - During A4, first backfill the completed A1, A2, and A3 titles in this section,
   then append A4 after its own local completion evidence has been committed.
 
+Completion index:
+
+- A1：冻结现有 Agent 基线 ✔️
+- A2：建立购物任务 Golden Set v1 ✔️
+- A3：扩展请求上下文协议 ✔️
+
+Independent rerun deferred by user direction: A1, A2, A3.
+
 ## Required task flow
 
 Work on exactly one task ID at a time.
