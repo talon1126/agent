@@ -7,6 +7,7 @@ from app.routers.AImodel.memory import get_aimodel_memory_store
 from app.routers.AImodel.schemas import (
     MAX_AIMODEL_REQUEST_BYTES,
     AiModelChatRequest,
+    AiModelChatResponse,
     AiModelConversationSummary,
     AiModelStoredMessage,
 )
@@ -15,7 +16,12 @@ from app.routers.AImodel.service import ensure_aimodel_configured, stream_chat_e
 router = APIRouter(prefix="/AImodel", tags=["AImodel"])
 
 
-@router.post("/chat")
+@router.post(
+    "/chat",
+    openapi_extra={
+        "x-sse-events": {"done": {"schema": AiModelChatResponse.model_json_schema()}}
+    },
+)
 async def chat_with_aimodel(
     request: AiModelChatRequest,
     http_request: Request,
@@ -65,6 +71,7 @@ def list_aimodel_conversation_messages(
             content=message.content,
             links=message.links,
             recommended_links=message.recommended_links,
+            structured_response=message.structured_response,
             created_at=message.created_at,
         )
         for message in get_aimodel_memory_store().list_messages(

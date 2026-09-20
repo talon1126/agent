@@ -1,0 +1,829 @@
+{
+  "$defs": {
+    "AiModelActionPreview": {
+      "additionalProperties": false,
+      "properties": {
+        "action_token": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Action Token",
+          "type": "string"
+        },
+        "action_type": {
+          "enum": [
+            "add_to_cart",
+            "remove_from_cart",
+            "compare",
+            "open_item"
+          ],
+          "title": "Action Type",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "target_item_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Target Item Id"
+        }
+      },
+      "required": [
+        "action_type",
+        "action_token",
+        "summary"
+      ],
+      "title": "AiModelActionPreview",
+      "type": "object"
+    },
+    "AiModelActionPreviewPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/AiModelActionPreview"
+        },
+        "answer": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/AiModelEvidenceReference"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "products": {
+          "items": {
+            "$ref": "#/$defs/AiModelProductRef"
+          },
+          "maxItems": 20,
+          "title": "Products",
+          "type": "array"
+        },
+        "response_type": {
+          "const": "action_preview",
+          "default": "action_preview",
+          "title": "Response Type",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "answer",
+        "action"
+      ],
+      "title": "AiModelActionPreviewPayload",
+      "type": "object"
+    },
+    "AiModelActionResultPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "action_token": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Action Token",
+          "type": "string"
+        },
+        "answer": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/AiModelEvidenceReference"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "products": {
+          "items": {
+            "$ref": "#/$defs/AiModelProductRef"
+          },
+          "maxItems": 20,
+          "title": "Products",
+          "type": "array"
+        },
+        "response_type": {
+          "const": "action_result",
+          "default": "action_result",
+          "title": "Response Type",
+          "type": "string"
+        },
+        "result_summary": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Result Summary",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "success",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "answer",
+        "action_token",
+        "status",
+        "result_summary"
+      ],
+      "title": "AiModelActionResultPayload",
+      "type": "object"
+    },
+    "AiModelAnswerPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/AiModelEvidenceReference"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "products": {
+          "items": {
+            "$ref": "#/$defs/AiModelProductRef"
+          },
+          "title": "Products",
+          "type": "array"
+        },
+        "response_type": {
+          "const": "answer",
+          "default": "answer",
+          "title": "Response Type",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "answer"
+      ],
+      "title": "AiModelAnswerPayload",
+      "type": "object"
+    },
+    "AiModelClarificationOption": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "option_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Option Id",
+          "type": "string"
+        },
+        "value": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "option_id",
+        "label",
+        "value"
+      ],
+      "title": "AiModelClarificationOption",
+      "type": "object"
+    },
+    "AiModelClarificationPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/AiModelEvidenceReference"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/AiModelClarificationOption"
+          },
+          "maxItems": 12,
+          "minItems": 1,
+          "title": "Options",
+          "type": "array"
+        },
+        "response_type": {
+          "const": "clarification",
+          "default": "clarification",
+          "title": "Response Type",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "answer",
+        "options"
+      ],
+      "title": "AiModelClarificationPayload",
+      "type": "object"
+    },
+    "AiModelComparisonColumn": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label"
+      ],
+      "title": "AiModelComparisonColumn",
+      "type": "object"
+    },
+    "AiModelComparisonPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/AiModelComparisonColumn"
+          },
+          "maxItems": 24,
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/AiModelEvidenceReference"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "products": {
+          "items": {
+            "$ref": "#/$defs/AiModelProductRef"
+          },
+          "maxItems": 12,
+          "minItems": 2,
+          "title": "Products",
+          "type": "array"
+        },
+        "response_type": {
+          "const": "comparison",
+          "default": "comparison",
+          "title": "Response Type",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/AiModelComparisonRow"
+          },
+          "maxItems": 12,
+          "minItems": 2,
+          "title": "Rows",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "answer",
+        "products",
+        "columns",
+        "rows"
+      ],
+      "title": "AiModelComparisonPayload",
+      "type": "object"
+    },
+    "AiModelComparisonRow": {
+      "additionalProperties": false,
+      "properties": {
+        "cells": {
+          "additionalProperties": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Cells",
+          "type": "object"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          ],
+          "title": "Item Id"
+        }
+      },
+      "required": [
+        "item_id",
+        "cells"
+      ],
+      "title": "AiModelComparisonRow",
+      "type": "object"
+    },
+    "AiModelEvidenceReference": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_type": {
+          "enum": [
+            "product_fact",
+            "catalog",
+            "review",
+            "policy",
+            "external"
+          ],
+          "title": "Source Type",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Title"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Url"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "source_type",
+        "source_id"
+      ],
+      "title": "AiModelEvidenceReference",
+      "type": "object"
+    },
+    "AiModelFallbackPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/AiModelEvidenceReference"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "reason_code": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "response_type": {
+          "const": "fallback",
+          "default": "fallback",
+          "title": "Response Type",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "answer",
+        "reason_code"
+      ],
+      "title": "AiModelFallbackPayload",
+      "type": "object"
+    },
+    "AiModelProductListPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/AiModelEvidenceReference"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "products": {
+          "items": {
+            "$ref": "#/$defs/AiModelProductRef"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Products",
+          "type": "array"
+        },
+        "response_type": {
+          "const": "product_list",
+          "default": "product_list",
+          "title": "Response Type",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "answer",
+        "products"
+      ],
+      "title": "AiModelProductListPayload",
+      "type": "object"
+    },
+    "AiModelProductRef": {
+      "additionalProperties": false,
+      "properties": {
+        "item_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          ],
+          "title": "Item Id"
+        },
+        "item_name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Item Name",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Url"
+        }
+      },
+      "required": [
+        "item_id",
+        "item_name"
+      ],
+      "title": "AiModelProductRef",
+      "type": "object"
+    },
+    "AiModelRecommendationPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 16000,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/AiModelProductRef"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/AiModelEvidenceReference"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "recommendations": {
+          "items": {
+            "$ref": "#/$defs/AiModelRecommendationReason"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Recommendations",
+          "type": "array"
+        },
+        "response_type": {
+          "const": "recommendation",
+          "default": "recommendation",
+          "title": "Response Type",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "answer",
+        "candidates",
+        "recommendations"
+      ],
+      "title": "AiModelRecommendationPayload",
+      "type": "object"
+    },
+    "AiModelRecommendationReason": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          ],
+          "title": "Item Id"
+        },
+        "reason": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "reason"
+      ],
+      "title": "AiModelRecommendationReason",
+      "type": "object"
+    },
+    "AiModelRecommendedLink": {
+      "additionalProperties": false,
+      "properties": {
+        "item_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          ],
+          "title": "Item Id"
+        },
+        "item_name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Item Name",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "item_name",
+        "url"
+      ],
+      "title": "AiModelRecommendedLink",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "answer": {
+      "maxLength": 16000,
+      "minLength": 1,
+      "title": "Answer",
+      "type": "string"
+    },
+    "conversation_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Conversation Id"
+    },
+    "payload": {
+      "discriminator": {
+        "mapping": {
+          "action_preview": "#/$defs/AiModelActionPreviewPayload",
+          "action_result": "#/$defs/AiModelActionResultPayload",
+          "answer": "#/$defs/AiModelAnswerPayload",
+          "clarification": "#/$defs/AiModelClarificationPayload",
+          "comparison": "#/$defs/AiModelComparisonPayload",
+          "fallback": "#/$defs/AiModelFallbackPayload",
+          "product_list": "#/$defs/AiModelProductListPayload",
+          "recommendation": "#/$defs/AiModelRecommendationPayload"
+        },
+        "propertyName": "response_type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AiModelAnswerPayload"
+        },
+        {
+          "$ref": "#/$defs/AiModelClarificationPayload"
+        },
+        {
+          "$ref": "#/$defs/AiModelProductListPayload"
+        },
+        {
+          "$ref": "#/$defs/AiModelComparisonPayload"
+        },
+        {
+          "$ref": "#/$defs/AiModelRecommendationPayload"
+        },
+        {
+          "$ref": "#/$defs/AiModelActionPreviewPayload"
+        },
+        {
+          "$ref": "#/$defs/AiModelActionResultPayload"
+        },
+        {
+          "$ref": "#/$defs/AiModelFallbackPayload"
+        }
+      ],
+      "title": "Payload"
+    },
+    "recommended_links": {
+      "items": {
+        "$ref": "#/$defs/AiModelRecommendedLink"
+      },
+      "title": "Recommended Links",
+      "type": "array"
+    },
+    "response_type": {
+      "enum": [
+        "answer",
+        "clarification",
+        "product_list",
+        "comparison",
+        "recommendation",
+        "action_preview",
+        "action_result",
+        "fallback"
+      ],
+      "title": "Response Type",
+      "type": "string"
+    },
+    "response_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Response Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "response_type",
+    "payload",
+    "answer",
+    "recommended_links"
+  ],
+  "title": "AiModelChatResponse",
+  "type": "object"
+}

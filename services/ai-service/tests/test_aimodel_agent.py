@@ -815,6 +815,7 @@ def test_conversation_routes_list_conversations_and_messages(monkeypatch) -> Non
             "content": "我喜欢小米",
             "links": [],
             "recommended_links": [],
+            "structured_response": None,
             "created_at": None,
         },
         {
@@ -823,6 +824,20 @@ def test_conversation_routes_list_conversations_and_messages(monkeypatch) -> Non
             "content": "已记住。",
             "links": [],
             "recommended_links": [],
+            "structured_response": {
+                "response_version": "v1",
+                "conversation_id": conversation_id,
+                "response_type": "answer",
+                "payload": {
+                    "schema_version": "v1",
+                    "answer": "已记住。",
+                    "evidence": [],
+                    "response_type": "answer",
+                    "products": [],
+                },
+                "answer": "已记住。",
+                "recommended_links": [],
+            },
             "created_at": None,
         },
     ]

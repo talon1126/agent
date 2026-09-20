@@ -49,7 +49,6 @@ from app.routers.AImodel.memory import (
 from app.routers.AImodel.schemas import (
     AiModelChatRequest,
     AiModelChatResponse,
-    AiModelRecommendedLink,
     AiModelToolResult,
 )
 from app.routers.AImodel.tools import (
@@ -115,6 +114,11 @@ def handle_chat(
             if agent_runner
             else _run_langchain_agent(request, tool_results, mock_api_url, http_client)
         )
+        response = AiModelChatResponse.from_legacy(
+            conversation_id=request.conversation_id,
+            answer=answer,
+            recommended_links=recommended_links_from_tool_results(tool_results),
+        )
     except HTTPException:
         raise
     except Exception as error:
@@ -122,14 +126,7 @@ def handle_chat(
             status_code=502, detail=f"AImodel generation failed: {error}"
         ) from error
 
-    return AiModelChatResponse(
-        conversation_id=request.conversation_id,
-        answer=answer,
-        recommended_links=[
-            AiModelRecommendedLink(**link)
-            for link in recommended_links_from_tool_results(tool_results)
-        ],
-    )
+    return response
 
 
 def ensure_aimodel_configured() -> None:
@@ -234,12 +231,30 @@ def stream_chat_events(
     recommended_links = recommended_links_from_tool_results(tool_results)
     query_trace_ids = _query_trace_ids_from_tool_results(tool_results)
     try:
+        response = AiModelChatResponse.from_legacy(
+            conversation_id=conversation_id,
+            answer=answer,
+            recommended_links=recommended_links,
+        )
+        done_payload = response.model_dump(mode="json")
+        done_event = _format_sse("done", done_payload)
+    except (TypeError, ValueError) as error:
+        agent_trace_context.fail(error)
+        _persist_agent_trace_safely(memory_store, agent_trace_context)
+        yield _format_sse(
+            "error",
+            {"content": "AImodel response validation failed."},
+        )
+        return
+
+    try:
         message_id = memory_store.append_assistant_message(
             conversation_id,
             user_id=request.user_id,
             content=answer,
             recommended_links=recommended_links,
             query_trace_ids=query_trace_ids,
+            structured_response=done_payload,
         )
         agent_trace_context.complete(
             message_id=message_id,
@@ -260,14 +275,7 @@ def stream_chat_events(
         # 中文注释：assistant 记忆写入失败不阻断已经生成给用户的回答，避免前端丢失本轮结果。
         pass
 
-    yield _format_sse(
-        "done",
-        {
-            "conversation_id": conversation_id,
-            "answer": answer,
-            "recommended_links": recommended_links,
-        },
-    )
+    yield done_event
 
 
 def _run_langchain_agent(

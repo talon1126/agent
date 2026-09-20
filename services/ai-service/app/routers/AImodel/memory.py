@@ -6,6 +6,10 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Literal, Protocol
 
+from pydantic import ValidationError
+
+from app.routers.AImodel.schemas import AiModelChatResponse
+
 
 _LANGCHAIN_CHECKPOINTER_LOCK = threading.Lock()
 
@@ -33,8 +37,13 @@ POSTGRES_AIMODEL_MEMORY_SCHEMA_SQL = [
         content TEXT NOT NULL,
         links JSONB NOT NULL DEFAULT '[]'::jsonb,
         recommended_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+        structured_response JSONB,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
+    """,
+    """
+    ALTER TABLE message
+    ADD COLUMN IF NOT EXISTS structured_response JSONB
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_message_conversation_created_at
@@ -177,6 +186,7 @@ class AiModelStoredMessage:
     content: str
     links: list[str]
     recommended_links: list[dict[str, Any]]
+    structured_response: dict[str, Any] | None = None
     created_at: datetime | None = None
 
 
@@ -207,6 +217,7 @@ class AiModelMemoryStore(Protocol):
         content: str,
         recommended_links: list[dict[str, str]],
         query_trace_ids: list[str] | None = None,
+        structured_response: dict[str, Any] | None = None,
     ) -> int: ...
 
     def list_message_query_traces(self, message_id: int) -> list[str]: ...
@@ -303,6 +314,7 @@ class NoopAiModelMemoryStore:
                     content=content,
                     links=links,
                     recommended_links=[],
+                    structured_response=None,
                 )
             )
             self._next_message_id += 1
@@ -315,7 +327,14 @@ class NoopAiModelMemoryStore:
         content: str,
         recommended_links: list[dict[str, str]],
         query_trace_ids: list[str] | None = None,
+        structured_response: dict[str, Any] | None = None,
     ) -> int:
+        normalized_response = _structured_response_or_fallback(
+            conversation_id=conversation_id,
+            content=content,
+            recommended_links=recommended_links,
+            structured_response=structured_response,
+        )
         with self._lock:
             message_id = self._next_message_id
             self._messages.setdefault(conversation_id, []).append(
@@ -325,6 +344,7 @@ class NoopAiModelMemoryStore:
                     content=content,
                     links=[],
                     recommended_links=recommended_links,
+                    structured_response=normalized_response,
                 )
             )
             self._next_message_id += 1
@@ -531,19 +551,39 @@ class PostgresAiModelMemoryStore:
         content: str,
         recommended_links: list[dict[str, str]],
         query_trace_ids: list[str] | None = None,
+        structured_response: dict[str, Any] | None = None,
     ) -> int:
         self.initialize()
         from psycopg.types.json import Jsonb
 
+        normalized_response = _structured_response_or_fallback(
+            conversation_id=conversation_id,
+            content=content,
+            recommended_links=recommended_links,
+            structured_response=structured_response,
+        )
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO message (conversation_id, user_id, role, content, recommended_links)
-                    VALUES (%s, %s, 'assistant', %s, %s)
+                    INSERT INTO message (
+                        conversation_id,
+                        user_id,
+                        role,
+                        content,
+                        recommended_links,
+                        structured_response
+                    )
+                    VALUES (%s, %s, 'assistant', %s, %s, %s)
                     RETURNING id
                     """,
-                    (conversation_id, user_id, content, Jsonb(recommended_links)),
+                    (
+                        conversation_id,
+                        user_id,
+                        content,
+                        Jsonb(recommended_links),
+                        Jsonb(normalized_response),
+                    ),
                 )
                 message_id = int(cursor.fetchone()[0])
                 for query_trace_id in _normalize_query_trace_ids(query_trace_ids):
@@ -714,7 +754,14 @@ class PostgresAiModelMemoryStore:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT id, role, content, links, recommended_links, created_at
+                    SELECT
+                        id,
+                        role,
+                        content,
+                        links,
+                        recommended_links,
+                        structured_response,
+                        created_at
                     FROM message
                     WHERE conversation_id = %s AND user_id = %s
                     ORDER BY created_at ASC, id ASC
@@ -729,7 +776,17 @@ class PostgresAiModelMemoryStore:
                 content=row[2],
                 links=list(row[3] or []),
                 recommended_links=list(row[4] or []),
-                created_at=row[5],
+                structured_response=(
+                    _structured_response_or_fallback(
+                        conversation_id=conversation_id,
+                        content=row[2],
+                        recommended_links=list(row[4] or []),
+                        structured_response=row[5],
+                    )
+                    if row[1] == "assistant"
+                    else None
+                ),
+                created_at=row[6],
             )
             for row in rows
             if row[1] in {"user", "assistant"}
@@ -739,6 +796,37 @@ class PostgresAiModelMemoryStore:
         import psycopg
 
         return psycopg.connect(self.database_url)
+
+
+def _structured_response_or_fallback(
+    *,
+    conversation_id: int,
+    content: str,
+    recommended_links: list[dict[str, Any]],
+    structured_response: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if structured_response:
+        try:
+            return AiModelChatResponse.model_validate(structured_response).model_dump(
+                mode="json"
+            )
+        except (TypeError, ValidationError):
+            pass
+
+    answer = content.strip() or "历史消息内容为空。"
+    try:
+        response = AiModelChatResponse.from_legacy(
+            answer=answer,
+            recommended_links=recommended_links,
+            conversation_id=conversation_id,
+        )
+    except (TypeError, ValidationError):
+        response = AiModelChatResponse.from_legacy(
+            answer=answer,
+            recommended_links=[],
+            conversation_id=conversation_id,
+        )
+    return response.model_dump(mode="json")
 
 
 def extract_user_memories_from_text(
