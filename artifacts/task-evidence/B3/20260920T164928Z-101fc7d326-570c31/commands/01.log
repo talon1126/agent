@@ -1,0 +1,5 @@
+Using CPython 3.12.12
+Creating virtual environment at: services\ai-service\.venv
+Installed 70 packages in 1.66s
+...............                                                          [100%]
+15 passed in 0.50s
