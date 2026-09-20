@@ -1,0 +1,10 @@
+{
+  "files": {
+    "tests/acceptance/a4/test_a4_structured_response_contract.py": "4ea917bee1f634725a4a739d168ea0482b4508ad545885e6fc69eeb9b7260c32"
+  },
+  "generated_at": "2026-09-20T12:12:43Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "A4",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}
