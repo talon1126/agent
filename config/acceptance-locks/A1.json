@@ -1,0 +1,10 @@
+{
+  "files": {
+    "tests/acceptance/a1/test_a1_baseline_contract.py": "2d6a7b64e22b9046860975d50b7a90b3f7188359fb050f2dbcc4403bfb4812ea"
+  },
+  "generated_at": "2026-09-20T10:31:10Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "A1",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}
