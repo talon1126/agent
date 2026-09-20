@@ -83,8 +83,14 @@ def test_decimal_commas_are_normalized() -> None:
     )
 
 
-def test_invalid_budget_is_rejected_without_losing_other_rule_fields() -> None:
-    result = extract("预算1000000001以内，买耳机")
+@pytest.mark.parametrize(
+    "budget",
+    ["1000000001", ",,500", "1,00", "-500"],
+)
+def test_invalid_budget_is_rejected_without_losing_other_rule_fields(
+    budget: str,
+) -> None:
+    result = extract(f"预算{budget}以内，买耳机")
     assert {value.item.field for value in values(result)} == {GoalField.CATEGORY}
     assert result.trace.rejected_fields == (GoalField.BUDGET_MAX.value,)
 
@@ -280,6 +286,8 @@ def test_quantity_supports_common_chinese_and_arabic_numbers(
     [
         "买0件",
         "买1000件",
+        "买1.5件",
+        "买-1件",
         f"不要{'9' * 600}件，只买1件",
     ],
 )
@@ -437,6 +445,10 @@ def test_delivery_correction_is_ordered_across_date_and_hour_representations(
     "text",
     [
         "明天25点送到",
+        "明天-1点送到",
+        "明天2.5点送到",
+        "1.5小时内送到",
+        "-2小时内送到",
         "999999999999小时内送到",
     ],
 )

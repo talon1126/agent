@@ -290,42 +290,48 @@ _BRAND_HARD_INCLUDE = re.compile(
 _BRAND_ANY = re.compile(rf"(?P<brand>{_BRAND_TEXT})")
 _BRAND_WITHDRAW = re.compile(r"品牌无所谓|撤销品牌偏好|取消品牌(?:偏好|限制)")
 _BUDGET_CORRECTION = re.compile(
-    r"(?P<span>预算(?:上限)?\s*(?:不是\s*[\d,.]+\s*[,，;；]?\s*是|"
-    r"改成|调整为|改为)\s*(?P<value>[\d,.]+)(?:\s*元)?(?:\s*(?:以内|以下))?)"
+    r"(?P<span>预算(?:上限)?\s*(?:不是\s*[+\-]?[\d,.]+\s*[,，;；]?\s*是|"
+    r"改成|调整为|改为)\s*(?P<value>[+\-]?[\d,.]+)(?:\s*元)?"
+    r"(?:\s*(?:以内|以下))?)"
 )
 _BUDGET_RANGE = re.compile(
-    r"预算[^\d]{0,8}(?P<span>(?P<minimum>[\d,.]+)\s*(?:到|至|[-~—])\s*"
-    r"(?P<maximum>[\d,.]+))(?:\s*元)?"
+    r"预算[^\d]{0,8}(?P<span>(?P<minimum>[+\-]?[\d,.]+)\s*"
+    r"(?:到|至|[-~—])\s*(?P<maximum>[+\-]?[\d,.]+))(?:\s*元)?"
 )
 _BUDGET_MAX_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"(?P<span>(?:预算|总价)?\s*(?:不能超过|不超过|最高|至多|上限)"
-        r"(?:\s*(?:仍然)?(?:是|为))?\s*(?P<value>[\d,.]+))(?:\s*元)?"
+        r"(?:\s*(?:仍然)?(?:是|为))?\s*(?P<value>[+\-]?[\d,.]+))"
+        r"(?:\s*元)?"
     ),
     re.compile(
-        r"(?P<span>(?:预算|总价)\s*(?:是|为|大约)?\s*(?P<value>[\d,.]+)"
+        r"(?P<span>(?:预算|总价)\s*(?:是|为|大约)?\s*"
+        r"(?P<value>[+\-]?[\d,.]+)"
         r"(?:\s*元)?\s*(?:以内|以下|封顶))"
     ),
     re.compile(
         r"(?P<span>预算(?:上限)?\s*(?:仍然)?(?:是|为)?\s*"
-        r"(?P<value>[\d,.]+))(?:\s*元)?"
+        r"(?P<value>[+\-]?[\d,.]+))(?:\s*元)?"
     ),
 )
 _BUDGET_MIN = re.compile(
     r"(?P<span>(?:(?:预算|价格)\s*(?:不能低于|不低于|最低|至少)|最低预算)\s*"
-    r"(?P<value>[\d,.]+))(?:\s*元)?"
+    r"(?P<value>[+\-]?[\d,.]+))(?:\s*元)?"
 )
+_RULE_NUMERIC_TOKEN = r"(?:[+\-]\s*)?[\d.,]+"
 _QUANTITY = re.compile(
-    r"(?P<span>(?P<value>\d+|[一二两三四五六七八九十])\s*"
-    r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
+    rf"(?P<span>(?P<value>{_RULE_NUMERIC_TOKEN}|[一二两三四五六七八九十])"
+    r"\s*(?P<unit>个|件|台|部|箱|盒|副|辆))"
 )
 _QUANTITY_CORRECTION = re.compile(
-    r"(?P<span>(?:(?:我)?(?:不需要|不要|不是|不买)\s*"
-    r"(?:\d+|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)|"
-    r"(?:\d+|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)"
+    rf"(?P<span>(?:(?:我)?(?:不需要|不要|不是|不买)\s*"
+    rf"(?:{_RULE_NUMERIC_TOKEN}|[一二两三四五六七八九十])\s*"
+    r"(?:个|件|台|部|箱|盒|副|辆)|"
+    rf"(?:{_RULE_NUMERIC_TOKEN}|[一二两三四五六七八九十])\s*"
+    r"(?:个|件|台|部|箱|盒|副|辆)"
     r"\s*(?:不要|不需要)(?:了)?)\s*(?:[,，;；]|然后)?\s*"
     r"(?:只?买|只?要|是|改成|改为)\s*"
-    r"(?P<value>\d+|[一二两三四五六七八九十])\s*"
+    rf"(?P<value>{_RULE_NUMERIC_TOKEN}|[一二两三四五六七八九十])\s*"
     r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
 )
 _CAPACITY_SPEC = re.compile(
@@ -343,12 +349,14 @@ _AREA_SPEC = re.compile(
 )
 _SCREEN_SPEC = re.compile(r"(?P<span>(?P<value>(?<!\d)\d{2,3}(?!\d))\s*英寸)")
 _DELIVERY_HOURS = re.compile(
-    r"(?P<span>(?P<hours>\d+|一|两|二|三|四|五|六|七|八|九|十)\s*"
+    rf"(?P<span>(?P<hours>{_RULE_NUMERIC_TOKEN}|一|两|二|三|四|五|六|七|八|九|十)\s*"
     r"(?:个)?小时内)"
 )
 _DELIVERY_DAY = re.compile(
-    r"(?P<span>(?P<day>今天|明天|后天)(?:\s*(?P<hour>\d{1,2})\s*点)?)"
+    rf"(?P<span>(?P<day>今天|明天|后天)(?:\s*(?P<hour>{_RULE_NUMERIC_TOKEN})"
+    r"\s*点)?)(?!\s*(?:[+\-]\s*)?[\d.,]+\s*点)"
 )
+_VALID_BUDGET_NUMBER = re.compile(r"(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?")
 _CHEAP_PREFERENCE = re.compile(r"越便宜越好|尽量便宜|价格越低越好")
 _SCENARIO_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"宿舍(?:里)?打游戏"), "宿舍打游戏"),
@@ -569,7 +577,10 @@ def _bounded_integer(raw: str, *, minimum: int, maximum: int) -> int | None:
 
 
 def _bounded_budget(raw: str) -> Decimal | None:
-    if len(raw) > MAX_EVIDENCE_QUOTE_LENGTH:
+    if (
+        len(raw) > MAX_EVIDENCE_QUOTE_LENGTH
+        or _VALID_BUDGET_NUMBER.fullmatch(raw) is None
+    ):
         return None
     try:
         value = _decimal(raw)
@@ -1187,8 +1198,12 @@ def _extract_delivery(
                 deadline = None
         else:
             raw_hour = candidate.group("hour")
-            hour = int(raw_hour) if raw_hour is not None else 23
-            if not 0 <= hour <= 23:
+            hour = (
+                _bounded_integer(raw_hour, minimum=0, maximum=23)
+                if raw_hour is not None
+                else 23
+            )
+            if hour is None:
                 deadline = None
             else:
                 offset = {"今天": 0, "明天": 1, "后天": 2}[candidate.group("day")]
