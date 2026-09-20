@@ -1,6 +1,8 @@
 import json
+import logging
 import os
 import re
+import threading
 from collections.abc import Callable
 from collections.abc import Iterable, Iterator
 from typing import Any
@@ -88,6 +90,10 @@ RAG 返回引用时可以在回答中展示引用标题或章节，但不能编�
 不要把工具调用过程、工具名称、工具参数、工具返回 JSON、原始字段名或 Python/JSON 对象展示给用户。
 """.strip()
 
+_LOGGER = logging.getLogger(__name__)
+_TRACE_PERSIST_FAILURE_LOCK = threading.Lock()
+_TRACE_PERSIST_FAILURE_COUNT = 0
+
 
 def handle_chat(
     request: AiModelChatRequest,
@@ -145,10 +151,52 @@ def stream_chat_events(
     streaming_agent_runner: StreamingAgentRunner | None = None,
     memory_store: AiModelMemoryStore | None = None,
 ) -> Iterator[str]:
+    """Stream chat events and close the trace if the client disconnects."""
+
+    trace_state: dict[str, Any] = {}
+    try:
+        yield from _stream_chat_events_impl(
+            request,
+            mock_api_url=mock_api_url,
+            http_client=http_client,
+            streaming_agent_runner=streaming_agent_runner,
+            memory_store=memory_store,
+            trace_state=trace_state,
+        )
+    except GeneratorExit:
+        context = trace_state.get("context")
+        store = trace_state.get("memory_store")
+        if (
+            isinstance(context, AgentTraceContext)
+            and store is not None
+            and not context.is_terminal
+        ):
+            context.cancel("client_cancelled")
+            _persist_agent_trace_safely(store, context)
+        raise
+
+
+def _stream_chat_events_impl(
+    request: AiModelChatRequest,
+    *,
+    mock_api_url: str,
+    http_client: httpx.Client | None = None,
+    streaming_agent_runner: StreamingAgentRunner | None = None,
+    memory_store: AiModelMemoryStore | None = None,
+    trace_state: dict[str, Any],
+) -> Iterator[str]:
+    """Implement the stream while exposing lifecycle state to its wrapper."""
+
     ensure_aimodel_configured()
     memory_store = memory_store or get_aimodel_memory_store()
+    trace_state["memory_store"] = memory_store
     tool_results: list[AiModelToolResult] = []
     answer_parts: list[str] = []
+    agent_trace_context = AgentTraceContext.start(
+        user_query=request.message,
+        conversation_id=request.conversation_id,
+    )
+    trace_state["context"] = agent_trace_context
 
     yield _format_sse("status", {"content": "正在理解问题"})
 
@@ -159,6 +207,7 @@ def stream_chat_events(
             user_id=request.user_id,
             first_message=request.message,
         )
+        agent_trace_context.conversation_id = conversation_id
         user_memories = memory_store.load_user_memories(request.user_id, limit=10)
         memory_store.append_user_message(
             conversation_id,
@@ -166,11 +215,9 @@ def stream_chat_events(
             content=request.message,
             links=request.links,
         )
-        agent_trace_context = AgentTraceContext.start(
-            user_query=request.message,
-            conversation_id=conversation_id,
-        )
     except Exception as error:
+        agent_trace_context.fail(error)
+        _persist_agent_trace_safely(memory_store, agent_trace_context)
         yield _format_sse("error", {"content": f"AImodel memory failed: {error}"})
         return
 
@@ -219,7 +266,9 @@ def stream_chat_events(
         for visible_chunk in visible_output_filter.flush():
             answer_parts.append(visible_chunk)
             yield _format_sse("delta", {"content": visible_chunk})
-    except HTTPException:
+    except HTTPException as error:
+        agent_trace_context.fail(error)
+        _persist_agent_trace_safely(memory_store, agent_trace_context)
         raise
     except Exception as error:
         agent_trace_context.fail(error)
@@ -260,7 +309,7 @@ def stream_chat_events(
             message_id=message_id,
             query_trace_ids=query_trace_ids,
         )
-        memory_store.persist_agent_trace(agent_trace_context.to_record())
+        _persist_agent_trace_safely(memory_store, agent_trace_context)
         for memory in extract_user_memories_from_text(
             request.message, user_id=request.user_id
         ):
@@ -271,9 +320,10 @@ def stream_chat_events(
                 evidence=memory.evidence,
                 confidence=memory.confidence,
             )
-    except Exception:
+    except Exception as error:
         # 中文注释：assistant 记忆写入失败不阻断已经生成给用户的回答，避免前端丢失本轮结果。
-        pass
+        agent_trace_context.fail(error)
+        _persist_agent_trace_safely(memory_store, agent_trace_context)
 
     yield done_event
 
@@ -499,10 +549,25 @@ def _persist_agent_trace_safely(
 ) -> None:
     """Persist trace diagnostics without changing the user-facing answer path."""
 
+    global _TRACE_PERSIST_FAILURE_COUNT
+
     try:
         memory_store.persist_agent_trace(agent_trace_context.to_record())
     except Exception:
+        with _TRACE_PERSIST_FAILURE_LOCK:
+            _TRACE_PERSIST_FAILURE_COUNT += 1
+        _LOGGER.exception(
+            "Agent Trace persistence failed",
+            extra={"trace_id": agent_trace_context.trace_id},
+        )
         return None
+
+
+def get_trace_persist_failure_count() -> int:
+    """Return the process-local count of failed trace writes."""
+
+    with _TRACE_PERSIST_FAILURE_LOCK:
+        return _TRACE_PERSIST_FAILURE_COUNT
 
 
 def _agent_tools_for_intent_route(

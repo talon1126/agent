@@ -627,9 +627,40 @@ def test_stream_chat_persists_agent_trace_without_answer_summary(monkeypatch) ->
     assert trace["query_trace_ids"] == ["query-agent-1"]
     assert "answer_summary" not in trace
     assert any(
-        event["event_type"] == "rag_trace_link"
-        and event["summary_payload"] == {"query_trace_id": "query-agent-1"}
+        event["event_type"] == "response"
+        and event["summary_payload"]["query_trace_count"] == 1
+        and event["related_ids"]["query_trace_id_1"] == "query-agent-1"
         for event in trace["events"]
+    )
+
+
+def test_stream_chat_records_cancellation_after_first_status(monkeypatch) -> None:
+    """A client leaving immediately after status still closes one error trace."""
+
+    class RecordingMemoryStore(NoopAiModelMemoryStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_traces: list[dict] = []
+
+        def persist_agent_trace(self, trace_record: dict) -> None:
+            self.agent_traces.append(trace_record)
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    memory_store = RecordingMemoryStore()
+    stream = stream_chat_events(
+        AiModelChatRequest(user_id=1, message="推荐耳机", links=[]),
+        mock_api_url="http://mock-api",
+        streaming_agent_runner=lambda _request, _results: ["回答"],
+        memory_store=memory_store,
+    )
+
+    assert _parse_sse_event(next(stream))[0] == "status"
+    stream.close()
+
+    assert len(memory_store.agent_traces) == 1
+    assert memory_store.agent_traces[0]["status"] == "error"
+    assert memory_store.agent_traces[0]["events"][-1]["summary"]["reason"] == (
+        "client_cancelled"
     )
 
 

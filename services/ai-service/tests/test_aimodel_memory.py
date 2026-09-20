@@ -272,8 +272,9 @@ def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payl
     assert payload["allowed_tools"] == ["rag_tool"]
     assert payload["query_trace_ids"] == ["mcp-query-1"]
     assert "answer_summary" not in payload
-    intent_event = payload["events"][0]
-    assert intent_event["event_type"] == "intent"
+    intent_event = next(
+        event for event in payload["events"] if event["event_type"] == "goal"
+    )
     assert [
         candidate["intent"]
         for candidate in intent_event["summary_payload"]["top_candidates"]
@@ -290,12 +291,12 @@ def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payl
         0.87,
         0.79,
     ]
-    assert payload["events"][2]["event_type"] == "tool_call"
-    assert (
-        payload["events"][2]["summary_payload"]["input_summary"]["query_chars"] == 1000
+    tool_event = next(
+        event for event in payload["events"] if event["event_type"] == "tool_call"
     )
-    assert "x" * 20 not in str(payload["events"][2]["summary_payload"])
-    assert "y" * 20 not in str(payload["events"][2]["summary_payload"])
+    assert tool_event["summary_payload"]["input_summary"]["query_chars"] == 1000
+    assert "x" * 20 not in str(tool_event["summary_payload"])
+    assert "y" * 20 not in str(tool_event["summary_payload"])
 
 
 def test_langchain_agent_trace_middleware_records_success_and_error_tool_calls() -> (
