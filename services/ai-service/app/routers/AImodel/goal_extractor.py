@@ -278,7 +278,7 @@ _BRAND_EXCLUSION = re.compile(
 )
 _BRAND_EXCLUSION_POSTFIX = re.compile(
     rf"(?P<span>(?P<brand>{_BRAND_TEXT})\s*(?:不要|排除|不考虑|不买)(?:了)?)"
-    r"(?=\s*[，。！？]?\s*$)"
+    r"(?=\s*[，。！？]|\s*$)"
 )
 _BRAND_HARD_INCLUDE = re.compile(
     rf"(?P<span>(?:只看|只要|认准|必须(?:选择)?|就要)\s*(?P<brand>{_BRAND_TEXT}))"
@@ -316,8 +316,11 @@ _QUANTITY = re.compile(
     r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
 )
 _QUANTITY_CORRECTION = re.compile(
-    r"(?P<span>不是\s*(?:\d{1,3}|[一二两三四五六七八九十])\s*"
-    r"(?:个|件|台|部|箱|盒|副|辆)\s*[,，]?\s*(?:是|改成|改为)\s*"
+    r"(?P<span>(?:(?:我)?(?:不需要|不要|不是|不买)\s*"
+    r"(?:\d{1,3}|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)|"
+    r"(?:\d{1,3}|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)"
+    r"\s*(?:不要|不需要)(?:了)?)\s*[,，]?\s*"
+    r"(?:只?买|只?要|是|改成|改为)\s*"
     r"(?P<value>\d{1,3}|[一二两三四五六七八九十])\s*"
     r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
 )
@@ -392,9 +395,15 @@ _FIELD_CONFIRMATION_ANSWER_PATTERNS: dict[GoalField, re.Pattern[str]] = {
 }
 _CATEGORY_NEGATION_PREFIX = re.compile(r"(?:不要|不买|排除|不考虑)\s*$")
 _CATEGORY_NEGATION_SUFFIX = re.compile(
-    r"^\s*(?:不要|不买|排除|不考虑)(?:了)?\s*[，。！？]?\s*$"
+    r"^\s*(?:不要|不买|排除|不考虑)(?:了)?(?=\s*[，。！？]|\s*$)"
 )
 _DELIVERY_INTENT = re.compile(r"不能晚于|送达|送到|配送|到货|收到")
+_CLAUSE_BOUNDARY = re.compile(r"[,，。；;！？]|另外|同时|并且|而且")
+_AFFIRMATIVE_CLAUSES = {"是", "对", "没错", "确认"}
+_NEGATION_BEFORE_SPAN = re.compile(
+    r"(?:不用|不要|不是|不必|不需要|不买|排除|不考虑|取消)\s*$"
+)
+_DEICTIC_ABANDONMENT = re.compile(r"先不说|不考虑|算了|不用|不看")
 _CHINESE_NUMBER = {
     "一": 1,
     "二": 2,
@@ -414,18 +423,58 @@ def _unique(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _action_for(text: str, field: GoalField) -> DeltaAction:
+def _clause_context(text: str, start: int, end: int) -> tuple[str, str]:
+    boundaries = list(_CLAUSE_BOUNDARY.finditer(text))
+    previous_boundary = None
+    next_boundary = None
+    for boundary in boundaries:
+        if boundary.end() <= start:
+            previous_boundary = boundary
+        elif boundary.start() >= end:
+            next_boundary = boundary
+            break
+    clause_start = previous_boundary.end() if previous_boundary else 0
+    clause_end = next_boundary.start() if next_boundary else len(text)
+    previous_clause = ""
+    if previous_boundary:
+        earlier = [
+            item for item in boundaries if item.end() <= previous_boundary.start()
+        ]
+        previous_start = earlier[-1].end() if earlier else 0
+        previous_clause = text[previous_start : previous_boundary.start()].strip()
+    return text[clause_start:clause_end].strip(), previous_clause
+
+
+def _span_is_negated(text: str, start: int, end: int) -> bool:
+    clause, _ = _clause_context(text, start, end)
+    relative_start = clause.find(text[start:end])
+    if relative_start < 0:
+        return False
+    return _NEGATION_BEFORE_SPAN.search(clause[:relative_start]) is not None
+
+
+def _action_for(
+    text: str,
+    field: GoalField,
+    *,
+    span_start: int,
+    span_end: int,
+) -> DeltaAction:
+    clause, previous_clause = _clause_context(text, span_start, span_end)
     replacement = _FIELD_REPLACEMENT_PATTERNS.get(field)
-    if replacement is not None and replacement.search(text):
+    if replacement is not None and replacement.search(clause):
         return DeltaAction.REPLACE
     confirmation = _FIELD_CONFIRMATION_PATTERNS.get(field)
     answer_pattern = _FIELD_CONFIRMATION_ANSWER_PATTERNS.get(field)
     explicit_answer = (
-        _CONFIRMATION_PREFIX.search(text) is not None
+        (
+            _CONFIRMATION_PREFIX.search(clause) is not None
+            or previous_clause in _AFFIRMATIVE_CLAUSES
+        )
         and answer_pattern is not None
-        and answer_pattern.search(text) is not None
+        and answer_pattern.search(clause) is not None
     )
-    if explicit_answer or (confirmation is not None and confirmation.search(text)):
+    if explicit_answer or (confirmation is not None and confirmation.search(clause)):
         return DeltaAction.CONFIRM
     return DeltaAction.ADD
 
@@ -514,9 +563,10 @@ def _extract_categories(
     observed_at: datetime,
     operations: list[GoalMutation],
 ) -> None:
+    found_explicit = False
     for pattern, category_id in _CATEGORY_PATTERNS:
-        match = pattern.search(text)
-        if match:
+        for match in pattern.finditer(text):
+            found_explicit = True
             prefix = text[: match.start()]
             suffix = text[match.end() :]
             prefix_negation = _CATEGORY_NEGATION_PREFIX.search(prefix)
@@ -541,10 +591,15 @@ def _extract_categories(
                         ),
                     ),
                 )
-                return
+                continue
             _append_value(
                 operations,
-                action=_action_for(text, GoalField.CATEGORY),
+                action=_action_for(
+                    text,
+                    GoalField.CATEGORY,
+                    span_start=match.start(),
+                    span_end=match.end(),
+                ),
                 item=_constraint(
                     GoalField.CATEGORY,
                     category_id,
@@ -553,20 +608,22 @@ def _extract_categories(
                     observed_at=observed_at,
                 ),
             )
-            return
 
-    if (
-        page_context is None
-        or not page_context.search_query
-        or not _DEICTIC_REFERENCE.search(text)
-    ):
+    if found_explicit:
+        return
+
+    deictic = _DEICTIC_REFERENCE.search(text)
+    if page_context is None or not page_context.search_query or deictic is None:
+        return
+    deictic_clause, _ = _clause_context(text, deictic.start(), deictic.end())
+    if _DEICTIC_ABANDONMENT.search(deictic_clause):
         return
     for pattern, category_id in _CATEGORY_PATTERNS:
         match = pattern.search(page_context.search_query)
         if match:
             _append_value(
                 operations,
-                action=_action_for(text, GoalField.CATEGORY),
+                action=DeltaAction.ADD,
                 item=_constraint(
                     GoalField.CATEGORY,
                     category_id,
@@ -610,7 +667,12 @@ def _extract_budget(
         ):
             _append_value(
                 operations,
-                action=_action_for(text, field),
+                action=_action_for(
+                    text,
+                    field,
+                    span_start=budget_range.start("span"),
+                    span_end=budget_range.end("span"),
+                ),
                 item=_constraint(
                     field,
                     _decimal(budget_range.group(group)),
@@ -622,10 +684,17 @@ def _extract_budget(
         return
 
     minimum = _BUDGET_MIN.search(text)
-    if minimum:
+    if minimum and not _span_is_negated(
+        text, minimum.start("span"), minimum.end("span")
+    ):
         _append_value(
             operations,
-            action=_action_for(text, GoalField.BUDGET_MIN),
+            action=_action_for(
+                text,
+                GoalField.BUDGET_MIN,
+                span_start=minimum.start("span"),
+                span_end=minimum.end("span"),
+            ),
             item=_constraint(
                 GoalField.BUDGET_MIN,
                 _decimal(minimum.group("value")),
@@ -637,10 +706,17 @@ def _extract_budget(
 
     for pattern in _BUDGET_MAX_PATTERNS:
         maximum = pattern.search(text)
-        if maximum:
+        if maximum and not _span_is_negated(
+            text, maximum.start("span"), maximum.end("span")
+        ):
             _append_value(
                 operations,
-                action=_action_for(text, GoalField.BUDGET_MAX),
+                action=_action_for(
+                    text,
+                    GoalField.BUDGET_MAX,
+                    span_start=maximum.start("span"),
+                    span_end=maximum.end("span"),
+                ),
                 item=_constraint(
                     GoalField.BUDGET_MAX,
                     _decimal(maximum.group("value")),
@@ -681,7 +757,7 @@ def _extract_brands(
         brand = _BRANDS[match.group("brand")]
         _append_value(
             operations,
-            action=_action_for(text, GoalField.BRAND),
+            action=DeltaAction.ADD,
             item=Exclusion(
                 field=GoalField.BRAND,
                 value=brand,
@@ -722,7 +798,12 @@ def _extract_brands(
         consumed_spans.append(match.span("brand"))
         _append_value(
             operations,
-            action=_action_for(text, GoalField.BRAND),
+            action=_action_for(
+                text,
+                GoalField.BRAND,
+                span_start=match.start("span"),
+                span_end=match.end("span"),
+            ),
             item=_constraint(
                 GoalField.BRAND,
                 _BRANDS[match.group("brand")],
@@ -737,7 +818,12 @@ def _extract_brands(
             continue
         _append_value(
             operations,
-            action=_action_for(text, GoalField.BRAND),
+            action=_action_for(
+                text,
+                GoalField.BRAND,
+                span_start=match.start("brand"),
+                span_end=match.end("brand"),
+            ),
             item=Preference(
                 field=GoalField.BRAND,
                 value=_BRANDS[match.group("brand")],
@@ -775,12 +861,19 @@ def _extract_quantity_specs_and_scenario(
                 observed_at=observed_at,
             ),
         )
-    elif quantity:
+    elif quantity and not _span_is_negated(
+        text, quantity.start("span"), quantity.end("span")
+    ):
         raw_value = quantity.group("value")
         value = int(raw_value) if raw_value.isdigit() else _CHINESE_NUMBER[raw_value]
         _append_value(
             operations,
-            action=_action_for(text, GoalField.QUANTITY),
+            action=_action_for(
+                text,
+                GoalField.QUANTITY,
+                span_start=quantity.start("span"),
+                span_end=quantity.end("span"),
+            ),
             item=_constraint(
                 GoalField.QUANTITY,
                 value,
@@ -806,12 +899,19 @@ def _extract_quantity_specs_and_scenario(
                 observed_at=observed_at,
             ),
         )
-    elif capacity:
+    elif capacity and not _span_is_negated(
+        text, capacity.start("span"), capacity.end("span")
+    ):
         prefix = "至少 " if capacity.group("minimum") else ""
         unit = "L" if capacity.group("unit").lower() == "l" else "升"
         _append_value(
             operations,
-            action=_action_for(text, GoalField.SPECIFICATION),
+            action=_action_for(
+                text,
+                GoalField.SPECIFICATION,
+                span_start=capacity.start("span"),
+                span_end=capacity.end("span"),
+            ),
             item=_constraint(
                 GoalField.SPECIFICATION,
                 f"{prefix}{capacity.group('value')}{unit}",
@@ -823,10 +923,15 @@ def _extract_quantity_specs_and_scenario(
         )
 
     area = _AREA_SPEC.search(text)
-    if area:
+    if area and not _span_is_negated(text, area.start("span"), area.end("span")):
         _append_value(
             operations,
-            action=_action_for(text, GoalField.SPECIFICATION),
+            action=_action_for(
+                text,
+                GoalField.SPECIFICATION,
+                span_start=area.start("span"),
+                span_end=area.end("span"),
+            ),
             item=_constraint(
                 GoalField.SPECIFICATION,
                 f"至少 {area.group('value')} 平方米",
@@ -838,10 +943,15 @@ def _extract_quantity_specs_and_scenario(
         )
 
     screen = _SCREEN_SPEC.search(text)
-    if screen:
+    if screen and not _span_is_negated(text, screen.start("span"), screen.end("span")):
         _append_value(
             operations,
-            action=_action_for(text, GoalField.SPECIFICATION),
+            action=_action_for(
+                text,
+                GoalField.SPECIFICATION,
+                span_start=screen.start("span"),
+                span_end=screen.end("span"),
+            ),
             item=_constraint(
                 GoalField.SPECIFICATION,
                 f"{screen.group('value')} 英寸",
@@ -854,10 +964,15 @@ def _extract_quantity_specs_and_scenario(
 
     for pattern, normalized in _SCENARIO_RULES:
         scenario = pattern.search(text)
-        if scenario:
+        if scenario and not _span_is_negated(text, scenario.start(), scenario.end()):
             _append_value(
                 operations,
-                action=_action_for(text, GoalField.USAGE_SCENARIO),
+                action=_action_for(
+                    text,
+                    GoalField.USAGE_SCENARIO,
+                    span_start=scenario.start(),
+                    span_end=scenario.end(),
+                ),
                 item=_constraint(
                     GoalField.USAGE_SCENARIO,
                     normalized,
@@ -869,10 +984,15 @@ def _extract_quantity_specs_and_scenario(
             break
 
     cheap = _CHEAP_PREFERENCE.search(text)
-    if cheap:
+    if cheap and not _span_is_negated(text, cheap.start(), cheap.end()):
         _append_value(
             operations,
-            action=_action_for(text, GoalField.FREEFORM_PREFERENCE),
+            action=_action_for(
+                text,
+                GoalField.FREEFORM_PREFERENCE,
+                span_start=cheap.start(),
+                span_end=cheap.end(),
+            ),
             item=Preference(
                 field=GoalField.FREEFORM_PREFERENCE,
                 value=cheap.group(0),
@@ -896,14 +1016,29 @@ def _extract_delivery(
 ) -> None:
     if not _DELIVERY_INTENT.search(text):
         return
-    hours = _DELIVERY_HOURS.search(text)
-    if hours:
+    rejected_deadline = False
+    hours = None
+    for candidate in _DELIVERY_HOURS.finditer(text):
+        if _span_is_negated(text, candidate.start("span"), candidate.end("span")):
+            rejected_deadline = True
+            continue
+        hours = candidate
+    if hours is not None:
         raw_hours = hours.group("hours")
         count = int(raw_hours) if raw_hours.isdigit() else _CHINESE_NUMBER[raw_hours]
         deadline = observed_at + timedelta(hours=count)
         _append_value(
             operations,
-            action=_action_for(text, GoalField.DELIVERY_DEADLINE),
+            action=(
+                DeltaAction.REPLACE
+                if rejected_deadline
+                else _action_for(
+                    text,
+                    GoalField.DELIVERY_DEADLINE,
+                    span_start=hours.start("span"),
+                    span_end=hours.end("span"),
+                )
+            ),
             item=_constraint(
                 GoalField.DELIVERY_DEADLINE,
                 deadline,
@@ -914,8 +1049,13 @@ def _extract_delivery(
         )
         return
 
-    day = _DELIVERY_DAY.search(text)
-    if not day:
+    day = None
+    for candidate in _DELIVERY_DAY.finditer(text):
+        if _span_is_negated(text, candidate.start("span"), candidate.end("span")):
+            rejected_deadline = True
+            continue
+        day = candidate
+    if day is None:
         return
     offset = {"今天": 0, "明天": 1, "后天": 2}[day.group("day")]
     deadline_date = (observed_at + timedelta(days=offset)).date()
@@ -926,7 +1066,16 @@ def _extract_delivery(
     deadline = deadline.replace(hour=hour, minute=minute, second=second)
     _append_value(
         operations,
-        action=_action_for(text, GoalField.DELIVERY_DEADLINE),
+        action=(
+            DeltaAction.REPLACE
+            if rejected_deadline
+            else _action_for(
+                text,
+                GoalField.DELIVERY_DEADLINE,
+                span_start=day.start("span"),
+                span_end=day.end("span"),
+            )
+        ),
         item=_constraint(
             GoalField.DELIVERY_DEADLINE,
             deadline,
