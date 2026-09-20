@@ -36,8 +36,9 @@ Completion index:
 - A2：建立购物任务 Golden Set v1 ✔️
 - A3：扩展请求上下文协议 ✔️
 - A4：建立结构化响应协议 ✔️
+- A5：扩展 Trace 与指标字典 ✔️
 
-Independent rerun deferred by user direction: A1, A2, A3, A4.
+Independent rerun deferred by user direction: A1, A2, A3, A4, A5.
 
 ## Required task flow
 
