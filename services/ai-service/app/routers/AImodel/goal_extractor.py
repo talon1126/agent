@@ -403,7 +403,7 @@ _CATEGORY_NEGATION_SUFFIX = re.compile(
 _DELIVERY_INTENT = re.compile(r"不能晚于|送达|送到|配送|到货|收到")
 _CLAUSE_BOUNDARY = re.compile(
     r"[,，.。;；!！?？\r\n]+|另外|同时|并且|而且|但是|可是|不过|然后|"
-    r"接着|随后|之后|接下来|但|却|再(?=加|买|要)|并(?=加|买|要)"
+    r"接着|随后|之后|接下来|但|却|再(?=来|添|选|加|买|要)|并(?=加|买|要)"
 )
 _AFFIRMATIVE_CLAUSES = {"是", "对", "没错", "确认"}
 _NEGATION_BEFORE_SPAN = re.compile(
@@ -414,8 +414,12 @@ _NEGATION_AFTER_SPAN = re.compile(
 )
 _DEICTIC_ABANDONMENT = re.compile(r"先不说|不考虑|算了|不用|不看")
 _DEICTIC_FOLLOWUP_ABANDONMENT = re.compile(
-    r"^\s*(?:[,，.。;；!！?？\r\n]+|但是|可是|不过|然后|接着|但)?\s*"
+    r"^(?:\s*(?:[,，.。;；!！?？\r\n]+|但是|可是|不过|然后|接着|随后|"
+    r"之后|接下来|但))*\s*"
     r"(?:先不说|不考虑|算了|不用|不看)"
+)
+_DELIVERY_CORRECTION_ACCEPTANCE = re.compile(
+    r"(?:也行|可以|改成|改为|换成|调整为|就按|那就)"
 )
 _CHINESE_NUMBER = {
     "一": 1,
@@ -1051,8 +1055,24 @@ def _extract_delivery(
     rejected_deadline = False
     hours = None
     for candidate in _DELIVERY_HOURS.finditer(text):
-        if _span_is_negated(text, candidate.start("span"), candidate.end("span")):
+        clause, _ = _clause_context(
+            text,
+            candidate.start("span"),
+            candidate.end("span"),
+        )
+        has_local_intent = _DELIVERY_INTENT.search(clause) is not None
+        if has_local_intent and _span_is_negated(
+            text,
+            candidate.start("span"),
+            candidate.end("span"),
+        ):
             rejected_deadline = True
+            continue
+        is_explicit_correction = (
+            rejected_deadline
+            and _DELIVERY_CORRECTION_ACCEPTANCE.search(clause) is not None
+        )
+        if not has_local_intent and not is_explicit_correction:
             continue
         hours = candidate
     if hours is not None:
@@ -1083,8 +1103,24 @@ def _extract_delivery(
 
     day = None
     for candidate in _DELIVERY_DAY.finditer(text):
-        if _span_is_negated(text, candidate.start("span"), candidate.end("span")):
+        clause, _ = _clause_context(
+            text,
+            candidate.start("span"),
+            candidate.end("span"),
+        )
+        has_local_intent = _DELIVERY_INTENT.search(clause) is not None
+        if has_local_intent and _span_is_negated(
+            text,
+            candidate.start("span"),
+            candidate.end("span"),
+        ):
             rejected_deadline = True
+            continue
+        is_explicit_correction = (
+            rejected_deadline
+            and _DELIVERY_CORRECTION_ACCEPTANCE.search(clause) is not None
+        )
+        if not has_local_intent and not is_explicit_correction:
             continue
         day = candidate
     if day is None:

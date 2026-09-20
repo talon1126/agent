@@ -328,14 +328,40 @@ def test_dismissed_deictic_reference_does_not_inject_page_category() -> None:
     )
     assert {value.item.field for value in values(result)} == {GoalField.BUDGET_MAX}
 
+    result = extract(
+        "这款怎么样，但是先不说，预算500以内",
+        page_context={"page_type": "search", "search_query": "空气炸锅"},
+    )
+    assert {value.item.field for value in values(result)} == {GoalField.BUDGET_MAX}
+
 
 def test_calendar_word_without_delivery_intent_is_ignored() -> None:
     result = extract("明天再聊")
     assert result.operations == ()
 
 
+@pytest.mark.parametrize("followup", ["后天再聊", "后天改预算", "后天再决定"])
+def test_unrelated_later_date_does_not_override_delivery_deadline(
+    followup: str,
+) -> None:
+    deadline = item(
+        extract(f"明天送到，{followup}"),
+        GoalField.DELIVERY_DEADLINE,
+    )
+    assert deadline.value.isoformat() == "2026-09-21T23:59:59+08:00"
+    assert deadline.evidence.quote == "明天"
+
+
 def test_negated_delivery_date_is_replaced_by_valid_later_date() -> None:
     result = values(extract("不用明天送到，后天也行"))
+    deadlines = [
+        value for value in result if value.item.field is GoalField.DELIVERY_DEADLINE
+    ]
+    assert len(deadlines) == 1
+    assert deadlines[0].action is DeltaAction.REPLACE
+    assert deadlines[0].item.value.isoformat() == "2026-09-22T23:59:59+08:00"
+
+    result = values(extract("明天不用送到，后天也行"))
     deadlines = [
         value for value in result if value.item.field is GoalField.DELIVERY_DEADLINE
     ]
@@ -351,13 +377,19 @@ def test_negated_delivery_date_is_replaced_by_valid_later_date() -> None:
     assert deadlines[0].action is DeltaAction.REPLACE
     assert deadlines[0].item.value.isoformat() == "2026-09-22T23:59:59+08:00"
 
-    result = values(extract("明天不用送到，后天也行"))
-    deadlines = [
-        value for value in result if value.item.field is GoalField.DELIVERY_DEADLINE
-    ]
-    assert len(deadlines) == 1
-    assert deadlines[0].action is DeltaAction.REPLACE
-    assert deadlines[0].item.value.isoformat() == "2026-09-22T23:59:59+08:00"
+
+@pytest.mark.parametrize("connector", ["再来", "再添", "再选"])
+def test_additive_connector_does_not_leak_replacement_action(connector: str) -> None:
+    result = values(extract(f"容量改成5L{connector}43英寸屏幕"))
+    actions = {
+        value.item.attribute: value.action
+        for value in result
+        if value.item.field is GoalField.SPECIFICATION
+    }
+    assert actions == {
+        "capacity": DeltaAction.REPLACE,
+        "screen_size": DeltaAction.ADD,
+    }
 
 
 class FakeModel:
