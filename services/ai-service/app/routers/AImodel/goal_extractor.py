@@ -353,7 +353,7 @@ _CAPACITY_VALUE_CORRECTION = re.compile(
     r"\s*(?P<unit>L|l|升))"
 )
 _CAPACITY_FOLLOWUP_CORRECTION = re.compile(
-    rf"\s*[,，;；]?\s*(?:(?:又|再|然后)\s*)?(?:容量\s*)?"
+    rf"\s*[,，.。;；!！?？、\r\n]?\s*(?:(?:又|再|然后)\s*)?(?:容量\s*)?"
     rf"(?:(?:又|再)\s*)?(?:改成|改为|调整为|换成)\s*"
     rf"(?P<value>{_RULE_NUMERIC_TOKEN})\s*(?P<unit>L|l|升)"
 )

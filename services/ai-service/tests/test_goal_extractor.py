@@ -250,6 +250,8 @@ def test_capacity_correction_chain_selects_only_the_final_value() -> None:
     [
         "容量6L改成5L，容量又改成4L",
         "容量6L改成5L，然后容量改成4L",
+        "容量6L改成5L。容量改成4L",
+        "容量6L改成5L、容量改成4L",
     ],
 )
 def test_capacity_correction_chain_allows_repeated_field_name(text: str) -> None:
@@ -271,6 +273,12 @@ def test_capacity_correction_chain_does_not_fall_back_from_invalid_final() -> No
     assert result.trace.rejected_fields == (GoalField.SPECIFICATION.value,)
 
     result = extract("容量6L改成5L，容量改成-4L")
+    assert all(
+        value.item.field is not GoalField.SPECIFICATION for value in values(result)
+    )
+    assert result.trace.rejected_fields == (GoalField.SPECIFICATION.value,)
+
+    result = extract("容量6L改成5L！容量改成-4L")
     assert all(
         value.item.field is not GoalField.SPECIFICATION for value in values(result)
     )
