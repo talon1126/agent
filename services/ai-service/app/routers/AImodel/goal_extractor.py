@@ -347,9 +347,14 @@ _CAPACITY_CORRECTION = re.compile(
     r"(?P<unit>L|l|升))"
 )
 _CAPACITY_VALUE_CORRECTION = re.compile(
-    rf"(?P<span>容量\s*(?:从|由)?\s*{_RULE_NUMERIC_TOKEN}\s*(?:L|l|升)"
+    rf"(?P<span>容量\s*(?:从|由)?\s*(?P<old_value>{_RULE_NUMERIC_TOKEN})"
+    r"\s*(?P<old_unit>L|l|升)"
     rf"\s*(?:改成|改为|调整为|换成)\s*(?P<value>{_RULE_NUMERIC_TOKEN})"
     r"\s*(?P<unit>L|l|升))"
+)
+_CAPACITY_FOLLOWUP_CORRECTION = re.compile(
+    rf"\s*[,，;；]?\s*(?:又|再|然后)?\s*(?:改成|改为|调整为|换成)\s*"
+    rf"(?P<value>{_RULE_NUMERIC_TOKEN})\s*(?P<unit>L|l|升)"
 )
 _AREA_SPEC = re.compile(
     rf"(?P<span>(?:适合\s*)?(?P<value>{_RULE_NUMERIC_TOKEN})\s*"
@@ -1094,18 +1099,51 @@ def _extract_quantity_specs_and_scenario(
         text
     ) or _CAPACITY_VALUE_CORRECTION.search(text)
     if capacity_correction:
-        unit = "L" if capacity_correction.group("unit").lower() == "l" else "升"
-        numeric_value = _bounded_positive_decimal(
-            capacity_correction.group("value"),
-            maximum=_MAX_CAPACITY,
-        )
+        old_value = capacity_correction.groupdict().get("old_value")
         if (
-            numeric_value is None
-            or len(capacity_correction.group("span")) > MAX_EVIDENCE_QUOTE_LENGTH
+            old_value is not None
+            and _bounded_positive_decimal(
+                old_value,
+                maximum=_MAX_CAPACITY,
+            )
+            is None
         ):
             rejected_fields.append(GoalField.SPECIFICATION.value)
-        else:
-            value = f"{numeric_value}{unit}"
+
+        selected_correction = capacity_correction
+        selected_numeric_value = _bounded_positive_decimal(
+            selected_correction.group("value"),
+            maximum=_MAX_CAPACITY,
+        )
+        selected_quote = selected_correction.group("span")
+        if (
+            selected_numeric_value is None
+            or len(selected_quote) > MAX_EVIDENCE_QUOTE_LENGTH
+        ):
+            rejected_fields.append(GoalField.SPECIFICATION.value)
+            selected_correction = None
+
+        cursor = capacity_correction.end()
+        while followup := _CAPACITY_FOLLOWUP_CORRECTION.match(text, cursor):
+            cursor = followup.end()
+            followup_value = _bounded_positive_decimal(
+                followup.group("value"),
+                maximum=_MAX_CAPACITY,
+            )
+            if (
+                followup_value is None
+                or len(followup.group(0).strip()) > MAX_EVIDENCE_QUOTE_LENGTH
+            ):
+                rejected_fields.append(GoalField.SPECIFICATION.value)
+                selected_correction = None
+                continue
+            selected_correction = followup
+            selected_numeric_value = followup_value
+            selected_quote = followup.group(0).strip()
+
+        if selected_correction is not None and selected_numeric_value is not None:
+            unit = "L" if selected_correction.group("unit").lower() == "l" else "升"
+            value = f"{selected_numeric_value}{unit}"
             _append_value(
                 operations,
                 action=DeltaAction.REPLACE,
@@ -1113,7 +1151,7 @@ def _extract_quantity_specs_and_scenario(
                     GoalField.SPECIFICATION,
                     value,
                     attribute="capacity",
-                    quote=capacity_correction.group("span"),
+                    quote=selected_quote,
                     source_turn=source_turn,
                     observed_at=observed_at,
                 ),

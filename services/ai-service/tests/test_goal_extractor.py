@@ -233,6 +233,26 @@ def test_invalid_old_spec_does_not_discard_valid_correction() -> None:
     assert result.trace.rejected_fields == (GoalField.SPECIFICATION.value,)
 
 
+def test_capacity_correction_chain_selects_only_the_final_value() -> None:
+    specifications = [
+        value
+        for value in values(extract("容量6L改成5L又改成4L"))
+        if value.item.field is GoalField.SPECIFICATION
+    ]
+    assert len(specifications) == 1
+    assert specifications[0].action is DeltaAction.REPLACE
+    assert specifications[0].item.value == "4L"
+    assert specifications[0].item.evidence.quote == "又改成4L"
+
+
+def test_capacity_correction_chain_does_not_fall_back_from_invalid_final() -> None:
+    result = extract("容量-6L改成5L又改成-4L")
+    assert all(
+        value.item.field is not GoalField.SPECIFICATION for value in values(result)
+    )
+    assert result.trace.rejected_fields == (GoalField.SPECIFICATION.value,)
+
+
 @pytest.mark.parametrize(
     "text",
     [
