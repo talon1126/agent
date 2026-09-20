@@ -119,6 +119,18 @@ def test_natural_quantity_correction_drops_negated_old_value() -> None:
     assert quantities[0].action is DeltaAction.REPLACE
     assert quantities[0].item.value == 1
 
+    result = values(extract("我不需要两台，但只买一台"))
+    quantities = [value for value in result if value.item.field is GoalField.QUANTITY]
+    assert len(quantities) == 1
+    assert quantities[0].action is DeltaAction.REPLACE
+    assert quantities[0].item.value == 1
+
+    result = values(extract("我不需要两台；只买一台"))
+    quantities = [value for value in result if value.item.field is GoalField.QUANTITY]
+    assert len(quantities) == 1
+    assert quantities[0].action is DeltaAction.REPLACE
+    assert quantities[0].item.value == 1
+
 
 def test_replacement_action_does_not_bleed_into_new_fields() -> None:
     result = extract("预算改成 500，再加小米偏好")
@@ -133,9 +145,36 @@ def test_confirmation_action_does_not_bleed_into_new_quantity() -> None:
     assert actions[GoalField.BUDGET_MAX] is DeltaAction.CONFIRM
     assert actions[GoalField.QUANTITY] is DeltaAction.ADD
 
+    result = extract("是，预算仍然500但数量再加两盒")
+    actions = {value.item.field: value.action for value in values(result)}
+    assert actions[GoalField.BUDGET_MAX] is DeltaAction.CONFIRM
+    assert actions[GoalField.QUANTITY] is DeltaAction.ADD
+
 
 def test_spec_replacement_is_bound_to_its_attribute_clause() -> None:
     result = values(extract("容量改成5L，另外加43英寸屏幕"))
+    actions = {
+        value.item.attribute: value.action
+        for value in result
+        if value.item.field is GoalField.SPECIFICATION
+    }
+    assert actions == {
+        "capacity": DeltaAction.REPLACE,
+        "screen_size": DeltaAction.ADD,
+    }
+
+    result = values(extract("容量不要6.5L，但要5L"))
+    capacity = [
+        value
+        for value in result
+        if value.item.field is GoalField.SPECIFICATION
+        and value.item.attribute == "capacity"
+    ]
+    assert len(capacity) == 1
+    assert capacity[0].action is DeltaAction.REPLACE
+    assert capacity[0].item.value == "5L"
+
+    result = values(extract("容量改成5L然后加43英寸屏幕"))
     actions = {
         value.item.attribute: value.action
         for value in result
@@ -178,6 +217,26 @@ def test_postfix_negation_is_scoped_to_its_clause() -> None:
         if value.item.field is GoalField.BRAND
     }
     category_result = values(extract("手机不要，电视可以"))
+    categories = [
+        value.item
+        for value in category_result
+        if value.item.field is GoalField.CATEGORY
+    ]
+    assert brands == {"Apple": "exclude", "Huawei": "soft"}
+    assert any(
+        entry.kind == "exclude" and entry.value == "手机" for entry in categories
+    )
+    assert any(
+        entry.kind == "hard" and entry.value == "electronics" for entry in categories
+    )
+
+    brand_result = values(extract("苹果不要；华为可以"))
+    brands = {
+        value.item.value: value.item.kind
+        for value in brand_result
+        if value.item.field is GoalField.BRAND
+    }
+    category_result = values(extract("手机不要；电视可以"))
     categories = [
         value.item
         for value in category_result
@@ -252,6 +311,18 @@ def test_dismissed_deictic_reference_does_not_inject_page_category() -> None:
     assert {value.item.field for value in values(result)} == {GoalField.BUDGET_MAX}
 
     result = extract(
+        "这款怎么样，先不说，预算500以内",
+        page_context={"page_type": "search", "search_query": "空气炸锅"},
+    )
+    assert {value.item.field for value in values(result)} == {GoalField.BUDGET_MAX}
+
+    result = extract(
+        "这款怎么样但先不说，预算500以内",
+        page_context={"page_type": "search", "search_query": "空气炸锅"},
+    )
+    assert {value.item.field for value in values(result)} == {GoalField.BUDGET_MAX}
+
+    result = extract(
         "这款怎么样先不说，预算500以内",
         page_context={"page_type": "search", "search_query": "空气炸锅"},
     )
@@ -265,6 +336,22 @@ def test_calendar_word_without_delivery_intent_is_ignored() -> None:
 
 def test_negated_delivery_date_is_replaced_by_valid_later_date() -> None:
     result = values(extract("不用明天送到，后天也行"))
+    deadlines = [
+        value for value in result if value.item.field is GoalField.DELIVERY_DEADLINE
+    ]
+    assert len(deadlines) == 1
+    assert deadlines[0].action is DeltaAction.REPLACE
+    assert deadlines[0].item.value.isoformat() == "2026-09-22T23:59:59+08:00"
+
+    result = values(extract("明天不用送到但后天也行"))
+    deadlines = [
+        value for value in result if value.item.field is GoalField.DELIVERY_DEADLINE
+    ]
+    assert len(deadlines) == 1
+    assert deadlines[0].action is DeltaAction.REPLACE
+    assert deadlines[0].item.value.isoformat() == "2026-09-22T23:59:59+08:00"
+
+    result = values(extract("明天不用送到，后天也行"))
     deadlines = [
         value for value in result if value.item.field is GoalField.DELIVERY_DEADLINE
     ]

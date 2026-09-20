@@ -278,7 +278,7 @@ _BRAND_EXCLUSION = re.compile(
 )
 _BRAND_EXCLUSION_POSTFIX = re.compile(
     rf"(?P<span>(?P<brand>{_BRAND_TEXT})\s*(?:不要|排除|不考虑|不买)(?:了)?)"
-    r"(?=\s*[，。！？]|\s*$)"
+    r"(?=\s*[,，.。;；!！?？\r\n]|\s*$)"
 )
 _BRAND_HARD_INCLUDE = re.compile(
     rf"(?P<span>(?:只看|只要|认准|必须(?:选择)?|就要)\s*(?P<brand>{_BRAND_TEXT}))"
@@ -286,7 +286,7 @@ _BRAND_HARD_INCLUDE = re.compile(
 _BRAND_ANY = re.compile(rf"(?P<brand>{_BRAND_TEXT})")
 _BRAND_WITHDRAW = re.compile(r"品牌无所谓|撤销品牌偏好|取消品牌(?:偏好|限制)")
 _BUDGET_CORRECTION = re.compile(
-    r"(?P<span>预算(?:上限)?\s*(?:不是\s*[\d,.]+\s*[,，]?\s*是|"
+    r"(?P<span>预算(?:上限)?\s*(?:不是\s*[\d,.]+\s*[,，;；]?\s*是|"
     r"改成|调整为|改为)\s*(?P<value>[\d,.]+)(?:\s*元)?(?:\s*(?:以内|以下))?)"
 )
 _BUDGET_RANGE = re.compile(
@@ -319,7 +319,7 @@ _QUANTITY_CORRECTION = re.compile(
     r"(?P<span>(?:(?:我)?(?:不需要|不要|不是|不买)\s*"
     r"(?:\d{1,3}|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)|"
     r"(?:\d{1,3}|[一二两三四五六七八九十])\s*(?:个|件|台|部|箱|盒|副|辆)"
-    r"\s*(?:不要|不需要)(?:了)?)\s*[,，]?\s*"
+    r"\s*(?:不要|不需要)(?:了)?)\s*(?:[,，;；]|然后)?\s*"
     r"(?:只?买|只?要|是|改成|改为)\s*"
     r"(?P<value>\d{1,3}|[一二两三四五六七八九十])\s*"
     r"(?P<unit>个|件|台|部|箱|盒|副|辆))"
@@ -329,8 +329,10 @@ _CAPACITY_SPEC = re.compile(
     r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>L|l|升))"
 )
 _CAPACITY_CORRECTION = re.compile(
-    r"(?P<span>容量\s*不是\s*\d+(?:\.\d+)?\s*(?:L|l|升)\s*[,，]?\s*"
-    r"(?:是|改成|改为)\s*(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>L|l|升))"
+    r"(?P<span>容量\s*(?:不需要|不要|不是)\s*\d+(?:\.\d+)?\s*(?:L|l|升)"
+    r"\s*[,，;；]?\s*(?:然后|但(?:是)?|可是|不过)?\s*"
+    r"(?:只?要|是|改成|改为)\s*(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>L|l|升))"
 )
 _AREA_SPEC = re.compile(
     r"(?P<span>(?:适合\s*)?(?P<value>\d+(?:\.\d+)?)\s*(?:平方米|平米))"
@@ -395,15 +397,26 @@ _FIELD_CONFIRMATION_ANSWER_PATTERNS: dict[GoalField, re.Pattern[str]] = {
 }
 _CATEGORY_NEGATION_PREFIX = re.compile(r"(?:不要|不买|排除|不考虑)\s*$")
 _CATEGORY_NEGATION_SUFFIX = re.compile(
-    r"^\s*(?:不要|不买|排除|不考虑)(?:了)?(?=\s*[，。！？]|\s*$)"
+    r"^\s*(?:不要|不买|排除|不考虑)(?:了)?"
+    r"(?=\s*[,，.。;；!！?？\r\n]|\s*$)"
 )
 _DELIVERY_INTENT = re.compile(r"不能晚于|送达|送到|配送|到货|收到")
-_CLAUSE_BOUNDARY = re.compile(r"[,，。；;！？]|另外|同时|并且|而且")
+_CLAUSE_BOUNDARY = re.compile(
+    r"[,，.。;；!！?？\r\n]+|另外|同时|并且|而且|但是|可是|不过|然后|"
+    r"接着|随后|之后|接下来|但|却|再(?=加|买|要)|并(?=加|买|要)"
+)
 _AFFIRMATIVE_CLAUSES = {"是", "对", "没错", "确认"}
 _NEGATION_BEFORE_SPAN = re.compile(
     r"(?:不用|不要|不是|不必|不需要|不买|排除|不考虑|取消)\s*$"
 )
+_NEGATION_AFTER_SPAN = re.compile(
+    r"^\s*(?:不用|不要|不是|不必|不需要|不买|排除|不考虑|取消)"
+)
 _DEICTIC_ABANDONMENT = re.compile(r"先不说|不考虑|算了|不用|不看")
+_DEICTIC_FOLLOWUP_ABANDONMENT = re.compile(
+    r"^\s*(?:[,，.。;；!！?？\r\n]+|但是|可是|不过|然后|接着|但)?\s*"
+    r"(?:先不说|不考虑|算了|不用|不看)"
+)
 _CHINESE_NUMBER = {
     "一": 1,
     "二": 2,
@@ -450,7 +463,11 @@ def _span_is_negated(text: str, start: int, end: int) -> bool:
     relative_start = clause.find(text[start:end])
     if relative_start < 0:
         return False
-    return _NEGATION_BEFORE_SPAN.search(clause[:relative_start]) is not None
+    relative_end = relative_start + len(text[start:end])
+    return (
+        _NEGATION_BEFORE_SPAN.search(clause[:relative_start]) is not None
+        or _NEGATION_AFTER_SPAN.search(clause[relative_end:]) is not None
+    )
 
 
 def _action_for(
@@ -616,7 +633,9 @@ def _extract_categories(
     if page_context is None or not page_context.search_query or deictic is None:
         return
     deictic_clause, _ = _clause_context(text, deictic.start(), deictic.end())
-    if _DEICTIC_ABANDONMENT.search(deictic_clause):
+    if _DEICTIC_ABANDONMENT.search(
+        deictic_clause
+    ) or _DEICTIC_FOLLOWUP_ABANDONMENT.search(text[deictic.end() :]):
         return
     for pattern, category_id in _CATEGORY_PATTERNS:
         match = pattern.search(page_context.search_query)
@@ -846,7 +865,18 @@ def _extract_quantity_specs_and_scenario(
     operations: list[GoalMutation],
 ) -> None:
     quantity_correction = _QUANTITY_CORRECTION.search(text)
-    quantity = None if quantity_correction else _QUANTITY.search(text)
+    quantity = None
+    rejected_quantity = False
+    if quantity_correction is None:
+        for candidate in _QUANTITY.finditer(text):
+            if _span_is_negated(
+                text,
+                candidate.start("span"),
+                candidate.end("span"),
+            ):
+                rejected_quantity = True
+                continue
+            quantity = candidate
     if quantity_correction:
         raw_value = quantity_correction.group("value")
         value = int(raw_value) if raw_value.isdigit() else _CHINESE_NUMBER[raw_value]
@@ -861,18 +891,20 @@ def _extract_quantity_specs_and_scenario(
                 observed_at=observed_at,
             ),
         )
-    elif quantity and not _span_is_negated(
-        text, quantity.start("span"), quantity.end("span")
-    ):
+    elif quantity:
         raw_value = quantity.group("value")
         value = int(raw_value) if raw_value.isdigit() else _CHINESE_NUMBER[raw_value]
         _append_value(
             operations,
-            action=_action_for(
-                text,
-                GoalField.QUANTITY,
-                span_start=quantity.start("span"),
-                span_end=quantity.end("span"),
+            action=(
+                DeltaAction.REPLACE
+                if rejected_quantity
+                else _action_for(
+                    text,
+                    GoalField.QUANTITY,
+                    span_start=quantity.start("span"),
+                    span_end=quantity.end("span"),
+                )
             ),
             item=_constraint(
                 GoalField.QUANTITY,
