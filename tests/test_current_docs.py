@@ -26,7 +26,6 @@ LEGACY_DOC_PATHS = (
     Path("docs/AGENTS/warehouse-agent/business-boundary.md"),
     Path("docs/AGENTS/warehouse-agent/mock-api.md"),
     Path("docs/AGENTS/warehouse-agent/database-tables.md"),
-    Path("AGENTS.md"),
 )
 
 DATA_OPS_CONTRACTS_PATH = Path("services/data-ops/src/data_ops/core/contracts.py")
@@ -135,7 +134,7 @@ def _read_csv_rows(path: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
 
 
 def test_removed_legacy_docs_are_not_reintroduced() -> None:
-    """Repository cleanup keeps retired docs and root AGENTS.md absent."""
+    """Repository cleanup keeps retired documentation absent."""
 
     assert all(not path.exists() for path in LEGACY_DOC_PATHS)
 

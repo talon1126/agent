@@ -24,6 +24,8 @@ jobs:
 
       - name: Run tests
         run: |
+          python scripts/task_preflight.py --check-config
+          pytest tests/test_agent_development_pipeline.py -v
           pytest services/ai-service/tests -v
           pytest services/mock-api/tests -v
           pytest services/feishu-adapter/tests -v

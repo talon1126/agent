@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "taskbook_path": "AGENT_TASKBOOK.md",
+  "taskbook_lock_path": "config/taskbook.lock.json",
+  "evidence_root": "artifacts/task-evidence",
+  "acceptance": {
+    "lock_root": "config/acceptance-locks"
+  },
+  "protected_paths": [
+    "AGENT_TASKBOOK.md",
+    "AGENTS.md",
+    "config/agent_tasks.yaml",
+    "config/agent_quality_gates.yaml",
+    "config/taskbook.lock.json",
+    "config/acceptance-locks/**",
+    "scripts/agent_pipeline.py",
+    "scripts/freeze_taskbook.py",
+    "scripts/freeze_acceptance.py",
+    "scripts/task_preflight.py",
+    "scripts/task_verify.py",
+    "scripts/verify_phase_gate.py",
+    ".github/workflows/agent-task-gate.yml",
+    "artifacts/task-evidence/**",
+    "artifacts/phase-evidence/**"
+  ],
+  "defaults": {
+    "allowed_paths": [
+      "services/ai-service/tests/**",
+      "services/mock-api/**",
+      "tests/acceptance/{task_id_lower}/**",
+      "fixtures/**",
+      "docs/**",
+      "scripts/**",
+      "config/**",
+      "artifacts/**",
+      ".env.example",
+      "docker-compose.yml",
+      "docker-compose.override.yml"
+    ],
+    "forbidden_paths": [
+      "apps/talonmart-web/**"
+    ]
+  },
+  "phases": {
+    "A": {
+      "allowed_paths": [
+        "services/ai-service/app/routers/AImodel/**",
+        "services/ai-service/pyproject.toml",
+        "services/ai-service/uv.lock"
+      ]
+    },
+    "B": {
+      "allowed_paths": [
+        "services/ai-service/app/routers/AImodel/**",
+        "services/ai-service/pyproject.toml",
+        "services/ai-service/uv.lock"
+      ]
+    },
+    "C": {
+      "allowed_paths": [
+        "services/ai-service/app/routers/AImodel/**",
+        "services/ai-service/pyproject.toml",
+        "services/ai-service/uv.lock"
+      ]
+    },
+    "D": {
+      "allowed_paths": [
+        "services/ai-service/app/routers/AImodel/**",
+        "services/ai-service/pyproject.toml",
+        "services/ai-service/uv.lock"
+      ]
+    },
+    "E": {
+      "allowed_paths": [
+        "services/ai-service/app/routers/AImodel/**",
+        "services/ai-service/pyproject.toml",
+        "services/ai-service/uv.lock"
+      ]
+    },
+    "F": {
+      "allowed_paths": [
+        "services/ai-service/app/routers/AImodel/**",
+        "services/ai-service/pyproject.toml",
+        "services/ai-service/uv.lock",
+        ".github/workflows/**"
+      ]
+    },
+    "G": {
+      "allowed_paths": [
+        "services/ai-service/app/domains/personalization/**",
+        "services/ai-service/app/infrastructure/personalization/**",
+        "services/ai-service/app/infrastructure/events/**",
+        "services/ai-service/app/infrastructure/features/**",
+        "services/ai-service/app/workers/**",
+        "services/ai-service/ml/features/**",
+        "services/ai-service/migrations/**",
+        "services/ai-service/alembic/**",
+        "services/ai-service/pyproject.toml",
+        "services/ai-service/uv.lock"
+      ]
+    },
+    "H": {
+      "allowed_paths": [
+        "services/ai-service/app/domains/catalog/**",
+        "services/ai-service/app/infrastructure/catalog/**",
+        "services/ai-service/app/workers/**",
+        "services/ai-service/ml/catalog/**",
+        "services/ai-service/migrations/**",
+        "services/ai-service/alembic/**",
+        "services/ai-service/pyproject.toml",
+        "services/ai-service/uv.lock"
+      ]
+    },
+    "I": {
+      "allowed_paths": [
+        "services/ai-service/app/domains/recommendation/**",
+        "services/ai-service/app/infrastructure/recommendation/**",
+        "services/ai-service/app/workers/**",
+        "services/ai-service/ml/datasets/**",
+        "services/ai-service/ml/indexes/**",
+        "services/ai-service/ml/ranking/**",
+        "services/ai-service/migrations/**",
+        "services/ai-service/alembic/**",
+        "services/ai-service/pyproject.toml",
+        "services/ai-service/uv.lock"
+      ]
+    }
+  },
+  "tasks": {
+    "A1": {"phase": "A", "dependencies": []},
+    "A2": {"phase": "A", "dependencies": ["A1"]},
+    "A3": {"phase": "A", "dependencies": ["A1"]},
+    "A4": {"phase": "A", "dependencies": ["A3"]},
+    "A5": {"phase": "A", "dependencies": ["A4"]},
+
+    "B1": {"phase": "B", "dependencies": ["A3"]},
+    "B2": {"phase": "B", "dependencies": ["B1"]},
+    "B3": {"phase": "B", "dependencies": ["B2"]},
+    "B4": {"phase": "B", "dependencies": ["B3"]},
+    "B5": {"phase": "B", "dependencies": ["B4"]},
+
+    "C1": {"phase": "C", "dependencies": ["A3"]},
+    "C2": {"phase": "C", "dependencies": ["B3", "C1"]},
+    "C3": {"phase": "C", "dependencies": ["C1"]},
+    "C4": {"phase": "C", "dependencies": ["C2", "C3"]},
+    "C5": {"phase": "C", "dependencies": ["C4"]},
+
+    "D1": {"phase": "D", "dependencies": ["A5", "B5", "C5"]},
+    "D2": {"phase": "D", "dependencies": ["D1"]},
+    "D3": {"phase": "D", "dependencies": ["D2"]},
+    "D4": {"phase": "D", "dependencies": ["D3"]},
+    "D5": {"phase": "D", "dependencies": ["D4"]},
+
+    "E1": {"phase": "E", "dependencies": ["A3", "B5", "C1"]},
+    "E2": {"phase": "E", "dependencies": ["E1"]},
+    "E3": {"phase": "E", "dependencies": ["A4", "D5", "E1"]},
+    "E4": {"phase": "E", "dependencies": ["C1", "D3", "E3"]},
+    "E5": {"phase": "E", "dependencies": ["A5", "B5", "C4", "E2", "E3", "E4"]},
+
+    "F1": {"phase": "F", "dependencies": ["D3", "D5", "E1", "E4", "E5"]},
+    "F2": {"phase": "F", "dependencies": ["F1"]},
+    "F3": {"phase": "F", "dependencies": ["A2", "F2"]},
+    "F4": {"phase": "F", "dependencies": ["F3"]},
+    "F5": {"phase": "F", "dependencies": ["F4"], "quality_profile": "M3"},
+
+    "G1": {"phase": "G", "dependencies": ["F5", "E5"]},
+    "G2": {"phase": "G", "dependencies": ["G1"]},
+    "G3": {"phase": "G", "dependencies": ["G2"]},
+    "G4": {"phase": "G", "dependencies": ["G3"]},
+    "G5": {
+      "phase": "G",
+      "dependencies": ["G4"],
+      "quality_profile": "M4",
+      "allowed_paths": ["services/ai-service/app/routers/AImodel/**"]
+    },
+
+    "H1": {"phase": "H", "dependencies": ["F5", "C1", "C3"]},
+    "H2": {"phase": "H", "dependencies": ["H1"]},
+    "H3": {"phase": "H", "dependencies": ["H2"]},
+    "H4": {"phase": "H", "dependencies": ["H2", "C1"]},
+    "H5": {
+      "phase": "H",
+      "dependencies": ["H1", "H2", "H3", "H4", "C5", "D5"],
+      "quality_profile": "M5",
+      "allowed_paths": ["services/ai-service/app/routers/AImodel/**"]
+    },
+
+    "I1": {"phase": "I", "dependencies": ["G5", "H5"]},
+    "I2": {"phase": "I", "dependencies": ["I1"]},
+    "I3": {"phase": "I", "dependencies": ["I2"]},
+    "I4": {
+      "phase": "I",
+      "dependencies": ["I3"],
+      "required_milestones": ["I-DATA-READY"]
+    },
+    "I5": {
+      "phase": "I",
+      "dependencies": ["I4"],
+      "quality_profile": "M6-B",
+      "allowed_paths": ["services/ai-service/app/routers/AImodel/**"]
+    }
+  }
+}

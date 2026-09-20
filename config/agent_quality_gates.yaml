@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "metrics": {
+    "M3-01": {"checks": [{"field": "shopping_task_success_rate", "operator": "gte", "threshold": 0.85}]},
+    "M3-02": {"checks": [{"field": "hard_constraint_violation_rate", "operator": "eq", "threshold": 0}]},
+    "M3-03": {"checks": [{"field": "product_fact_accuracy", "operator": "eq", "threshold": 1}]},
+    "M3-04": {"checks": [{"field": "key_claim_evidence_coverage", "operator": "gte", "threshold": 0.95}]},
+    "M3-05": {"checks": [{"field": "clarification_recall", "operator": "gte", "threshold": 0.9}]},
+    "M3-06": {"checks": [{"field": "structured_response_validity", "operator": "eq", "threshold": 1}]},
+    "M3-07": {"checks": [{"field": "unauthorized_tool_calls", "operator": "eq", "threshold": 0}]},
+    "M3-08": {"checks": [{"field": "side_effect_confirmation_coverage", "operator": "eq", "threshold": 1}]},
+    "M3-09": {"checks": [{"field": "failure_recovery_rate", "operator": "gte", "threshold": 0.95}]},
+    "M3-10": {"checks": [{"field": "complete_response_p95_seconds", "operator": "lte", "threshold": 25}]},
+
+    "M4-01": {"checks": [{"field": "unauthorized_profile_reads", "operator": "eq", "threshold": 0}]},
+    "M4-02": {"checks": [{"field": "online_offline_feature_consistency", "operator": "eq", "threshold": 1}]},
+    "M4-03": {"checks": [
+      {"field": "event_processing_p95_seconds", "operator": "lte", "threshold": 60},
+      {"field": "dead_letter_rate", "operator": "lte", "threshold": 0.001}
+    ]},
+    "M4-04": {"checks": [
+      {"field": "profile_read_p95_ms", "operator": "lte", "threshold": 150},
+      {"field": "configured_deadline_ms", "operator": "lte", "threshold": 200}
+    ]},
+
+    "M5-01": {"checks": [
+      {"field": "frozen_set_false_merges", "operator": "eq", "threshold": 0},
+      {"field": "sample_precision", "operator": "gte", "threshold": 0.995},
+      {"field": "reviewed_entities", "operator": "gte", "threshold": 1000},
+      {"field": "minimum_entities_per_core_category", "operator": "gte", "threshold": 200}
+    ]},
+    "M5-02": {"checks": [{"field": "freshness_compliance_rate", "operator": "eq", "threshold": 1}]},
+    "M5-03": {"checks": [
+      {"field": "actionable_fact_coverage", "operator": "gte", "threshold": 0.95},
+      {"field": "evaluated_offers", "operator": "gte", "threshold": 1000},
+      {"field": "core_categories", "operator": "gte", "threshold": 5}
+    ]},
+    "M5-04": {"checks": [
+      {"field": "graph_query_p95_ms", "operator": "lte", "threshold": 200},
+      {"field": "fact_batch_50_p95_ms", "operator": "lte", "threshold": 800},
+      {"field": "concurrency", "operator": "gte", "threshold": 100}
+    ]},
+
+    "M6-01": {"checks": [{"field": "recall_at_50", "operator": "gte", "threshold": 0.95}]},
+    "M6-02": {"checks": [
+      {"field": "baseline_ndcg_at_10", "operator": "gt", "threshold": 0},
+      {"field": "ndcg_at_10_ratio", "operator": "gte", "threshold": 1.05},
+      {"field": "evaluation_requests", "operator": "gte", "threshold": 10000},
+      {"field": "bootstrap_ci_95_lower_ratio", "operator": "gt", "threshold": 1},
+      {"field": "minimum_requests_per_key_group", "operator": "gte", "threshold": 500},
+      {"field": "minimum_key_group_ratio", "operator": "gte", "threshold": 0.98}
+    ]},
+    "M6-03": {"checks": [
+      {"field": "rank_100_candidates_p95_ms", "operator": "lte", "threshold": 150},
+      {"field": "evaluated_candidates_per_request", "operator": "gte", "threshold": 100}
+    ]},
+
+    "I-DATA-01": {"checks": [
+      {"field": "consecutive_days", "operator": "gte", "threshold": 28},
+      {"field": "valid_impression_rendered", "operator": "gte", "threshold": 100000},
+      {"field": "authorized_subjects", "operator": "gte", "threshold": 5000},
+      {"field": "strong_positive_labels", "operator": "gte", "threshold": 5000},
+      {"field": "strong_negative_labels", "operator": "gte", "threshold": 1000}
+    ]},
+    "I-DATA-02": {"checks": [
+      {"field": "core_categories", "operator": "gte", "threshold": 5},
+      {"field": "minimum_impressions_per_core_category", "operator": "gte", "threshold": 10000},
+      {"field": "minimum_strong_labels_per_core_category", "operator": "gte", "threshold": 300}
+    ]},
+    "I-DATA-03": {"checks": [
+      {"field": "orphan_rate", "operator": "lte", "threshold": 0.01},
+      {"field": "consent_lineage_completeness", "operator": "eq", "threshold": 1},
+      {"field": "candidate_set_completeness", "operator": "eq", "threshold": 1},
+      {"field": "position_completeness", "operator": "eq", "threshold": 1},
+      {"field": "policy_version_completeness", "operator": "eq", "threshold": 1},
+      {"field": "model_version_completeness", "operator": "eq", "threshold": 1},
+      {"field": "feature_version_completeness", "operator": "eq", "threshold": 1},
+      {"field": "fact_version_completeness", "operator": "eq", "threshold": 1}
+    ]}
+  },
+  "milestones": {
+    "A": {"required_tasks": ["A1", "A2", "A3", "A4", "A5"], "required_milestones": [], "metric_ids": []},
+    "B": {"required_tasks": ["B1", "B2", "B3", "B4", "B5"], "required_milestones": ["A"], "metric_ids": []},
+    "C": {"required_tasks": ["C1", "C2", "C3", "C4", "C5"], "required_milestones": ["A"], "metric_ids": []},
+    "D": {"required_tasks": ["D1", "D2", "D3", "D4", "D5"], "required_milestones": ["A", "B", "C"], "metric_ids": []},
+    "E": {"required_tasks": ["E1", "E2", "E3", "E4", "E5"], "required_milestones": ["D"], "metric_ids": []},
+    "M3": {
+      "required_tasks": [
+        "A1", "A2", "A3", "A4", "A5", "B1", "B2", "B3", "B4", "B5",
+        "C1", "C2", "C3", "C4", "C5", "D1", "D2", "D3", "D4", "D5",
+        "E1", "E2", "E3", "E4", "E5", "F1", "F2", "F3", "F4", "F5"
+      ],
+      "required_milestones": ["A", "B", "C", "D", "E"],
+      "metric_ids": ["M3-01", "M3-02", "M3-03", "M3-04", "M3-05", "M3-06", "M3-07", "M3-08", "M3-09", "M3-10"],
+      "gate_task": "F5"
+    },
+    "M4": {
+      "required_tasks": ["G1", "G2", "G3", "G4", "G5"],
+      "required_milestones": ["M3"],
+      "metric_ids": ["M4-01", "M4-02", "M4-03", "M4-04"],
+      "gate_task": "G5"
+    },
+    "M5": {
+      "required_tasks": ["H1", "H2", "H3", "H4", "H5"],
+      "required_milestones": ["M3"],
+      "metric_ids": ["M5-01", "M5-02", "M5-03", "M5-04"],
+      "gate_task": "H5"
+    },
+    "M6-A": {
+      "required_tasks": ["I1", "I2", "I3"],
+      "required_milestones": ["M4", "M5"],
+      "metric_ids": []
+    },
+    "I-DATA-READY": {
+      "required_tasks": ["I1", "I2", "I3"],
+      "required_milestones": ["M6-A"],
+      "metric_ids": ["I-DATA-01", "I-DATA-02", "I-DATA-03"]
+    },
+    "M6-B": {
+      "required_tasks": ["I1", "I2", "I3", "I4", "I5"],
+      "required_milestones": ["I-DATA-READY"],
+      "metric_ids": ["M6-01", "M6-02", "M6-03"],
+      "gate_task": "I5"
+    }
+  }
+}
