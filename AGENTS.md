@@ -17,6 +17,19 @@ handled separately and must not be hidden inside a taskbook task.
   evidence under `artifacts/task-audits/`, `artifacts/task-evidence/`, and
   `artifacts/phase-evidence/`.
 
+## Completed task titles
+
+- Maintain a concise completion list in this file using the exact format
+  `<TASK_ID>：<task title> ✔️`. This is a human-readable index only; committed
+  evidence remains the source of truth and the taskbook must not gain status
+  fields or completion markers.
+- Add a title only after its implementation, frozen acceptance, two-layer audit,
+  task verification, and evidence commits have succeeded. If an independent
+  rerun is intentionally deferred, report that gap separately instead of
+  hiding it behind the marker.
+- During A4, first backfill the completed A1, A2, and A3 titles in this section,
+  then append A4 after its own local completion evidence has been committed.
+
 ## Required task flow
 
 Work on exactly one task ID at a time.
