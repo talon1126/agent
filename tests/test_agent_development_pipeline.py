@@ -22,6 +22,7 @@ from agent_pipeline import (  # noqa: E402
 )
 from task_audit import (  # noqa: E402
     MAX_AUDIT_ROUNDS,
+    _non_audit_worktree_changes,
     scan_added_secrets,
     syntax_findings,
 )
@@ -209,3 +210,19 @@ def test_task_audit_parses_changed_python_and_json(tmp_path: Path) -> None:
 
     assert len(findings) == 1
     assert findings[0].startswith("invalid.py:")
+
+
+def test_task_audit_ignores_only_its_generated_evidence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def fake_git(root: Path, *args: str, **kwargs) -> str:
+        assert root == tmp_path
+        assert "--porcelain=v1" in args
+        return (
+            "?? artifacts/task-audits/A1/run/manifest.json\0"
+            " M services/ai-service/app/main.py\0"
+        )
+
+    monkeypatch.setattr("task_audit.git", fake_git)
+
+    assert _non_audit_worktree_changes(tmp_path) == ["services/ai-service/app/main.py"]

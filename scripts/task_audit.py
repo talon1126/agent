@@ -303,9 +303,32 @@ def _apply_safe_repairs(
     ]
     for relative in repaired:
         destination = root / relative
+        if not destination.is_file() or sha256_file(destination) != before[relative]:
+            raise PipelineError(
+                "safe repair refused because the current file diverged from the "
+                f"audited revision: {relative}"
+            )
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(snapshot / relative, destination)
     return repaired
+
+
+def _non_audit_worktree_changes(root: Path) -> list[str]:
+    status = git(
+        root,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+    )
+    changes: list[str] = []
+    for record in status.split("\0"):
+        if not record:
+            continue
+        relative = record[3:].replace("\\", "/")
+        if not relative.startswith("artifacts/task-audits/"):
+            changes.append(relative)
+    return changes
 
 
 def _run_behavior_layer(
@@ -379,13 +402,12 @@ def run_task_audit(
             f"target {target_commit} does not descend from {baseline_commit}"
         )
     if fix:
-        head_commit = git(root, "rev-parse", "HEAD")
-        if target_commit != head_commit:
+        unrelated_changes = _non_audit_worktree_changes(root)
+        if unrelated_changes:
             raise PipelineError(
-                "--fix is only allowed when --target-ref resolves to HEAD"
+                "--fix requires a clean working tree outside prior audit evidence: "
+                + ", ".join(unrelated_changes)
             )
-        if git(root, "status", "--porcelain=v1", "--untracked-files=all"):
-            raise PipelineError("--fix requires a clean working tree")
 
     changed_paths = _target_changed_paths(root, baseline_commit, target_commit)
     if not changed_paths:
@@ -469,6 +491,10 @@ def run_task_audit(
         "max_rounds": max_rounds,
         "rounds_executed": len(rounds),
         "safe_repairs": sorted(set(repaired_files)),
+        "safe_repair_hashes": {
+            relative: sha256_file(root / relative)
+            for relative in sorted(set(repaired_files))
+        },
         "result": result,
         "layers": rounds,
         "evidence_files": evidence_file_entries(run_directory, log_paths),
