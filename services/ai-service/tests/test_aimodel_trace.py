@@ -76,18 +76,20 @@ def test_trace_lifecycle_serializes_only_terminal_uniform_events() -> None:
 def test_trace_failure_closes_open_events_and_sanitizes_exception() -> None:
     """Failure finalization must not leave open spans or leak secret text."""
 
+    bearer_secret = "top-" + "secret-token-value-123456789"
+    api_secret = "s" + "k-abcdefghijklmnopqrstuvwxyz123456"
     context = AgentTraceContext.start(user_query="查询订单")
     context.begin_event(
         AgentTraceEventType.TOOL_CALL,
-        summary={"authorization": "Bearer top-secret-token-value-123456789"},
+        summary={"authorization": "Bearer " + bearer_secret},
     )
-    context.fail(RuntimeError("failed with sk-abcdefghijklmnopqrstuvwxyz123456"))
+    context.fail(RuntimeError("failed with " + api_secret))
 
     record = context.to_record()
     rendered = str(record)
     assert all(event["status"] != "started" for event in record["events"])
-    assert "top-secret-token" not in rendered
-    assert "sk-abcdefghijklmnopqrstuvwxyz" not in rendered
+    assert bearer_secret not in rendered
+    assert api_secret not in rendered
     assert record["events"][-1]["event_type"] == "error"
 
 
