@@ -93,6 +93,12 @@ def _walk_strings(value: Any) -> list[str]:
     return []
 
 
+def _normalized_text_sha256(path: Path) -> str:
+    text = path.read_bytes().decode("utf-8")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def test_route_cases_cover_every_configured_route_and_tool_boundary() -> None:
     baseline = _load_baseline()
     configured = _configured_routes()
@@ -182,7 +188,7 @@ def test_baseline_report_is_reproducible_and_bound_to_fixture() -> None:
 
     for token in REQUIRED_REPORT_TOKENS:
         assert token in report
-    routes_hash = hashlib.sha256(ROUTES_PATH.read_bytes()).hexdigest()
+    routes_hash = _normalized_text_sha256(ROUTES_PATH)
     assert baseline["metadata"]["intent_routes_sha256"] == routes_hash
     assert baseline["metadata"]["baseline_id"] in report
     assert routes_hash in report
