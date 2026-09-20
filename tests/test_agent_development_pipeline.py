@@ -15,6 +15,7 @@ from agent_pipeline import (  # noqa: E402
     evaluate_quality_profile,
     is_generated_evidence_path,
     load_pipeline,
+    sha256_file,
     validate_changed_paths,
     verify_taskbook_lock,
 )
@@ -57,6 +58,15 @@ def test_taskbook_lock_matches_current_contracts() -> None:
     assert current["task_config_sha256"] == expected["task_config_sha256"]
     assert current["quality_gates_sha256"] == expected["quality_gates_sha256"]
     assert current["tasks"] == expected["tasks"]
+
+
+def test_text_hash_is_stable_across_git_line_endings(tmp_path: Path) -> None:
+    lf = tmp_path / "lf.txt"
+    crlf = tmp_path / "crlf.txt"
+    lf.write_bytes(b"alpha\nbeta\n")
+    crlf.write_bytes(b"alpha\r\nbeta\r\n")
+
+    assert sha256_file(lf) == sha256_file(crlf)
 
 
 def test_scope_rules_block_frontend_and_pipeline_mutation() -> None:
