@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -164,10 +164,10 @@ def _remove_key_from_kinds(
         _replace_key(collections[_COLLECTION_BY_KIND[kind]], key, None)
 
 
-def _item_rank(item: GoalValueItem, *, historical: bool) -> int:
+def _source_rank(evidence: GoalEvidence, *, historical: bool) -> int:
     if historical:
         return 200
-    source = item.evidence.source_type
+    source = evidence.source_type
     if source is GoalSourceType.USER_TURN:
         return 400
     if source is GoalSourceType.PAGE_CONTEXT:
@@ -181,15 +181,20 @@ def _normalized_value(value: Any) -> Any:
     if isinstance(value, str):
         return "".join(value.split()).casefold()
     if isinstance(value, datetime):
-        return value.isoformat()
+        return value.astimezone(UTC).isoformat()
     return value
+
+
+def _item_value(item: GoalValueItem) -> Any:
+    return item.question if item.kind == "unknown" else item.value
 
 
 def _same_semantic_value(left: GoalValueItem, right: GoalValueItem) -> bool:
     return (
         left.kind == right.kind
         and left.semantic_key == right.semantic_key
-        and _normalized_value(left.value) == _normalized_value(right.value)
+        and _normalized_value(_item_value(left))
+        == _normalized_value(_item_value(right))
     )
 
 
@@ -308,9 +313,9 @@ def _apply_value_mutation(
         )
 
     rank_key = (item.kind, key)
-    incoming_rank = _item_rank(item, historical=False)
+    incoming_rank = _source_rank(item.evidence, historical=False)
     existing_rank = winner_rank.get(rank_key, 200 if same_kind is not None else -1)
-    if same_kind is not None and incoming_rank < existing_rank:
+    if incoming_rank < existing_rank:
         return GoalChangeEvent(
             action=operation.action,
             field=item.field,
@@ -360,6 +365,7 @@ def _apply_remove_mutation(
     collections: dict[str, list[GoalValueItem]],
     operation: GoalRemoveMutation,
     source_turn: int,
+    winner_rank: dict[tuple[str, SemanticKey], int],
 ) -> GoalChangeEvent:
     key = _semantic_key(operation.field, operation.attribute)
     before = tuple(
@@ -368,6 +374,10 @@ def _apply_remove_mutation(
         if item.kind in operation.target_kinds
     )
     _remove_key_from_kinds(collections, key, operation.target_kinds)
+    removal_rank = _source_rank(operation.evidence, historical=False)
+    for kind in operation.target_kinds:
+        rank_key = (kind, key)
+        winner_rank[rank_key] = max(winner_rank.get(rank_key, -1), removal_rank)
     outcome = MergeEventOutcome.APPLIED if before else MergeEventOutcome.NO_CHANGE
     return GoalChangeEvent(
         action=operation.action,
@@ -565,9 +575,7 @@ def _semantic_state(
                 item.kind,
                 item.field.value,
                 item.attribute.casefold() if item.attribute else None,
-                _normalized_value(
-                    item.question if item.kind == "unknown" else item.value
-                ),
+                _normalized_value(_item_value(item)),
             )
             for collection in collections.values()
             for item in collection
@@ -591,7 +599,6 @@ def _target_stage(
         for collection_name in (
             "hard_constraints",
             "preferences",
-            "exclusions",
         )
         for item in collections[collection_name]
         if item.field in _REQUIRED_FIELDS
@@ -695,7 +702,9 @@ def merge_goal_delta(
     for collection_name, values in collections.items():
         kind = _KIND_BY_COLLECTION[collection_name]
         for item in values:
-            winner_rank[(kind, item.semantic_key)] = _item_rank(item, historical=True)
+            winner_rank[(kind, item.semantic_key)] = _source_rank(
+                item.evidence, historical=True
+            )
 
     events: list[GoalChangeEvent] = []
     for operation in delta.operations:
@@ -711,6 +720,7 @@ def merge_goal_delta(
                 collections,
                 operation,
                 delta.source_turn,
+                winner_rank,
             )
         events.append(event)
 

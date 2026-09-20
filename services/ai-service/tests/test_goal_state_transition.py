@@ -118,6 +118,36 @@ def test_page_context_replaces_history_but_not_same_turn_user_input() -> None:
     assert user_result.events[-1].outcome is MergeEventOutcome.IGNORED_LOWER_PRIORITY
 
 
+@pytest.mark.parametrize("remove_first", [True, False])
+def test_user_remove_beats_page_context_independent_of_operation_order(
+    remove_first: bool,
+) -> None:
+    historical = hard(GoalField.CATEGORY, "家电", quote="之前看家电")
+    page = hard(
+        GoalField.CATEGORY,
+        "耳机",
+        turn=2,
+        quote="耳机列表",
+        source_type=GoalSourceType.PAGE_CONTEXT,
+    )
+    remove = GoalRemoveMutation(
+        field=GoalField.CATEGORY,
+        target_kinds=("hard",),
+        evidence=evidence(2, "不看这个品类了"),
+    )
+    page_add = value_operation(page)
+    operations = (remove, page_add) if remove_first else (page_add, remove)
+
+    result = merge_goal_delta(
+        ShoppingGoal(hard_constraints=(historical,)),
+        change(2, *operations),
+        reference_time=NOW,
+    )
+
+    assert result.goal.hard_constraints == ()
+    assert result.goal.decision_stage is DecisionStage.DISCOVERING
+
+
 def test_long_term_preference_only_fills_an_unoccupied_slot() -> None:
     remembered = Preference(
         field=GoalField.BRAND,
@@ -236,6 +266,38 @@ def test_open_required_slot_enters_clarifying() -> None:
     assert result.goal.stage_reason == "required_slot_open:category"
 
 
+def test_open_slot_confirmation_is_deterministic_instead_of_crashing() -> None:
+    current_slot = OpenSlot(
+        field=GoalField.CATEGORY,
+        question="想买什么品类？",
+        evidence=GoalEvidence(
+            source_type=GoalSourceType.SYSTEM_DEFAULT,
+            confidence=0,
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+    )
+    confirmed_slot = OpenSlot(
+        field=GoalField.CATEGORY,
+        question="想买什么品类？",
+        evidence=evidence(
+            2,
+            quote=None,
+            source_type=GoalSourceType.MODEL_INFERENCE,
+            confidence=0.6,
+        ),
+    )
+
+    result = merge_goal_delta(
+        ShoppingGoal(open_slots=(current_slot,)),
+        change(2, value_operation(confirmed_slot, DeltaAction.CONFIRM)),
+        reference_time=NOW,
+    )
+
+    assert result.goal.open_slots == (current_slot,)
+    assert result.events[0].outcome is MergeEventOutcome.IGNORED_LOWER_PRIORITY
+
+
 def test_remove_targets_attribute_and_kind_without_touching_other_specs() -> None:
     memory = hard(
         GoalField.SPECIFICATION,
@@ -337,6 +399,46 @@ def test_delivery_deadline_equal_to_reference_time_is_not_past() -> None:
         reference_time=NOW,
     )
     assert result.conflicts == ()
+
+
+def test_confirmation_compares_aware_datetimes_as_absolute_instants() -> None:
+    local_deadline = datetime.fromisoformat("2026-09-22T10:00:00+08:00")
+    utc_deadline = datetime.fromisoformat("2026-09-22T02:00:00+00:00")
+    old = hard(
+        GoalField.DELIVERY_DEADLINE,
+        local_deadline,
+        quote="十点前送到",
+    )
+    confirmed = hard(
+        GoalField.DELIVERY_DEADLINE,
+        utc_deadline,
+        turn=2,
+        quote="确认这个时间",
+    )
+
+    result = merge_goal_delta(
+        ShoppingGoal(hard_constraints=(old,)),
+        change(2, value_operation(confirmed, DeltaAction.CONFIRM)),
+        reference_time=NOW,
+    )
+
+    assert result.conflicts == ()
+    assert result.goal.hard_constraints == (confirmed,)
+
+
+def test_category_exclusion_does_not_fill_required_positive_category() -> None:
+    excluded = Exclusion(
+        field=GoalField.CATEGORY,
+        value="家电",
+        evidence=evidence(1, "不要家电"),
+    )
+    result = merge_goal_delta(
+        ShoppingGoal(),
+        change(1, value_operation(excluded)),
+        reference_time=NOW,
+    )
+
+    assert result.goal.decision_stage is DecisionStage.DISCOVERING
 
 
 def test_reference_time_must_be_timezone_aware() -> None:
