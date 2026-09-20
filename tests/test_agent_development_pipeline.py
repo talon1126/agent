@@ -12,6 +12,7 @@ if str(SCRIPTS) not in sys.path:
 from agent_pipeline import (  # noqa: E402
     PipelineError,
     build_taskbook_lock,
+    discover_acceptance_files,
     evaluate_quality_profile,
     is_generated_evidence_path,
     load_pipeline,
@@ -67,6 +68,39 @@ def test_text_hash_is_stable_across_git_line_endings(tmp_path: Path) -> None:
     crlf.write_bytes(b"alpha\r\nbeta\r\n")
 
     assert sha256_file(lf) == sha256_file(crlf)
+
+
+def test_explicit_acceptance_paths_do_not_lock_implementation_tests(
+    tmp_path: Path,
+) -> None:
+    acceptance_dir = tmp_path / "tests" / "acceptance" / "a1"
+    acceptance_dir.mkdir(parents=True)
+    acceptance_file = acceptance_dir / "test_contract.py"
+    acceptance_file.write_text("def test_contract(): pass\n", encoding="utf-8")
+    implementation_test = tmp_path / "services" / "ai-service" / "tests"
+    implementation_test.mkdir(parents=True)
+    (implementation_test / "test_aimodel_agent.py").write_text(
+        "def test_agent(): pass\n", encoding="utf-8"
+    )
+    section = type(
+        "TaskSectionStub",
+        (),
+        {
+            "verification_commands": (
+                "pytest services/ai-service/tests/test_aimodel_agent.py",
+            )
+        },
+    )()
+
+    files, missing = discover_acceptance_files(
+        tmp_path,
+        "A1",
+        section,
+        ("tests/acceptance/a1",),
+    )
+
+    assert files == [acceptance_file]
+    assert missing == []
 
 
 def test_scope_rules_block_frontend_and_pipeline_mutation() -> None:

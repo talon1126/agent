@@ -24,7 +24,10 @@ def main() -> int:
         "--path",
         action="append",
         default=[],
-        help="additional acceptance file or directory; may be repeated",
+        help=(
+            "acceptance file or directory; may be repeated; when supplied, only "
+            "these paths are frozen"
+        ),
     )
     parser.add_argument(
         "--update",

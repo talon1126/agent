@@ -360,15 +360,20 @@ def discover_acceptance_files(
     section: TaskSection,
     explicit_paths: Sequence[str] = (),
 ) -> tuple[list[Path], list[str]]:
-    candidates = set(explicit_paths)
-    candidates.add(f"tests/acceptance/{task_id.lower()}")
-    for command in section.verification_commands:
-        for token in re.findall(r"[A-Za-z0-9_.\-/]+", command):
-            normalized = token.rstrip(".,:;")
-            if normalized.startswith("tests/") or "/tests/" in normalized:
-                candidates.add(normalized)
-            elif normalized.startswith("fixtures/evals/"):
-                candidates.add(normalized)
+    dedicated_path = f"tests/acceptance/{task_id.lower()}"
+    if explicit_paths:
+        candidates = set(explicit_paths)
+    elif (root / dedicated_path).exists():
+        candidates = {dedicated_path}
+    else:
+        candidates = set()
+        for command in section.verification_commands:
+            for token in re.findall(r"[A-Za-z0-9_.\-/]+", command):
+                normalized = token.rstrip(".,:;")
+                if normalized.startswith("tests/") or "/tests/" in normalized:
+                    candidates.add(normalized)
+                elif normalized.startswith("fixtures/evals/"):
+                    candidates.add(normalized)
 
     files: set[Path] = set()
     missing: list[str] = []
@@ -378,7 +383,7 @@ def discover_acceptance_files(
             files.add(path)
         elif path.is_dir():
             files.update(item for item in path.rglob("*") if item.is_file())
-        elif candidate != f"tests/acceptance/{task_id.lower()}":
+        else:
             missing.append(candidate)
     return sorted(files), missing
 
