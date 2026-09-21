@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "task_id": "B5",
+  "repository_contract": [
+    "create_and_restart_restore",
+    "optimistic_revision_conflict",
+    "conversation_user_isolation",
+    "append_event",
+    "idempotent_initialization"
+  ],
+  "long_term_memory": {
+    "allowed_fields": ["brand"],
+    "required_source_type": "user_turn",
+    "ttl_days": 180,
+    "forbidden_fields": [
+      "budget_min",
+      "budget_max",
+      "delivery_deadline",
+      "quantity",
+      "specification",
+      "current_candidate"
+    ]
+  }
+}
