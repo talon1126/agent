@@ -46,8 +46,8 @@ Completion index:
 Stage A independent closure passed at commit `592710f4` with evidence run
 `20260920T132512Z-592710f4de-9e89e0`.
 
-Stage B independent closure passed at commit `7bdc25a9` with evidence run
-`20260921T033117Z-7bdc25a9c3-6a4370`.
+Stage B independent closure passed at commit `3452f178` with evidence run
+`20260921T040728Z-3452f178a3-a66de2`.
 
 ## Required task flow
 
