@@ -1036,8 +1036,6 @@ def is_explicit_reusable_brand_preference(text: str, brand: str) -> bool:
     normalized_brand = brand.strip()
     if not normalized_text or not normalized_brand:
         return False
-    if any(term in normalized_text for term in _EPHEMERAL_PREFERENCE_TERMS):
-        return False
 
     clauses = [
         clause.strip()
@@ -1048,6 +1046,8 @@ def is_explicit_reusable_brand_preference(text: str, brand: str) -> bool:
     ]
     for index, clause in enumerate(clauses):
         if normalized_brand not in clause:
+            continue
+        if any(term in clause for term in _EPHEMERAL_PREFERENCE_TERMS):
             continue
         if any(term in clause for term in _NEGATIVE_PREFERENCE_TERMS):
             continue

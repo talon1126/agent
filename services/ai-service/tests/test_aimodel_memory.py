@@ -96,12 +96,18 @@ def test_extract_user_memories_keeps_explicit_brand_but_not_session_budget() -> 
         )
         == []
     )
-    mixed = extract_user_memories_from_text(
+    for mixed_statement in (
         "我不喜欢小米，但长期喜欢华为",
-        user_id=1,
-        now=now,
-    )
-    assert [memory.memory_value for memory in mixed] == ["华为"]
+        "这次不要小米，但我长期喜欢华为",
+        "今天不考虑苹果；平时一直喜欢华为",
+        "临时不买小米，而长期偏好华为",
+    ):
+        mixed = extract_user_memories_from_text(
+            mixed_statement,
+            user_id=1,
+            now=now,
+        )
+        assert [memory.memory_value for memory in mixed] == ["华为"]
 
 
 def test_noop_aimodel_memory_store_upserts_user_memory() -> None:
