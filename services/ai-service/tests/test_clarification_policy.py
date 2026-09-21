@@ -281,6 +281,9 @@ def test_skipped_conflict_fingerprint_suppresses_only_the_same_conflict() -> Non
     )
 
     assert suppressed.should_ask is False
+    assert suppressed.may_proceed is False
+    assert suppressed.recommend_with_uncertainty is False
+    assert suppressed.reason is ClarificationReason.UNRESOLVED_BLOCKING_CONFLICT
     assert suppressed.critical_unknowns == ("budget_max",)
     assert reasked.should_ask is True
     assert reasked.conflict_fingerprint != first.conflict_fingerprint

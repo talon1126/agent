@@ -53,6 +53,7 @@ class ClarificationReason(StrEnum):
     HIGH_IMPACT_SLOT = "high_impact_slot"
     GENERAL_PREFERENCE = "general_preference"
     NO_CLARIFICATION_NEEDED = "no_clarification_needed"
+    UNRESOLVED_BLOCKING_CONFLICT = "unresolved_blocking_conflict"
     SUPPRESSED_UNCERTAINTY = "suppressed_uncertainty"
     NO_CANDIDATES = "no_candidates"
 
@@ -666,7 +667,10 @@ def select_clarification(
         dict.fromkeys(topic.slot_key for topic in (*skipped_conflict_topics, *topics))
     )
     if suppressed_unknowns:
-        may_proceed = candidate_status is not CandidateStatus.EMPTY
+        has_blocking_conflict = bool(skipped_conflict_topics)
+        may_proceed = (
+            not has_blocking_conflict and candidate_status is not CandidateStatus.EMPTY
+        )
         return ClarificationDecision(
             policy_version=config.policy_version,
             should_ask=False,
@@ -674,7 +678,11 @@ def select_clarification(
             recommend_with_uncertainty=(
                 may_proceed and candidate_status is CandidateStatus.AVAILABLE
             ),
-            reason=ClarificationReason.SUPPRESSED_UNCERTAINTY,
+            reason=(
+                ClarificationReason.UNRESOLVED_BLOCKING_CONFLICT
+                if has_blocking_conflict
+                else ClarificationReason.SUPPRESSED_UNCERTAINTY
+            ),
             critical_unknowns=suppressed_unknowns,
         )
 
