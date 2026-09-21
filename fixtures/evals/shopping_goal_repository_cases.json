@@ -6,7 +6,14 @@
     "optimistic_revision_conflict",
     "conversation_user_isolation",
     "append_event",
-    "idempotent_initialization"
+    "idempotent_initialization",
+    "atomic_transition_commit"
+  ],
+  "orchestration_contract": [
+    "load_extract_merge_persist",
+    "single_clarification_short_circuit",
+    "non_shopping_passthrough",
+    "goal_context_projection"
   ],
   "long_term_memory": {
     "allowed_fields": ["brand"],
