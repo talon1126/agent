@@ -316,6 +316,8 @@ def _stream_chat_events_impl(
                 memory_value=memory.memory_value,
                 evidence=memory.evidence,
                 confidence=memory.confidence,
+                expires_at=memory.expires_at,
+                source_goal_id=memory.source_goal_id,
             )
     except Exception as error:
         # 中文注释：assistant 记忆写入失败不阻断已经生成给用户的回答，避免前端丢失本轮结果。

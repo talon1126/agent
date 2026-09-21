@@ -1,6 +1,7 @@
 import sys
 import threading
 import types
+from datetime import UTC, datetime, timedelta
 
 from app.routers.AImodel.agent_trace import (
     AgentTraceContext,
@@ -40,10 +41,9 @@ def test_aimodel_memory_schema_uses_integer_ids_without_physical_foreign_keys() 
     assert "query_trace_id TEXT NOT NULL" in schema_sql
     assert "REFERENCES message" not in schema_sql
     assert "REFERENCES rag_query_traces" not in schema_sql
-    assert (
-        "TRUNCATE TABLE message_query_trace, message, conversation, user_memory"
-        in normalized_schema
-    )
+    assert "TRUNCATE" not in normalized_schema.upper()
+    assert "CREATE TABLE IF NOT EXISTS shopping_goal_state" in schema_sql
+    assert "CREATE TABLE IF NOT EXISTS shopping_goal_event" in schema_sql
 
 
 def test_noop_aimodel_memory_store_generates_conversation_id_and_keeps_recent_messages() -> (
@@ -71,29 +71,30 @@ def test_noop_aimodel_memory_store_generates_conversation_id_and_keeps_recent_me
     ]
 
 
-def test_extract_user_memories_from_text_detects_price_and_brand_preferences() -> None:
+def test_extract_user_memories_keeps_explicit_brand_but_not_session_budget() -> None:
+    now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
     memories = extract_user_memories_from_text(
         "我喜欢小米，也比较看重高性价比，预算有限。",
         user_id=1,
+        now=now,
     )
 
-    assert (
+    assert memories == [
         AiModelUserMemory(
             memory_type="brand_preference",
             memory_value="小米",
-            evidence="用户表达了对小米的品牌偏好。",
+            evidence="我喜欢小米，也比较看重高性价比，预算有限。",
             confidence=0.8,
+            expires_at=now + timedelta(days=180),
         )
-        in memories
-    )
+    ]
     assert (
-        AiModelUserMemory(
-            memory_type="price_preference",
-            memory_value="高性价比",
-            evidence="用户表达了高性价比或预算敏感偏好。",
-            confidence=0.7,
+        extract_user_memories_from_text(
+            "这次只看华为，预算六千",
+            user_id=1,
+            now=now,
         )
-        in memories
+        == []
     )
 
 
