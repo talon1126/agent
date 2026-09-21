@@ -665,7 +665,7 @@ def select_clarification(
 
     suppressed_unknowns = tuple(
         dict.fromkeys(topic.slot_key for topic in (*skipped_conflict_topics, *topics))
-    )
+    )[:16]
     if suppressed_unknowns:
         has_blocking_conflict = bool(skipped_conflict_topics)
         may_proceed = (

@@ -42,6 +42,9 @@ B4 澄清策略是一个确定性决策层，输入为 B3 的 `ShoppingGoal`、`
 所有问题包含 2-5 个选项并带稳定 option ID。问题渲染器异常、返回空文本、超长文本
 或内部字段名时，策略使用固定中文模板，错误内容不会进入响应。
 
+`critical_unknowns` 沿用决策优先级并稳定保留前 16 项，以匹配输出 schema；其余未知项
+仍保留在 `ShoppingGoal`，不会因响应投影而丢失。
+
 ## A2 指标
 
 `clarification_policy_cases.json` 与 A2 的 40 个场景一一对应。必要澄清召回率为

@@ -342,6 +342,26 @@ def test_long_valid_upstream_values_still_project_to_a4() -> None:
     )
 
 
+def test_suppressed_unknowns_are_stably_capped_to_output_schema() -> None:
+    attributes = tuple(f"spec-{index:02d}" for index in range(17))
+    goal = category_goal(
+        *(
+            open_slot(GoalField.SPECIFICATION, "规格？", attribute=attribute)
+            for attribute in attributes
+        )
+    )
+    skipped = tuple(f"specification:{attribute}" for attribute in attributes)
+
+    decision = select_clarification(
+        goal,
+        history=ClarificationHistory(skipped_slot_keys=skipped),
+        candidate_status=CandidateStatus.AVAILABLE,
+    )
+
+    assert decision.should_ask is False
+    assert decision.critical_unknowns == skipped[:16]
+
+
 def test_suppressed_unknowns_are_stable_and_allow_uncertain_ranking() -> None:
     goal = category_goal(
         open_slot(GoalField.BUDGET_MAX, "预算上限？"),
