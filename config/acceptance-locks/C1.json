@@ -1,0 +1,11 @@
+{
+  "files": {
+    "tests/acceptance/c1/product_snapshot_cases.json": "a268da01003ba35a40be2de9ed3e2b1845b2c052b3ea9897da0a9085793c4609",
+    "tests/acceptance/c1/test_c1_product_snapshot_contract.py": "940f55bb5fcd67a029d236d953edee6bf398b944f9e160133efc60fac5304bd7"
+  },
+  "generated_at": "2026-09-21T04:21:40Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "C1",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}
