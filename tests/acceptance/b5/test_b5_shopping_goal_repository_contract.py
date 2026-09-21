@@ -228,9 +228,10 @@ class _FakePostgresDatabase:
 
 def repository_factories() -> tuple[tuple[str, Any], ...]:
     database = _FakePostgresDatabase()
-    conversation_owner = lambda conversation_id: (
-        9 if conversation_id in {71, 72} else None
-    )
+
+    def conversation_owner(conversation_id: int) -> int | None:
+        return 9 if conversation_id in {71, 72} else None
+
     return (
         (
             "memory",
