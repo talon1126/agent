@@ -43,6 +43,7 @@ Completion index:
 - B4：实现澄清策略 ✔️
 - B5：持久化目标状态并隔离长期偏好 ✔️
 - C1：建立商品事实快照 ✔️
+- C2：实现候选召回与硬过滤 ✔️
 
 Stage A independent closure passed at commit `592710f4` with evidence run
 `20260920T132512Z-592710f4de-9e89e0`.
