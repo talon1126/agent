@@ -92,7 +92,7 @@ def change_event() -> GoalChangeEvent:
         evidence=evidence("改成华为"),
     )
     return GoalChangeEvent(
-        action=DeltaAction.SET,
+        action=DeltaAction.REPLACE,
         field=GoalField.BRAND,
         source_turn=2,
         after=(brand,),
