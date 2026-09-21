@@ -68,6 +68,39 @@ def test_parse_item_id_from_frontend_product_link() -> None:
     )
 
 
+def test_parse_item_id_rejects_noncanonical_and_traversal_paths() -> None:
+    unsafe_links = (
+        "https://shop.example.com/items/item_milk_pure/extra",
+        "https://shop.example.com/shop/items/item_milk_pure",
+        "https://shop.example.com/items/item_milk_pure%2F..%2Fadmin",
+        "https://shop.example.com/items/item_milk_pure\\..\\admin",
+        "https://shop.example.com/items/..",
+    )
+
+    assert all(parse_item_id_from_link(link) is None for link in unsafe_links)
+
+
+def test_invalid_product_link_is_rejected_before_http_call() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"unexpected": True})
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="http://mock-api"
+    )
+    result = fetch_product_detail_from_link(
+        "https://shop.example.com/items/item_milk_pure%2F..%2Fadmin",
+        mock_api_url="http://mock-api",
+        http_client=client,
+    )
+
+    assert result.ok is False
+    assert result.error == "product_link_item_id_not_found"
+    assert requests == []
+
+
 def test_build_product_url_uses_frontend_base_url(monkeypatch) -> None:
     monkeypatch.setenv("FRONTEND_BASE_URL", "https://shop.example.com/")
 

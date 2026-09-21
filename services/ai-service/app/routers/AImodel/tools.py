@@ -2,6 +2,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
 import threading
 from collections.abc import Coroutine
 from collections.abc import Callable
@@ -22,6 +23,10 @@ RAG_TOOL_NAME = "rag_tool"
 DEFAULT_RAG_TOP_K = 5
 DEFAULT_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 DEFAULT_TAVILY_MAX_RESULTS = 5
+SAFE_PRODUCT_ITEM_ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
+_PRODUCT_LINK_PATH_PATTERN = re.compile(
+    rf"/(?:items|ip)/(?P<item_id>{SAFE_PRODUCT_ITEM_ID_PATTERN})/?"
+)
 
 
 class TavilySearchClient:
@@ -482,15 +487,20 @@ def _python_mcp_args() -> list[str]:
 
 
 def parse_item_id_from_link(link: str) -> str | None:
-    parsed = urlparse(link)
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if "items" not in path_parts:
+    """Extract one canonical item ID from an exact product path."""
+
+    try:
+        parsed = urlparse(link)
+    except ValueError:
         return None
-    item_index = path_parts.index("items") + 1
-    if item_index >= len(path_parts):
+    raw_path = parsed.path
+    if "\\" in raw_path or re.search(r"%(?:2f|5c)", raw_path, re.IGNORECASE):
         return None
-    # 中文注释：前端商品详情页约定为 /items/{item_id}，工具只信任该路径中的商品 ID。
-    return unquote(path_parts[item_index]).strip() or None
+    decoded_path = unquote(raw_path)
+    if "\\" in decoded_path:
+        return None
+    match = _PRODUCT_LINK_PATH_PATTERN.fullmatch(decoded_path)
+    return match.group("item_id") if match else None
 
 
 def build_product_url(item_id: str) -> str:
@@ -654,7 +664,9 @@ def rag_tool(
         )
 
     active_collection = (
-        collection.strip() if isinstance(collection, str) and collection.strip() else None
+        collection.strip()
+        if isinstance(collection, str) and collection.strip()
+        else None
     )
     active_collections = _normalize_collections(collections)
     client = rag_client or get_rag_knowledge_client()

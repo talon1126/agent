@@ -40,6 +40,8 @@ _SENSITIVE_KEY_PARTS = (
     "address",
 )
 _CONTENT_KEY_PARTS = ("content", "prompt", "document", "html", "body")
+_PUBLIC_CODE_KEYS = frozenset({"authorization_code"})
+_PUBLIC_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _LEGACY_EVENT_TYPES = {
     "intent": "goal",
     "allowed_tools": "plan",
@@ -592,6 +594,12 @@ def _sanitize_value(key: str, value: Any) -> Any:
     """Sanitize one trace value according to its key and shape."""
 
     lowered = key.lower()
+    if (
+        lowered in _PUBLIC_CODE_KEYS
+        and isinstance(value, str)
+        and _PUBLIC_CODE_PATTERN.fullmatch(value)
+    ):
+        return value
     if any(part in lowered for part in _SENSITIVE_KEY_PARTS):
         return "[REDACTED]"
     if isinstance(value, Mapping):

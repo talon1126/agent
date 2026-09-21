@@ -1002,7 +1002,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_aimod
 
 不执行工具，不生成最终回答，不为了展示复杂度给简单任务增加步骤。
 
-### D3：实现步骤级工具授权
+### D3：实现步骤级工具授权 ✔️
 
 **目标**
 

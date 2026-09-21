@@ -1,0 +1,128 @@
+{
+  "acceptance_lock_sha256": "2c25449c0cd003e6b55f885247017c0ebdc227f44887e39a7952a32adea41cd5",
+  "baseline_commit": "6a65d9efd81ab3ddf4f52df40473fe2879a0d3d1",
+  "change_commits": [],
+  "changed_files": [
+    "docs/agent_tool_permission_matrix.md",
+    "services/ai-service/app/routers/AImodel/agent_trace.py",
+    "services/ai-service/app/routers/AImodel/tool_policy.py",
+    "services/ai-service/app/routers/AImodel/tools.py",
+    "services/ai-service/tests/test_aimodel_agent.py",
+    "services/ai-service/tests/test_tool_policy_gate.py",
+    "tests/acceptance/d3/test_d3_tool_policy_contract.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "0f52e8940e29a8f77793e66153e8ee15200b634954284b997f9611dd8cbd1b0a"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "011055f54bb42a369ad68d9da27e0cf562c8fca7188ec318fa3525ffa7c67eb8"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "ef7d13d02214e98ca902b05257cdbe6a8e84f3b4714508efdc19766460b54209"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "9e4dd30d4cb074abae9bbaa63c284860983d4183f2f8a29c9e800dbf1ed6af8c"
+    }
+  ],
+  "implementation_fingerprint": "35e777af74ac19f8c3c60231e47b6d214a943d1c72dea4c0956ef0991ac9e317",
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "7 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check 6a65d9efd81ab3ddf4f52df40473fe2879a0d3d1..0a8b68374ca1e49a05792a86e578318b7a90c30a",
+            "duration_seconds": 0.062,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/agent_trace.py services/ai-service/app/routers/AImodel/tool_policy.py services/ai-service/app/routers/AImodel/tools.py services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_tool_policy_gate.py tests/acceptance/d3/test_d3_tool_policy_contract.py",
+            "duration_seconds": 1.812,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/agent_trace.py services/ai-service/app/routers/AImodel/tool_policy.py services/ai-service/app/routers/AImodel/tools.py services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_tool_policy_gate.py tests/acceptance/d3/test_d3_tool_policy_contract.py",
+            "duration_seconds": 0.5,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/d3/test_d3_tool_policy_contract.py -q",
+            "duration_seconds": 1.329,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_tool_policy_gate.py services/ai-service/tests/test_aimodel_agent.py -q",
+            "duration_seconds": 1.421,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-21T10:22:56Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "0a8b68374ca1e49a05792a86e578318b7a90c30a",
+  "task_id": "D3",
+  "task_title": "实现步骤级工具授权"
+}
