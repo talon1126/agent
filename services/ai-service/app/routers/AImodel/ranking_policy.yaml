@@ -1,0 +1,43 @@
+schema_version: v1
+policy_version: c4-baseline-v1
+score_precision: 6
+
+component_weights:
+  soft_preference: "0.25"
+  price_position: "0.15"
+  rating_confidence: "0.20"
+  review_volume: "0.10"
+  delivery_match: "0.15"
+  category_features: "0.15"
+
+normalization:
+  price: cohort_min_max_lower_better
+  rating: bounded_0_5_with_review_confidence
+  review_volume: log_saturation
+  delivery: deadline_or_availability
+  category_number: cohort_min_max
+  review_saturation: 1000
+
+missing_feature_strategy: renormalize_available
+tie_break:
+  - total_score_desc
+  - evidence_completeness_desc
+  - item_id_asc
+
+diversity:
+  top_n: 5
+  max_per_brand: 1
+  max_per_model: 1
+
+low_confidence_threshold: "0.35"
+
+category_feature_weights:
+  electronics:
+    memory_gb: "0.45"
+    storage_gb: "0.45"
+    wireless_charging: "0.10"
+  dairy:
+    volume_ml: "0.50"
+    shelf_life_days: "0.50"
+  office_supply:
+    sheet_count: "1.00"

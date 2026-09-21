@@ -797,7 +797,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_featu
 
 不定义最终排序权重，不使用 LLM 猜测缺失规格，不处理跨品类商品的强行参数对齐。
 
-### C4：实现可解释排序与多样性
+### C4：实现可解释排序与多样性 ✔️
 
 **目标**
 

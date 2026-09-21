@@ -508,6 +508,30 @@ class FeatureNormalizer:
             errors=tuple(errors),
         )
 
+    def normalize_value(
+        self,
+        *,
+        profile_id: str,
+        feature_key: str,
+        raw_value: str,
+    ) -> NormalizedFeature:
+        """Normalize one declared value with the same profile rules as a product."""
+
+        profile = self._registry.resolve(profile_id)
+        if profile.profile_id != profile_id:
+            raise FeatureConfigError(f"profiles.{profile_id}: unknown feature profile")
+        canonical_key = self._registry.feature_key(profile_id, feature_key)
+        if canonical_key is None:
+            raise FeatureConfigError(
+                f"profiles.{profile_id}.features.{feature_key}: unknown feature"
+            )
+        return self._normalize_feature(
+            profile_id,
+            canonical_key,
+            profile.features[canonical_key],
+            (feature_key, raw_value),
+        )
+
     def _find_raw_feature(
         self,
         profile_id: str,
