@@ -15,6 +15,7 @@ from .memory import (
     POSTGRES_AIMODEL_MEMORY_SCHEMA_SQL,
     AiModelMemoryStore,
     AiModelUserMemory,
+    is_explicit_reusable_brand_preference,
 )
 from .shopping_goal import GoalField, GoalSourceType, ShoppingGoal
 
@@ -24,8 +25,6 @@ GoalId = Annotated[
     StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
 ]
 LONG_TERM_MEMORY_TTL = timedelta(days=180)
-_REUSABLE_BRAND_TERMS = ("长期", "一直", "平时", "常买", "喜欢", "偏好")
-_EPHEMERAL_PREFERENCE_TERMS = ("这次", "本次", "当前", "今天", "临时")
 
 
 class ShoppingGoalRepositoryError(RuntimeError):
@@ -151,12 +150,6 @@ def _validate_next_revision(goal: ShoppingGoal, expected_revision: int) -> None:
         raise ValueError("saved goal revision must equal expected_revision + 1")
 
 
-def _is_reusable_brand_statement(quote: str) -> bool:
-    return not any(term in quote for term in _EPHEMERAL_PREFERENCE_TERMS) and any(
-        term in quote for term in _REUSABLE_BRAND_TERMS
-    )
-
-
 class InMemoryShoppingGoalRepository:
     """Thread-safe repository with the same externally visible CAS semantics."""
 
@@ -177,7 +170,9 @@ class InMemoryShoppingGoalRepository:
 
     def _validate_create_owner(self, conversation_id: int, user_id: int) -> None:
         if self._conversation_owner is None:
-            return
+            raise ShoppingGoalRepositoryError(
+                "conversation owner resolver is required for goal creation"
+            )
         owner = self._conversation_owner(conversation_id)
         if owner is None:
             raise ShoppingGoalNotFound("conversation does not exist")
@@ -305,12 +300,14 @@ class PostgresShoppingGoalRepository:
         *,
         connection_factory: Callable[[], Any] | None = None,
         clock: Callable[[], datetime] = _utc_now,
+        conversation_owner: Callable[[int], int | None] | None = None,
     ) -> None:
         self.database_url = database_url.replace(
             "postgresql+psycopg://", "postgresql://"
         )
         self._connection_factory = connection_factory
         self._clock = clock
+        self._conversation_owner = conversation_owner
         self._init_lock = threading.Lock()
         self._initialized = False
 
@@ -339,18 +336,20 @@ class PostgresShoppingGoalRepository:
             self._initialized = True
 
     def _validate_conversation_owner(self, conversation_id: int, user_id: int) -> None:
-        if self._connection_factory is not None:
-            return
-        with self._connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT user_id FROM conversation WHERE id = %s",
-                    (conversation_id,),
-                )
-                row = cursor.fetchone()
-        if row is None:
+        if self._conversation_owner is not None:
+            owner = self._conversation_owner(conversation_id)
+        else:
+            with self._connect() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT user_id FROM conversation WHERE id = %s",
+                        (conversation_id,),
+                    )
+                    row = cursor.fetchone()
+            owner = int(row[0]) if row is not None else None
+        if owner is None:
             raise ShoppingGoalNotFound("conversation does not exist")
-        if int(row[0]) != user_id:
+        if owner != user_id:
             raise ShoppingGoalAccessDenied("shopping goal access denied")
 
     @staticmethod
@@ -593,7 +592,9 @@ def project_reusable_user_memories(
             continue
         if evidence.source_type is not GoalSourceType.USER_TURN or not evidence.quote:
             continue
-        if not _is_reusable_brand_statement(evidence.quote):
+        if not is_explicit_reusable_brand_preference(
+            evidence.quote, str(preference.value)
+        ):
             continue
         expires_at = evidence.updated_at + LONG_TERM_MEMORY_TTL
         if expires_at <= reference_time:

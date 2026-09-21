@@ -13,6 +13,7 @@ from app.routers.AImodel.goal_repository import (
     ShoppingGoalAccessDenied,
     ShoppingGoalNotFound,
     ShoppingGoalRepository,
+    ShoppingGoalRepositoryError,
     ShoppingGoalRevisionConflict,
     project_reusable_user_memories,
     sync_reusable_goal_memories,
@@ -96,8 +97,18 @@ def test_create_can_validate_external_conversation_ownership() -> None:
         repository.create(conversation_id=2, user_id=10, goal=shopping_goal())
 
 
-def test_compare_and_save_requires_exact_next_revision() -> None:
+def test_in_memory_create_fails_closed_without_conversation_owner() -> None:
     repository = InMemoryShoppingGoalRepository(clock=lambda: NOW)
+
+    with pytest.raises(ShoppingGoalRepositoryError, match="owner resolver"):
+        repository.create(conversation_id=1, user_id=10, goal=shopping_goal())
+
+
+def test_compare_and_save_requires_exact_next_revision() -> None:
+    repository = InMemoryShoppingGoalRepository(
+        clock=lambda: NOW,
+        conversation_owner=lambda conversation_id: 10 if conversation_id == 1 else None,
+    )
     repository.create(conversation_id=1, user_id=10, goal=shopping_goal())
 
     with pytest.raises(ValueError, match=r"expected_revision \+ 1"):
@@ -164,6 +175,33 @@ def test_projection_rejects_inferred_expired_and_non_brand_preferences() -> None
         project_reusable_user_memories(
             ShoppingGoal(preferences=(old_brand,)),
             goal_id="goal-2",
+            now=NOW,
+        )
+        == ()
+    )
+
+
+@pytest.mark.parametrize(
+    "statement,brand",
+    [
+        ("我不喜欢小米", "小米"),
+        ("我一直不喜欢华为", "华为"),
+        ("以前喜欢苹果，现在不喜欢了", "苹果"),
+    ],
+)
+def test_projection_rejects_negated_or_withdrawn_brand_preferences(
+    statement: str, brand: str
+) -> None:
+    preference = Preference(
+        field=GoalField.BRAND,
+        value=brand,
+        evidence=evidence(statement),
+    )
+
+    assert (
+        project_reusable_user_memories(
+            ShoppingGoal(preferences=(preference,)),
+            goal_id="goal-negative",
             now=NOW,
         )
         == ()

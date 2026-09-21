@@ -14,6 +14,35 @@ from app.routers.AImodel.schemas import AiModelChatResponse
 
 _LANGCHAIN_CHECKPOINTER_LOCK = threading.Lock()
 
+_KNOWN_BRANDS = (
+    "小米",
+    "华为",
+    "苹果",
+    "索尼",
+    "戴森",
+    "美的",
+    "海尔",
+    "耐克",
+    "阿迪达斯",
+)
+_REUSABLE_PREFERENCE_TERMS = ("长期", "一直", "平时", "常买", "喜欢", "偏好")
+_EPHEMERAL_PREFERENCE_TERMS = ("这次", "本次", "当前", "今天", "临时")
+_NEGATIVE_PREFERENCE_TERMS = (
+    "不喜欢",
+    "不偏好",
+    "不想要",
+    "不想买",
+    "不考虑",
+    "不要",
+    "不买",
+    "不选",
+    "排斥",
+    "讨厌",
+    "取消偏好",
+    "撤销偏好",
+)
+_HISTORICAL_PREFERENCE_TERMS = ("以前", "曾经", "过去")
+
 POSTGRES_AIMODEL_MEMORY_SCHEMA_SQL = [
     """
     CREATE TABLE IF NOT EXISTS conversation (
@@ -993,30 +1022,54 @@ def extract_user_memories_from_text(
 
 
 def _extract_brand_preferences(text: str) -> list[str]:
-    brands = [
-        "小米",
-        "华为",
-        "苹果",
-        "索尼",
-        "戴森",
-        "美的",
-        "海尔",
-        "耐克",
-        "阿迪达斯",
-    ]
-    if any(keyword in text for keyword in ["这次", "本次", "当前", "今天", "临时"]):
-        return []
-    if not any(keyword in text for keyword in ["喜欢", "偏好", "常买", "长期", "一直"]):
-        return []
     return [
         brand
-        for brand in brands
-        if re.search(
-            rf"(喜欢|偏好|常买|长期|一直).{{0,8}}{brand}|"
-            rf"{brand}.{{0,8}}(喜欢|偏好|常买|长期|一直)",
-            text,
-        )
+        for brand in _KNOWN_BRANDS
+        if is_explicit_reusable_brand_preference(text, brand)
     ]
+
+
+def is_explicit_reusable_brand_preference(text: str, brand: str) -> bool:
+    """Return true only for current, positive, cross-session brand preferences."""
+
+    normalized_text = text.strip()
+    normalized_brand = brand.strip()
+    if not normalized_text or not normalized_brand:
+        return False
+    if any(term in normalized_text for term in _EPHEMERAL_PREFERENCE_TERMS):
+        return False
+
+    clauses = [
+        clause.strip()
+        for clause in re.split(
+            r"[，,。；;！？!?\n]|(?:但是|但|不过|而是|却)", normalized_text
+        )
+        if clause.strip()
+    ]
+    for index, clause in enumerate(clauses):
+        if normalized_brand not in clause:
+            continue
+        if any(term in clause for term in _NEGATIVE_PREFERENCE_TERMS):
+            continue
+        if (
+            any(term in clause for term in _HISTORICAL_PREFERENCE_TERMS)
+            and "一直" not in clause
+        ):
+            continue
+        if index + 1 < len(clauses):
+            following = clauses[index + 1]
+            has_explicit_brand = any(brand in following for brand in _KNOWN_BRANDS)
+            if not has_explicit_brand and any(
+                term in following for term in _NEGATIVE_PREFERENCE_TERMS
+            ):
+                continue
+        if re.search(
+            rf"(?:{'|'.join(_REUSABLE_PREFERENCE_TERMS)}).{{0,8}}{re.escape(normalized_brand)}|"
+            rf"{re.escape(normalized_brand)}.{{0,8}}(?:{'|'.join(_REUSABLE_PREFERENCE_TERMS)})",
+            clause,
+        ):
+            return True
+    return False
 
 
 class FallbackLangChainCheckpointer:
