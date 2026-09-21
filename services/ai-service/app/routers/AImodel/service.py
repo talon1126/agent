@@ -35,9 +35,17 @@ from app.routers.AImodel.intent_router import (
 )
 from app.routers.AImodel.agent_trace import (
     AgentTraceContext,
+    AgentTraceEventType,
+    AgentTraceStatus,
     LangChainAgentTraceMiddleware,
     record_allowed_tools,
     record_intent_route,
+)
+from app.routers.AImodel.goal_orchestrator import (
+    ShoppingGoalOrchestrator,
+    ShoppingGoalTurnResult,
+    get_shopping_goal_orchestrator,
+    shopping_goal_prompt_context,
 )
 from app.routers.AImodel.memory import (
     AiModelMemoryMessage,
@@ -85,6 +93,7 @@ RAG 工具返回的是可直接用于回答的内部知识上下文，不是最�
 RAG 返回引用时可以在回答中展示引用标题或章节，但不能编造引用，也不能展示内部 chunk id、trace id、query_trace_id 或原始工具 JSON。
 不要在最终回答中声明“根据内部知识库”“我查了内部知识库”“来自 RAG”“我调用了工具”等来源过程；直接给出答案。
 如果工具没有找到合适商品，请明确说明未找到。
+服务端提供的购物任务状态是本轮决策的权威约束；不得放宽其中的硬约束或排除项，开放槽位只能通过用户确认补齐。
 回答使用中文，简洁、实用，并优先给出可执行建议。
 回答必须使用清晰 Markdown 格式：短段落说明结论，多个要点使用无序列表，每个列表项只表达一个建议。
 不要把工具调用过程、工具名称、工具参数、工具返回 JSON、原始字段名或 Python/JSON 对象展示给用户。
@@ -152,6 +161,7 @@ def stream_chat_events(
     http_client: httpx.Client | None = None,
     streaming_agent_runner: StreamingAgentRunner | None = None,
     memory_store: AiModelMemoryStore | None = None,
+    goal_orchestrator: ShoppingGoalOrchestrator | None = None,
 ) -> Iterator[str]:
     """Stream chat events and close the trace if the client disconnects."""
 
@@ -163,6 +173,7 @@ def stream_chat_events(
             http_client=http_client,
             streaming_agent_runner=streaming_agent_runner,
             memory_store=memory_store,
+            goal_orchestrator=goal_orchestrator,
             trace_state=trace_state,
         )
     except GeneratorExit:
@@ -185,12 +196,16 @@ def _stream_chat_events_impl(
     http_client: httpx.Client | None = None,
     streaming_agent_runner: StreamingAgentRunner | None = None,
     memory_store: AiModelMemoryStore | None = None,
+    goal_orchestrator: ShoppingGoalOrchestrator | None = None,
     trace_state: dict[str, Any],
 ) -> Iterator[str]:
     """Implement the stream while exposing lifecycle state to its wrapper."""
 
     ensure_aimodel_configured()
+    uses_default_memory_store = memory_store is None
     memory_store = memory_store or get_aimodel_memory_store()
+    if goal_orchestrator is None and uses_default_memory_store:
+        goal_orchestrator = get_shopping_goal_orchestrator()
     trace_state["memory_store"] = memory_store
     tool_results: list[AiModelToolResult] = []
     answer_parts: list[str] = []
@@ -210,17 +225,56 @@ def _stream_chat_events_impl(
             first_message=request.message,
         )
         agent_trace_context.conversation_id = conversation_id
-        user_memories = memory_store.load_user_memories(request.user_id, limit=10)
         memory_store.append_user_message(
             conversation_id,
             user_id=request.user_id,
             content=request.message,
             links=request.links,
         )
+        goal_result = _process_shopping_goal_turn(
+            goal_orchestrator,
+            agent_trace_context,
+            conversation_id=conversation_id,
+            request=request,
+        )
+        user_memories = memory_store.load_user_memories(request.user_id, limit=10)
     except Exception as error:
         agent_trace_context.fail(error)
         _persist_agent_trace_safely(memory_store, agent_trace_context)
         yield _format_sse("error", {"content": f"AImodel memory failed: {error}"})
+        return
+
+    if goal_result is not None and goal_result.clarification.should_ask:
+        payload = goal_result.clarification.payload
+        if payload is None:
+            error = RuntimeError("clarification decision is missing its payload")
+            agent_trace_context.fail(error)
+            _persist_agent_trace_safely(memory_store, agent_trace_context)
+            yield _format_sse("error", {"content": "AImodel goal response failed."})
+            return
+        response = AiModelChatResponse.from_payload(
+            payload,
+            conversation_id=conversation_id,
+        )
+        done_payload = response.model_dump(mode="json")
+        try:
+            message_id = memory_store.append_assistant_message(
+                conversation_id,
+                user_id=request.user_id,
+                content=response.answer,
+                recommended_links=[
+                    link.model_dump(mode="json") for link in response.recommended_links
+                ],
+                structured_response=done_payload,
+            )
+        except Exception as error:
+            _record_memory_persist_failure(error)
+            agent_trace_context.fail(error)
+            _persist_agent_trace_safely(memory_store, agent_trace_context)
+        else:
+            agent_trace_context.complete(message_id=message_id, query_trace_ids=[])
+            _persist_agent_trace_safely(memory_store, agent_trace_context)
+        yield _format_sse("done", done_payload)
         return
 
     if request.links:
@@ -250,6 +304,11 @@ def _stream_chat_events_impl(
                 mock_api_url,
                 http_client,
                 user_memories=user_memories,
+                shopping_goal_context=(
+                    shopping_goal_prompt_context(goal_result.record)
+                    if goal_result is not None
+                    else None
+                ),
                 agent_trace_context=agent_trace_context,
                 langchain_config=build_langchain_config(conversation_id),
             )
@@ -307,18 +366,19 @@ def _stream_chat_events_impl(
             query_trace_ids=query_trace_ids,
             structured_response=done_payload,
         )
-        for memory in extract_user_memories_from_text(
-            request.message, user_id=request.user_id
-        ):
-            memory_store.upsert_user_memory(
-                request.user_id,
-                memory_type=memory.memory_type,
-                memory_value=memory.memory_value,
-                evidence=memory.evidence,
-                confidence=memory.confidence,
-                expires_at=memory.expires_at,
-                source_goal_id=memory.source_goal_id,
-            )
+        if goal_result is None:
+            for memory in extract_user_memories_from_text(
+                request.message, user_id=request.user_id
+            ):
+                memory_store.upsert_user_memory(
+                    request.user_id,
+                    memory_type=memory.memory_type,
+                    memory_value=memory.memory_value,
+                    evidence=memory.evidence,
+                    confidence=memory.confidence,
+                    expires_at=memory.expires_at,
+                    source_goal_id=memory.source_goal_id,
+                )
     except Exception as error:
         # 中文注释：assistant 记忆写入失败不阻断已经生成给用户的回答，避免前端丢失本轮结果。
         _record_memory_persist_failure(error)
@@ -332,6 +392,54 @@ def _stream_chat_events_impl(
         _persist_agent_trace_safely(memory_store, agent_trace_context)
 
     yield done_event
+
+
+def _process_shopping_goal_turn(
+    goal_orchestrator: ShoppingGoalOrchestrator | None,
+    trace_context: AgentTraceContext,
+    *,
+    conversation_id: int,
+    request: AiModelChatRequest,
+) -> ShoppingGoalTurnResult | None:
+    """Run the deterministic goal layer and attach a privacy-safe trace event."""
+
+    event = trace_context.begin_event(
+        AgentTraceEventType.GOAL,
+        stage="shopping_goal",
+        summary={"enabled": goal_orchestrator is not None},
+    )
+    if goal_orchestrator is None:
+        event.finish(AgentTraceStatus.SKIPPED, summary={"reason": "not_configured"})
+        return None
+    try:
+        result = goal_orchestrator.process_turn(
+            conversation_id=conversation_id,
+            user_id=request.user_id,
+            text=request.message,
+            page_context=request.page_context,
+        )
+    except Exception as error:
+        event.finish(AgentTraceStatus.ERROR, error=type(error).__name__)
+        raise
+    if result is None:
+        event.finish(
+            AgentTraceStatus.SKIPPED,
+            summary={"reason": "no_goal_mutation"},
+        )
+        return None
+    event.related_ids["goal_id"] = result.record.goal_id
+    event.finish(
+        AgentTraceStatus.SUCCESS,
+        summary={
+            "revision": result.record.revision,
+            "operation_count": len(result.delta.operations),
+            "event_count": len(result.committed_events),
+            "conflict_count": len(result.conflicts),
+            "clarification_required": result.clarification.should_ask,
+            "revision_retries": result.revision_retries,
+        },
+    )
+    return result
 
 
 def _run_langchain_agent(
@@ -431,6 +539,7 @@ def _run_langchain_agent_stream(
     *,
     history: list[AiModelMemoryMessage] | None = None,
     user_memories: list[AiModelUserMemory] | None = None,
+    shopping_goal_context: str | None = None,
     agent_trace_context: AgentTraceContext | None = None,
     langchain_config: dict[str, Any] | None = None,
 ) -> Iterator[str]:
@@ -515,7 +624,13 @@ def _run_langchain_agent_stream(
     )
     # 中文注释：这里只向前端流式输出可见回答文本，不暴露模型内部隐藏推理链路。
     for update in agent.stream(
-        {"messages": _build_langchain_messages(request, user_memories=user_memories)},
+        {
+            "messages": _build_langchain_messages(
+                request,
+                user_memories=user_memories,
+                shopping_goal_context=shopping_goal_context,
+            )
+        },
         stream_mode="messages",
         config=langchain_config,
     ):
@@ -904,10 +1019,19 @@ def _run_rag_tool(
     return result.model_dump()
 
 
-def _build_user_prompt(request: AiModelChatRequest) -> str:
+def _build_user_prompt(
+    request: AiModelChatRequest,
+    *,
+    shopping_goal_context: str | None = None,
+) -> str:
     links = "\n".join(f"- {link}" for link in request.links) if request.links else "无"
     # 中文注释：把用户问题和显式商品链接放进上下文，工具选择仍由 Agent 按系统提示自行决策。
-    return f"用户问题：{request.message}\n用户提供的商品链接：\n{links}"
+    goal_context = shopping_goal_context or "无"
+    return (
+        f"用户问题：{request.message}\n"
+        f"用户提供的商品链接：\n{links}\n"
+        f"服务端购物任务状态：{goal_context}"
+    )
 
 
 def _query_trace_ids_from_tool_results(
@@ -942,6 +1066,7 @@ def _build_langchain_messages(
     *,
     history: list[AiModelMemoryMessage] | None = None,
     user_memories: list[AiModelUserMemory] | None = None,
+    shopping_goal_context: str | None = None,
 ) -> list[HumanMessage | AIMessage]:
     # 中文注释：LangChain 输入显式使用 HumanMessage，避免手写 role dict 在不同模型适配器中行为不一致。
     messages: list[HumanMessage | AIMessage] = []
@@ -955,7 +1080,14 @@ def _build_langchain_messages(
         else:
             messages.append(HumanMessage(content=message.content))
 
-    messages.append(HumanMessage(content=_build_user_prompt(request)))
+    messages.append(
+        HumanMessage(
+            content=_build_user_prompt(
+                request,
+                shopping_goal_context=shopping_goal_context,
+            )
+        )
+    )
     return messages
 
 

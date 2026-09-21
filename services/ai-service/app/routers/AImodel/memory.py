@@ -14,16 +14,20 @@ from app.routers.AImodel.schemas import AiModelChatResponse
 
 _LANGCHAIN_CHECKPOINTER_LOCK = threading.Lock()
 
-_KNOWN_BRANDS = (
-    "小米",
-    "华为",
-    "苹果",
-    "索尼",
-    "戴森",
-    "美的",
-    "海尔",
-    "耐克",
-    "阿迪达斯",
+_BRAND_ALIASES = {
+    "Xiaomi": ("小米", "Xiaomi"),
+    "Huawei": ("华为", "Huawei"),
+    "Apple": ("苹果", "Apple"),
+    "Sony": ("索尼", "Sony"),
+    "Dyson": ("戴森", "Dyson"),
+    "Midea": ("美的", "Midea"),
+    "Haier": ("海尔", "Haier"),
+    "Nike": ("耐克", "Nike"),
+    "Adidas": ("阿迪达斯", "Adidas"),
+}
+_KNOWN_BRANDS = tuple(aliases[0] for aliases in _BRAND_ALIASES.values())
+_ALL_BRAND_ALIASES = tuple(
+    alias for aliases in _BRAND_ALIASES.values() for alias in aliases
 )
 _REUSABLE_PREFERENCE_TERMS = ("长期", "一直", "平时", "常买", "喜欢", "偏好")
 _EPHEMERAL_PREFERENCE_TERMS = ("这次", "本次", "当前", "今天", "临时")
@@ -290,6 +294,8 @@ class AiModelStoredMessage:
 class AiModelMemoryStore(Protocol):
     def initialize(self) -> None: ...
 
+    def get_conversation_owner(self, conversation_id: int) -> int | None: ...
+
     def ensure_conversation(
         self, conversation_id: int | None, *, user_id: int, first_message: str
     ) -> int: ...
@@ -361,20 +367,31 @@ class NoopAiModelMemoryStore:
     def initialize(self) -> None:
         return None
 
+    def get_conversation_owner(self, conversation_id: int) -> int | None:
+        with self._lock:
+            conversation = self._conversations.get(conversation_id)
+            return conversation[0] if conversation is not None else None
+
+    def _assert_conversation_owner(self, conversation_id: int, user_id: int) -> None:
+        conversation = self._conversations.get(conversation_id)
+        if conversation is None or conversation[0] != user_id:
+            raise PermissionError("conversation access denied")
+
     def ensure_conversation(
         self, conversation_id: int | None, *, user_id: int, first_message: str
     ) -> int:
         with self._lock:
             if conversation_id is not None:
-                self._conversations.setdefault(
-                    conversation_id,
-                    (
+                existing = self._conversations.get(conversation_id)
+                if existing is not None and existing[0] != user_id:
+                    raise PermissionError("conversation access denied")
+                if existing is None:
+                    self._conversations[conversation_id] = (
                         user_id,
                         _build_conversation_title(first_message),
                         self._next_sort_order,
-                    ),
-                )
-                self._next_sort_order += 1
+                    )
+                    self._next_sort_order += 1
                 self._messages.setdefault(conversation_id, [])
                 return conversation_id
             conversation_id = self._next_conversation_id
@@ -415,6 +432,7 @@ class NoopAiModelMemoryStore:
         self, conversation_id: int, *, user_id: int, content: str, links: list[str]
     ) -> None:
         with self._lock:
+            self._assert_conversation_owner(conversation_id, user_id)
             # 中文注释：Noop store 也保留完整消息结构，保证前端会话历史测试不依赖真实数据库。
             self._messages.setdefault(conversation_id, []).append(
                 AiModelStoredMessage(
@@ -445,6 +463,7 @@ class NoopAiModelMemoryStore:
             structured_response=structured_response,
         )
         with self._lock:
+            self._assert_conversation_owner(conversation_id, user_id)
             message_id = self._next_message_id
             self._messages.setdefault(conversation_id, []).append(
                 AiModelStoredMessage(
@@ -560,6 +579,17 @@ class PostgresAiModelMemoryStore:
                 connection.commit()
             self._initialized = True
 
+    def get_conversation_owner(self, conversation_id: int) -> int | None:
+        self.initialize()
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT user_id FROM conversation WHERE id = %s",
+                    (conversation_id,),
+                )
+                row = cursor.fetchone()
+        return int(row[0]) if row is not None else None
+
     def ensure_conversation(
         self, conversation_id: int | None, *, user_id: int, first_message: str
     ) -> int:
@@ -586,11 +616,14 @@ class PostgresAiModelMemoryStore:
                         INSERT INTO conversation (id, user_id, source, title)
                         VALUES (%s, %s, 'web', %s)
                         ON CONFLICT (id) DO UPDATE SET
-                            user_id = EXCLUDED.user_id,
                             updated_at = now()
+                        WHERE conversation.user_id = EXCLUDED.user_id
+                        RETURNING id
                         """,
                         (conversation_id, user_id, title),
                     )
+                    if cursor.fetchone() is None:
+                        raise PermissionError("conversation access denied")
             connection.commit()
         return conversation_id
 
@@ -1037,6 +1070,14 @@ def is_explicit_reusable_brand_preference(text: str, brand: str) -> bool:
     if not normalized_text or not normalized_brand:
         return False
 
+    brand_aliases = next(
+        (
+            aliases
+            for canonical, aliases in _BRAND_ALIASES.items()
+            if normalized_brand == canonical or normalized_brand in aliases
+        ),
+        (normalized_brand,),
+    )
     clauses = [
         clause.strip()
         for clause in re.split(
@@ -1045,7 +1086,8 @@ def is_explicit_reusable_brand_preference(text: str, brand: str) -> bool:
         if clause.strip()
     ]
     for index, clause in enumerate(clauses):
-        if normalized_brand not in clause:
+        matched_aliases = [alias for alias in brand_aliases if alias in clause]
+        if not matched_aliases:
             continue
         if any(term in clause for term in _EPHEMERAL_PREFERENCE_TERMS):
             continue
@@ -1058,14 +1100,15 @@ def is_explicit_reusable_brand_preference(text: str, brand: str) -> bool:
             continue
         if index + 1 < len(clauses):
             following = clauses[index + 1]
-            has_explicit_brand = any(brand in following for brand in _KNOWN_BRANDS)
+            has_explicit_brand = any(brand in following for brand in _ALL_BRAND_ALIASES)
             if not has_explicit_brand and any(
                 term in following for term in _NEGATIVE_PREFERENCE_TERMS
             ):
                 continue
+        alias_pattern = "|".join(re.escape(alias) for alias in matched_aliases)
         if re.search(
-            rf"(?:{'|'.join(_REUSABLE_PREFERENCE_TERMS)}).{{0,8}}{re.escape(normalized_brand)}|"
-            rf"{re.escape(normalized_brand)}.{{0,8}}(?:{'|'.join(_REUSABLE_PREFERENCE_TERMS)})",
+            rf"(?:{'|'.join(_REUSABLE_PREFERENCE_TERMS)}).{{0,8}}(?:{alias_pattern})|"
+            rf"(?:{alias_pattern}).{{0,8}}(?:{'|'.join(_REUSABLE_PREFERENCE_TERMS)})",
             clause,
         ):
             return True

@@ -94,6 +94,15 @@ class ShoppingGoalEventRecord(BaseModel):
     created_at: datetime
 
 
+class ShoppingGoalTransitionCommit(BaseModel):
+    """Atomically persisted goal snapshot and its append-only change events."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record: ShoppingGoalRecord
+    events: tuple[ShoppingGoalEventRecord, ...] = ()
+
+
 @runtime_checkable
 class ShoppingGoalRepository(Protocol):
     def initialize(self) -> None: ...
@@ -131,6 +140,16 @@ class ShoppingGoalRepository(Protocol):
         event: GoalChangeEvent,
     ) -> ShoppingGoalEventRecord: ...
 
+    def commit_transition(
+        self,
+        conversation_id: int,
+        *,
+        user_id: int,
+        expected_revision: int | None,
+        goal: ShoppingGoal,
+        events: tuple[GoalChangeEvent, ...],
+    ) -> ShoppingGoalTransitionCommit: ...
+
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
@@ -148,6 +167,15 @@ def _validate_next_revision(goal: ShoppingGoal, expected_revision: int) -> None:
         raise ValueError("expected_revision cannot be negative")
     if goal.revision != expected_revision + 1:
         raise ValueError("saved goal revision must equal expected_revision + 1")
+
+
+def _validated_transition_events(
+    events: tuple[GoalChangeEvent, ...],
+) -> tuple[GoalChangeEvent, ...]:
+    return tuple(
+        GoalChangeEvent.model_validate(event.model_dump(mode="python"))
+        for event in events
+    )
 
 
 class InMemoryShoppingGoalRepository:
@@ -290,6 +318,79 @@ class InMemoryShoppingGoalRepository:
             self._events.append(stored)
             return stored.model_copy(deep=True)
 
+    def commit_transition(
+        self,
+        conversation_id: int,
+        *,
+        user_id: int,
+        expected_revision: int | None,
+        goal: ShoppingGoal,
+        events: tuple[GoalChangeEvent, ...],
+    ) -> ShoppingGoalTransitionCommit:
+        _validate_identity(conversation_id, user_id)
+        validated_goal = ShoppingGoal.model_validate(goal.model_dump(mode="python"))
+        validated_events = _validated_transition_events(events)
+        with self._lock:
+            current = self._records.get(conversation_id)
+            if expected_revision is None:
+                self._validate_create_owner(conversation_id, user_id)
+                if current is not None:
+                    if current.user_id != user_id:
+                        raise ShoppingGoalAccessDenied("shopping goal access denied")
+                    raise ShoppingGoalAlreadyExists("shopping goal already exists")
+                now = self._clock()
+                record = ShoppingGoalRecord(
+                    goal_id=str(uuid4()),
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    schema_version=validated_goal.schema_version,
+                    revision=validated_goal.revision,
+                    goal=validated_goal,
+                    created_at=now,
+                    updated_at=now,
+                )
+            else:
+                current = self._owned_record(conversation_id, user_id)
+                if current.revision != expected_revision:
+                    raise ShoppingGoalRevisionConflict(
+                        expected_revision=expected_revision,
+                        actual_revision=current.revision,
+                    )
+                if validated_goal.revision == expected_revision:
+                    if validated_goal != current.goal:
+                        raise ValueError("unchanged revision cannot change goal state")
+                    record = current
+                else:
+                    _validate_next_revision(validated_goal, expected_revision)
+                    record = current.model_copy(
+                        update={
+                            "schema_version": validated_goal.schema_version,
+                            "revision": validated_goal.revision,
+                            "goal": validated_goal,
+                            "updated_at": self._clock(),
+                        },
+                        deep=True,
+                    )
+
+            stored_events = tuple(
+                ShoppingGoalEventRecord(
+                    event_id=str(uuid4()),
+                    goal_id=record.goal_id,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    revision=record.revision,
+                    event=event,
+                    created_at=self._clock(),
+                )
+                for event in validated_events
+            )
+            self._records[conversation_id] = record
+            self._events.extend(stored_events)
+            return ShoppingGoalTransitionCommit(
+                record=record.model_copy(deep=True),
+                events=tuple(event.model_copy(deep=True) for event in stored_events),
+            )
+
 
 class PostgresShoppingGoalRepository:
     """PostgreSQL repository using atomic revision predicates for every update."""
@@ -366,6 +467,57 @@ class PostgresShoppingGoalRepository:
             created_at=row[6],
             updated_at=row[7],
         )
+
+    @staticmethod
+    def _event_from_row(row: tuple[Any, ...]) -> ShoppingGoalEventRecord:
+        payload = getattr(row[5], "obj", row[5])
+        return ShoppingGoalEventRecord(
+            event_id=str(row[0]),
+            goal_id=str(row[1]),
+            conversation_id=int(row[2]),
+            user_id=int(row[3]),
+            revision=int(row[4]),
+            event=GoalChangeEvent.model_validate(payload),
+            created_at=row[6],
+        )
+
+    def _insert_transition_events(
+        self,
+        cursor: Any,
+        *,
+        record: ShoppingGoalRecord,
+        events: tuple[GoalChangeEvent, ...],
+        created_at: datetime,
+    ) -> tuple[ShoppingGoalEventRecord, ...]:
+        stored: list[ShoppingGoalEventRecord] = []
+        for event in events:
+            cursor.execute(
+                """
+                INSERT INTO shopping_goal_event (
+                    event_id, goal_id, conversation_id, user_id,
+                    revision, payload, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING event_id, goal_id, conversation_id, user_id,
+                          revision, payload, created_at
+                """,
+                (
+                    str(uuid4()),
+                    record.goal_id,
+                    record.conversation_id,
+                    record.user_id,
+                    record.revision,
+                    self._jsonb(event.model_dump(mode="json")),
+                    created_at,
+                ),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ShoppingGoalRepositoryError(
+                    "transition event insert did not return a row"
+                )
+            stored.append(self._event_from_row(row))
+        return tuple(stored)
 
     def _select_row(self, conversation_id: int) -> tuple[Any, ...] | None:
         self.initialize()
@@ -564,16 +716,133 @@ class PostgresShoppingGoalRepository:
             connection.commit()
         if row is None:
             raise ShoppingGoalRepositoryError("append did not return a goal event")
-        payload = getattr(row[5], "obj", row[5])
-        return ShoppingGoalEventRecord(
-            event_id=str(row[0]),
-            goal_id=str(row[1]),
-            conversation_id=int(row[2]),
-            user_id=int(row[3]),
-            revision=int(row[4]),
-            event=GoalChangeEvent.model_validate(payload),
-            created_at=row[6],
-        )
+        return self._event_from_row(row)
+
+    def commit_transition(
+        self,
+        conversation_id: int,
+        *,
+        user_id: int,
+        expected_revision: int | None,
+        goal: ShoppingGoal,
+        events: tuple[GoalChangeEvent, ...],
+    ) -> ShoppingGoalTransitionCommit:
+        _validate_identity(conversation_id, user_id)
+        validated_goal = ShoppingGoal.model_validate(goal.model_dump(mode="python"))
+        validated_events = _validated_transition_events(events)
+        self.initialize()
+        now = self._clock()
+        if expected_revision is None:
+            self._validate_conversation_owner(conversation_id, user_id)
+
+        try:
+            with self._connect() as connection:
+                with connection.cursor() as cursor:
+                    if expected_revision is None:
+                        cursor.execute(
+                            """
+                            INSERT INTO shopping_goal_state (
+                                goal_id, conversation_id, user_id, schema_version,
+                                revision, payload, created_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            RETURNING goal_id, conversation_id, user_id,
+                                      schema_version, revision, payload,
+                                      created_at, updated_at
+                            """,
+                            (
+                                str(uuid4()),
+                                conversation_id,
+                                user_id,
+                                validated_goal.schema_version,
+                                validated_goal.revision,
+                                self._jsonb(validated_goal.model_dump(mode="json")),
+                                now,
+                            ),
+                        )
+                        row = cursor.fetchone()
+                        if row is None:
+                            raise ShoppingGoalRepositoryError(
+                                "transition create did not return a shopping goal"
+                            )
+                        record = self._record_from_row(row)
+                    else:
+                        cursor.execute(
+                            """
+                            SELECT goal_id, conversation_id, user_id, schema_version,
+                                   revision, payload, created_at, updated_at
+                            FROM shopping_goal_state
+                            WHERE conversation_id = %s
+                            FOR UPDATE
+                            """,
+                            (conversation_id,),
+                        )
+                        current_row = cursor.fetchone()
+                        if current_row is None:
+                            raise ShoppingGoalNotFound("shopping goal does not exist")
+                        current = self._record_from_row(current_row)
+                        if current.user_id != user_id:
+                            raise ShoppingGoalAccessDenied(
+                                "shopping goal access denied"
+                            )
+                        if current.revision != expected_revision:
+                            raise ShoppingGoalRevisionConflict(
+                                expected_revision=expected_revision,
+                                actual_revision=current.revision,
+                            )
+                        if validated_goal.revision == expected_revision:
+                            if validated_goal != current.goal:
+                                raise ValueError(
+                                    "unchanged revision cannot change goal state"
+                                )
+                            record = current
+                        else:
+                            _validate_next_revision(validated_goal, expected_revision)
+                            cursor.execute(
+                                """
+                                UPDATE shopping_goal_state
+                                SET schema_version = %s, revision = %s, payload = %s,
+                                    updated_at = %s
+                                WHERE conversation_id = %s AND user_id = %s
+                                      AND revision = %s
+                                RETURNING goal_id, conversation_id, user_id,
+                                          schema_version, revision, payload,
+                                          created_at, updated_at
+                                """,
+                                (
+                                    validated_goal.schema_version,
+                                    validated_goal.revision,
+                                    self._jsonb(validated_goal.model_dump(mode="json")),
+                                    now,
+                                    conversation_id,
+                                    user_id,
+                                    expected_revision,
+                                ),
+                            )
+                            updated_row = cursor.fetchone()
+                            if updated_row is None:
+                                raise ShoppingGoalRevisionConflict(
+                                    expected_revision=expected_revision,
+                                    actual_revision=expected_revision + 1,
+                                )
+                            record = self._record_from_row(updated_row)
+                    stored_events = self._insert_transition_events(
+                        cursor,
+                        record=record,
+                        events=validated_events,
+                        created_at=now,
+                    )
+                connection.commit()
+        except Exception as exc:
+            if expected_revision is not None or isinstance(
+                exc, ShoppingGoalRepositoryError
+            ):
+                raise
+            existing = self.load(conversation_id, user_id=user_id)
+            if existing is not None:
+                raise ShoppingGoalAlreadyExists("shopping goal already exists") from exc
+            raise
+        return ShoppingGoalTransitionCommit(record=record, events=stored_events)
 
 
 def project_reusable_user_memories(
@@ -581,6 +850,7 @@ def project_reusable_user_memories(
     *,
     goal_id: str,
     now: datetime | None = None,
+    current_turn_text: str | None = None,
 ) -> tuple[AiModelUserMemory, ...]:
     """Project only explicit, reusable, unexpired goal facts into user memory."""
 
@@ -592,8 +862,13 @@ def project_reusable_user_memories(
             continue
         if evidence.source_type is not GoalSourceType.USER_TURN or not evidence.quote:
             continue
+        source_text = evidence.quote
+        if current_turn_text and is_explicit_reusable_brand_preference(
+            current_turn_text, str(preference.value)
+        ):
+            source_text = current_turn_text.strip()[:512]
         if not is_explicit_reusable_brand_preference(
-            evidence.quote, str(preference.value)
+            source_text, str(preference.value)
         ):
             continue
         expires_at = evidence.updated_at + LONG_TERM_MEMORY_TTL
@@ -603,7 +878,7 @@ def project_reusable_user_memories(
             AiModelUserMemory(
                 memory_type="brand_preference",
                 memory_value=str(preference.value).strip(),
-                evidence=evidence.quote,
+                evidence=source_text,
                 confidence=evidence.confidence,
                 expires_at=expires_at,
                 source_goal_id=goal_id,
@@ -619,10 +894,16 @@ def sync_reusable_goal_memories(
     goal_id: str,
     goal: ShoppingGoal,
     now: datetime | None = None,
+    current_turn_text: str | None = None,
 ) -> tuple[AiModelUserMemory, ...]:
     """Persist the conservative long-term projection through the existing store."""
 
-    memories = project_reusable_user_memories(goal, goal_id=goal_id, now=now)
+    memories = project_reusable_user_memories(
+        goal,
+        goal_id=goal_id,
+        now=now,
+        current_turn_text=current_turn_text,
+    )
     for memory in memories:
         memory_store.upsert_user_memory(
             user_id,

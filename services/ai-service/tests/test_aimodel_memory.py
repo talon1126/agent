@@ -3,6 +3,8 @@ import threading
 import types
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.routers.AImodel.agent_trace import (
     AgentTraceContext,
     LangChainAgentTraceMiddleware,
@@ -108,6 +110,24 @@ def test_extract_user_memories_keeps_explicit_brand_but_not_session_budget() -> 
             now=now,
         )
         assert [memory.memory_value for memory in mixed] == ["华为"]
+
+
+def test_noop_memory_rejects_conversation_owner_reassignment() -> None:
+    store = NoopAiModelMemoryStore()
+    conversation_id = store.ensure_conversation(
+        None,
+        user_id=1,
+        first_message="第一位用户",
+    )
+
+    with pytest.raises(PermissionError, match="conversation access denied"):
+        store.ensure_conversation(
+            conversation_id,
+            user_id=2,
+            first_message="尝试接管",
+        )
+
+    assert store.get_conversation_owner(conversation_id) == 1
 
 
 def test_noop_aimodel_memory_store_upserts_user_memory() -> None:

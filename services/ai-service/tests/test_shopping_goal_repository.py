@@ -133,6 +133,59 @@ def test_compare_and_save_requires_exact_next_revision() -> None:
         )
 
 
+def test_commit_transition_persists_snapshot_and_events_under_one_revision() -> None:
+    repository = InMemoryShoppingGoalRepository(
+        clock=lambda: NOW,
+        conversation_owner=lambda conversation_id: 10 if conversation_id == 1 else None,
+    )
+
+    initial = repository.commit_transition(
+        1,
+        user_id=10,
+        expected_revision=None,
+        goal=shopping_goal(revision=1),
+        events=(event(),),
+    )
+    updated = repository.commit_transition(
+        1,
+        user_id=10,
+        expected_revision=1,
+        goal=shopping_goal(revision=2, brand="华为"),
+        events=(event(),),
+    )
+
+    assert initial.events[0].revision == initial.record.revision == 1
+    assert updated.events[0].revision == updated.record.revision == 2
+    assert updated.record.goal_id == initial.record.goal_id
+    assert repository.load(1, user_id=10) == updated.record
+
+
+def test_commit_transition_conflict_leaves_snapshot_and_events_unchanged() -> None:
+    repository = InMemoryShoppingGoalRepository(
+        clock=lambda: NOW,
+        conversation_owner=lambda conversation_id: 10 if conversation_id == 1 else None,
+    )
+    committed = repository.commit_transition(
+        1,
+        user_id=10,
+        expected_revision=None,
+        goal=shopping_goal(revision=1),
+        events=(event(),),
+    )
+
+    with pytest.raises(ShoppingGoalRevisionConflict):
+        repository.commit_transition(
+            1,
+            user_id=10,
+            expected_revision=0,
+            goal=shopping_goal(revision=1, brand="华为"),
+            events=(event(),),
+        )
+
+    assert repository.load(1, user_id=10) == committed.record
+    assert len(repository._events) == 1
+
+
 def test_projection_rejects_inferred_expired_and_non_brand_preferences() -> None:
     inferred = Preference(
         field=GoalField.BRAND,
@@ -221,6 +274,20 @@ def test_sync_reusable_memory_preserves_lineage_and_expires() -> None:
     assert memory_store.load_user_memories(10) == list(projected)
     assert projected[0].source_goal_id == "goal-1"
     assert projected[0].expires_at == NOW + timedelta(days=180)
+
+
+def test_projection_matches_normalized_brand_to_current_turn_evidence() -> None:
+    normalized_goal = shopping_goal(brand="Huawei")
+
+    projected = project_reusable_user_memories(
+        normalized_goal,
+        goal_id="goal-normalized",
+        now=NOW,
+        current_turn_text="预算改成6000元，长期喜欢华为",
+    )
+
+    assert [memory.memory_value for memory in projected] == ["Huawei"]
+    assert projected[0].evidence == "预算改成6000元，长期喜欢华为"
 
 
 def test_noop_memory_hides_expired_long_term_entries() -> None:
