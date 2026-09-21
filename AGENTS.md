@@ -40,6 +40,7 @@ Completion index:
 - B1：定义购物目标模型 ✔️
 - B2：实现目标抽取器 ✔️
 - B3：实现状态合并与冲突检测 ✔️
+- B4：实现澄清策略 ✔️
 
 Stage A independent closure passed at commit `592710f4` with evidence run
 `20260920T132512Z-592710f4de-9e89e0`.
