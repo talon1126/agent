@@ -1,0 +1,49 @@
+{
+  "acceptance_files": [
+    "tests/acceptance/d1/test_d1_agent_plan_contract.py"
+  ],
+  "acceptance_lock_sha256": "0d14ac3ae339466fd69ed0d26bf6baa835359f6ac5938ffb842c54ef4d87dad9",
+  "baseline_commit": "fc5d51bf1317c29d7e25a1d7b4d4c9c1c92e862d",
+  "changed_files": [
+    "docs/agent_plan_contract.md",
+    "services/ai-service/app/routers/AImodel/plan_models.py",
+    "services/ai-service/app/routers/AImodel/plan_policy.yaml",
+    "services/ai-service/tests/test_agent_plan.py",
+    "tests/acceptance/d1/test_d1_agent_plan_contract.py"
+  ],
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_agent_plan.py -q",
+      "duration_seconds": 3.078,
+      "exit_code": 0,
+      "log": "01.log"
+    }
+  ],
+  "commit": "e4f03f4b68f9c26b191922e4efa495780df84721",
+  "evidence_files": [
+    {
+      "path": "commands/01.log",
+      "sha256": "dfc0bbdec0018dd987c822a131545190c09d4e02e53d52a666f018370d66697c"
+    }
+  ],
+  "implementation_fingerprint": "581114f5046f2d3db9972c671c1c2dea3c71c7881843401cd36b3ae6ea678ae5",
+  "phase": "D",
+  "quality_gates_sha256": "161d4392600e37822b8aa77ffc74acb05de91c2413537f626450734c929087ca",
+  "quality_profile": null,
+  "quality_results": [],
+  "recorded_at": "2026-09-21T09:13:10Z",
+  "run_id": "20260921T091300Z-e4f03f4b68-33e883",
+  "runner": {
+    "ci": false,
+    "independent": true,
+    "verifier_id": "codex-d1-independent-review"
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "D1",
+  "task_title": "定义任务计划协议",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "verification_workspace": "git_archive",
+  "working_tree_dirty": true
+}

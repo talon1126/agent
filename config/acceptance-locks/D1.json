@@ -1,0 +1,12 @@
+{
+  "baseline_commit": "fc5d51bf1317c29d7e25a1d7b4d4c9c1c92e862d",
+  "commit_mode": "single",
+  "files": {
+    "tests/acceptance/d1/test_d1_agent_plan_contract.py": "6b71052864a756387762916510f467b536dc76de4f0a6f394347bec7d9dac73b"
+  },
+  "generated_at": "2026-09-21T09:09:36Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "D1",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

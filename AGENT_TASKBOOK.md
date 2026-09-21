@@ -908,7 +908,7 @@ uv run --project services/mock-api pytest services/mock-api/tests/test_api.py -q
 
 阶段目标：让 Agent 能完成跨商品搜索、详情、评论和知识检索的多步任务，同时保留严格工具边界。
 
-### D1：定义任务计划协议
+### D1：定义任务计划协议 ✔️
 
 **目标**
 
