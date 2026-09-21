@@ -12,6 +12,11 @@
     "allowed_fields": ["brand"],
     "required_source_type": "user_turn",
     "ttl_days": 180,
+    "rejected_brand_statements": [
+      "我不喜欢小米",
+      "我一直不喜欢华为",
+      "以前喜欢苹果，现在不喜欢了"
+    ],
     "forbidden_fields": [
       "budget_min",
       "budget_max",

@@ -228,14 +228,24 @@ class _FakePostgresDatabase:
 
 def repository_factories() -> tuple[tuple[str, Any], ...]:
     database = _FakePostgresDatabase()
+    conversation_owner = lambda conversation_id: (
+        9 if conversation_id in {71, 72} else None
+    )
     return (
-        ("memory", lambda: InMemoryShoppingGoalRepository(clock=lambda: NOW)),
+        (
+            "memory",
+            lambda: InMemoryShoppingGoalRepository(
+                clock=lambda: NOW,
+                conversation_owner=conversation_owner,
+            ),
+        ),
         (
             "postgres",
             lambda: PostgresShoppingGoalRepository(
                 "postgresql://test",
                 connection_factory=database.connect,
                 clock=lambda: NOW,
+                conversation_owner=conversation_owner,
             ),
         ),
     )
@@ -301,6 +311,16 @@ def test_repository_contract_enforces_user_ownership_and_appends_events(
     assert stored_event.event == change_event()
 
 
+@pytest.mark.parametrize("_backend,factory", repository_factories())
+def test_repository_contract_rejects_create_without_matching_conversation_owner(
+    _backend: str, factory: Any
+) -> None:
+    repository = factory()
+
+    with pytest.raises(ShoppingGoalAccessDenied):
+        repository.create(conversation_id=71, user_id=10, goal=goal())
+
+
 def test_long_term_memory_projection_is_explicit_evidenced_and_expiring() -> None:
     current = goal()
     memories = project_reusable_user_memories(
@@ -316,6 +336,8 @@ def test_long_term_memory_projection_is_explicit_evidenced_and_expiring() -> Non
     assert memories[0].expires_at == NOW + timedelta(days=180)
     assert all("budget" not in item.memory_type for item in memories)
     assert extract_user_memories_from_text("这次预算有限，最多五千", user_id=9) == []
+    for statement in FIXTURE["long_term_memory"]["rejected_brand_statements"]:
+        assert extract_user_memories_from_text(statement, user_id=9, now=NOW) == []
 
     expired_brand = Preference(
         field=GoalField.BRAND,
