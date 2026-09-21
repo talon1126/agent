@@ -416,6 +416,7 @@ class FakeSnapshotClient:
                 price=Decimal("800")
                 if item_id == "page-over-budget"
                 else Decimal("400"),
+                category="tablet" if item_id == "wrong-category" else "phone",
             )
             for item_id in item_ids
             if item_id not in self.failed_item_ids
