@@ -1,0 +1,13 @@
+{
+  "baseline_commit": "afeac80e83b65e11f9dc103e50ae95cb8aa8cad1",
+  "commit_mode": "single",
+  "files": {
+    "tests/acceptance/d2/planner_cases.json": "df30994286b6535d2071892824276334bc46e06667c00c5889820f212a049f6f",
+    "tests/acceptance/d2/test_d2_hierarchical_planner_contract.py": "4db0586683e4760bf1c62b803edd4efeb330f87e12a794bb3f291134de9fbd0c"
+  },
+  "generated_at": "2026-09-21T09:26:09Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "D2",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

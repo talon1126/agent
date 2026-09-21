@@ -1,0 +1,356 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "direct-greeting",
+      "turn_kind": "single",
+      "route": {"action": "direct", "intent": "greeting"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "direct",
+      "expected_step_types": ["compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "direct-thanks",
+      "turn_kind": "single",
+      "route": {"action": "direct", "intent": "thanks"},
+      "goal_mode": "empty",
+      "clarification_mode": "proceed",
+      "expected_task_type": "direct",
+      "expected_step_types": ["compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "direct-refuse",
+      "turn_kind": "error",
+      "route": {"action": "refuse", "intent": "unsafe_request"},
+      "goal_mode": "empty",
+      "clarification_mode": "proceed",
+      "expected_task_type": "direct",
+      "expected_step_types": ["compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "direct-small-talk",
+      "turn_kind": "multi",
+      "route": {"action": "direct", "intent": "small_talk"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "direct",
+      "expected_step_types": ["compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "clarify-recommend-category",
+      "turn_kind": "single",
+      "route": {"action": "rag", "intent": "buying_recommendation"},
+      "goal_mode": "open_category",
+      "clarification_mode": "ask",
+      "expected_task_type": "clarify",
+      "expected_step_types": ["clarify"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "clarify-compare-category",
+      "turn_kind": "multi",
+      "route": {"action": "rag", "intent": "comparison"},
+      "goal_mode": "open_category",
+      "clarification_mode": "ask",
+      "expected_task_type": "clarify",
+      "expected_step_types": ["clarify"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "clarify-search-category",
+      "turn_kind": "single",
+      "route": {"action": "product_api", "intent": "catalog_search"},
+      "goal_mode": "open_category",
+      "clarification_mode": "ask",
+      "expected_task_type": "clarify",
+      "expected_step_types": ["clarify"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "clarify-action-category",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "add_to_cart"},
+      "page_context": {"page_type": "product", "current_item_id": "sku-8"},
+      "goal_mode": "open_category",
+      "clarification_mode": "ask",
+      "expected_task_type": "clarify",
+      "expected_step_types": ["clarify"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "knowledge-parameters",
+      "turn_kind": "single",
+      "route": {"action": "rag", "intent": "parameter_consulting"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "knowledge",
+      "expected_step_types": ["rag_lookup", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "knowledge-operation",
+      "turn_kind": "single",
+      "route": {"action": "rag", "intent": "operation_guide"},
+      "goal_mode": "empty",
+      "clarification_mode": "proceed",
+      "expected_task_type": "knowledge",
+      "expected_step_types": ["rag_lookup", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "knowledge-shipping",
+      "turn_kind": "multi",
+      "route": {"action": "rag", "intent": "shipping_policy"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "knowledge",
+      "expected_step_types": ["rag_lookup", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "knowledge-troubleshooting",
+      "turn_kind": "multi",
+      "route": {"action": "rag", "intent": "troubleshooting"},
+      "goal_mode": "empty",
+      "clarification_mode": "proceed",
+      "expected_task_type": "knowledge",
+      "expected_step_types": ["rag_lookup", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "knowledge-return-policy",
+      "turn_kind": "error",
+      "route": {"action": "rag", "intent": "return_exchange"},
+      "goal_mode": "empty",
+      "clarification_mode": "proceed",
+      "expected_task_type": "knowledge",
+      "expected_step_types": ["rag_lookup", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "detail-current-product",
+      "turn_kind": "single",
+      "route": {"action": "product_api", "intent": "product_detail"},
+      "page_context": {"page_type": "product", "current_item_id": "sku-1"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "product_detail",
+      "expected_step_types": ["snapshot", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "detail-price",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "price_promotion"},
+      "page_context": {"page_type": "product", "current_item_id": "sku-2"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "product_detail",
+      "expected_step_types": ["snapshot", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "detail-stock",
+      "turn_kind": "single",
+      "route": {"action": "product_api", "intent": "stock"},
+      "page_context": {"page_type": "product", "current_item_id": "sku-3"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "product_detail",
+      "expected_step_types": ["snapshot", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "detail-specification",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "product_info"},
+      "page_context": {"page_type": "product", "current_item_id": "sku-4"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "product_detail",
+      "expected_step_types": ["snapshot", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "search-catalog",
+      "turn_kind": "single",
+      "route": {"action": "product_api", "intent": "catalog_search"},
+      "page_context": {"page_type": "search", "search_query": "laptop"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "product_search",
+      "expected_step_types": ["product_search", "snapshot", "filter", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "search-price-list",
+      "turn_kind": "single",
+      "route": {"action": "product_api", "intent": "price_promotion"},
+      "page_context": {"page_type": "search", "search_query": "discount laptop"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "product_search",
+      "expected_step_types": ["product_search", "snapshot", "filter", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "search-stock-list",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "stock_search"},
+      "page_context": {"page_type": "search"},
+      "goal_mode": "searching",
+      "clarification_mode": "proceed",
+      "expected_task_type": "product_search",
+      "expected_step_types": ["product_search", "snapshot", "filter", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "search-generic-product-api",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "products"},
+      "goal_mode": "searching",
+      "clarification_mode": "proceed",
+      "expected_task_type": "product_search",
+      "expected_step_types": ["product_search", "snapshot", "filter", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "compare-rag-route",
+      "turn_kind": "single",
+      "route": {"action": "rag", "intent": "comparison"},
+      "goal_mode": "comparing",
+      "clarification_mode": "proceed",
+      "expected_task_type": "compare",
+      "expected_step_types": ["product_search", "snapshot", "review_fetch", "filter", "rank", "compare", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "compare-product-api",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "product_compare"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "compare",
+      "expected_step_types": ["product_search", "snapshot", "review_fetch", "filter", "rank", "compare", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "compare-alias",
+      "turn_kind": "single",
+      "route": {"action": "product_api", "intent": "compare"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "compare",
+      "expected_step_types": ["product_search", "snapshot", "review_fetch", "filter", "rank", "compare", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "compare-stage-fallback",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "products"},
+      "goal_mode": "comparing",
+      "clarification_mode": "proceed",
+      "expected_task_type": "compare",
+      "expected_step_types": ["product_search", "snapshot", "review_fetch", "filter", "rank", "compare", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "recommend-buying",
+      "turn_kind": "single",
+      "route": {"action": "rag", "intent": "buying_recommendation"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "recommend",
+      "expected_step_types": ["product_search", "snapshot", "filter", "rank", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "recommend-product-api",
+      "turn_kind": "single",
+      "route": {"action": "product_api", "intent": "recommendation"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "recommend",
+      "expected_step_types": ["product_search", "snapshot", "filter", "rank", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "recommend-alias",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "recommend"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "recommend",
+      "expected_step_types": ["product_search", "snapshot", "filter", "rank", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "recommend-shopping-advice",
+      "turn_kind": "multi",
+      "route": {"action": "rag", "intent": "shopping_recommendation"},
+      "goal_mode": "searching",
+      "clarification_mode": "proceed",
+      "expected_task_type": "recommend",
+      "expected_step_types": ["product_search", "snapshot", "filter", "rank", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "action-add-cart",
+      "turn_kind": "single",
+      "route": {"action": "product_api", "intent": "add_to_cart"},
+      "page_context": {"page_type": "product", "current_item_id": "sku-10"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "action_preview",
+      "expected_step_types": ["snapshot", "action_preview", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "action-explicit-preview",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "action_preview"},
+      "page_context": {"page_type": "product", "current_item_id": "sku-11"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "action_preview",
+      "expected_step_types": ["snapshot", "action_preview", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "action-cart-preview",
+      "turn_kind": "multi",
+      "route": {"action": "product_api", "intent": "cart_preview"},
+      "page_context": {"page_type": "product", "current_item_id": "sku-12"},
+      "goal_mode": "category",
+      "clarification_mode": "proceed",
+      "expected_task_type": "action_preview",
+      "expected_step_types": ["snapshot", "action_preview", "compose"],
+      "expected_source": "template"
+    },
+    {
+      "case_id": "error-order-route",
+      "turn_kind": "error",
+      "route": {"action": "order_api", "intent": "order_status"},
+      "goal_mode": "empty",
+      "clarification_mode": "proceed",
+      "expected_task_type": "direct",
+      "expected_step_types": ["compose"],
+      "expected_source": "fallback"
+    },
+    {
+      "case_id": "error-web-route",
+      "turn_kind": "error",
+      "route": {"action": "web", "intent": "external_search"},
+      "goal_mode": "empty",
+      "clarification_mode": "proceed",
+      "expected_task_type": "direct",
+      "expected_step_types": ["compose"],
+      "expected_source": "fallback"
+    }
+  ]
+}

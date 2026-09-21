@@ -955,7 +955,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_agent
 
 不执行计划，不决定商品排序，不暴露 chain-of-thought；只定义计划契约和静态校验。
 
-### D2：实现分层规划器
+### D2：实现分层规划器 ✔️
 
 **目标**
 

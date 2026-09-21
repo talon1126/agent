@@ -232,6 +232,7 @@ class _StepContract(BaseModel):
     risk_level: RiskLevel
     allowed_tools: frozenset[PlanTool]
     required_input_types: frozenset[PlanValueType]
+    required_any_input_types: frozenset[PlanValueType] = frozenset()
     allowed_input_types: frozenset[PlanValueType]
 
 
@@ -262,8 +263,13 @@ _CONTRACTS: dict[StepType, _StepContract] = {
         output_type=PlanValueType.PRODUCT_SNAPSHOT,
         risk_level=RiskLevel.MEDIUM,
         allowed_tools=frozenset({PlanTool.PRODUCT_SNAPSHOT}),
-        required_input_types=frozenset({PlanValueType.CANDIDATE_REFS}),
-        allowed_input_types=frozenset({PlanValueType.CANDIDATE_REFS}),
+        required_input_types=frozenset(),
+        required_any_input_types=frozenset(
+            {PlanValueType.CANDIDATE_REFS, PlanValueType.PAGE_CONTEXT}
+        ),
+        allowed_input_types=frozenset(
+            {PlanValueType.CANDIDATE_REFS, PlanValueType.PAGE_CONTEXT}
+        ),
     ),
     StepType.REVIEW_FETCH: _StepContract(
         output_type=PlanValueType.REVIEW_COLLECTION,
@@ -348,6 +354,8 @@ _CONTRACTS: dict[StepType, _StepContract] = {
                 PlanValueType.CLARIFICATION,
                 PlanValueType.KNOWLEDGE_RESULT,
                 PlanValueType.PRODUCT_SNAPSHOT,
+                PlanValueType.REVIEW_COLLECTION,
+                PlanValueType.CANDIDATE_SET,
                 PlanValueType.RANKING_RESULT,
                 PlanValueType.COMPARISON_MATRIX,
                 PlanValueType.RESPONSE_DRAFT,
@@ -628,6 +636,10 @@ class AgentPlanValidator:
             or step.risk_level is not contract.risk_level
             or tool_set != contract.allowed_tools
             or not contract.required_input_types.issubset(input_types)
+            or (
+                contract.required_any_input_types
+                and not contract.required_any_input_types.intersection(input_types)
+            )
             or not input_types.issubset(contract.allowed_input_types)
         ):
             raise PlanValidationError(
