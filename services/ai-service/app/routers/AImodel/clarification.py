@@ -41,7 +41,7 @@ SlotKey = Annotated[
 ]
 OptionText = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=256),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
 ]
 
 
@@ -75,6 +75,10 @@ class ClarificationHistory(BaseModel):
         default_factory=tuple, max_length=64
     )
     skipped_slot_keys: tuple[SlotKey, ...] = Field(default_factory=tuple, max_length=64)
+    skipped_conflict_fingerprints: tuple[SlotKey, ...] = Field(
+        default_factory=tuple,
+        max_length=64,
+    )
     recent_slot_keys: tuple[SlotKey, ...] = Field(default_factory=tuple, max_length=64)
 
     @model_validator(mode="after")
@@ -82,6 +86,7 @@ class ClarificationHistory(BaseModel):
         for field_name in (
             "answered_slot_keys",
             "skipped_slot_keys",
+            "skipped_conflict_fingerprints",
             "recent_slot_keys",
         ):
             values = getattr(self, field_name)
@@ -101,6 +106,7 @@ class ClarificationDecision(BaseModel):
     recommend_with_uncertainty: bool = False
     reason: ClarificationReason
     slot_key: SlotKey | None = None
+    conflict_fingerprint: SlotKey | None = None
     payload: AiModelClarificationPayload | None = None
     critical_unknowns: tuple[SlotKey, ...] = Field(
         default_factory=tuple,
@@ -116,6 +122,11 @@ class ClarificationDecision(BaseModel):
                 raise ValueError("an active clarification cannot proceed")
         elif self.slot_key is not None or self.payload is not None:
             raise ValueError("non-clarification decisions cannot carry a question")
+        if self.conflict_fingerprint is not None and (
+            not self.should_ask
+            or self.reason is not ClarificationReason.BLOCKING_CONFLICT
+        ):
+            raise ValueError("conflict fingerprint requires a blocking clarification")
         if self.recommend_with_uncertainty and not self.may_proceed:
             raise ValueError("uncertain recommendation requires may_proceed")
         return self
@@ -202,6 +213,7 @@ class _Topic:
     reason: ClarificationReason
     open_slot: OpenSlot | None = None
     conflict: GoalConflict | None = None
+    conflict_fingerprint: str | None = None
 
 
 QuestionRenderer = Callable[[str], str]
@@ -230,7 +242,7 @@ def _slot_key_for_open_slot(
 ) -> tuple[str, str]:
     base = open_slot.field.value
     if open_slot.field is GoalField.SPECIFICATION:
-        return f"{base}:{open_slot.attribute}", base
+        return _specification_slot_key(open_slot.attribute or "关键规格"), base
     for alias in config.slot_aliases:
         if alias.field is not open_slot.field:
             continue
@@ -246,11 +258,40 @@ def _conflict_slot_key(conflict: GoalConflict) -> tuple[str, str]:
         return GoalField.BRAND.value, GoalField.BRAND.value
     if conflict.code is GoalConflictCode.SPECIFICATION_MUTUALLY_EXCLUSIVE:
         suffix = conflict.attribute or "关键规格"
-        return (
-            f"{GoalField.SPECIFICATION.value}:{suffix}",
-            GoalField.SPECIFICATION.value,
-        )
+        return _specification_slot_key(suffix), GoalField.SPECIFICATION.value
     return conflict.field.value, conflict.field.value
+
+
+def _specification_slot_key(attribute: str) -> str:
+    normalized = attribute.casefold()
+    prefix = f"{GoalField.SPECIFICATION.value}:"
+    direct = f"{prefix}{normalized}"
+    if len(direct) <= 128:
+        return direct
+    digest = hashlib.sha256(normalized.encode()).hexdigest()[:16]
+    available = 128 - len(prefix) - len(digest) - 1
+    return f"{prefix}{normalized[:available]}:{digest}"
+
+
+def _conflict_fingerprint(conflict: GoalConflict) -> str:
+    payload = conflict.model_dump(mode="json")
+    for key in ("values", "sources"):
+        payload[key] = sorted(
+            payload[key],
+            key=lambda item: json.dumps(
+                item,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"conflict-{hashlib.sha256(canonical.encode()).hexdigest()[:24]}"
 
 
 def _conflict_topics(
@@ -267,6 +308,7 @@ def _conflict_topics(
                 priority=config.conflict_priority[conflict.code],
                 reason=ClarificationReason.BLOCKING_CONFLICT,
                 conflict=conflict,
+                conflict_fingerprint=_conflict_fingerprint(conflict),
             )
         )
     return sorted(
@@ -336,6 +378,22 @@ def _stable_scalar(value: Any) -> str:
     return str(value).strip()
 
 
+def _bounded_label(prefix: str, raw_value: str) -> str:
+    combined = f"{prefix}{raw_value}"
+    if len(combined) <= 512:
+        return combined
+    suffix = "..."
+    return f"{prefix}{raw_value[: 512 - len(prefix) - len(suffix)]}{suffix}"
+
+
+def _bounded_option_value(prefix: str, raw_value: str) -> str:
+    combined = f"{prefix}{raw_value}"
+    if len(combined) <= 512:
+        return combined
+    digest = hashlib.sha256(raw_value.encode()).hexdigest()
+    return f"{prefix}sha256:{digest}"
+
+
 def _conflict_option_seeds(topic: _Topic) -> tuple[ClarificationOptionSeed, ...]:
     conflict = topic.conflict
     if conflict is None:
@@ -345,19 +403,31 @@ def _conflict_option_seeds(topic: _Topic) -> tuple[ClarificationOptionSeed, ...]
         value = _stable_scalar(item.value if hasattr(item, "value") else item.question)
         if conflict.code is GoalConflictCode.BUDGET_RANGE_REVERSED:
             boundary = "最低预算" if item.field is GoalField.BUDGET_MIN else "最高预算"
-            label = f"保留{boundary} {value} 元"
-            option_value = f"resolve:{item.field.value}:{value}"
+            label = _bounded_label(f"保留{boundary} ", f"{value} 元")
+            option_value = _bounded_option_value(
+                f"resolve:{item.field.value}:",
+                value,
+            )
         elif conflict.code is GoalConflictCode.BRAND_INCLUDED_AND_EXCLUDED:
             action = "保留品牌要求" if item.kind == "hard" else "保留排除条件"
-            label = f"{action}“{value}”"
-            option_value = f"resolve:brand:{item.kind}:{value}"
+            label = _bounded_label(f"{action}“", f"{value}”")
+            option_value = _bounded_option_value(
+                f"resolve:brand:{item.kind}:",
+                value,
+            )
         elif conflict.code is GoalConflictCode.SPECIFICATION_MUTUALLY_EXCLUSIVE:
             action = "保留规格要求" if item.kind == "hard" else "保留排除条件"
-            label = f"{action}“{value}”"
-            option_value = f"resolve:{topic.slot_key}:{item.kind}:{value}"
+            label = _bounded_label(f"{action}“", f"{value}”")
+            option_value = _bounded_option_value(
+                f"resolve:{topic.slot_key}:{item.kind}:",
+                value,
+            )
         elif conflict.code is GoalConflictCode.CONFIRMATION_MISMATCH:
-            label = f"采用“{value}”"
-            option_value = f"resolve:{topic.slot_key}:{value}"
+            label = _bounded_label("采用“", f"{value}”")
+            option_value = _bounded_option_value(
+                f"resolve:{topic.slot_key}:",
+                value,
+            )
         else:
             continue
         seed = ClarificationOptionSeed(label=label, value=option_value)
@@ -375,6 +445,7 @@ def _conflict_option_seeds(topic: _Topic) -> tuple[ClarificationOptionSeed, ...]
 
 def _known_specification_seeds(
     attribute: str,
+    slot_key: str,
     known_attribute_options: Mapping[
         str,
         Sequence[ClarificationOptionSeed | Mapping[str, Any]],
@@ -390,7 +461,7 @@ def _known_specification_seeds(
         seed = ClarificationOptionSeed.model_validate(raw)
         prefixed = ClarificationOptionSeed(
             label=seed.label,
-            value=f"specification:{attribute}:{seed.value}",
+            value=_bounded_option_value(f"{slot_key}:", seed.value),
         )
         if prefixed.value not in {item.value for item in normalized}:
             normalized.append(prefixed)
@@ -409,7 +480,13 @@ def _topic_option_seeds(
         seeds = list(_conflict_option_seeds(topic))
     elif topic.base_slot_key == GoalField.SPECIFICATION.value:
         attribute = topic.open_slot.attribute if topic.open_slot else "关键规格"
-        seeds = list(_known_specification_seeds(attribute, known_attribute_options))
+        seeds = list(
+            _known_specification_seeds(
+                attribute,
+                topic.slot_key,
+                known_attribute_options,
+            )
+        )
         if not seeds:
             seeds.append(
                 ClarificationOptionSeed(
@@ -514,6 +591,7 @@ def _clarification_decision(
         may_proceed=False,
         reason=topic.reason,
         slot_key=topic.slot_key,
+        conflict_fingerprint=topic.conflict_fingerprint,
         payload=payload,
     )
 
@@ -546,9 +624,20 @@ def select_clarification(
     known_attribute_options = known_attribute_options or {}
 
     conflict_topics = _conflict_topics(validated_conflicts, config)
-    if conflict_topics:
+    skipped_conflicts = set(history.skipped_conflict_fingerprints)
+    skipped_conflict_topics = [
+        topic
+        for topic in conflict_topics
+        if topic.conflict_fingerprint in skipped_conflicts
+    ]
+    active_conflicts = [
+        topic
+        for topic in conflict_topics
+        if topic.conflict_fingerprint not in skipped_conflicts
+    ]
+    if active_conflicts:
         return _clarification_decision(
-            conflict_topics[0],
+            active_conflicts[0],
             config,
             known_attribute_options,
             question_renderer,
@@ -573,7 +662,9 @@ def select_clarification(
             question_renderer,
         )
 
-    suppressed_unknowns = tuple(topic.slot_key for topic in topics)
+    suppressed_unknowns = tuple(
+        dict.fromkeys(topic.slot_key for topic in (*skipped_conflict_topics, *topics))
+    )
     if suppressed_unknowns:
         may_proceed = candidate_status is not CandidateStatus.EMPTY
         return ClarificationDecision(

@@ -63,12 +63,13 @@ def hard(
     value: object,
     *,
     attribute: str | None = None,
+    turn: int = 1,
 ) -> Constraint:
     return Constraint(
         field=field,
         value=value,
         attribute=attribute,
-        evidence=evidence("用户原话"),
+        evidence=evidence("用户原话", turn=turn),
     )
 
 
@@ -232,6 +233,110 @@ def test_answered_slot_is_suppressed_but_a_new_conflict_can_reask() -> None:
     assert suppressed.critical_unknowns == ("budget_max",)
     assert conflicted.should_ask is True
     assert conflicted.slot_key == "budget_max"
+
+
+def test_skipped_conflict_fingerprint_suppresses_only_the_same_conflict() -> None:
+    original = conflict(
+        GoalConflictCode.BUDGET_RANGE_REVERSED,
+        hard(GoalField.BUDGET_MIN, 5000),
+        hard(GoalField.BUDGET_MAX, 3000),
+        field=GoalField.BUDGET_MAX,
+    )
+    first = select_clarification(category_goal(), conflicts=(original,))
+    assert first.conflict_fingerprint is not None
+    replay_reordered = select_clarification(
+        category_goal(),
+        conflicts=(
+            GoalConflict(
+                code=original.code,
+                field=original.field,
+                values=tuple(reversed(original.values)),
+                sources=tuple(reversed(original.sources)),
+                clarification_topic=original.clarification_topic,
+            ),
+        ),
+    )
+    assert replay_reordered.conflict_fingerprint == first.conflict_fingerprint
+    history = ClarificationHistory(
+        skipped_slot_keys=("budget_max",),
+        skipped_conflict_fingerprints=(first.conflict_fingerprint,),
+    )
+
+    suppressed = select_clarification(
+        category_goal(),
+        conflicts=(original,),
+        history=history,
+        candidate_status=CandidateStatus.AVAILABLE,
+    )
+    changed = conflict(
+        GoalConflictCode.BUDGET_RANGE_REVERSED,
+        hard(GoalField.BUDGET_MIN, 5000, turn=2),
+        hard(GoalField.BUDGET_MAX, 2500, turn=2),
+        field=GoalField.BUDGET_MAX,
+    )
+    reasked = select_clarification(
+        category_goal(),
+        conflicts=(changed,),
+        history=history,
+    )
+
+    assert suppressed.should_ask is False
+    assert suppressed.critical_unknowns == ("budget_max",)
+    assert reasked.should_ask is True
+    assert reasked.conflict_fingerprint != first.conflict_fingerprint
+
+
+def test_specification_slot_key_matches_b1_casefold_semantics() -> None:
+    first = select_clarification(
+        category_goal(open_slot(GoalField.SPECIFICATION, "内存？", attribute="RAM"))
+    )
+    assert first.slot_key == "specification:ram"
+
+    suppressed = select_clarification(
+        category_goal(open_slot(GoalField.SPECIFICATION, "内存？", attribute="ram")),
+        history=ClarificationHistory(skipped_slot_keys=("specification:ram",)),
+        candidate_status=CandidateStatus.AVAILABLE,
+    )
+    assert suppressed.should_ask is False
+    assert suppressed.critical_unknowns == ("specification:ram",)
+
+
+def test_long_valid_upstream_values_still_project_to_a4() -> None:
+    attribute = "A" * 120
+    slot_decision = select_clarification(
+        category_goal(open_slot(GoalField.SPECIFICATION, "规格？", attribute=attribute))
+    )
+    assert slot_decision.slot_key is not None
+    assert len(slot_decision.slot_key) <= 128
+
+    brand = "B" * 512
+    included = hard(GoalField.BRAND, brand)
+    excluded = Exclusion(
+        field=GoalField.BRAND,
+        value=brand,
+        evidence=evidence("不要这个品牌"),
+    )
+    conflict_decision = select_clarification(
+        category_goal(),
+        conflicts=(
+            conflict(
+                GoalConflictCode.BRAND_INCLUDED_AND_EXCLUDED,
+                included,
+                excluded,
+                field=GoalField.BRAND,
+            ),
+        ),
+    )
+    assert conflict_decision.payload is not None
+    assert all(
+        len(option.label) <= 512 and len(option.value) <= 512
+        for option in conflict_decision.payload.options
+    )
+    assert all(
+        "sha256:" in option.value
+        for option in conflict_decision.payload.options
+        if option.value.startswith("resolve:")
+    )
 
 
 def test_suppressed_unknowns_are_stable_and_allow_uncertain_ranking() -> None:

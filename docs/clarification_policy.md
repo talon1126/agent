@@ -15,6 +15,10 @@ B4 澄清策略是一个确定性决策层，输入为 B3 的 `ShoppingGoal`、`
 被“已回答”“跳过”或“近期问过”抑制；普通 open slot 会跳过已回答、已选择
 “都可以/跳过”的槽位和最近窗口内问过的槽位，再尝试下一个主题。
 
+阻断冲突会返回稳定 `conflict_fingerprint`。用户跳过冲突时，调用方同时保存该指纹和
+槽位；相同冲突不会循环，新输入造成的冲突因证据或取值变化而获得新指纹，可以再次
+询问。规格槽位按 B1 规则对属性名执行 `casefold()`；超长属性使用可复现的摘要键。
+
 ## 输出字段
 
 | 字段 | 含义 |
@@ -23,6 +27,7 @@ B4 澄清策略是一个确定性决策层，输入为 B3 的 `ShoppingGoal`、`
 | `may_proceed` | 下游能否继续搜索、排序或 fallback |
 | `recommend_with_uncertainty` | 候选可排序但未知项已跳过/近期问过时允许低置信推荐 |
 | `slot_key` | 本轮唯一澄清主题；规格使用 `specification:<attribute>` |
+| `conflict_fingerprint` | 阻断冲突身份；用于精确抑制已跳过的原冲突 |
 | `payload` | A4 `AiModelClarificationPayload`，仅提问时存在 |
 | `critical_unknowns` | 未重复追问但下游必须披露的关键未知项 |
 | `reason` | 稳定策略原因码 |
