@@ -751,7 +751,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_candi
 
 不计算软偏好得分，不自动修改预算，不把 RAG 文档中的商品描述作为库存或价格事实。
 
-### C3：建立品类特征归一化
+### C3：建立品类特征归一化 ✔️
 
 **目标**
 

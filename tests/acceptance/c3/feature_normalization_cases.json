@@ -1,0 +1,60 @@
+{
+  "profiles": {
+    "electronics": [
+      {
+        "item_id": "phone-gb",
+        "specifications": {
+          "RAM": "8 GB",
+          "capacity": "512 GB",
+          "screen": "6.1 in",
+          "wireless_charge": "yes"
+        }
+      },
+      {
+        "item_id": "phone-mixed-units",
+        "specifications": {
+          "memory": "8192 MB",
+          "storage": "0.5 TB",
+          "screen_size": "15.494 cm",
+          "wireless_charging": "支持"
+        }
+      }
+    ],
+    "dairy": [
+      {
+        "item_id": "milk-ml",
+        "specifications": {
+          "net_volume": "250 ml",
+          "shelf_life": "45 day",
+          "lactose_free": "false"
+        }
+      },
+      {
+        "item_id": "milk-litres",
+        "specifications": {
+          "volume": "0.25 L",
+          "保质期": "45 天",
+          "无乳糖": "否"
+        }
+      }
+    ],
+    "office_supply": [
+      {
+        "item_id": "paper-en",
+        "specifications": {
+          "sheets": "500 count",
+          "paper_weight": "80 gsm",
+          "paper_color": "white"
+        }
+      },
+      {
+        "item_id": "paper-zh",
+        "specifications": {
+          "张数": "500 张",
+          "克重": "80 g/m2",
+          "颜色": "白色"
+        }
+      }
+    ]
+  }
+}
