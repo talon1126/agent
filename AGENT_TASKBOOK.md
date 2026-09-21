@@ -844,7 +844,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_produ
 
 阶段 C 不训练 Learning-to-Rank，不接入商业竞价，不用 LLM 直接输出分数或重排候选；学习排序只允许在阶段 I 的数据、模型和回退门禁下引入。
 
-### C5：实现商品比较和评论洞察
+### C5：实现商品比较和评论洞察 ✔️
 
 **目标**
 

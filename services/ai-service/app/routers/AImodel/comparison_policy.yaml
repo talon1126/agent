@@ -1,0 +1,25 @@
+schema_version: v1
+policy_version: c5-review-insight-v1
+minimum_review_sample: 4
+minimum_topic_mentions: 2
+majority_ratio: "0.6"
+controversy_minimum_each: 2
+topics:
+  battery:
+    label: 续航
+    keywords: [battery, battery life, 电池, 续航]
+  camera:
+    label: 拍照
+    keywords: [camera, photo, 相机, 拍照]
+  packaging:
+    label: 包装
+    keywords: [packaging, package, 包装]
+  delivery:
+    label: 配送
+    keywords: [delivery, shipping, 物流, 配送]
+  quality:
+    label: 品质
+    keywords: [quality, durable, 品质, 质量, 耐用]
+  value:
+    label: 性价比
+    keywords: [value, price, 性价比, 价格]
