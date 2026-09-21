@@ -21,7 +21,9 @@ from agent_pipeline import (
     acceptance_lock_path,
     evidence_file_entries,
     git,
+    implementation_fingerprint,
     is_generated_evidence_path,
+    is_task_metadata_path,
     load_pipeline,
     repository_root,
     sha256_file,
@@ -82,7 +84,7 @@ def _extract_snapshot(root: Path, target_commit: str, destination: Path) -> None
 
 
 def _target_changed_paths(
-    root: Path, baseline_commit: str, target_commit: str
+    root: Path, task_id: str, baseline_commit: str, target_commit: str
 ) -> list[str]:
     output = git(
         root,
@@ -94,7 +96,9 @@ def _target_changed_paths(
     return sorted(
         path.replace("\\", "/")
         for path in output.splitlines()
-        if path and not is_generated_evidence_path(path)
+        if path
+        and not is_generated_evidence_path(path)
+        and not is_task_metadata_path(path, task_id)
     )
 
 
@@ -467,7 +471,9 @@ def run_task_audit(
                 )
         changed_paths, added_diff = _changes_from_commits(root, change_commits)
     else:
-        changed_paths = _target_changed_paths(root, baseline_commit, target_commit)
+        changed_paths = _target_changed_paths(
+            root, task_id, baseline_commit, target_commit
+        )
         added_diff = _added_diff(root, baseline_commit, target_commit)
     if not changed_paths:
         raise PipelineError("target has no task changes after its acceptance baseline")
@@ -537,6 +543,11 @@ def run_task_audit(
         else ("passed" if audit_passed else "failed")
     )
     log_paths = list(run_directory.glob("round-*/*.log"))
+    fingerprint, fingerprint_paths = implementation_fingerprint(
+        root, task_id, baseline_commit, target_commit
+    )
+    if fingerprint_paths != changed_paths:
+        raise PipelineError("audit path set does not match implementation fingerprint")
     manifest = {
         "schema_version": 1,
         "task_id": task_id,
@@ -544,6 +555,7 @@ def run_task_audit(
         "recorded_at": utc_now(),
         "target_commit": target_commit,
         "baseline_commit": baseline_commit,
+        "implementation_fingerprint": fingerprint,
         "acceptance_lock_sha256": sha256_file(
             acceptance_lock_path(root, task_config, task_id)
         ),

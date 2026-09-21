@@ -9,7 +9,6 @@ from agent_pipeline import (
     PipelineError,
     acceptance_lock_path,
     build_acceptance_lock,
-    ensure_clean_worktree,
     load_pipeline,
     repository_root,
     run_preflight,
@@ -39,7 +38,6 @@ def main() -> int:
     root = repository_root()
     try:
         run_preflight(root, task_id, prepare=True)
-        ensure_clean_worktree(root)
         task_config, _, _ = load_pipeline(root)
         lock_path = acceptance_lock_path(root, task_config, task_id)
         if lock_path.exists() and not args.update:
@@ -52,7 +50,7 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     print(f"Frozen {len(lock['files'])} acceptance files for {task_id}")
-    print(f"Commit {lock_path.relative_to(root)} before implementation starts.")
+    print(f"Keep {lock_path.relative_to(root)} for the task's single final commit.")
     return 0
 
 

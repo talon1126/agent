@@ -1,3 +1,4 @@
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,9 +13,12 @@ if str(SCRIPTS) not in sys.path:
 from agent_pipeline import (  # noqa: E402
     PipelineError,
     build_taskbook_lock,
+    canonical_taskbook_text,
     discover_acceptance_files,
     evaluate_quality_profile,
+    implementation_fingerprint,
     is_generated_evidence_path,
+    is_task_metadata_path,
     load_pipeline,
     runner_metadata,
     sha256_file,
@@ -75,6 +79,76 @@ def test_taskbook_lock_matches_current_contracts() -> None:
     assert current["task_config_sha256"] == expected["task_config_sha256"]
     assert current["quality_gates_sha256"] == expected["quality_gates_sha256"]
     assert current["tasks"] == expected["tasks"]
+
+
+def test_completion_markers_do_not_change_taskbook_semantics() -> None:
+    plain = "### C3：建立品类特征归一化\n\nbody\n"
+    marked = "### C3：建立品类特征归一化 ✔️\n\nbody\n"
+
+    assert canonical_taskbook_text(plain) == canonical_taskbook_text(marked)
+    _, _, taskbook = load_pipeline(ROOT)
+    assert taskbook["C2"].completed
+    assert not taskbook["C3"].completed
+
+
+def test_single_commit_metadata_is_not_an_implementation_change() -> None:
+    assert is_task_metadata_path("AGENT_TASKBOOK.md", "C3")
+    assert is_task_metadata_path("config/acceptance-locks/C3.json", "C3")
+    assert not is_task_metadata_path("config/acceptance-locks/C2.json", "C3")
+    assert not is_task_metadata_path("services/ai-service/app/main.py", "C3")
+
+
+def test_implementation_fingerprint_ignores_evidence_and_completion_metadata(
+    tmp_path: Path,
+) -> None:
+    def run_git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    run_git("init")
+    run_git("config", "user.email", "pipeline-test@example.invalid")
+    run_git("config", "user.name", "Pipeline Test")
+    (tmp_path / "README.md").write_text("baseline\n", encoding="utf-8")
+    run_git("add", "README.md")
+    run_git("commit", "-m", "baseline")
+    baseline = run_git("rev-parse", "HEAD")
+
+    implementation = tmp_path / "services" / "ai-service" / "feature.py"
+    implementation.parent.mkdir(parents=True)
+    implementation.write_text("VALUE = 1\n", encoding="utf-8")
+    acceptance = tmp_path / "tests" / "acceptance" / "c3" / "test_contract.py"
+    acceptance.parent.mkdir(parents=True)
+    acceptance.write_text("def test_contract(): pass\n", encoding="utf-8")
+    lock = tmp_path / "config" / "acceptance-locks" / "C3.json"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("{}\n", encoding="utf-8")
+    (tmp_path / "AGENT_TASKBOOK.md").write_text(
+        "### C3：建立品类特征归一化 ✔️\n", encoding="utf-8"
+    )
+    evidence = tmp_path / "artifacts" / "task-evidence" / "C3" / "run"
+    evidence.mkdir(parents=True)
+    (evidence / "manifest.json").write_text("{}\n", encoding="utf-8")
+    run_git("add", ".")
+    run_git("commit", "-m", "task")
+
+    first, paths = implementation_fingerprint(tmp_path, "C3", baseline)
+    assert paths == [
+        "services/ai-service/feature.py",
+        "tests/acceptance/c3/test_contract.py",
+    ]
+
+    (evidence / "manifest.json").write_text('{"passed": true}\n', encoding="utf-8")
+    run_git("add", ".")
+    run_git("commit", "-m", "evidence-only")
+    second, _ = implementation_fingerprint(tmp_path, "C3", baseline)
+
+    assert second == first
 
 
 def test_text_hash_is_stable_across_git_line_endings(tmp_path: Path) -> None:
@@ -212,6 +286,8 @@ def test_agents_instructions_bind_ai_work_to_the_pipeline() -> None:
         "one task ID at a time",
         "Never edit `apps/talonmart-web`",
         "Do not add task status fields",
+        "one permanent task commit",
+        "the only location for its ` ✔️`",
         "AGENT_INDEPENDENT_REVIEW",
     ):
         assert token in text

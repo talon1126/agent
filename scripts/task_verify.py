@@ -13,12 +13,11 @@ from pathlib import Path
 
 from agent_pipeline import (
     PipelineError,
-    committed_changed_files,
     evaluate_quality_profile,
     evidence_file_entries,
     extract_git_snapshot,
     git,
-    is_generated_evidence_path,
+    implementation_fingerprint,
     load_pipeline,
     load_structured,
     new_run_id,
@@ -74,17 +73,9 @@ def main() -> int:
         worktree_dirty = bool(
             git(root, "status", "--porcelain=v1", "--untracked-files=all")
         )
-        paths = [
-            path
-            for path in committed_changed_files(
-                root, preflight["baseline_commit"], target_commit
-            )
-            if not is_generated_evidence_path(path)
-        ]
-        if not paths:
-            raise PipelineError(
-                "no implementation changes found after the acceptance baseline"
-            )
+        fingerprint, paths = implementation_fingerprint(
+            root, task_id, preflight["baseline_commit"], target_commit
+        )
         scope_violations = validate_changed_paths(task_config, task_id, paths)
         if scope_violations:
             raise PipelineError("; ".join(scope_violations))
@@ -146,6 +137,7 @@ def main() -> int:
             "verification_result": result,
             "commit": target_commit,
             "baseline_commit": preflight["baseline_commit"],
+            "implementation_fingerprint": fingerprint,
             "working_tree_dirty": worktree_dirty,
             "verification_workspace": "git_archive",
             "taskbook_sha256": lock["taskbook_sha256"],

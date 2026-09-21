@@ -18,7 +18,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 SCHEMA_VERSION = 1
-TASK_HEADING = re.compile(r"^###\s+([A-I][1-5])：(.+?)\s*$", re.MULTILINE)
+TASK_HEADING = re.compile(r"^###[ \t]+([A-I][1-5])：([^\r\n]+?)[ \t]*$", re.MULTILINE)
+TASK_COMPLETION_MARKER = "✔️"
 VERIFY_BLOCK = re.compile(
     r"\*\*验证命令\*\*\s*```(?:powershell|bash|shell)?\s*\n(.*?)```",
     re.DOTALL,
@@ -35,10 +36,36 @@ class TaskSection:
     title: str
     body: str
     verification_commands: tuple[str, ...]
+    completed: bool = False
 
     @property
     def section_sha256(self) -> str:
         return sha256_bytes(self.body.encode("utf-8"))
+
+
+def _strip_completion_marker(title: str) -> tuple[str, bool]:
+    stripped = title.strip()
+    completed = stripped.endswith(TASK_COMPLETION_MARKER)
+    if completed:
+        stripped = stripped[: -len(TASK_COMPLETION_MARKER)].rstrip()
+    return stripped, completed
+
+
+def canonical_taskbook_text(text: str) -> str:
+    """Remove presentation-only completion markers before semantic hashing."""
+
+    canonical = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    def normalize_heading(match: re.Match[str]) -> str:
+        title, _ = _strip_completion_marker(match.group(2))
+        return f"### {match.group(1)}：{title}"
+
+    return TASK_HEADING.sub(normalize_heading, canonical)
+
+
+def taskbook_sha256(path: Path) -> str:
+    canonical = canonical_taskbook_text(path.read_text(encoding="utf-8"))
+    return sha256_bytes(canonical.encode("utf-8"))
 
 
 def utc_now() -> str:
@@ -129,7 +156,7 @@ def parse_taskbook(path: Path) -> dict[str, TaskSection]:
     for index, heading in enumerate(headings):
         start = heading.start()
         end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
-        body = text[start:end].rstrip() + "\n"
+        body = canonical_taskbook_text(text[start:end].rstrip() + "\n")
         command_block = VERIFY_BLOCK.search(body)
         if command_block is None:
             raise PipelineError(f"{heading.group(1)} has no verification command block")
@@ -145,11 +172,13 @@ def parse_taskbook(path: Path) -> dict[str, TaskSection]:
         task_id = heading.group(1)
         if task_id in tasks:
             raise PipelineError(f"duplicate task heading: {task_id}")
+        title, completed = _strip_completion_marker(heading.group(2))
         tasks[task_id] = TaskSection(
             task_id=task_id,
-            title=heading.group(2).strip(),
+            title=title,
             body=body,
             verification_commands=commands,
+            completed=completed,
         )
     return tasks
 
@@ -322,7 +351,7 @@ def build_taskbook_lock(root: Path) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "generated_at": utc_now(),
         "taskbook_path": taskbook_path.relative_to(root).as_posix(),
-        "taskbook_sha256": sha256_file(taskbook_path),
+        "taskbook_sha256": taskbook_sha256(taskbook_path),
         "task_config_sha256": sha256_file(task_config_path),
         "quality_gates_sha256": sha256_file(quality_config_path),
         "tasks": {
@@ -487,6 +516,8 @@ def build_acceptance_lock(
         "schema_version": SCHEMA_VERSION,
         "task_id": task_id,
         "generated_at": utc_now(),
+        "commit_mode": "single",
+        "baseline_commit": git(root, "rev-parse", "HEAD"),
         "taskbook_sha256": taskbook_lock["taskbook_sha256"],
         "task_config_sha256": taskbook_lock["task_config_sha256"],
         "files": {
@@ -517,6 +548,32 @@ def verify_acceptance_lock(
             raise PipelineError(f"frozen acceptance file changed: {relative}")
 
     relative_lock = lock_path.relative_to(root).as_posix()
+    if lock.get("commit_mode") == "single":
+        baseline_commit = str(lock.get("baseline_commit", "")).strip()
+        if not baseline_commit:
+            raise PipelineError(
+                f"single-commit acceptance lock has no baseline: {relative_lock}"
+            )
+        if not git(
+            root,
+            "rev-parse",
+            "--verify",
+            f"{baseline_commit}^{{commit}}",
+            check=False,
+        ):
+            raise PipelineError(
+                f"acceptance baseline does not exist: {baseline_commit}"
+            )
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", baseline_commit, "HEAD"],
+            cwd=root,
+        )
+        if ancestor.returncode != 0:
+            raise PipelineError(
+                "current HEAD does not descend from the acceptance baseline"
+            )
+        return lock, baseline_commit
+
     tracked = git(root, "ls-files", "--error-unmatch", "--", relative_lock, check=False)
     if not tracked:
         raise PipelineError(
@@ -589,6 +646,51 @@ def committed_changed_files(
     )
 
 
+def is_task_metadata_path(path: str, task_id: str) -> bool:
+    normalized = path.replace("\\", "/").lstrip("./")
+    return normalized in {
+        "AGENT_TASKBOOK.md",
+        f"config/acceptance-locks/{task_id}.json",
+    }
+
+
+def task_implementation_files(
+    root: Path, task_id: str, baseline_commit: str, target_commit: str = "HEAD"
+) -> list[str]:
+    return [
+        path
+        for path in committed_changed_files(root, baseline_commit, target_commit)
+        if not is_generated_evidence_path(path)
+        and not is_task_metadata_path(path, task_id)
+    ]
+
+
+def implementation_fingerprint(
+    root: Path, task_id: str, baseline_commit: str, target_commit: str = "HEAD"
+) -> tuple[str, list[str]]:
+    """Hash a task diff independently of evidence and completion metadata."""
+
+    paths = task_implementation_files(root, task_id, baseline_commit, target_commit)
+    if not paths:
+        raise PipelineError("target has no task changes after its acceptance baseline")
+    process = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--binary",
+            "--full-index",
+            f"{baseline_commit}..{target_commit}",
+            "--",
+            *paths,
+        ],
+        cwd=root,
+        capture_output=True,
+    )
+    if process.returncode != 0:
+        raise PipelineError("cannot compute task implementation fingerprint")
+    return sha256_bytes(process.stdout), paths
+
+
 def expand_pattern(pattern: str, task_id: str) -> str:
     return pattern.format(
         task_id=task_id,
@@ -658,6 +760,33 @@ def latest_manifest(root: Path, category: str, item_id: str) -> Path | None:
     return manifests[0] if manifests else None
 
 
+def latest_independent_manifest(root: Path, category: str, item_id: str) -> Path | None:
+    directory = root / "artifacts" / category / item_id
+    if not directory.is_dir():
+        return None
+    for manifest_path in sorted(directory.glob("*/manifest.json"), reverse=True):
+        manifest = load_structured(manifest_path)
+        runner = manifest.get("runner")
+        if isinstance(runner, dict) and runner.get("independent"):
+            return manifest_path
+    return None
+
+
+def manifest_introducing_commit(root: Path, manifest_path: Path) -> str | None:
+    relative = manifest_path.relative_to(root).as_posix()
+    commit = git(
+        root,
+        "log",
+        "--diff-filter=A",
+        "-1",
+        "--format=%H",
+        "--",
+        relative,
+        check=False,
+    )
+    return commit or None
+
+
 def verify_task_audit(
     root: Path, task_id: str, *, target_commit: str | None = None
 ) -> dict[str, Any]:
@@ -669,7 +798,26 @@ def verify_task_audit(
     manifest = load_structured(manifest_path)
     if manifest.get("task_id") != task_id or manifest.get("result") != "passed":
         raise PipelineError(f"latest audit did not pass: {manifest_path}")
-    if target_commit is not None and manifest.get("target_commit") != target_commit:
+    fingerprint = manifest.get("implementation_fingerprint")
+    if fingerprint:
+        covered_commit = target_commit or manifest_introducing_commit(
+            root, manifest_path
+        )
+        if covered_commit is None:
+            raise PipelineError(
+                f"cannot resolve audited task revision: {manifest_path}"
+            )
+        actual, _ = implementation_fingerprint(
+            root,
+            task_id,
+            str(manifest.get("baseline_commit", "")),
+            covered_commit,
+        )
+        if actual != fingerprint:
+            raise PipelineError(
+                f"latest audit for {task_id} does not cover the task implementation"
+            )
+    elif target_commit is not None and manifest.get("target_commit") != target_commit:
         raise PipelineError(
             f"latest audit for {task_id} does not cover commit {target_commit}"
         )
@@ -721,8 +869,23 @@ def validate_evidence_manifest(
             raise PipelineError(
                 f"independent evidence has no verifier: {manifest_path}"
             )
+    fingerprint = manifest.get("implementation_fingerprint")
     commit = manifest.get("commit")
-    if commit:
+    if fingerprint and id_field == "task_id":
+        evidence_commit = manifest_introducing_commit(root, manifest_path)
+        if evidence_commit is None:
+            raise PipelineError(f"task evidence is not committed: {manifest_path}")
+        actual, _ = implementation_fingerprint(
+            root,
+            expected_id,
+            str(manifest.get("baseline_commit", "")),
+            evidence_commit,
+        )
+        if actual != fingerprint:
+            raise PipelineError(
+                f"task evidence does not match its committed implementation: {manifest_path}"
+            )
+    elif commit:
         ancestor = subprocess.run(
             ["git", "merge-base", "--is-ancestor", str(commit), "HEAD"],
             cwd=root,
@@ -746,7 +909,53 @@ def validate_evidence_manifest(
             raise PipelineError(
                 f"acceptance lock changed after task verification: {expected_id}"
             )
-        verify_acceptance_lock(root, task_config, expected_id)
+        acceptance, baseline_commit = verify_acceptance_lock(
+            root, task_config, expected_id
+        )
+        if acceptance.get("commit_mode") == "single":
+            if not fingerprint or evidence_commit is None:
+                raise PipelineError(
+                    f"single-commit task evidence has no implementation fingerprint: "
+                    f"{manifest_path}"
+                )
+            _, _, taskbook = load_pipeline(root)
+            if not taskbook[expected_id].completed:
+                raise PipelineError(
+                    f"completed task heading has no marker: {expected_id}"
+                )
+            commit_count = git(
+                root,
+                "rev-list",
+                "--count",
+                f"{baseline_commit}..{evidence_commit}",
+            )
+            if commit_count != "1":
+                raise PipelineError(
+                    f"task {expected_id} must be delivered in exactly one commit"
+                )
+            lock_commit = manifest_introducing_commit(
+                root, acceptance_lock_path(root, task_config, expected_id)
+            )
+            if lock_commit != evidence_commit:
+                raise PipelineError(
+                    f"task {expected_id} acceptance, implementation, and evidence "
+                    "must share one commit"
+                )
+            marker_commit = git(
+                root,
+                "log",
+                "-1",
+                "--format=%H",
+                "-G",
+                f"^### {expected_id}：.*{TASK_COMPLETION_MARKER}",
+                "--",
+                "AGENT_TASKBOOK.md",
+                check=False,
+            )
+            if marker_commit != evidence_commit:
+                raise PipelineError(
+                    f"task {expected_id} completion marker must share its final commit"
+                )
     elif id_field == "milestone_id":
         for task_id, run_id in manifest.get("task_evidence", {}).items():
             task_manifest = (
@@ -799,12 +1008,8 @@ def validate_evidence_manifest(
 
 
 def verify_task_dependency(root: Path, task_id: str) -> dict[str, Any]:
-    manifest_path = latest_manifest(root, "task-evidence", task_id)
-    if manifest_path is None:
-        raise PipelineError(f"dependency {task_id} has no evidence")
-    raw_manifest = load_structured(manifest_path)
-    runner = raw_manifest.get("runner")
-    if isinstance(runner, dict) and runner.get("independent"):
+    manifest_path = latest_independent_manifest(root, "task-evidence", task_id)
+    if manifest_path is not None:
         return validate_evidence_manifest(
             root,
             manifest_path,
@@ -812,6 +1017,10 @@ def verify_task_dependency(root: Path, task_id: str) -> dict[str, Any]:
             "task_id",
             require_independent=True,
         )
+
+    manifest_path = latest_manifest(root, "task-evidence", task_id)
+    if manifest_path is None:
+        raise PipelineError(f"dependency {task_id} has no evidence")
 
     task_config = load_structured(root / "config/agent_tasks.yaml")
     phase = str(task_config["tasks"][task_id]["phase"])

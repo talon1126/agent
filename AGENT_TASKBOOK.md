@@ -177,7 +177,7 @@ M3-M4 只要求点击、加购、购买、取消和退货事件完整采集、�
 
 阶段目标：不改变现有行为，先建立可回归的质量基线，并为上下文和结构化结果提供兼容协议。
 
-### A1：冻结现有 Agent 基线
+### A1：冻结现有 Agent 基线 ✔️
 
 **目标**
 
@@ -221,7 +221,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_aimod
 
 不新增购物能力，不调整 Prompt，不改变路由阈值，不优化性能；发现的问题只记录为基线缺陷，除非它导致测试无法建立。
 
-### A2：建立购物任务 Golden Set v1
+### A2：建立购物任务 Golden Set v1 ✔️
 
 **目标**
 
@@ -267,7 +267,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_shopp
 
 v1 不使用 LLM Judge 决定对错，不包含真实用户隐私数据，不为了提高分数删除困难样本。
 
-### A3：扩展请求上下文协议
+### A3：扩展请求上下文协议 ✔️
 
 **目标**
 
@@ -312,7 +312,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_aimod
 
 本任务只建立传输协议，不读取购物车、不决定上下文优先级、不实现主动触发；这些行为属于 E1 和 E2。
 
-### A4：建立结构化响应协议
+### A4：建立结构化响应协议 ✔️
 
 **目标**
 
@@ -357,7 +357,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_aimod
 
 不实现任何前端渲染，不实现排序、比较算法或加购执行；只定义并验证后端协议。
 
-### A5：扩展 Trace 与指标字典
+### A5：扩展 Trace 与指标字典 ✔️
 
 **目标**
 
@@ -418,7 +418,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_aimod
 
 阶段目标：把“聊天历史”升级为明确、可持久化、可解释的购物任务状态。
 
-### B1：定义购物目标模型
+### B1：定义购物目标模型 ✔️
 
 **目标**
 
@@ -463,7 +463,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_shopp
 
 不在本任务从自然语言抽取字段，不持久化数据库，不实现商品过滤；只定义领域模型及其不变量。
 
-### B2：实现目标抽取器
+### B2：实现目标抽取器 ✔️
 
 **目标**
 
@@ -508,7 +508,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_goal_
 
 不修改历史状态，不决定是否追问，不把抽取结果直接写入长期用户偏好。
 
-### B3：实现状态合并与冲突检测
+### B3：实现状态合并与冲突检测 ✔️
 
 **目标**
 
@@ -553,7 +553,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_goal_
 
 不生成面向用户的提问文本，不访问商品 API，不持久化数据库。
 
-### B4：实现澄清策略
+### B4：实现澄清策略 ✔️
 
 **目标**
 
@@ -598,7 +598,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_clari
 
 不负责把选项写成复杂营销话术，不调用商品排序器，不一次询问多个主题。
 
-### B5：持久化目标状态并隔离长期偏好
+### B5：持久化目标状态并隔离长期偏好 ✔️
 
 **目标**
 
@@ -658,7 +658,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_shopp
 
 阶段目标：把商品推荐从 LLM 主观选择改造成可测试、可解释的确定性决策流水线。
 
-### C1：建立商品事实快照
+### C1：建立商品事实快照 ✔️
 
 **目标**
 
@@ -705,7 +705,7 @@ uv run --project services/mock-api pytest services/mock-api/tests -q
 
 不进行商品过滤、评分和评论总结；不在 ai-service 建立第二份商品主数据。
 
-### C2：实现候选召回与硬过滤
+### C2：实现候选召回与硬过滤 ✔️
 
 **目标**
 
