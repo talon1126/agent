@@ -220,6 +220,16 @@ class DeliveryCapability(BaseModel):
     shipping_available: bool
     pickup_available: bool
     delivery_available: bool
+    estimated_delivery_at: datetime | None = None
+
+    @field_validator("estimated_delivery_at")
+    @classmethod
+    def validate_estimated_delivery_at(cls, value: datetime | None) -> datetime | None:
+        return (
+            _require_aware(value, "estimated_delivery_at")
+            if value is not None
+            else None
+        )
 
 
 class ProductSnapshotItem(BaseModel):

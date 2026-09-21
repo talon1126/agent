@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 
@@ -50,6 +50,7 @@ class ProductSnapshotDelivery(BaseModel):
     shipping_available: bool
     pickup_available: bool
     delivery_available: bool
+    estimated_delivery_at: datetime | None = None
 
 
 class ProductSnapshotFacts(BaseModel):
@@ -240,6 +241,7 @@ def get_product_snapshots(
                         shipping_available=True,
                         pickup_available=True,
                         delivery_available=True,
+                        estimated_delivery_at=captured_at + timedelta(days=1),
                     ),
                     observed_at=ProductSnapshotObservedAt(
                         catalog=captured_at,

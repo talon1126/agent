@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -76,6 +77,11 @@ def test_batch_endpoint_preserves_order_deduplicates_and_reports_partial_errors(
     assert body["items"][1]["error"]["code"] == "item_not_found"
     assert body["items"][2]["facts"]["stock"] is None
     assert body["items"][2]["facts"]["rating"] is None
+    captured_at = datetime.fromisoformat(body["captured_at"])
+    estimated_delivery_at = datetime.fromisoformat(
+        body["items"][0]["facts"]["delivery"]["estimated_delivery_at"]
+    )
+    assert estimated_delivery_at - captured_at == timedelta(days=1)
     assert calls == [["sku-a", "missing", "sku-b"]]
 
 

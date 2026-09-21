@@ -70,6 +70,7 @@ class _RawDelivery(BaseModel):
     shipping_available: bool
     pickup_available: bool
     delivery_available: bool
+    estimated_delivery_at: datetime | None = None
 
 
 class _RawFacts(BaseModel):
