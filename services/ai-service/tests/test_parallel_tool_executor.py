@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from app.routers.AImodel.agent_trace import AgentTraceContext
+from app.routers.AImodel.candidate_service import CandidateReference, CandidateSource
 from app.routers.AImodel.plan_models import (
     AgentPlan,
     AgentPlanValidator,
@@ -161,6 +162,102 @@ def test_denied_tool_call_never_reaches_handler() -> None:
         assert result.steps[0].status is StepExecutionStatus.FAILED
         assert result.steps[0].error_code == "item_not_in_candidate_set"
         assert result.steps[0].attempt_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_upstream_search_candidates_authorize_snapshot_step() -> None:
+    async def scenario() -> None:
+        plan = AgentPlanValidator(load_plan_policy()).validate(
+            {
+                "schema_version": "1.0",
+                "plan_id": "d4-dynamic-candidate-plan",
+                "steps": [
+                    {
+                        "step_id": "s01_search",
+                        "step_type": "product_search",
+                        "dependencies": [],
+                        "inputs": [_root("goal", "goal", "shopping_goal")],
+                        "output_type": "candidate_refs",
+                        "risk_level": "medium",
+                        "allowed_tools": ["product_search"],
+                        "timeout_ms": 1_000,
+                    },
+                    {
+                        "step_id": "s02_snapshot",
+                        "step_type": "snapshot",
+                        "dependencies": [
+                            {
+                                "step_id": "s01_search",
+                                "output_type": "candidate_refs",
+                            }
+                        ],
+                        "inputs": [
+                            {
+                                "name": "candidate_refs",
+                                "source": "step",
+                                "step_id": "s01_search",
+                                "value_type": "candidate_refs",
+                            }
+                        ],
+                        "output_type": "product_snapshot",
+                        "risk_level": "medium",
+                        "allowed_tools": ["product_snapshot"],
+                        "timeout_ms": 1_000,
+                    },
+                ],
+                "stop_reasons": ["completed", "tool_denied", "safe_fallback"],
+            }
+        )
+
+        async def search(_invocation: StepInvocation) -> ExecutionValue:
+            return ExecutionValue(
+                value_type=PlanValueType.CANDIDATE_REFS,
+                value=(
+                    CandidateReference(
+                        item_id="sku-from-search",
+                        sources=(CandidateSource.SEARCH,),
+                    ),
+                ),
+            )
+
+        result = await BoundedParallelToolExecutor(_policy()).execute(
+            plan,
+            StepExecutionContext(
+                user_id=11,
+                conversation_id=22,
+                goal_inputs={
+                    "goal": ExecutionValue(
+                        value_type=PlanValueType.SHOPPING_GOAL,
+                        value={},
+                    )
+                },
+            ),
+            {
+                "product_search": StepHandler(
+                    invoke=search,
+                    tool_call_factory=lambda _invocation: AgentToolCall(
+                        tool_name="product_search",
+                        arguments={
+                            "user_id": 11,
+                            "conversation_id": 22,
+                            "query": "phone",
+                        },
+                    ),
+                    idempotent=True,
+                ),
+                "snapshot": StepHandler(
+                    invoke=_snapshot,
+                    tool_call_factory=_snapshot_call("sku-from-search"),
+                    idempotent=True,
+                ),
+            },
+        )
+
+        assert [step.status for step in result.steps] == [
+            StepExecutionStatus.SUCCESS,
+            StepExecutionStatus.SUCCESS,
+        ]
 
     asyncio.run(scenario())
 

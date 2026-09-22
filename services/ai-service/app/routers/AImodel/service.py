@@ -41,6 +41,8 @@ from app.routers.AImodel.agent_trace import (
     record_allowed_tools,
     record_intent_route,
 )
+from app.routers.AImodel.agent_runtime import run_shopping_agent_main_chain
+from app.routers.AImodel.clarification import ClarificationDecision
 from app.routers.AImodel.goal_orchestrator import (
     ShoppingGoalOrchestrator,
     ShoppingGoalTurnResult,
@@ -61,6 +63,7 @@ from app.routers.AImodel.schemas import (
     AiModelChatResponse,
     AiModelToolResult,
 )
+from app.routers.AImodel.shopping_goal import ShoppingGoal
 from app.routers.AImodel.tools import (
     RagKnowledgeClient,
     fetch_product_detail_from_link,
@@ -277,6 +280,77 @@ def _stream_chat_events_impl(
         yield _format_sse("done", done_payload)
         return
 
+    if streaming_agent_runner is None:
+        try:
+            runtime_goal, runtime_clarification = _runtime_goal_context(
+                goal_result,
+                goal_orchestrator,
+                conversation_id=conversation_id,
+                user_id=request.user_id,
+            )
+            runtime_result = run_shopping_agent_main_chain(
+                request,
+                conversation_id=conversation_id,
+                goal=runtime_goal,
+                clarification=runtime_clarification,
+                mock_api_url=mock_api_url,
+                http_client=http_client,
+                trace_context=agent_trace_context,
+            )
+        except Exception as error:
+            agent_trace_context.fail(error)
+            _persist_agent_trace_safely(memory_store, agent_trace_context)
+            yield _format_sse("error", {"content": "AImodel execution failed."})
+            return
+        if runtime_result is not None:
+            tool_results.extend(runtime_result.tool_results)
+            response = AiModelChatResponse.from_payload(
+                runtime_result.payload,
+                conversation_id=conversation_id,
+            )
+            done_payload = response.model_dump(mode="json")
+            query_trace_ids = _query_trace_ids_from_tool_results(tool_results)
+            yield _format_sse("status", {"content": "正在执行导购计划"})
+            yield _format_sse("delta", {"content": response.answer})
+            try:
+                message_id = memory_store.append_assistant_message(
+                    conversation_id,
+                    user_id=request.user_id,
+                    content=response.answer,
+                    recommended_links=[
+                        link.model_dump(mode="json")
+                        for link in response.recommended_links
+                    ],
+                    query_trace_ids=query_trace_ids,
+                    structured_response=done_payload,
+                )
+                if goal_result is None:
+                    for memory in extract_user_memories_from_text(
+                        request.message,
+                        user_id=request.user_id,
+                    ):
+                        memory_store.upsert_user_memory(
+                            request.user_id,
+                            memory_type=memory.memory_type,
+                            memory_value=memory.memory_value,
+                            evidence=memory.evidence,
+                            confidence=memory.confidence,
+                            expires_at=memory.expires_at,
+                            source_goal_id=memory.source_goal_id,
+                        )
+            except Exception as error:
+                _record_memory_persist_failure(error)
+                agent_trace_context.fail(error)
+                _persist_agent_trace_safely(memory_store, agent_trace_context)
+            else:
+                agent_trace_context.complete(
+                    message_id=message_id,
+                    query_trace_ids=query_trace_ids,
+                )
+                _persist_agent_trace_safely(memory_store, agent_trace_context)
+            yield _format_sse("done", done_payload)
+            return
+
     if request.links:
         yield _format_sse("status", {"content": "正在识别商品链接"})
         for link in request.links:
@@ -440,6 +514,24 @@ def _process_shopping_goal_turn(
         },
     )
     return result
+
+
+def _runtime_goal_context(
+    result: ShoppingGoalTurnResult | None,
+    orchestrator: ShoppingGoalOrchestrator | None,
+    *,
+    conversation_id: int,
+    user_id: int,
+) -> tuple[ShoppingGoal, ClarificationDecision | None]:
+    """Resolve the persisted goal even when this turn did not mutate it."""
+
+    if result is not None:
+        return result.record.goal, result.clarification
+    if orchestrator is not None:
+        record = orchestrator.repository.load(conversation_id, user_id=user_id)
+        if record is not None:
+            return record.goal, None
+    return ShoppingGoal(), None
 
 
 def _run_langchain_agent(

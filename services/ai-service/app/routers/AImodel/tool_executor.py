@@ -215,6 +215,7 @@ class _PreparedStep:
     invocation: StepInvocation
     tool_call: AgentToolCall | None
     access_mode: ToolAccessMode | None
+    authorization_context: ToolAuthorizationContext
     scheduled_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     scheduled_clock: float = field(default_factory=time.perf_counter)
 
@@ -494,6 +495,7 @@ class BoundedParallelToolExecutor:
             invocation=invocation,
             tool_call=tool_call,
             access_mode=access_mode,
+            authorization_context=_authorization_context_for_inputs(context, inputs),
         )
 
     async def _run_prepared(
@@ -522,7 +524,7 @@ class BoundedParallelToolExecutor:
                         plan,
                         prepared.step,
                         prepared.tool_call,
-                        context.authorization_context(),
+                        prepared.authorization_context,
                     )
                 attempts += 1
                 try:
@@ -765,6 +767,34 @@ def _root_inputs(
     if source is InputSource.CONTEXT:
         return context.context_inputs
     return {}
+
+
+def _authorization_context_for_inputs(
+    context: StepExecutionContext,
+    inputs: Mapping[str, ExecutionValue],
+) -> ToolAuthorizationContext:
+    """Add candidate provenance created by an upstream search step."""
+
+    candidate_ids = list(context.candidate_item_ids)
+    seen = set(candidate_ids)
+    for value in inputs.values():
+        if value.value_type is not PlanValueType.CANDIDATE_REFS:
+            continue
+        candidates = value.value
+        if not isinstance(candidates, (list, tuple)):
+            continue
+        for candidate in candidates:
+            item_id = getattr(candidate, "item_id", None)
+            normalized = str(item_id).strip() if item_id is not None else ""
+            if normalized and normalized not in seen:
+                candidate_ids.append(normalized)
+                seen.add(normalized)
+    return ToolAuthorizationContext(
+        user_id=context.user_id,
+        conversation_id=context.conversation_id,
+        candidate_item_ids=tuple(candidate_ids[:100]),
+        trace_context=context.trace_context,
+    )
 
 
 def _instant_result(
