@@ -5,6 +5,7 @@ import re
 import threading
 from collections.abc import Callable
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -41,7 +42,10 @@ from app.routers.AImodel.agent_trace import (
     record_allowed_tools,
     record_intent_route,
 )
-from app.routers.AImodel.agent_runtime import run_shopping_agent_main_chain
+from app.routers.AImodel.agent_runtime import (
+    AgentRuntimeResult,
+    run_shopping_agent_main_chain,
+)
 from app.routers.AImodel.clarification import ClarificationDecision
 from app.routers.AImodel.goal_orchestrator import (
     ShoppingGoalOrchestrator,
@@ -64,6 +68,7 @@ from app.routers.AImodel.schemas import (
     AiModelToolResult,
 )
 from app.routers.AImodel.shopping_goal import ShoppingGoal
+from app.routers.AImodel.tool_executor import ExecutionCancellation
 from app.routers.AImodel.tools import (
     RagKnowledgeClient,
     fetch_product_detail_from_link,
@@ -77,6 +82,16 @@ AgentRunner = Callable[[AiModelChatRequest, list[AiModelToolResult]], str]
 StreamingAgentRunner = Callable[
     [AiModelChatRequest, list[AiModelToolResult]], Iterable[str]
 ]
+
+
+@dataclass(slots=True)
+class AiModelExecutionCapture:
+    """Internal handoff from the production stream to evaluation adapters."""
+
+    trace_context: AgentTraceContext | None = None
+    runtime_result: AgentRuntimeResult | None = None
+    tool_results: tuple[AiModelToolResult, ...] = ()
+
 
 SYSTEM_PROMPT = """
 你是 TalonMart 的 AImodel 购物助手。
@@ -165,6 +180,9 @@ def stream_chat_events(
     streaming_agent_runner: StreamingAgentRunner | None = None,
     memory_store: AiModelMemoryStore | None = None,
     goal_orchestrator: ShoppingGoalOrchestrator | None = None,
+    execution_capture: AiModelExecutionCapture | None = None,
+    langchain_callbacks: Iterable[Any] | None = None,
+    execution_cancellation: ExecutionCancellation | None = None,
 ) -> Iterator[str]:
     """Stream chat events and close the trace if the client disconnects."""
 
@@ -178,8 +196,12 @@ def stream_chat_events(
             memory_store=memory_store,
             goal_orchestrator=goal_orchestrator,
             trace_state=trace_state,
+            langchain_callbacks=tuple(langchain_callbacks or ()),
+            execution_cancellation=execution_cancellation,
         )
     except GeneratorExit:
+        if execution_cancellation is not None:
+            execution_cancellation.cancel()
         context = trace_state.get("context")
         store = trace_state.get("memory_store")
         if (
@@ -190,6 +212,22 @@ def stream_chat_events(
             context.cancel("client_cancelled")
             _persist_agent_trace_safely(store, context)
         raise
+    finally:
+        if execution_capture is not None:
+            context = trace_state.get("context")
+            runtime_result = trace_state.get("runtime_result")
+            tool_results = trace_state.get("tool_results")
+            execution_capture.trace_context = (
+                context if isinstance(context, AgentTraceContext) else None
+            )
+            execution_capture.runtime_result = (
+                runtime_result
+                if isinstance(runtime_result, AgentRuntimeResult)
+                else None
+            )
+            execution_capture.tool_results = (
+                tuple(tool_results) if isinstance(tool_results, list) else ()
+            )
 
 
 def _stream_chat_events_impl(
@@ -201,6 +239,8 @@ def _stream_chat_events_impl(
     memory_store: AiModelMemoryStore | None = None,
     goal_orchestrator: ShoppingGoalOrchestrator | None = None,
     trace_state: dict[str, Any],
+    langchain_callbacks: tuple[Any, ...] = (),
+    execution_cancellation: ExecutionCancellation | None = None,
 ) -> Iterator[str]:
     """Implement the stream while exposing lifecycle state to its wrapper."""
 
@@ -211,6 +251,7 @@ def _stream_chat_events_impl(
         goal_orchestrator = get_shopping_goal_orchestrator()
     trace_state["memory_store"] = memory_store
     tool_results: list[AiModelToolResult] = []
+    trace_state["tool_results"] = tool_results
     answer_parts: list[str] = []
     agent_trace_context = AgentTraceContext.start(
         user_query=request.message,
@@ -296,7 +337,9 @@ def _stream_chat_events_impl(
                 mock_api_url=mock_api_url,
                 http_client=http_client,
                 trace_context=agent_trace_context,
+                cancellation=execution_cancellation,
             )
+            trace_state["runtime_result"] = runtime_result
         except Exception as error:
             agent_trace_context.fail(error)
             _persist_agent_trace_safely(memory_store, agent_trace_context)
@@ -384,7 +427,10 @@ def _stream_chat_events_impl(
                     else None
                 ),
                 agent_trace_context=agent_trace_context,
-                langchain_config=build_langchain_config(conversation_id),
+                langchain_config=_with_langchain_callbacks(
+                    build_langchain_config(conversation_id),
+                    langchain_callbacks,
+                ),
             )
         )
         for chunk in chunks:
@@ -729,6 +775,19 @@ def _run_langchain_agent_stream(
         chunk = _extract_stream_token(update)
         if chunk:
             yield chunk
+
+
+def _with_langchain_callbacks(
+    config: dict[str, Any],
+    callbacks: tuple[Any, ...],
+) -> dict[str, Any]:
+    if not callbacks:
+        return config
+    merged = dict(config)
+    existing = merged.get("callbacks")
+    existing_callbacks = list(existing) if isinstance(existing, (list, tuple)) else []
+    merged["callbacks"] = [*existing_callbacks, *callbacks]
+    return merged
 
 
 def _record_agent_trace_routing(

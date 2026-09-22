@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -144,7 +145,7 @@ class ExecutionCancellation:
     """Cooperative turn cancellation signal owned by the API/SSE caller."""
 
     def __init__(self) -> None:
-        self._event = asyncio.Event()
+        self._event = threading.Event()
 
     def cancel(self) -> None:
         self._event.set()
@@ -154,7 +155,8 @@ class ExecutionCancellation:
         return self._event.is_set()
 
     async def wait(self) -> None:
-        await self._event.wait()
+        while not self._event.is_set():
+            await asyncio.sleep(0.05)
 
 
 class StepExecutionContext(_StrictModel):
@@ -733,6 +735,7 @@ class BoundedParallelToolExecutor:
                 },
                 related_ids={"plan_id": plan.plan_id, "step_id": step.step_id},
             )
+            event.started_at = step.started_at
             trace_status = AgentTraceStatus.SUCCESS
             if step.status is StepExecutionStatus.SKIPPED:
                 trace_status = AgentTraceStatus.SKIPPED
@@ -743,6 +746,7 @@ class BoundedParallelToolExecutor:
                 error=step.error_code
                 if trace_status is AgentTraceStatus.ERROR
                 else None,
+                duration_ms=step.duration_ms,
             )
 
 

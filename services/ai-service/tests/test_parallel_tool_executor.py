@@ -16,6 +16,7 @@ from app.routers.AImodel.plan_models import (
 )
 from app.routers.AImodel.tool_executor import (
     BoundedParallelToolExecutor,
+    ExecutionCancellation,
     ExecutionValue,
     ExecutorPolicy,
     RetryableStepError,
@@ -64,7 +65,11 @@ def _snapshot_plan(*step_ids: str) -> AgentPlan:
     )
 
 
-def _context(*, trace: AgentTraceContext | None = None) -> StepExecutionContext:
+def _context(
+    *,
+    trace: AgentTraceContext | None = None,
+    cancellation: ExecutionCancellation | None = None,
+) -> StepExecutionContext:
     return StepExecutionContext(
         user_id=11,
         conversation_id=22,
@@ -75,6 +80,7 @@ def _context(*, trace: AgentTraceContext | None = None) -> StepExecutionContext:
             )
         },
         candidate_item_ids=("sku-1", "sku-2"),
+        cancellation=cancellation or ExecutionCancellation(),
         trace_context=trace,
     )
 
@@ -458,6 +464,44 @@ def test_outer_coroutine_cancellation_cleans_up_running_steps() -> None:
             and not task.done()
             and task.get_name().startswith("agent-")
         ] == []
+
+    asyncio.run(scenario())
+
+
+def test_cooperative_cancellation_is_safe_across_threads() -> None:
+    async def scenario() -> None:
+        cancellation = ExecutionCancellation()
+        started = asyncio.Event()
+        finalized = asyncio.Event()
+
+        async def blocked(_invocation: StepInvocation) -> ExecutionValue:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                finalized.set()
+            raise AssertionError("unreachable")
+
+        execution = asyncio.create_task(
+            BoundedParallelToolExecutor(_policy()).execute(
+                _snapshot_plan("s01_cancelled"),
+                _context(cancellation=cancellation),
+                {
+                    "s01_cancelled": StepHandler(
+                        invoke=blocked,
+                        tool_call_factory=_snapshot_call("sku-1"),
+                        idempotent=True,
+                    )
+                },
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await asyncio.to_thread(cancellation.cancel)
+        result = await asyncio.wait_for(execution, timeout=1)
+
+        assert result.steps[0].status is StepExecutionStatus.CANCELLED
+        assert result.steps[0].error_code == "client_cancelled"
+        assert finalized.is_set()
 
     asyncio.run(scenario())
 

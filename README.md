@@ -220,6 +220,18 @@ RAG 评估：
 uv run --project services/ai-service/rag python -m src.scripts.run_evaluation --help
 ```
 
+Kayn Agent 评测入口：
+
+```powershell
+# 先在 .env 中配置 KAYN_API_TOKEN、KAYN_PROJECT_ID 和模型/数据库变量。
+.\scripts\run_kayn_agent_target.ps1
+```
+
+该进程通过 Kayn SDK 出站连接，不开放新的 HTTP 端口。它返回最终答案、实际采用的
+RAG/商品事实上下文和脱敏工具调用，并把现有 Agent Trace 及旧 LangChain 兜底链映射到
+同一条 Kayn/OpenTelemetry Trace。SDK 尚未发布到包仓库时，脚本默认加载相邻的
+`Kayn/packages/python-sdk` 源码，也可通过 `KAYN_SDK_PATH` 指定其他检出目录。
+
 ## 开发约束
 
 - 业务事实只能由确定性 API 写入，Agent 不直接编造订单、库存、采购或物流状态。

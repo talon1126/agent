@@ -9,6 +9,7 @@ grounding verifier before they leave the service boundary.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -54,6 +55,7 @@ from .schemas import (
 from .shopping_goal import ShoppingGoal
 from .tool_executor import (
     BoundedParallelToolExecutor,
+    ExecutionCancellation,
     ExecutionValue,
     PlanExecutionResult,
     PlanExecutionStatus,
@@ -90,6 +92,16 @@ _SUPPORTED_TASKS = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class AgentEvaluationContext:
+    """One bounded evidence block actually used by the deterministic runtime."""
+
+    content: str
+    source_type: str
+    source_id: str
+    title: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AgentRuntimeResult:
     """One fully executed main-chain result returned to the API layer."""
 
@@ -97,6 +109,7 @@ class AgentRuntimeResult:
     planning: PlanningResult
     execution: PlanExecutionResult
     tool_results: tuple[AiModelToolResult, ...] = ()
+    evaluation_contexts: tuple[AgentEvaluationContext, ...] = ()
 
 
 @dataclass(slots=True)
@@ -109,6 +122,7 @@ class _TurnState:
     http_client: httpx.Client | None
     rag_client: RagKnowledgeClient | None
     trace_context: AgentTraceContext | None
+    cancellation: ExecutionCancellation
     tool_results: list[AiModelToolResult] = field(default_factory=list)
     candidates: tuple[CandidateReference, ...] = ()
     snapshot: ProductSnapshot | None = None
@@ -148,6 +162,7 @@ class ShoppingAgentRuntime:
         mock_api_url: str,
         http_client: httpx.Client | None = None,
         trace_context: AgentTraceContext | None = None,
+        cancellation: ExecutionCancellation | None = None,
     ) -> AgentRuntimeResult | None:
         """Return ``None`` when the route belongs to a legacy-only capability."""
 
@@ -180,6 +195,7 @@ class ShoppingAgentRuntime:
             http_client=http_client,
             rag_client=self._rag_client,
             trace_context=trace_context,
+            cancellation=cancellation or ExecutionCancellation(),
         )
         return asyncio.run(
             self._run_plan(
@@ -222,6 +238,7 @@ class ShoppingAgentRuntime:
                 },
                 context_inputs=context_inputs,
                 candidate_item_ids=candidate_ids,
+                cancellation=state.cancellation,
                 trace_context=state.trace_context,
             ),
             self._handlers(
@@ -252,6 +269,7 @@ class ShoppingAgentRuntime:
             planning=planning,
             execution=execution,
             tool_results=tuple(state.tool_results),
+            evaluation_contexts=_build_evaluation_contexts(state, payload),
         )
 
     async def _verify_product_result(
@@ -797,6 +815,91 @@ def _compose_draft(
     )
 
 
+def _build_evaluation_contexts(
+    state: _TurnState,
+    payload: AiModelResponsePayload,
+) -> tuple[AgentEvaluationContext, ...]:
+    """Project only evidence consumed by this turn into Kayn-ready contexts."""
+
+    contexts: list[AgentEvaluationContext] = []
+    for result in state.tool_results:
+        if result.tool not in {"rag_tool", "search_shopping_guides"} or not result.ok:
+            continue
+        content = str(result.data.get("content") or "").strip()
+        trace_id = str(result.data.get("trace_id") or "").strip()
+        if content:
+            contexts.append(
+                AgentEvaluationContext(
+                    content=content,
+                    source_type="rag_final_context",
+                    source_id=trace_id or "rag-context",
+                    title="RAG final context",
+                )
+            )
+
+    snapshot = state.snapshot
+    if snapshot is None:
+        return tuple(contexts)
+    selected_ids = {
+        str(product.item_id)
+        for product in payload.recommended_products()
+        if str(product.item_id) in snapshot.items_by_id
+    }
+    for item_id in snapshot.requested_item_ids:
+        if item_id not in selected_ids:
+            continue
+        item = snapshot.items_by_id[item_id]
+        facts = {
+            name: _evaluation_fact(getattr(item, name))
+            for name in (
+                "name",
+                "category",
+                "brand",
+                "current_price",
+                "currency",
+                "stock",
+                "specifications",
+                "rating",
+                "review_count",
+                "delivery",
+            )
+        }
+        contexts.append(
+            AgentEvaluationContext(
+                content=json.dumps(
+                    {
+                        "item_id": item_id,
+                        "snapshot_id": snapshot.snapshot_id,
+                        "source_version": snapshot.source_version,
+                        "facts": facts,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                source_type="product_snapshot",
+                source_id=f"{snapshot.snapshot_id}:{item_id}",
+                title=f"Product facts {item_id}",
+            )
+        )
+    return tuple(contexts)
+
+
+def _evaluation_fact(fact: Any) -> dict[str, Any]:
+    value = fact.value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        value = model_dump(mode="json")
+    elif value is not None and not isinstance(value, (str, int, float, bool, dict, list)):
+        value = str(value)
+    return {
+        "status": fact.status.value,
+        "value": value,
+        "source_version": fact.source.source_version,
+        "freshness": fact.freshness.state.value,
+    }
+
+
 def run_shopping_agent_main_chain(
     request: AiModelChatRequest,
     *,
@@ -806,6 +909,7 @@ def run_shopping_agent_main_chain(
     mock_api_url: str,
     http_client: httpx.Client | None = None,
     trace_context: AgentTraceContext | None = None,
+    cancellation: ExecutionCancellation | None = None,
 ) -> AgentRuntimeResult | None:
     """Construct the default runtime and execute one request."""
 
@@ -817,4 +921,5 @@ def run_shopping_agent_main_chain(
         mock_api_url=mock_api_url,
         http_client=http_client,
         trace_context=trace_context,
+        cancellation=cancellation,
     )
