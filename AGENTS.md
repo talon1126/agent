@@ -36,6 +36,9 @@ Stage B independent closure passed at commit `3452f178` with evidence run
 Stage C independent closure passed at commit `da6a9226` with evidence run
 `20260921T080927Z-da6a92262e-1b864f`.
 
+Stage D independent closure passed at commit `081248cf` with evidence run
+`20260922T033829Z-081248cf2e-827689`.
+
 ## Required task flow
 
 Work on exactly one task ID at a time.
