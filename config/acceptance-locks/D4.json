@@ -1,0 +1,12 @@
+{
+  "baseline_commit": "738aea102e304f69c27db5144fc333a7289c541f",
+  "commit_mode": "single",
+  "files": {
+    "tests/acceptance/d4/test_d4_parallel_executor_contract.py": "bbf109511d0ff790125fe5330ba957284a1b96eac149f70a9dd05feed6f60742"
+  },
+  "generated_at": "2026-09-22T02:40:04Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "D4",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}
