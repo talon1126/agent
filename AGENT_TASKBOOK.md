@@ -1094,7 +1094,7 @@ uv run --project services/ai-service pytest services/ai-service/tests/test_paral
 
 不修改 RAG 内部并行策略，不并发执行带副作用步骤，不无限重试恢复外部服务。
 
-### D5：实现事实校验与恢复策略
+### D5：实现事实校验与恢复策略 ✔️
 
 **目标**
 
