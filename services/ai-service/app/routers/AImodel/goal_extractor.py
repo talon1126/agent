@@ -266,28 +266,38 @@ _CATEGORY_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (re.compile(r"婴儿车|母婴"), "baby_kids"),
     (re.compile(r"中性笔|办公耗材|复印纸|办公用品"), "office_supply"),
-    (re.compile(r"饮料|牛奶|酸奶"), "beverage"),
+    (re.compile(r"牛奶|酸奶|乳制品|奶制品"), "dairy"),
+    (re.compile(r"饮料|矿泉水|可乐"), "beverage"),
 )
 _BRANDS: dict[str, str] = {
     "小米": "Xiaomi",
+    "xiaomi": "Xiaomi",
     "苹果": "Apple",
+    "apple": "Apple",
     "华为": "Huawei",
+    "huawei": "Huawei",
     "索尼": "Sony",
+    "sony": "Sony",
     "海尔": "Haier",
+    "haier": "Haier",
     "美的": "Midea",
+    "midea": "Midea",
 }
 _BRAND_TEXT = "|".join(re.escape(name) for name in _BRANDS)
 _BRAND_EXCLUSION = re.compile(
-    rf"(?P<span>(?:不要|排除|不考虑|不买)\s*(?P<brand>{_BRAND_TEXT}))"
+    rf"(?P<span>(?:不要|排除|不考虑|不买)\s*(?P<brand>{_BRAND_TEXT}))",
+    re.IGNORECASE,
 )
 _BRAND_EXCLUSION_POSTFIX = re.compile(
     rf"(?P<span>(?P<brand>{_BRAND_TEXT})\s*(?:不要|排除|不考虑|不买)(?:了)?)"
-    r"(?=\s*[,，.。;；!！?？\r\n]|\s*$)"
+    r"(?=\s*[,，.。;；!！?？\r\n]|\s*$)",
+    re.IGNORECASE,
 )
 _BRAND_HARD_INCLUDE = re.compile(
-    rf"(?P<span>(?:只看|只要|认准|必须(?:选择)?|就要)\s*(?P<brand>{_BRAND_TEXT}))"
+    rf"(?P<span>(?:只看|只要|认准|必须(?:选择)?|就要)\s*(?P<brand>{_BRAND_TEXT}))",
+    re.IGNORECASE,
 )
-_BRAND_ANY = re.compile(rf"(?P<brand>{_BRAND_TEXT})")
+_BRAND_ANY = re.compile(rf"(?P<brand>{_BRAND_TEXT})", re.IGNORECASE)
 _BRAND_WITHDRAW = re.compile(r"品牌无所谓|撤销品牌偏好|取消品牌(?:偏好|限制)")
 _BUDGET_CORRECTION = re.compile(
     r"(?P<span>预算(?:上限)?\s*(?:不是\s*[+\-]?[\d,.]+\s*[,，;；]?\s*是|"
@@ -939,7 +949,7 @@ def _extract_brands(
     consumed_spans: list[tuple[int, int]] = []
     for match in _BRAND_EXCLUSION.finditer(text):
         consumed_spans.append(match.span("brand"))
-        brand = _BRANDS[match.group("brand")]
+        brand = _BRANDS[match.group("brand").casefold()]
         _append_value(
             operations,
             action=DeltaAction.ADD,
@@ -960,7 +970,7 @@ def _extract_brands(
         if any(start <= match.start("brand") < end for start, end in consumed_spans):
             continue
         consumed_spans.append(match.span("brand"))
-        brand = _BRANDS[match.group("brand")]
+        brand = _BRANDS[match.group("brand").casefold()]
         _append_value(
             operations,
             action=DeltaAction.ADD,
@@ -991,7 +1001,7 @@ def _extract_brands(
             ),
             item=_constraint(
                 GoalField.BRAND,
-                _BRANDS[match.group("brand")],
+                _BRANDS[match.group("brand").casefold()],
                 quote=match.group("span"),
                 source_turn=source_turn,
                 observed_at=observed_at,
@@ -1011,7 +1021,7 @@ def _extract_brands(
             ),
             item=Preference(
                 field=GoalField.BRAND,
-                value=_BRANDS[match.group("brand")],
+                value=_BRANDS[match.group("brand").casefold()],
                 evidence=_evidence(
                     source_type=GoalSourceType.USER_TURN,
                     source_turn=source_turn,

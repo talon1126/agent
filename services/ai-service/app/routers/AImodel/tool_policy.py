@@ -55,6 +55,7 @@ _BLOCKED_HOST_SUFFIXES = (".internal", ".local", ".localhost")
 _PUBLIC_ARGUMENT_KEYS = frozenset(
     {
         "collections",
+        "category",
         "conversation_id",
         "include_image_base64",
         "item_id",
@@ -138,6 +139,12 @@ class _ScopedToolInput(_StrictModel):
 
 class ProductSearchToolInput(_ScopedToolInput):
     query: str = Field(min_length=1, max_length=512)
+    category: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=_COLLECTION_PATTERN,
+    )
 
 
 class ProductSnapshotToolInput(_ScopedToolInput):

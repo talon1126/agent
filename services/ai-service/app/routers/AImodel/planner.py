@@ -243,9 +243,17 @@ _RECOMMEND_INTENTS = frozenset(
     }
 )
 _DETAIL_INTENTS = frozenset(
-    {"detail", "product_detail", "product_info", "specification", "stock"}
+    {
+        "detail",
+        "parameter_consulting",
+        "product_detail",
+        "product_info",
+        "specification",
+        "stock",
+    }
 )
 _COMPLEX_TASKS = frozenset({PlanningTaskType.COMPARE, PlanningTaskType.RECOMMEND})
+_KNOWLEDGE_STEP_TIMEOUT_MS = 10_000
 
 
 class HierarchicalPlanner:
@@ -359,6 +367,12 @@ class HierarchicalPlanner:
             return PlanningTaskType.COMPARE, False
         if intent in _RECOMMEND_INTENTS:
             return PlanningTaskType.RECOMMEND, False
+        if (
+            intent in _DETAIL_INTENTS
+            and page_context is not None
+            and page_context.current_item_id is not None
+        ):
+            return PlanningTaskType.PRODUCT_DETAIL, False
         if action == "product_api":
             if shopping_goal.decision_stage is DecisionStage.COMPARING:
                 return PlanningTaskType.COMPARE, False
@@ -437,9 +451,38 @@ class HierarchicalPlanner:
             clarification,
             page_context,
         )
+        effective_budget = requested_budget
+        knowledge_timeout_ms = 2_000
+        if task_type is PlanningTaskType.KNOWLEDGE:
+            knowledge_timeout_ms = _KNOWLEDGE_STEP_TIMEOUT_MS
+            if requested_budget is None:
+                effective_budget = ExecutionBudgetRequest(
+                    step_timeout_ms=_KNOWLEDGE_STEP_TIMEOUT_MS
+                )
+            elif isinstance(requested_budget, ExecutionBudgetRequest):
+                if requested_budget.step_timeout_ms is not None:
+                    knowledge_timeout_ms = requested_budget.step_timeout_ms
+                else:
+                    effective_budget = requested_budget.model_copy(
+                        update={"step_timeout_ms": _KNOWLEDGE_STEP_TIMEOUT_MS}
+                    )
+            elif isinstance(requested_budget, Mapping):
+                requested_timeout = requested_budget.get("step_timeout_ms")
+                if isinstance(requested_timeout, int):
+                    knowledge_timeout_ms = requested_timeout
+                elif requested_timeout is None:
+                    effective_budget = {
+                        **requested_budget,
+                        "step_timeout_ms": _KNOWLEDGE_STEP_TIMEOUT_MS,
+                    }
+
         return self.validator.validate(
-            _template_draft(task_type, plan_id),
-            requested_budget=requested_budget,
+            _template_draft(
+                task_type,
+                plan_id,
+                knowledge_timeout_ms=knowledge_timeout_ms,
+            ),
+            requested_budget=effective_budget,
             trace_context=trace_context,
         )
 
@@ -583,6 +626,7 @@ def _step(
     dependencies: Sequence[dict[str, str]] = (),
     risk_level: str = "low",
     allowed_tools: Sequence[str] = (),
+    timeout_ms: int = 2_000,
 ) -> dict[str, Any]:
     return {
         "step_id": step_id,
@@ -592,7 +636,7 @@ def _step(
         "output_type": output_type,
         "risk_level": risk_level,
         "allowed_tools": list(allowed_tools),
-        "timeout_ms": 2_000,
+        "timeout_ms": timeout_ms,
     }
 
 
@@ -652,6 +696,8 @@ def _rank_step() -> dict[str, Any]:
 def _template_draft(
     task_type: PlanningTaskType,
     plan_id: str,
+    *,
+    knowledge_timeout_ms: int = _KNOWLEDGE_STEP_TIMEOUT_MS,
 ) -> dict[str, Any]:
     if task_type is PlanningTaskType.DIRECT:
         steps = [
@@ -682,6 +728,7 @@ def _template_draft(
                 output_type="knowledge_result",
                 risk_level="medium",
                 allowed_tools=["rag_lookup"],
+                timeout_ms=knowledge_timeout_ms,
             ),
             _step(
                 "s02_compose",

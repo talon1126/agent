@@ -285,6 +285,28 @@ def test_fastapi_shutdown_closes_persistent_rag_client(monkeypatch) -> None:
     assert calls == ["closed"]
 
 
+def test_persistent_mcp_rag_client_prewarms_without_running_a_query(tmp_path) -> None:
+    starts: list[str] = []
+    calls: list[dict[str, Any]] = []
+
+    async def fake_call_tool(payload: dict[str, Any]) -> dict[str, Any]:
+        calls.append(payload)
+        return {"ok": True, "trace_id": "warm-query", "content": "ok"}
+
+    client = PersistentMcpRagKnowledgeClient(
+        cwd=tmp_path,
+        session_factory=lambda: fake_call_tool,
+        on_session_start=lambda: starts.append("start"),
+    )
+
+    client.prewarm()
+    client.prewarm()
+
+    assert starts == ["start"]
+    assert calls == []
+    client.close()
+
+
 def test_close_rag_knowledge_client_does_not_create_unused_client(monkeypatch) -> None:
     """Closing an unused process-wide RAG client must not start MCP resources."""
 

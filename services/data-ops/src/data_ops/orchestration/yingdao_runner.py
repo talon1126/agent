@@ -15,29 +15,12 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
-CaptureStatus = Literal["success", "failed"]
+from data_ops.collectors.base import CaptureRequest, CaptureResult
+
 _SUCCESS_STATUSES = frozenset({"success", "succeeded", "finish", "finished", "completed"})
 _FAILURE_STATUSES = frozenset({"failed", "error", "stopped", "cancelled", "canceled"})
-
-
-@dataclass(frozen=True, slots=True)
-class CaptureRequest:
-    """Describe one file-only handoff to the Yingdao application."""
-
-    batch_id: str
-    input_csv: Path
-    raw_output_csv: Path
-
-    def app_parameters(self) -> dict[str, str]:
-        """Return the three public application parameters as absolute paths."""
-
-        return {
-            "batch_id": self.batch_id,
-            "input_csv": str(self.input_csv.resolve()),
-            "raw_output_csv": str(self.raw_output_csv.resolve()),
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,15 +28,6 @@ class CaptureHandle:
     """Identify an accepted command process or OpenAPI job."""
 
     run_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class CaptureResult:
-    """Report the terminal capture state without returning captured rows."""
-
-    run_id: str
-    status: CaptureStatus
-    error_code: str = ""
 
 
 class YingdaoRunner(Protocol):
@@ -68,6 +42,19 @@ class YingdaoRunner(Protocol):
         request: CaptureRequest,
     ) -> CaptureResult:
         """Wait for a terminal state and verify the raw CSV handoff."""
+
+
+@dataclass(slots=True)
+class YingdaoProductDetailCollector:
+    """Adapt the existing two-step Yingdao runner to the collector interface."""
+
+    runner: YingdaoRunner
+
+    def collect(self, request: CaptureRequest) -> CaptureResult:
+        """Start one Yingdao job and wait for its promised raw CSV."""
+
+        handle = self.runner.start_capture(request)
+        return self.runner.wait_for_capture(handle, request)
 
 
 @dataclass(slots=True)
@@ -319,5 +306,6 @@ __all__ = [
     "CaptureResult",
     "YingdaoApiRunner",
     "YingdaoCommandRunner",
+    "YingdaoProductDetailCollector",
     "YingdaoRunner",
 ]

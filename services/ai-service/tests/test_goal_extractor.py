@@ -77,6 +77,19 @@ def test_no_goal_language_returns_empty_delta() -> None:
     assert result.trace.rule_fields == ()
 
 
+def test_milk_uses_catalog_dairy_category_not_generic_beverage() -> None:
+    category = item(extract("推荐牛奶"), GoalField.CATEGORY)
+
+    assert category.value == "dairy"
+    assert category.evidence.quote == "牛奶"
+
+
+def test_english_brand_alias_is_normalized_for_persistent_goal() -> None:
+    brand = item(extract("推荐 Xiaomi 家电"), GoalField.BRAND)
+
+    assert brand.value == "Xiaomi"
+
+
 def test_decimal_commas_are_normalized() -> None:
     assert item(extract("预算 3,000 以内"), GoalField.BUDGET_MAX).value == Decimal(
         "3000"

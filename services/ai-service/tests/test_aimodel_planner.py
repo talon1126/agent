@@ -185,6 +185,24 @@ def test_explicit_detail_without_current_item_fails_closed() -> None:
     assert all(not step.allowed_tools for step in result.plan.steps)
 
 
+def test_parameter_question_with_current_item_uses_product_detail_fast_path() -> None:
+    result = _planner().plan(
+        intent_route=_route("rag", "parameter_consulting"),
+        shopping_goal=_goal(),
+        clarification=_proceed(),
+        page_context=AiModelPageContext(
+            page_type="product",
+            current_item_id="sku-1",
+        ),
+    )
+
+    assert result.task_type is PlanningTaskType.PRODUCT_DETAIL
+    assert [step.step_type.value for step in result.plan.steps] == [
+        "snapshot",
+        "compose",
+    ]
+
+
 def test_valid_complex_model_plan_is_accepted_under_server_budget() -> None:
     template = _planner().plan(
         intent_route=_route("rag", "buying_recommendation"),
@@ -232,6 +250,34 @@ def test_model_backend_is_never_used_for_fast_path() -> None:
 
     assert backend.requests == []
     assert result.task_type is PlanningTaskType.KNOWLEDGE
+
+
+def test_knowledge_template_has_dedicated_rag_timeout_budget() -> None:
+    result = _planner().plan(
+        intent_route=_route("rag", "shipping_policy"),
+        shopping_goal=_goal(),
+        clarification=_proceed(),
+    )
+
+    rag_step, compose_step = result.plan.steps
+
+    assert result.plan.budget.step_timeout_ms == 10_000
+    assert rag_step.step_type.value == "rag_lookup"
+    assert rag_step.timeout_ms == 10_000
+    assert compose_step.timeout_ms == 2_000
+
+
+def test_partial_knowledge_budget_keeps_dedicated_rag_timeout() -> None:
+    result = _planner().plan(
+        intent_route=_route("rag", "shipping_policy"),
+        shopping_goal=_goal(),
+        clarification=_proceed(),
+        requested_budget={"max_steps": 4},
+    )
+
+    assert result.plan.budget.max_steps == 4
+    assert result.plan.budget.step_timeout_ms == 10_000
+    assert result.plan.steps[0].timeout_ms == 10_000
 
 
 def test_plan_id_ignores_goal_evidence_quote_but_tracks_normalized_goal() -> None:

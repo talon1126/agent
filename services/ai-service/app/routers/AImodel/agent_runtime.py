@@ -10,17 +10,24 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
 
-from .agent_trace import AgentTraceContext, record_intent_route
+from .agent_trace import (
+    AgentTraceContext,
+    AgentTraceEventType,
+    AgentTraceStatus,
+    record_intent_route,
+)
 from .candidate_service import (
     CandidateReference,
     CandidateSet,
     CandidateSetStatus,
     CandidateSource,
+    ExclusionAction,
     apply_hard_filters,
 )
 from .clarification import ClarificationDecision, ClarificationReason
@@ -52,7 +59,7 @@ from .schemas import (
     AiModelResponsePayload,
     AiModelToolResult,
 )
-from .shopping_goal import ShoppingGoal
+from .shopping_goal import DecisionStage, GoalField, ShoppingGoal
 from .tool_executor import (
     BoundedParallelToolExecutor,
     ExecutionCancellation,
@@ -132,6 +139,7 @@ class _TurnState:
     reviews: tuple[ReviewCollection, ...] = ()
     evidence: tuple[EvidenceRef, ...] = ()
     canonical_draft: GroundedResponseDraft | None = None
+    search_query: str | None = None
 
 
 class ShoppingAgentRuntime:
@@ -169,6 +177,7 @@ class ShoppingAgentRuntime:
         route, route_candidates = (
             load_default_aimodel_intent_router().route_with_candidates(request.message)
         )
+        route = _recover_goal_backed_route(route, goal, request.message)
         if trace_context is not None:
             record_intent_route(
                 trace_context,
@@ -315,12 +324,20 @@ class ShoppingAgentRuntime:
             state.mock_api_url,
             http_client=state.http_client,
         )
+        derived_search_query = _product_search_query(
+            state.goal,
+            page_context,
+            fallback_message=state.request.message,
+        )
+        derived_search_category = _product_search_category(state.goal)
 
         async def search(_: StepInvocation) -> ExecutionValue:
+            state.search_query = derived_search_query
             result = await asyncio.to_thread(
                 search_products,
-                _bounded_query(state.request.message),
+                derived_search_query,
                 mock_api_url=state.mock_api_url,
+                category=derived_search_category,
                 http_client=state.http_client,
             )
             state.tool_results.append(result)
@@ -342,7 +359,8 @@ class ShoppingAgentRuntime:
                 tool_name=AgentToolName.PRODUCT_SEARCH.value,
                 arguments=_scope_arguments(
                     state,
-                    query=_bounded_query(state.request.message),
+                    query=derived_search_query,
+                    category=derived_search_category,
                 ),
             )
 
@@ -354,6 +372,63 @@ class ShoppingAgentRuntime:
                 item_ids=item_ids,
                 trace_context=state.trace_context,
             )
+            initial_candidates = state.candidates or tuple(
+                CandidateReference(
+                    item_id=item_id,
+                    sources=(CandidateSource.PAGE,),
+                )
+                for item_id in state.snapshot.requested_item_ids
+            )
+            initial_set = apply_hard_filters(
+                state.goal,
+                state.snapshot,
+                candidates=initial_candidates,
+                search_query=state.search_query or derived_search_query,
+            )
+            refresh_reasons = _fact_refresh_reason_codes(initial_set)
+            if refresh_reasons:
+                refresh_event = (
+                    state.trace_context.begin_event(
+                        AgentTraceEventType.CONTEXT,
+                        stage="fact_refresh",
+                        summary={
+                            "attempt": 1,
+                            "reason_codes": list(refresh_reasons),
+                        },
+                        related_ids={"snapshot_id": state.snapshot.snapshot_id},
+                    )
+                    if state.trace_context is not None
+                    else None
+                )
+                refresh_client = ProductSnapshotClient(
+                    state.mock_api_url,
+                    http_client=state.http_client,
+                )
+                state.snapshot = await asyncio.to_thread(
+                    refresh_client.capture_for_turn,
+                    turn_id=(
+                        f"{state.conversation_id}:{invocation.plan_id}:refresh-1"
+                    ),
+                    item_ids=item_ids,
+                    trace_context=state.trace_context,
+                )
+                refreshed_set = apply_hard_filters(
+                    state.goal,
+                    state.snapshot,
+                    candidates=initial_candidates,
+                    search_query=state.search_query or derived_search_query,
+                )
+                remaining = _fact_refresh_reason_codes(refreshed_set)
+                if refresh_event is not None:
+                    refresh_event.related_ids["refreshed_snapshot_id"] = (
+                        state.snapshot.snapshot_id
+                    )
+                    refresh_event.finish(
+                        AgentTraceStatus.SUCCESS,
+                        summary={
+                            "remaining_reason_codes": list(remaining),
+                        },
+                    )
             return ExecutionValue(
                 value_type=PlanValueType.PRODUCT_SNAPSHOT,
                 value=state.snapshot,
@@ -436,8 +511,9 @@ class ShoppingAgentRuntime:
                 state.goal,
                 snapshot_value,
                 candidates=candidates,
-                search_query=_bounded_query(state.request.message),
+                search_query=state.search_query or derived_search_query,
             )
+            _record_candidate_filter_trace(state)
             return ExecutionValue(
                 value_type=PlanValueType.CANDIDATE_SET,
                 value=state.candidate_set,
@@ -518,6 +594,49 @@ def _proceed_decision() -> ClarificationDecision:
         should_ask=False,
         may_proceed=True,
         reason=ClarificationReason.NO_CLARIFICATION_NEEDED,
+    )
+
+
+def _recover_goal_backed_route(
+    route: AImodelIntentRoute,
+    goal: ShoppingGoal,
+    message: str,
+) -> AImodelIntentRoute:
+    """Resume recommendation only when this turn supplies the category evidence."""
+
+    if not route.fallback_used or goal.decision_stage not in {
+        DecisionStage.SEARCHING,
+        DecisionStage.COMPARING,
+    }:
+        return route
+    normalized_message = " ".join(message.casefold().split())
+    category = next(
+        (
+            item
+            for item in goal.hard_constraints
+            if item.field is GoalField.CATEGORY
+        ),
+        None,
+    )
+    category_quote = (
+        " ".join(category.evidence.quote.casefold().split())
+        if category is not None and category.evidence.quote
+        else ""
+    )
+    if not category_quote or category_quote not in normalized_message:
+        return route
+    return replace(
+        route,
+        action="rag",
+        collection="shopping_guides",
+        collections=("shopping_guides",),
+        domain="support",
+        category="presale",
+        intent="buying_recommendation",
+        confidence=max(route.confidence, 0.8),
+        reason="goal_context_recovered_after_clarification",
+        matched_rule="goal_context_recovery",
+        rag_enabled=True,
     )
 
 
@@ -633,6 +752,101 @@ def _bounded_query(query: str) -> str:
     return " ".join(query.split())[:512].rstrip()
 
 
+def _product_search_category(goal: ShoppingGoal) -> str | None:
+    for item in goal.hard_constraints:
+        if item.field is GoalField.CATEGORY:
+            category = " ".join(str(item.value).strip().split())
+            return category or None
+    return None
+
+
+_SEARCH_QUERY_FIELDS = frozenset(
+    {
+        GoalField.BRAND,
+        GoalField.CATEGORY,
+        GoalField.SPECIFICATION,
+        GoalField.USAGE_SCENARIO,
+    }
+)
+_QUERY_PREFIX = re.compile(
+    r"^(?:(?:请|麻烦)?(?:帮我|给我)?(?:想要|想买|购买|找|搜索|查找|推荐|看看)"
+    r"(?:一款|一个|一些|一下)?\s*)+"
+)
+_QUERY_SUFFIX = re.compile(r"(?:有吗|吗|呢|吧)?[?？!！.。]*$")
+
+
+def _product_search_query(
+    goal: ShoppingGoal,
+    page_context: AiModelPageContext | None,
+    *,
+    fallback_message: str,
+) -> str:
+    """Build a bounded catalog query from normalized goal facts and provenance."""
+
+    raw_parts: list[object] = []
+    if page_context is not None and page_context.search_query:
+        raw_parts.append(page_context.search_query)
+    for collection in (goal.hard_constraints, goal.preferences):
+        for item in collection:
+            if item.field not in _SEARCH_QUERY_FIELDS:
+                continue
+            if item.field is GoalField.CATEGORY and item.evidence.quote:
+                raw_parts.append(item.evidence.quote)
+            else:
+                raw_parts.append(item.value)
+
+    parts: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_parts:
+        part = " ".join(str(raw).strip().split())
+        folded = part.casefold()
+        if part and folded not in seen:
+            parts.append(part)
+            seen.add(folded)
+    if parts:
+        return _bounded_query(" ".join(parts))
+
+    normalized = _bounded_query(fallback_message)
+    normalized = _QUERY_PREFIX.sub("", normalized).strip()
+    normalized = _QUERY_SUFFIX.sub("", normalized).strip(" ,，;；")
+    return _bounded_query(normalized or fallback_message)
+
+
+def _record_candidate_filter_trace(state: _TurnState) -> None:
+    if state.trace_context is None or state.candidate_set is None:
+        return
+    candidate_set = state.candidate_set
+    event = state.trace_context.begin_event(
+        AgentTraceEventType.FILTER,
+        stage="candidate_filter",
+        summary={
+            "recalled_count": len(candidate_set.recalled),
+            "eligible_count": len(candidate_set.eligible),
+            "excluded_count": len(candidate_set.excluded),
+            "failure_count": len(candidate_set.failures),
+            "reason_counts": [
+                item.model_dump(mode="json") for item in candidate_set.reason_counts
+            ],
+            "suggestions": [
+                item.model_dump(mode="json") for item in candidate_set.suggestions
+            ],
+        },
+        related_ids={"snapshot_id": candidate_set.snapshot_id or "none"},
+    )
+    event.finish(AgentTraceStatus.SUCCESS)
+
+
+def _fact_refresh_reason_codes(candidate_set: CandidateSet) -> tuple[str, ...]:
+    codes = {
+        reason.code
+        for candidate in candidate_set.excluded
+        for reason in candidate.reasons
+        if reason.action is ExclusionAction.REFRESH_FACT
+        or reason.code.endswith(("_missing", "_stale", "_unknown"))
+    }
+    return tuple(sorted(codes))
+
+
 def _bounded_rag_query(query: str) -> str:
     return " ".join(query.split())[:2_000].rstrip()
 
@@ -745,6 +959,17 @@ def _compose_draft(
             candidates=candidates,
         )
     if state.candidate_set.status is CandidateSetStatus.NO_CANDIDATE:
+        unavailable_reasons = _fact_refresh_reason_codes(state.candidate_set)
+        if unavailable_reasons:
+            return GroundedResponseDraft(
+                payload=AiModelFallbackPayload(
+                    answer=(
+                        "已刷新商品事实，但必要的价格、库存或履约信息仍不可用，"
+                        "暂时无法给出可靠推荐。"
+                    ),
+                    reason_code="required_fact_unavailable",
+                )
+            )
         return GroundedResponseDraft(
             payload=AiModelFallbackPayload(
                 answer="没有商品同时满足当前硬约束，请调整条件后再试。",

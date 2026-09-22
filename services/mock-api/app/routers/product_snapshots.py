@@ -246,7 +246,10 @@ def get_product_snapshots(
                     observed_at=ProductSnapshotObservedAt(
                         catalog=captured_at,
                         price=captured_at,
-                        stock=row.get("stock_observed_at"),
+                        # The snapshot query observes the authoritative stock
+                        # balance now. The latest movement timestamp describes
+                        # when stock changed, not when its value was observed.
+                        stock=captured_at if row.get("stock") is not None else None,
                         rating=row.get("rating_observed_at"),
                         delivery=captured_at,
                     ),

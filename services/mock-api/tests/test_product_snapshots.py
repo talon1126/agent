@@ -82,6 +82,11 @@ def test_batch_endpoint_preserves_order_deduplicates_and_reports_partial_errors(
         body["items"][0]["facts"]["delivery"]["estimated_delivery_at"]
     )
     assert estimated_delivery_at - captured_at == timedelta(days=1)
+    assert (
+        datetime.fromisoformat(body["items"][0]["facts"]["observed_at"]["stock"])
+        == captured_at
+    )
+    assert body["items"][2]["facts"]["observed_at"]["stock"] is None
     assert calls == [["sku-a", "missing", "sku-b"]]
 
 

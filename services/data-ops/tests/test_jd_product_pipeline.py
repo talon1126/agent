@@ -124,6 +124,20 @@ class FailingRunner:
         )
 
 
+class SuccessfulCollector:
+    """Deliver the shared raw contract through the one-step collector API."""
+
+    def collect(self, request: CaptureRequest) -> CaptureResult:
+        """Write one row and report the Playwright-shaped batch counts."""
+
+        _write_raw_export(request)
+        return CaptureResult(
+            run_id="collector-success",
+            status="success",
+            captured_count=1,
+        )
+
+
 class UnexpectedRunner:
     """Fail the test if a resumable batch tries to start Yingdao again."""
 
@@ -387,3 +401,85 @@ def test_cli_resumes_existing_raw_csv_without_yingdao_configuration(
         "normalized": 1,
         "failed": 0,
     }
+
+
+def test_discovery_only_publishes_urls_without_capture_or_pandas(tmp_path: Path) -> None:
+    """DiscoveryOnly ends after its URL CSV and result without a collector."""
+
+    result = run_jd_product_pipeline(
+        batch_id="j10_discovery_only",
+        output_root=tmp_path,
+        runner=None,
+        keyword="phone",
+        max_pages=1,
+        max_items=5,
+        discovery_only=True,
+        discoverer=_discover,
+        processor=lambda *args: (_ for _ in ()).throw(
+            AssertionError("pandas must not run in DiscoveryOnly")
+        ),
+    )
+
+    assert result.status == "discovery_complete"
+    assert result.exit_code == PipelineExitCode.SUCCESS
+    assert result.discovered_count == 1
+    assert result.captured_count == 0
+    assert result.normalized_count == 0
+    assert result.failed_count == 0
+    assert Path(result.paths["input_csv"]).is_file()
+    assert result.result_path.is_file()
+    assert not (tmp_path / "inbox").exists()
+    assert not (tmp_path / "normalized").exists()
+    assert not (tmp_path / "archive").exists()
+
+
+def test_playwright_collector_mode_uses_shared_raw_processor_contract(tmp_path: Path) -> None:
+    """The one-step collector feeds the unchanged pandas processor successfully."""
+
+    result = run_jd_product_pipeline(
+        batch_id="j10_playwright_contract",
+        output_root=tmp_path,
+        runner=UnexpectedRunner(),
+        collector=SuccessfulCollector(),
+        collector_mode="playwright",
+        keyword="phone",
+        max_pages=1,
+        max_items=5,
+        discoverer=_discover,
+    )
+
+    assert result.status == "success"
+    assert result.exit_code == PipelineExitCode.SUCCESS
+    assert result.discovered_count == result.captured_count == result.normalized_count == 1
+    assert result.failed_count == 0
+
+
+def test_cli_discovery_only_does_not_require_yingdao_arguments(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The URL-only CLI accepts no Yingdao mode, app, or credentials."""
+
+    batch_id = "j10_cli_discovery_only"
+    _discover(tmp_path / "discovery" / f"jd_product_urls_{batch_id}.csv")
+
+    exit_code = main(
+        [
+            "--seed-url",
+            "https://search.jd.com/Search?keyword=phone",
+            "--batch-id",
+            batch_id,
+            "--output-root",
+            str(tmp_path),
+            "--max-pages",
+            "1",
+            "--max-items",
+            "5",
+            "--discovery-only",
+        ]
+    )
+
+    assert exit_code == PipelineExitCode.SUCCESS
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "discovery_complete"
+    assert payload["counts"]["discovered"] == 1

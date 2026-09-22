@@ -428,8 +428,9 @@ class AsyncQueryRuntime:
             collection_query,
             trace_controller=local_controller,
         )
-        rerank_applied = not no_rerank and self._rerank_controller is not None
-        if rerank_applied:
+        rerank_requested = not no_rerank and self._rerank_controller is not None
+        rerank_applied = False
+        if rerank_requested:
             outcome = await self._rerank(
                 collection_query.normalized_query,
                 hybrid.results,
@@ -439,6 +440,7 @@ class AsyncQueryRuntime:
             rerank_results = outcome.results
             fallback_used = hybrid.fallback_used or outcome.fallback_used
             rerank_fallback_used = outcome.fallback_used
+            rerank_applied = outcome.rerank_applied
         else:
             rerank_results = [
                 candidate.model_copy(deep=True)
