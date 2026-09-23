@@ -22,10 +22,10 @@ jobs:
       - name: Run tests
         run: |
           python scripts/task_preflight.py --check-config
-          uv run --project services/ai-service pytest tests -v
-          uv run --project services/ai-service pytest services/ai-service/tests -v
-          uv run --project services/mock-api pytest services/mock-api/tests -v
-          uv run --project services/feishu-adapter pytest services/feishu-adapter/tests -v
+          uv run --project services/ai-service --extra test pytest tests -v
+          uv run --project services/ai-service --extra test pytest services/ai-service/tests -v
+          uv run --project services/mock-api --extra test pytest services/mock-api/tests -v
+          uv run --project services/feishu-adapter --extra test pytest services/feishu-adapter/tests -v
 
       - name: Validate Docker Compose
         run: docker compose config --quiet
