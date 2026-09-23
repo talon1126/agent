@@ -8,7 +8,7 @@
 
 门槛只在 `config/agent_quality_gates.yaml` 的 M1-01 至 M1-08 中定义。总体、多轮、比较、评论总结与硬约束场景的成功率分别计算；工具契约使用 Kayn 的确定性 `talonmart_contract_guard` 结果。现有 D 阶段冻结验收继续检查硬过滤、商品事实和工具授权；Judge 评分不替代这些断言。
 
-运行时指纹必须由目标连接器在评测时回传到 `manifest.target_runtime_fingerprint`，与评测脚本记录的 `implementation_fingerprint` 一致。评测文件还必须来自干净的 Git 工作区，且在评测提交与 CI 当前提交之间没有改动。缺少任一证明时，M1-07 为 0。
+运行时指纹由目标连接器在启动时固定，并随每个 Kayn 契约指标的 `runtime_fingerprint` 证据返回。评测脚本汇总为 `manifest.target_runtime_fingerprint`；CI 会逐案从原始指标证据重新核对，不能仅靠填写 manifest 通过。该值还须与评测脚本的 `implementation_fingerprint` 一致。评测文件必须来自干净的 Git 工作区，且在评测提交与 CI 当前提交之间没有改动。缺少任一证明时，M1-07 为 0。
 
 ## CI 复验
 

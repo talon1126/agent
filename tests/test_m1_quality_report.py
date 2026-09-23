@@ -14,19 +14,30 @@ from agent_pipeline import evaluate_quality_profile, load_structured, sha256_map
 from build_m1_quality_report import _fixture_hash_matches, summarize  # noqa: E402
 
 
+FINGERPRINT = "a" * 64
+
+
 def _case(test_id: str, verdict: str, *, multi_turn: bool) -> tuple[dict, dict]:
     item = {"testId": test_id, "verdict": verdict}
+    guard_evidence = [{"type": "runtime_fingerprint", "sha256": FINGERPRINT}]
     if multi_turn:
         evidence = {
             "metrics": {
-                "talonmart_contract_guard": {"passed": True},
+                "talonmart_contract_guard": {
+                    "passed": True,
+                    "outcomes": [{"evidence": guard_evidence}],
+                },
                 "talonmart_abcd_quality": {"score": 0.95},
             }
         }
     else:
         evidence = {
             "metricResults": [
-                {"metricKey": "talonmart_contract_guard", "passed": True},
+                {
+                    "metricKey": "talonmart_contract_guard",
+                    "passed": True,
+                    "evidence": guard_evidence,
+                },
                 {"metricKey": "talonmart_abcd_quality", "score": 0.95},
             ]
         }
@@ -53,8 +64,8 @@ def _inputs() -> tuple[dict, dict, dict, dict]:
         "runs": {"single_turn": "single", "multi_turn": "multi"},
         "test_id_to_scenario": {"t1": "compare", "t2": "review", "t3": "multi"},
         "deferred_scenarios": [],
-        "implementation_fingerprint": "source-hash",
-        "target_runtime_fingerprint": "source-hash",
+        "implementation_fingerprint": FINGERPRINT,
+        "target_runtime_fingerprint": FINGERPRINT,
         "git_worktree_dirty": False,
     }
     single = _run("single", [_case("t1", "PASS", multi_turn=False), _case("t2", "PASS", multi_turn=False)])
@@ -95,6 +106,28 @@ def test_deferred_and_not_evaluated_cases_cannot_pass_coverage() -> None:
     assert metrics["M1-01"]["graded_coverage"] == pytest.approx(1 / 3)
     assert metrics["M1-03"]["multi_turn_success_rate"] == 0
     assert metrics["M1-05"]["review_summary_success_rate"] == 0
+    assert metrics["M1-07"]["runtime_fingerprint_match"] == 0
+
+
+def test_manifest_fingerprint_requires_matching_target_metric_evidence() -> None:
+    fixture, manifest, single, multi = _inputs()
+    single["details"][0]["evidence"]["metricResults"][0]["evidence"] = []
+
+    metrics = summarize(
+        fixture, manifest, single, multi, source_commit_matches=True
+    )
+
+    assert metrics["M1-07"]["runtime_fingerprint_match"] == 0
+
+
+def test_mixed_target_runtime_fingerprints_fail_lineage() -> None:
+    fixture, manifest, single, multi = _inputs()
+    multi["details"][0]["evidence"]["metrics"]["talonmart_contract_guard"]["outcomes"][0]["evidence"][0]["sha256"] = "b" * 64
+
+    metrics = summarize(
+        fixture, manifest, single, multi, source_commit_matches=True
+    )
+
     assert metrics["M1-07"]["runtime_fingerprint_match"] == 0
 
 

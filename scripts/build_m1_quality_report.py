@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from agent_pipeline import load_structured, sha256_mapping
 GUARD_KEY = "talonmart_contract_guard"
 JUDGE_KEY = "talonmart_abcd_quality"
 GRADED_VERDICTS = {"PASS", "FAIL"}
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -37,6 +39,36 @@ def _guard_passed(detail: dict[str, Any], *, multi_turn: bool) -> bool:
         and matches[0].get("passed") is True
         and not matches[0].get("error")
     )
+
+
+def _runtime_fingerprint(detail: dict[str, Any], *, multi_turn: bool) -> str | None:
+    evidence = detail.get("evidence") or {}
+    if multi_turn:
+        metric = (evidence.get("metrics") or {}).get(GUARD_KEY) or {}
+        outcomes = metric.get("outcomes") or []
+        if not outcomes or any(item.get("error") for item in outcomes):
+            return None
+    else:
+        outcomes = [
+            item
+            for item in evidence.get("metricResults") or []
+            if item.get("metricKey") == GUARD_KEY
+        ]
+        if len(outcomes) != 1 or outcomes[0].get("error"):
+            return None
+    fingerprints = [
+        item.get("sha256")
+        for outcome in outcomes
+        for item in outcome.get("evidence") or []
+        if isinstance(item, dict) and item.get("type") == "runtime_fingerprint"
+    ]
+    if (
+        len(fingerprints) != len(outcomes)
+        or any(not isinstance(value, str) or not _SHA256.fullmatch(value) for value in fingerprints)
+        or len(set(fingerprints)) != 1
+    ):
+        return None
+    return fingerprints[0]
 
 
 def _judge_scored(detail: dict[str, Any], *, multi_turn: bool) -> bool:
@@ -103,7 +135,7 @@ def summarize(
     if not set(test_map.values()).issubset(scenarios):
         raise ValueError("run contains scenarios outside the frozen set")
 
-    outcomes: dict[str, tuple[str, bool, bool]] = {}
+    outcomes: dict[str, tuple[str, bool, bool, str | None]] = {}
     for name, run in (("single_turn", single), ("multi_turn", multi)):
         summary = run["summary"]
         if summary.get("runId") != manifest["runs"][name]:
@@ -132,6 +164,7 @@ def summarize(
                 verdict,
                 _guard_passed(details[test_id], multi_turn=is_multi),
                 _judge_scored(details[test_id], multi_turn=is_multi),
+                _runtime_fingerprint(details[test_id], multi_turn=is_multi),
             )
 
     deferred = {item["scenario_id"] for item in manifest.get("deferred_scenarios", [])}
@@ -143,12 +176,12 @@ def summarize(
     total = len(scenarios)
     graded = sum(
         verdict in GRADED_VERDICTS and judged
-        for verdict, _, judged in outcomes.values()
+        for verdict, _, judged, _ in outcomes.values()
     )
     passed = sum(
-        verdict == "PASS" and judged for verdict, _, judged in outcomes.values()
+        verdict == "PASS" and judged for verdict, _, judged, _ in outcomes.values()
     )
-    guarded = sum(guard for _, guard, _ in outcomes.values())
+    guarded = sum(guard for _, guard, _, _ in outcomes.values())
     groups = {
         "multi_turn": {sid for sid, item in scenarios.items() if len(item["turns"]) > 1},
         "comparison": {sid for sid, item in scenarios.items() if item["category"] == "comparison"},
@@ -158,7 +191,7 @@ def summarize(
     group_counts = {
         name: {
             "passed": sum(
-                outcomes.get(sid, (None, False, False))[0] == "PASS"
+                outcomes.get(sid, (None, False, False, None))[0] == "PASS"
                 and outcomes[sid][2]
                 for sid in ids
             ),
@@ -167,9 +200,15 @@ def summarize(
         for name, ids in groups.items()
     }
     lineage = (
-        bool(manifest.get("implementation_fingerprint"))
+        isinstance(manifest.get("implementation_fingerprint"), str)
+        and _SHA256.fullmatch(manifest["implementation_fingerprint"])
         and manifest.get("target_runtime_fingerprint")
         == manifest.get("implementation_fingerprint")
+        and len(outcomes) == total
+        and all(
+            fingerprint == manifest["implementation_fingerprint"]
+            for _, _, _, fingerprint in outcomes.values()
+        )
         and source_commit_matches
     )
     return {
