@@ -12,7 +12,7 @@ on:
         required: false
         type: string
       quality_report:
-        description: Repository-relative quality report for F5/G5/H5/I5
+        description: Repository-relative quality report for D/F5/G5/H5/I5
         required: false
         type: string
   workflow_call:
@@ -69,6 +69,31 @@ jobs:
           }
           python @arguments
 
+      - name: Validate M1 report against frozen Kayn results
+        if: inputs.milestone_id == 'D'
+        shell: pwsh
+        env:
+          M1_QUALITY_REPORT: ${{ inputs.quality_report }}
+        run: |
+          $report = $env:M1_QUALITY_REPORT
+          if (-not $report) {
+            throw "D/M1 requires a quality report inside its Kayn run directory."
+          }
+          $runDirectory = Split-Path -Parent $report
+          python scripts/build_m1_quality_report.py --run-dir $runDirectory --check-report $report
+
+      - name: Independently refresh M1 prerequisite milestones
+        if: inputs.milestone_id == 'D'
+        shell: pwsh
+        env:
+          AGENT_VERIFIER_ID: github-actions
+          AGENT_INDEPENDENT_REVIEW: "true"
+        run: |
+          foreach ($milestone in @("A", "B", "C")) {
+            python scripts/verify_phase_gate.py --milestone $milestone
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Independently verify current milestone
         if: inputs.milestone_id != ''
         shell: pwsh
@@ -95,5 +120,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agent-phase-${{ inputs.milestone_id }}-evidence
-          path: artifacts/phase-evidence/${{ inputs.milestone_id }}/
+          path: artifacts/phase-evidence/
           if-no-files-found: error

@@ -87,8 +87,7 @@ def test_completion_markers_do_not_change_taskbook_semantics() -> None:
 
     assert canonical_taskbook_text(plain) == canonical_taskbook_text(marked)
     _, _, taskbook = load_pipeline(ROOT)
-    assert taskbook["C2"].completed
-    assert not taskbook["C3"].completed
+    assert all(taskbook[task_id].completed for task_id in ("C1", "C2", "C3", "C4", "C5"))
 
 
 def test_single_commit_metadata_is_not_an_implementation_change() -> None:

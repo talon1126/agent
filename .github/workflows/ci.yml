@@ -25,12 +25,10 @@ jobs:
       - name: Run tests
         run: |
           python scripts/task_preflight.py --check-config
-          pytest tests/test_agent_development_pipeline.py -v
+          pytest tests -v
           pytest services/ai-service/tests -v
           pytest services/mock-api/tests -v
           pytest services/feishu-adapter/tests -v
-          pytest tests/test_department_workflows.py -v
-          pytest tests/test_chat_parent_son_workflow.py -v
 
       - name: Validate Docker Compose
         run: docker compose config --quiet

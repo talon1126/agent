@@ -156,7 +156,7 @@ def test_frozen_pipeline_thresholds_build_the_complete_m3_dictionary() -> None:
     )
     config = build_m3_quality_gate_config(raw_config)
 
-    assert config.config_version == "agent-quality-gates-v1"
+    assert config.config_version == "agent-quality-gates-v2"
     assert {metric.metric_id for metric in config.metrics} == {
         f"M3-{index:02d}" for index in range(1, 11)
     }

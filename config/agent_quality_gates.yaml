@@ -1,7 +1,16 @@
 {
   "schema_version": 1,
-  "config_version": "agent-quality-gates-v1",
+  "config_version": "agent-quality-gates-v2",
   "metrics": {
+    "M1-01": {"target": "Grade the complete frozen M1 set", "denominator": "all frozen M1 scenarios, including dependency failures", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "graded_coverage", "operator": "eq", "threshold": 1}]},
+    "M1-02": {"target": "Complete shopping tasks", "denominator": "all frozen M1 scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "task_success_rate", "operator": "gte", "threshold": 0.8}]},
+    "M1-03": {"target": "Complete multi-turn tasks", "denominator": "all frozen multi-turn M1 scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "multi_turn_success_rate", "operator": "gte", "threshold": 0.8}]},
+    "M1-04": {"target": "Compare requested products", "denominator": "all frozen comparison scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "comparison_success_rate", "operator": "gte", "threshold": 0.8}]},
+    "M1-05": {"target": "Summarize product reviews", "denominator": "all frozen review-summary scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "review_summary_success_rate", "operator": "gte", "threshold": 0.8}]},
+    "M1-06": {"target": "Honor required and forbidden tools", "denominator": "all frozen M1 scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "tool_contract_pass_rate", "operator": "eq", "threshold": 1}]},
+    "M1-07": {"target": "Match target runtime to evaluated source", "denominator": "one frozen M1 run", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "runtime_fingerprint_match", "operator": "eq", "threshold": 1}]},
+    "M1-08": {"target": "Honor shopping hard constraints", "denominator": "all frozen hard-constraint scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "hard_constraint_success_rate", "operator": "gte", "threshold": 0.8}]},
+
     "M3-01": {"target": "Shopping task success", "denominator": "eligible shopping tasks", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "shopping_task_success_rate", "operator": "gte", "threshold": 0.85}]},
     "M3-02": {"target": "No hard constraint violations", "denominator": "evaluated recommendations", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "hard_constraint_violation_rate", "operator": "eq", "threshold": 0}]},
     "M3-03": {"target": "Accurate product facts", "denominator": "checked product claims", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "product_fact_accuracy", "operator": "eq", "threshold": 1}]},
@@ -83,7 +92,7 @@
     "A": {"required_tasks": ["A1", "A2", "A3", "A4", "A5"], "required_milestones": [], "metric_ids": []},
     "B": {"required_tasks": ["B1", "B2", "B3", "B4", "B5"], "required_milestones": ["A"], "metric_ids": []},
     "C": {"required_tasks": ["C1", "C2", "C3", "C4", "C5"], "required_milestones": ["A"], "metric_ids": []},
-    "D": {"required_tasks": ["D1", "D2", "D3", "D4", "D5"], "required_milestones": ["A", "B", "C"], "metric_ids": []},
+    "D": {"required_tasks": ["D1", "D2", "D3", "D4", "D5"], "required_milestones": ["A", "B", "C"], "metric_ids": ["M1-01", "M1-02", "M1-03", "M1-04", "M1-05", "M1-06", "M1-07", "M1-08"]},
     "E": {"required_tasks": ["E1", "E2", "E3", "E4", "E5"], "required_milestones": ["D"], "metric_ids": []},
     "M3": {
       "required_tasks": [
