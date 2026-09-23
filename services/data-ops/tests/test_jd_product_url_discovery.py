@@ -79,7 +79,7 @@ def test_discover_jd_product_urls_from_real_jd(tmp_path: Path) -> None:
         output_path=output_path,
         max_pages=1,
         max_items=5,
-        browser_channel="msedge",
+        browser_channel="chrome",
         storage_state=os.environ.get("JD_PLAYWRIGHT_STORAGE_STATE"),
         headless=True,
     )

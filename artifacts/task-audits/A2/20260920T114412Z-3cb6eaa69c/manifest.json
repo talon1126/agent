@@ -1,0 +1,223 @@
+{
+  "acceptance_lock_sha256": "2c56a95eb72a74db2bf8b7c22a08108297cb9b7cf2b1328639d38d34bb9214e5",
+  "baseline_commit": "e4eaa597ac431a507c14c8f42504ec31eca713cb",
+  "changed_files": [
+    "docs/shopping_agent_scenario_coverage.md",
+    "fixtures/evals/shopping_agent_scenarios.json",
+    "scripts/validate_shopping_agent_scenarios.py",
+    "services/ai-service/tests/test_shopping_agent_scenarios.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "672de0f931f6764280151094739a7dca0e04de1596395aa50013e08c3a9479d3"
+    },
+    {
+      "path": "round-1/ruff-fix.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "round-1/ruff-format-fix.log",
+      "sha256": "96a977f329ec3c59092d40e041a019b49dcf03ca04055e177aa0ccb8c27234df"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "c215f5daa482fa392d290738afab3d57061ec9720f24c0095119d847af5a0cb0"
+    },
+    {
+      "path": "round-2/acceptance.log",
+      "sha256": "bd5201fad773316bbfda2cfee7833ff2d8db356db81550c537f47ba44de0ed2d"
+    },
+    {
+      "path": "round-2/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-2/ruff-check.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "round-2/ruff-format.log",
+      "sha256": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938"
+    },
+    {
+      "path": "round-2/verification-01.log",
+      "sha256": "4c4d6bed2efc0c0b2deff18643c8d759c006cc9ce51ee2372eab3413d93b540f"
+    },
+    {
+      "path": "round-2/verification-02.log",
+      "sha256": "9b1781e2b9299adb3e2d7e29ce949b681ed28362fa62c1ba6941ac870d80cac8"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "4 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check e4eaa597ac431a507c14c8f42504ec31eca713cb..3cb6eaa69c758cbae8562efc761e66fc9e9841d4",
+            "duration_seconds": 0.047,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check scripts/validate_shopping_agent_scenarios.py services/ai-service/tests/test_shopping_agent_scenarios.py",
+            "duration_seconds": 1.859,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check scripts/validate_shopping_agent_scenarios.py services/ai-service/tests/test_shopping_agent_scenarios.py",
+            "duration_seconds": 0.485,
+            "exit_code": 1,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": false
+          }
+        ],
+        "name": "static_and_security",
+        "passed": false
+      },
+      "layer_2": null,
+      "passed": false,
+      "round": 1,
+      "safe_repairs": [
+        "scripts/validate_shopping_agent_scenarios.py",
+        "services/ai-service/tests/test_shopping_agent_scenarios.py"
+      ]
+    },
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "4 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check e4eaa597ac431a507c14c8f42504ec31eca713cb..3cb6eaa69c758cbae8562efc761e66fc9e9841d4",
+            "duration_seconds": 0.062,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check scripts/validate_shopping_agent_scenarios.py services/ai-service/tests/test_shopping_agent_scenarios.py",
+            "duration_seconds": 0.156,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check scripts/validate_shopping_agent_scenarios.py services/ai-service/tests/test_shopping_agent_scenarios.py",
+            "duration_seconds": 0.141,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/a2/test_a2_golden_set_contract.py -q",
+            "duration_seconds": 0.875,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service python scripts/validate_shopping_agent_scenarios.py",
+            "duration_seconds": 0.906,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_shopping_agent_scenarios.py -q",
+            "duration_seconds": 1.094,
+            "exit_code": 0,
+            "log": "verification-02.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 2,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-20T11:44:21Z",
+  "result": "repaired_pending_commit",
+  "rounds_executed": 2,
+  "safe_repair_hashes": {
+    "scripts/validate_shopping_agent_scenarios.py": "086dc73aa25ccbc7fc6f2b1eff7d15e0443370cc30f8f8bf2c6491df40f96983",
+    "services/ai-service/tests/test_shopping_agent_scenarios.py": "87eb5aaa203f534b25b87156b67b50a4a1f2db567baa7ecbcfcd3b10b8df7938"
+  },
+  "safe_repairs": [
+    "scripts/validate_shopping_agent_scenarios.py",
+    "services/ai-service/tests/test_shopping_agent_scenarios.py"
+  ],
+  "schema_version": 1,
+  "target_commit": "3cb6eaa69c758cbae8562efc761e66fc9e9841d4",
+  "task_id": "A2",
+  "task_title": "建立购物任务 Golden Set v1"
+}

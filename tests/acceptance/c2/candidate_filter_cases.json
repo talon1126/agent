@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-21T12:00:00Z",
+  "delivery_deadline": "2026-09-22T12:00:00Z",
+  "policy": {
+    "max_search_query_length": 24,
+    "max_candidates": 4,
+    "minimum_stock": 1,
+    "unknown_fact_action": "clarify",
+    "stale_fact_action": "refresh_fact"
+  },
+  "reason_codes": {
+    "budget_min": "budget_below_minimum",
+    "budget_max": "budget_above_maximum",
+    "brand_include": "brand_not_included",
+    "brand_exclude": "brand_excluded",
+    "category": "category_mismatch",
+    "stock": "insufficient_stock",
+    "delivery": "delivery_after_deadline",
+    "specification": "specification_mismatch"
+  }
+}

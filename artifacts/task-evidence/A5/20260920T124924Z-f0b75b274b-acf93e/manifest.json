@@ -1,0 +1,61 @@
+{
+  "acceptance_files": [
+    "tests/acceptance/a5/test_a5_trace_observability_contract.py"
+  ],
+  "acceptance_lock_sha256": "92216acf86f5e8b6f63d7a8c894582f99ad501f505d9f62350788f2713f3225a",
+  "baseline_commit": "cc1c62e0b85ed51018d6d85e5fdb3f3c737bfa56",
+  "changed_files": [
+    "artifacts/task-audits/A5/20260920T124810Z-774be17a61/manifest.json",
+    "artifacts/task-audits/A5/20260920T124810Z-774be17a61/round-1/diff-check.log",
+    "artifacts/task-audits/A5/20260920T124810Z-774be17a61/round-1/ruff-check.log",
+    "artifacts/task-audits/A5/20260920T124810Z-774be17a61/round-1/ruff-fix.log",
+    "artifacts/task-audits/A5/20260920T124810Z-774be17a61/round-1/ruff-format-fix.log",
+    "artifacts/task-audits/A5/20260920T124810Z-774be17a61/round-1/ruff-format.log",
+    "artifacts/task-audits/A5/20260920T124859Z-f0b75b274b/manifest.json",
+    "artifacts/task-audits/A5/20260920T124859Z-f0b75b274b/round-1/acceptance.log",
+    "artifacts/task-audits/A5/20260920T124859Z-f0b75b274b/round-1/diff-check.log",
+    "artifacts/task-audits/A5/20260920T124859Z-f0b75b274b/round-1/ruff-check.log",
+    "artifacts/task-audits/A5/20260920T124859Z-f0b75b274b/round-1/ruff-format.log",
+    "artifacts/task-audits/A5/20260920T124859Z-f0b75b274b/round-1/verification-01.log",
+    "docs/agent_trace_dictionary.md",
+    "services/ai-service/app/routers/AImodel/agent_trace.py",
+    "services/ai-service/app/routers/AImodel/memory.py",
+    "services/ai-service/app/routers/AImodel/quality_gates.py",
+    "services/ai-service/app/routers/AImodel/service.py",
+    "services/ai-service/tests/test_aimodel_agent.py",
+    "services/ai-service/tests/test_aimodel_memory.py",
+    "services/ai-service/tests/test_aimodel_trace.py"
+  ],
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_trace.py services/ai-service/tests/test_aimodel_agent.py -q",
+      "duration_seconds": 1.297,
+      "exit_code": 0,
+      "log": "01.log"
+    }
+  ],
+  "commit": "f0b75b274b0afd5b3fb65f68369b5d825cb90e79",
+  "evidence_files": [
+    {
+      "path": "commands/01.log",
+      "sha256": "c5b0f38f5d4ab16df03a6911aa82a0aaea5f75a44c901cd71f37d99338306412"
+    }
+  ],
+  "phase": "A",
+  "quality_gates_sha256": "fdd7ab15401e7107893bcf7147e20db2b29774cc116719ebf0976a6158943c46",
+  "quality_profile": null,
+  "quality_results": [],
+  "recorded_at": "2026-09-20T12:49:25Z",
+  "run_id": "20260920T124924Z-f0b75b274b-acf93e",
+  "runner": {
+    "ci": false,
+    "verifier_id": null
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "A5",
+  "task_title": "扩展 Trace 与指标字典",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "working_tree_dirty": true
+}

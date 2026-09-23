@@ -1,0 +1,344 @@
+{
+  "generated_at": "2026-09-23T08:32:26Z",
+  "quality_gates_sha256": "691dae7b7668a9cd24918adde91d08e59c73091b3f19e27907d6aad97dfe1de3",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "taskbook_path": "AGENT_TASKBOOK.md",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "tasks": {
+    "A1": {
+      "section_sha256": "e7d7b001e2219618fecf74408fbce587055fee10effc4e5025483f580ef92f63",
+      "title": "冻结现有 Agent 基线",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_aimodel_rag_tool.py services/ai-service/tests/test_aimodel_memory.py -q"
+      ]
+    },
+    "A2": {
+      "section_sha256": "3f92737b3d5e5d3c81058be4768654bfe54646fc971b05cd6566cf0d4e707042",
+      "title": "建立购物任务 Golden Set v1",
+      "verification_commands": [
+        "uv run --project services/ai-service python scripts/validate_shopping_agent_scenarios.py",
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_shopping_agent_scenarios.py -q"
+      ]
+    },
+    "A3": {
+      "section_sha256": "3891742087454a44b405904f1290dff02db6fe66c2001fc3f0d5357cb3c9f5b6",
+      "title": "扩展请求上下文协议",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_context.py services/ai-service/tests/test_api.py -q"
+      ]
+    },
+    "A4": {
+      "section_sha256": "94b3daf0f0ef6e0e346a5f97ae6cbe97b068134ebfebcd15d62ade997630a405",
+      "title": "建立结构化响应协议",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_response_schema.py services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_aimodel_memory.py -q"
+      ]
+    },
+    "A5": {
+      "section_sha256": "bea9ab61075b766b5f505d524ce5b4c59cb34e09a162155c04bf9ac7c8e8271e",
+      "title": "扩展 Trace 与指标字典",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_trace.py services/ai-service/tests/test_aimodel_agent.py -q"
+      ]
+    },
+    "B1": {
+      "section_sha256": "c533ae9d89a622ccbe1b8c807a0926f121e0be5a3d95e59b7e49b3f84db4c327",
+      "title": "定义购物目标模型",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_shopping_goal.py -q"
+      ]
+    },
+    "B2": {
+      "section_sha256": "c92cc7a168111a70e2f96419b3544dd3591faef9c8c60fa0271bb4e3c1d8a1a8",
+      "title": "实现目标抽取器",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_goal_extractor.py -q"
+      ]
+    },
+    "B3": {
+      "section_sha256": "d4a41168f69ec3a041cda628bd5e3f3f4c38361a56a1ca8d042af87b041fb015",
+      "title": "实现状态合并与冲突检测",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_goal_state_transition.py -q"
+      ]
+    },
+    "B4": {
+      "section_sha256": "aca9d04a143dab0f43ddaee3e8ba459ed70aaf0fe05680387418a9dbefdf0388",
+      "title": "实现澄清策略",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_clarification_policy.py -q"
+      ]
+    },
+    "B5": {
+      "section_sha256": "55ceb1193cf7c41512df2257711b8d3805116636eaa702e70809363e499280c1",
+      "title": "持久化目标状态并隔离长期偏好",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_shopping_goal_repository.py services/ai-service/tests/test_aimodel_memory.py -q"
+      ]
+    },
+    "C1": {
+      "section_sha256": "4c425bc320cb4bea9047ac672e59d17de876d508ee82e7f5935d6b94ceeb8c07",
+      "title": "建立商品事实快照",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_product_snapshot.py -q",
+        "uv run --project services/mock-api pytest services/mock-api/tests -q"
+      ]
+    },
+    "C2": {
+      "section_sha256": "1734186d9e85d1c67a2103fb08d9f0f3484efeae1b87aa85d82a102d75c93987",
+      "title": "实现候选召回与硬过滤",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_candidate_filter.py -q"
+      ]
+    },
+    "C3": {
+      "section_sha256": "ef096733a389b66aa93353b9b77ee7aeddf524f4e6eb03344e638cc14993fe3d",
+      "title": "建立品类特征归一化",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_feature_normalizer.py -q"
+      ]
+    },
+    "C4": {
+      "section_sha256": "13758dbe935064e49aa0b75cff8144b1a4623028c43d3beef13b67728b674a07",
+      "title": "实现可解释排序与多样性",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_product_ranker.py -q"
+      ]
+    },
+    "C5": {
+      "section_sha256": "96e421c45ba65330d4112f48a541ab1343c4cd215b991a3b92e87fc87ee4a17a",
+      "title": "实现商品比较和评论洞察",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_product_comparison.py -q",
+        "uv run --project services/mock-api pytest services/mock-api/tests/test_api.py -q"
+      ]
+    },
+    "D1": {
+      "section_sha256": "f08a537605bbb549acac0fcf8d83997a6d927fe573f3e7b36e705cdfc3a7bd69",
+      "title": "定义任务计划协议",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_agent_plan.py -q"
+      ]
+    },
+    "D2": {
+      "section_sha256": "57dfa72687f5f940d75f6ccdfd39a5719852bfcf690d11c5a94b76abbea581fe",
+      "title": "实现分层规划器",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_planner.py -q"
+      ]
+    },
+    "D3": {
+      "section_sha256": "e6dd3cfbcb27d45089725366c473f06f8e141aeaa4904ec2a32d15dc33681178",
+      "title": "实现步骤级工具授权",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_tool_policy_gate.py services/ai-service/tests/test_aimodel_agent.py -q"
+      ]
+    },
+    "D4": {
+      "section_sha256": "21be160a3f8d92af02c96f2bd867fb4b51857e272852111079cd9b45604cca57",
+      "title": "实现有界并行执行",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_parallel_tool_executor.py services/ai-service/tests/test_aimodel_rag_tool.py -q"
+      ]
+    },
+    "D5": {
+      "section_sha256": "ce5128ba29d8b5183853f309471e6ed22304a97e545a712b4cefc56663aa65f3",
+      "title": "实现事实校验与恢复策略",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_agent_verifier.py services/ai-service/tests/test_candidate_filter.py services/ai-service/tests/test_product_comparison.py -q"
+      ]
+    },
+    "E1": {
+      "section_sha256": "6e68bb58ccdad7a8eb8d8d6568fc3f6e65555867d3101371277479898635897a",
+      "title": "实现上下文组装器",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_context_assembler.py -q"
+      ]
+    },
+    "E2": {
+      "section_sha256": "400accd329e4ade8f15eac63ecddbfc5f6ba3c4eff02282201d5769ba46fb5fc",
+      "title": "实现主动导购触发策略",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_proactive_policy.py -q"
+      ]
+    },
+    "E3": {
+      "section_sha256": "5ea6f84cb777d48ec8a73fea2c2e64702a9c621c4d7e737a363e2386e4edc13d",
+      "title": "接通结构化 SSE 后端链路",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_aimodel_response_schema.py services/ai-service/tests/test_aimodel_structured_sse.py -q"
+      ]
+    },
+    "E4": {
+      "section_sha256": "d26a531d18ceaa3d3281df012bad4fbb9e8df8d3e51d4b37a1b8cfa8f8a28ec4",
+      "title": "实现确认式加购",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_cart_action_guard.py -q",
+        "uv run --project services/mock-api pytest services/mock-api/tests/test_api.py -q"
+      ]
+    },
+    "E5": {
+      "section_sha256": "f9cf7fdc85c74187fdaac703d579cc8dd127b27783b9728706e39efbab9b9354",
+      "title": "建立行为反馈与归因",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_agent_feedback.py -q"
+      ]
+    },
+    "F1": {
+      "section_sha256": "2b9cdf621bc8e317e5f526ed1f8d14017e7549dc9f5299734d3ffc4005faa636",
+      "title": "加固内容与工具安全",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_agent_security.py services/ai-service/tests/test_tool_policy_gate.py services/ai-service/tests/test_cart_action_guard.py -q"
+      ]
+    },
+    "F2": {
+      "section_sha256": "62efa61bcd65b7cc545c862bc005b06383e07692d7bed59469dd5bcc2bf34c21",
+      "title": "建立故障与对抗场景",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_agent_failure_matrix.py -q"
+      ]
+    },
+    "F3": {
+      "section_sha256": "ec75817cce9be24ba1cfcd50df86459608a9e86566783f458c2f3b7033c41276",
+      "title": "扩充并冻结 Golden Set v2",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_shopping_agent_evaluation.py -q",
+        "uv run --project services/ai-service python scripts/evaluate_shopping_agent.py --dataset fixtures/evals/shopping_agent_scenarios.json"
+      ]
+    },
+    "F4": {
+      "section_sha256": "02380c83ade11d13ab804c75561c2624704fc65dd44c85dec4b2b4b06d91e3f9",
+      "title": "优化延迟、成本与稳定性",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests -q",
+        "uv run --project services/ai-service python scripts/benchmark_shopping_agent.py --runs 3"
+      ]
+    },
+    "F5": {
+      "section_sha256": "3152b125ea1f849a080aa86949d073bdbcee6675023e598558ee71e77ee7ad6a",
+      "title": "建立发布门禁与运行手册",
+      "verification_commands": [
+        "powershell -ExecutionPolicy Bypass -File scripts/verify_shopping_agent_release.ps1"
+      ]
+    },
+    "G1": {
+      "section_sha256": "e46a3cfb02f1648e3aec9dceb3ecd2cd622ba282a97257277d5aec4473a36198",
+      "title": "建立身份、授权与数据生命周期边界",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_consent_policy.py -q"
+      ]
+    },
+    "G2": {
+      "section_sha256": "419663b731f26551778db148400a09f23210b8dd1a79bacc83d09e23b7314af5",
+      "title": "建立可信行为事件管道",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_behavior_event_pipeline.py -q",
+        "uv run --project services/ai-service python scripts/replay_behavior_events.py --fixture fixtures/personalization/behavior_events.json --dry-run"
+      ]
+    },
+    "G3": {
+      "section_sha256": "8c059894d3311fdd61ec4908e6062b65803e0dbcf2aec46829e3b1a1e536c140",
+      "title": "建立特征注册表与在线/离线特征存储",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_feature_store_consistency.py -q",
+        "uv run --project services/ai-service python scripts/backfill_agent_features.py --fixture fixtures/personalization/behavior_events.json --as-of 2026-09-01T00:00:00Z --dry-run"
+      ]
+    },
+    "G4": {
+      "section_sha256": "811a8160bcf6d8babd9f08b56a68c1ab4ddfb9e6579c6e1fcd4c725d98b68b08",
+      "title": "建立可解释用户画像服务",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_user_profile_service.py -q"
+      ]
+    },
+    "G5": {
+      "section_sha256": "04af1045b212fb5912833c8d1e23d0811ab5990f417e2c6d32b382b6b7480a9f",
+      "title": "将实时画像接入 Agent 并建立数据阶段门禁",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_agent_personalization_context.py services/ai-service/tests/test_consent_policy.py services/ai-service/tests/test_feature_store_consistency.py -q",
+        "powershell -ExecutionPolicy Bypass -File scripts/verify_personalization_data_release.ps1"
+      ]
+    },
+    "H1": {
+      "section_sha256": "e4029fe5c119d03a81e4b2c3750d25d9d949189805c49d89056f430e6ad813e2",
+      "title": "建立商品本体与版本化属性规范",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_product_ontology.py services/ai-service/tests/test_product_feature_normalizer.py -q",
+        "uv run --project services/ai-service python scripts/lint_product_ontology.py --root config/product_ontology"
+      ]
+    },
+    "H2": {
+      "section_sha256": "5ec0a2ad5dc829758f6f12a71f4427e496038f5d5d93e9fd80c302640e09938c",
+      "title": "建立商品实体消歧与数据质量治理",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_product_entity_resolution.py -q",
+        "uv run --project services/ai-service python scripts/audit_catalog_entities.py --fixture fixtures/catalog/entity_resolution_cases.json"
+      ]
+    },
+    "H3": {
+      "section_sha256": "e25dcc50fd0018432cc2eb362f350b73707e2d0fe651d59fdbce9116dfee0d60",
+      "title": "建立商品关系图谱与受控查询服务",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_product_graph.py -q"
+      ]
+    },
+    "H4": {
+      "section_sha256": "670c7ead97ef43d15376b906f14ffe2d6a2ab4cf43a143882995c66810214876",
+      "title": "建立统一电商实时事实网关",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_commerce_fact_gateway.py -q"
+      ]
+    },
+    "H5": {
+      "section_sha256": "10919cbe4d3174de0e4c58043514e50768416b886957cee54c0be3188ae982c0",
+      "title": "将商品知识与事实网关接入决策链路",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_agent_catalog_intelligence.py services/ai-service/tests/test_commerce_fact_gateway.py services/ai-service/tests/test_product_graph.py -q",
+        "powershell -ExecutionPolicy Bypass -File scripts/verify_catalog_intelligence_release.ps1"
+      ]
+    },
+    "I1": {
+      "section_sha256": "dcf3428d11b127470ec46d309d539bcb2813f1e288ba80233a12990f39a1764d",
+      "title": "定义推荐请求、候选与目标契约",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_recommendation_contracts.py -q"
+      ]
+    },
+    "I2": {
+      "section_sha256": "ce95325e861384a0269f9f1e5b699f6873f41949e18429a969c65e453cdbb1d7",
+      "title": "实现有界多路候选召回与融合",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_multi_lane_recall.py -q",
+        "uv run --project services/ai-service python scripts/build_recommendation_indexes.py --fixture fixtures/recommendation/index_sources.json --dry-run",
+        "uv run --project services/ai-service python scripts/evaluate_recommendation_recall.py --dataset fixtures/evals/recommendation_recall_cases.json"
+      ]
+    },
+    "I3": {
+      "section_sha256": "1f4731d2310a31f8d921c0cddc84b12e23c1ab89c2c0d12cf9d6828411174426",
+      "title": "建立 point-in-time 排序训练与评测数据集",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_ranking_dataset.py -q",
+        "uv run --project services/ai-service python scripts/build_ranking_dataset.py --fixture fixtures/recommendation/ranking_events.json --dry-run",
+        "uv run --project services/ai-service python scripts/audit_ranking_dataset.py --manifest artifacts/recommendation/dataset_manifest.json"
+      ]
+    },
+    "I4": {
+      "section_sha256": "3da4bd1e9a8e64bda652a9a56ef8f270caff03fddc877f3ffc223436ad019250",
+      "title": "训练并服务可审计的个性化排序器",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_personalized_ranker.py -q",
+        "uv run --project services/ai-service python scripts/train_personalized_ranker.py --manifest artifacts/recommendation/dataset_manifest.json --output artifacts/recommendation/models/candidate",
+        "uv run --project services/ai-service python scripts/evaluate_personalized_ranker.py --model-version candidate --compare baseline-c4"
+      ]
+    },
+    "I5": {
+      "section_sha256": "65a331d5b9cc3353a01976745639f235ee3eba8d9d565946b4911f8bd4853656",
+      "title": "接入安全混排、影子验证与回退门禁",
+      "verification_commands": [
+        "uv run --project services/ai-service pytest services/ai-service/tests/test_personalized_ranking_integration.py services/ai-service/tests/test_agent_security.py -q",
+        "powershell -ExecutionPolicy Bypass -File scripts/verify_personalized_ranking_release.ps1"
+      ]
+    }
+  }
+}

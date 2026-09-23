@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "config_version": "agent-quality-gates-v2",
+  "metrics": {
+    "M1-01": {"target": "Grade the complete frozen M1 set", "denominator": "all frozen M1 scenarios, including dependency failures", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "graded_coverage", "operator": "eq", "threshold": 1}]},
+    "M1-02": {"target": "Complete shopping tasks", "denominator": "all frozen M1 scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "task_success_rate", "operator": "gte", "threshold": 0.8}]},
+    "M1-03": {"target": "Complete multi-turn tasks", "denominator": "all frozen multi-turn M1 scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "multi_turn_success_rate", "operator": "gte", "threshold": 0.8}]},
+    "M1-04": {"target": "Compare requested products", "denominator": "all frozen comparison scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "comparison_success_rate", "operator": "gte", "threshold": 0.8}]},
+    "M1-05": {"target": "Summarize product reviews", "denominator": "all frozen review-summary scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "review_summary_success_rate", "operator": "gte", "threshold": 0.8}]},
+    "M1-06": {"target": "Honor required and forbidden tools", "denominator": "all frozen M1 scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "tool_contract_pass_rate", "operator": "eq", "threshold": 1}]},
+    "M1-07": {"target": "Match target runtime to evaluated source", "denominator": "one frozen M1 run", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "runtime_fingerprint_match", "operator": "eq", "threshold": 1}]},
+    "M1-08": {"target": "Honor shopping hard constraints", "denominator": "all frozen hard-constraint scenarios", "window": "frozen_run", "applicable_milestones": ["D"], "checks": [{"field": "hard_constraint_success_rate", "operator": "gte", "threshold": 0.8}]},
+
+    "M3-01": {"target": "Shopping task success", "denominator": "eligible shopping tasks", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "shopping_task_success_rate", "operator": "gte", "threshold": 0.85}]},
+    "M3-02": {"target": "No hard constraint violations", "denominator": "evaluated recommendations", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "hard_constraint_violation_rate", "operator": "eq", "threshold": 0}]},
+    "M3-03": {"target": "Accurate product facts", "denominator": "checked product claims", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "product_fact_accuracy", "operator": "eq", "threshold": 1}]},
+    "M3-04": {"target": "Evidence-backed key claims", "denominator": "key recommendation claims", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "key_claim_evidence_coverage", "operator": "gte", "threshold": 0.95}]},
+    "M3-05": {"target": "Ask required clarifications", "denominator": "requests requiring clarification", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "clarification_recall", "operator": "gte", "threshold": 0.9}]},
+    "M3-06": {"target": "Valid structured responses", "denominator": "completed Agent responses", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "structured_response_validity", "operator": "eq", "threshold": 1}]},
+    "M3-07": {"target": "No unauthorized tool calls", "denominator": "Agent tool calls", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "unauthorized_tool_calls", "operator": "eq", "threshold": 0}]},
+    "M3-08": {"target": "Confirm every side effect", "denominator": "side-effect attempts", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "side_effect_confirmation_coverage", "operator": "eq", "threshold": 1}]},
+    "M3-09": {"target": "Recover from dependency failures", "denominator": "recoverable dependency failures", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "failure_recovery_rate", "operator": "gte", "threshold": 0.95}]},
+    "M3-10": {"target": "Bound complete response latency", "denominator": "completed Agent responses", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "complete_response_p95_seconds", "operator": "lte", "threshold": 25}]},
+
+    "M4-01": {"checks": [{"field": "unauthorized_profile_reads", "operator": "eq", "threshold": 0}]},
+    "M4-02": {"checks": [{"field": "online_offline_feature_consistency", "operator": "eq", "threshold": 1}]},
+    "M4-03": {"checks": [
+      {"field": "event_processing_p95_seconds", "operator": "lte", "threshold": 60},
+      {"field": "dead_letter_rate", "operator": "lte", "threshold": 0.001}
+    ]},
+    "M4-04": {"checks": [
+      {"field": "profile_read_p95_ms", "operator": "lte", "threshold": 150},
+      {"field": "configured_deadline_ms", "operator": "lte", "threshold": 200}
+    ]},
+
+    "M5-01": {"checks": [
+      {"field": "frozen_set_false_merges", "operator": "eq", "threshold": 0},
+      {"field": "sample_precision", "operator": "gte", "threshold": 0.995},
+      {"field": "reviewed_entities", "operator": "gte", "threshold": 1000},
+      {"field": "minimum_entities_per_core_category", "operator": "gte", "threshold": 200}
+    ]},
+    "M5-02": {"checks": [{"field": "freshness_compliance_rate", "operator": "eq", "threshold": 1}]},
+    "M5-03": {"checks": [
+      {"field": "actionable_fact_coverage", "operator": "gte", "threshold": 0.95},
+      {"field": "evaluated_offers", "operator": "gte", "threshold": 1000},
+      {"field": "core_categories", "operator": "gte", "threshold": 5}
+    ]},
+    "M5-04": {"checks": [
+      {"field": "graph_query_p95_ms", "operator": "lte", "threshold": 200},
+      {"field": "fact_batch_50_p95_ms", "operator": "lte", "threshold": 800},
+      {"field": "concurrency", "operator": "gte", "threshold": 100}
+    ]},
+
+    "M6-01": {"checks": [{"field": "recall_at_50", "operator": "gte", "threshold": 0.95}]},
+    "M6-02": {"checks": [
+      {"field": "baseline_ndcg_at_10", "operator": "gt", "threshold": 0},
+      {"field": "ndcg_at_10_ratio", "operator": "gte", "threshold": 1.05},
+      {"field": "evaluation_requests", "operator": "gte", "threshold": 10000},
+      {"field": "bootstrap_ci_95_lower_ratio", "operator": "gt", "threshold": 1},
+      {"field": "minimum_requests_per_key_group", "operator": "gte", "threshold": 500},
+      {"field": "minimum_key_group_ratio", "operator": "gte", "threshold": 0.98}
+    ]},
+    "M6-03": {"checks": [
+      {"field": "rank_100_candidates_p95_ms", "operator": "lte", "threshold": 150},
+      {"field": "evaluated_candidates_per_request", "operator": "gte", "threshold": 100}
+    ]},
+
+    "I-DATA-01": {"checks": [
+      {"field": "consecutive_days", "operator": "gte", "threshold": 28},
+      {"field": "valid_impression_rendered", "operator": "gte", "threshold": 100000},
+      {"field": "authorized_subjects", "operator": "gte", "threshold": 5000},
+      {"field": "strong_positive_labels", "operator": "gte", "threshold": 5000},
+      {"field": "strong_negative_labels", "operator": "gte", "threshold": 1000}
+    ]},
+    "I-DATA-02": {"checks": [
+      {"field": "core_categories", "operator": "gte", "threshold": 5},
+      {"field": "minimum_impressions_per_core_category", "operator": "gte", "threshold": 10000},
+      {"field": "minimum_strong_labels_per_core_category", "operator": "gte", "threshold": 300}
+    ]},
+    "I-DATA-03": {"checks": [
+      {"field": "orphan_rate", "operator": "lte", "threshold": 0.01},
+      {"field": "consent_lineage_completeness", "operator": "eq", "threshold": 1},
+      {"field": "candidate_set_completeness", "operator": "eq", "threshold": 1},
+      {"field": "position_completeness", "operator": "eq", "threshold": 1},
+      {"field": "policy_version_completeness", "operator": "eq", "threshold": 1},
+      {"field": "model_version_completeness", "operator": "eq", "threshold": 1},
+      {"field": "feature_version_completeness", "operator": "eq", "threshold": 1},
+      {"field": "fact_version_completeness", "operator": "eq", "threshold": 1}
+    ]}
+  },
+  "milestones": {
+    "A": {"required_tasks": ["A1", "A2", "A3", "A4", "A5"], "required_milestones": [], "metric_ids": []},
+    "B": {"required_tasks": ["B1", "B2", "B3", "B4", "B5"], "required_milestones": ["A"], "metric_ids": []},
+    "C": {"required_tasks": ["C1", "C2", "C3", "C4", "C5"], "required_milestones": ["A"], "metric_ids": []},
+    "D": {"required_tasks": ["D1", "D2", "D3", "D4", "D5"], "required_milestones": ["A", "B", "C"], "metric_ids": ["M1-01", "M1-02", "M1-03", "M1-04", "M1-05", "M1-06", "M1-07", "M1-08"]},
+    "E": {"required_tasks": ["E1", "E2", "E3", "E4", "E5"], "required_milestones": ["D"], "metric_ids": []},
+    "M3": {
+      "required_tasks": [
+        "A1", "A2", "A3", "A4", "A5", "B1", "B2", "B3", "B4", "B5",
+        "C1", "C2", "C3", "C4", "C5", "D1", "D2", "D3", "D4", "D5",
+        "E1", "E2", "E3", "E4", "E5", "F1", "F2", "F3", "F4", "F5"
+      ],
+      "required_milestones": ["A", "B", "C", "D", "E"],
+      "metric_ids": ["M3-01", "M3-02", "M3-03", "M3-04", "M3-05", "M3-06", "M3-07", "M3-08", "M3-09", "M3-10"],
+      "gate_task": "F5"
+    },
+    "M4": {
+      "required_tasks": ["G1", "G2", "G3", "G4", "G5"],
+      "required_milestones": ["M3"],
+      "metric_ids": ["M4-01", "M4-02", "M4-03", "M4-04"],
+      "gate_task": "G5"
+    },
+    "M5": {
+      "required_tasks": ["H1", "H2", "H3", "H4", "H5"],
+      "required_milestones": ["M3"],
+      "metric_ids": ["M5-01", "M5-02", "M5-03", "M5-04"],
+      "gate_task": "H5"
+    },
+    "M6-A": {
+      "required_tasks": ["I1", "I2", "I3"],
+      "required_milestones": ["M4", "M5"],
+      "metric_ids": []
+    },
+    "I-DATA-READY": {
+      "required_tasks": ["I1", "I2", "I3"],
+      "required_milestones": ["M6-A"],
+      "metric_ids": ["I-DATA-01", "I-DATA-02", "I-DATA-03"]
+    },
+    "M6-B": {
+      "required_tasks": ["I1", "I2", "I3", "I4", "I5"],
+      "required_milestones": ["I-DATA-READY"],
+      "metric_ids": ["M6-01", "M6-02", "M6-03"],
+      "gate_task": "I5"
+    }
+  }
+}

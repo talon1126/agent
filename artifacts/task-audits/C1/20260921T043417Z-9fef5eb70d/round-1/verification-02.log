@@ -1,0 +1,28 @@
+Using CPython 3.12.12
+Creating virtual environment at: services\mock-api\.venv
+Downloading sqlalchemy (2.0MiB)
+ Downloaded sqlalchemy
+Installed 24 packages in 610ms
+........................................................................ [ 58%]
+...................................................                      [100%]
+============================== warnings summary ===============================
+services\mock-api\app\main.py:198
+  C:\Users\32320\AppData\Local\Temp\agent-audit-c1-o4f9d7cr\services\mock-api\app\main.py:198: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+D:\python\Lib\site-packages\fastapi\applications.py:4495
+  D:\python\Lib\site-packages\fastapi\applications.py:4495: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+123 passed, 2 warnings in 17.40s

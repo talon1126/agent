@@ -1,0 +1,124 @@
+name: Agent task gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: Taskbook task ID, for example G1
+        required: false
+        type: string
+      milestone_id:
+        description: Phase or milestone ID, for example A or M3
+        required: false
+        type: string
+      quality_report:
+        description: Repository-relative quality report for D/F5/G5/H5/I5
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      task_id:
+        required: false
+        type: string
+      milestone_id:
+        required: false
+        type: string
+      quality_report:
+        required: false
+        type: string
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Validate pipeline configuration
+        run: python scripts/task_preflight.py --check-config
+
+      - name: Validate requested gate
+        shell: pwsh
+        run: |
+          $selected = @("${{ inputs.task_id }}", "${{ inputs.milestone_id }}") | Where-Object { $_ }
+          if ($selected.Count -ne 1) {
+            throw "Provide exactly one of task_id or milestone_id."
+          }
+
+      - name: Run two-layer task audit
+        if: inputs.task_id != ''
+        run: python scripts/task_audit.py --task "${{ inputs.task_id }}" --target-ref HEAD
+
+      - name: Verify selected task
+        if: inputs.task_id != ''
+        shell: pwsh
+        env:
+          AGENT_VERIFIER_ID: github-actions
+        run: |
+          $arguments = @("scripts/task_verify.py", "--task", "${{ inputs.task_id }}")
+          if ("${{ inputs.quality_report }}") {
+            $arguments += @("--quality-report", "${{ inputs.quality_report }}")
+          }
+          python @arguments
+
+      - name: Validate M1 report against frozen Kayn results
+        if: inputs.milestone_id == 'D'
+        shell: pwsh
+        env:
+          M1_QUALITY_REPORT: ${{ inputs.quality_report }}
+        run: |
+          $report = $env:M1_QUALITY_REPORT
+          if (-not $report) {
+            throw "D/M1 requires a quality report inside its Kayn run directory."
+          }
+          $runDirectory = Split-Path -Parent $report
+          python scripts/build_m1_quality_report.py --run-dir $runDirectory --check-report $report
+
+      - name: Independently refresh M1 prerequisite milestones
+        if: inputs.milestone_id == 'D'
+        shell: pwsh
+        env:
+          AGENT_VERIFIER_ID: github-actions
+          AGENT_INDEPENDENT_REVIEW: "true"
+        run: |
+          foreach ($milestone in @("A", "B", "C")) {
+            python scripts/verify_phase_gate.py --milestone $milestone
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Independently verify current milestone
+        if: inputs.milestone_id != ''
+        shell: pwsh
+        env:
+          AGENT_VERIFIER_ID: github-actions
+          AGENT_INDEPENDENT_REVIEW: "true"
+        run: |
+          $arguments = @("scripts/verify_phase_gate.py", "--milestone", "${{ inputs.milestone_id }}")
+          if ("${{ inputs.quality_report }}") {
+            $arguments += @("--quality-report", "${{ inputs.quality_report }}")
+          }
+          python @arguments
+
+      - name: Upload task verification evidence
+        if: always() && inputs.task_id != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-task-${{ inputs.task_id }}-evidence
+          path: artifacts/task-evidence/${{ inputs.task_id }}/
+          if-no-files-found: error
+
+      - name: Upload phase verification evidence
+        if: always() && inputs.milestone_id != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-phase-${{ inputs.milestone_id }}-evidence
+          path: artifacts/phase-evidence/
+          if-no-files-found: error

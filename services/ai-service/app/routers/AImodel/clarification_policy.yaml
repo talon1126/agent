@@ -1,0 +1,80 @@
+schema_version: 1
+policy_version: b4-v1
+recent_question_window: 3
+min_options: 2
+max_options: 5
+
+conflict_priority:
+  budget_range_reversed: 1100
+  brand_included_and_excluded: 1090
+  specification_mutually_exclusive: 1080
+  delivery_deadline_in_past: 1070
+  confirmation_mismatch: 1060
+
+slot_priority:
+  category: 900
+  delivery_deadline: 850
+  budget_min: 810
+  budget_max: 800
+  specification: 750
+  usage_scenario: 700
+  quantity: 650
+  brand: 600
+  recipient_preference: 250
+  freeform_preference: 200
+
+fallback_questions:
+  category: 你主要想买哪一类商品？
+  budget_min: 你的最低预算是多少？
+  budget_max: 你的预算上限是多少？
+  brand: 品牌要求和排除条件冲突了，你想保留哪一个？
+  usage_scenario: 你主要会在什么场景使用？
+  quantity: 你大约需要多少件？
+  delivery_deadline: 你最晚希望什么时候送到？
+  specification: 这项关键规格你希望怎么选？
+  recipient_preference: 收礼人更偏好哪一类？
+  freeform_preference: 你更看重哪一方面？
+
+option_catalog:
+  category:
+    - {label: 手机数码, value: category:electronics}
+    - {label: 家居家电, value: category:home_appliance}
+    - {label: 食品饮料, value: category:food_beverage}
+    - {label: 办公用品, value: category:office_supply}
+  budget_min:
+    - {label: 100 元起, value: budget_min:100}
+    - {label: 500 元起, value: budget_min:500}
+    - {label: 1000 元起, value: budget_min:1000}
+  budget_max:
+    - {label: 500 元以内, value: budget_max:500}
+    - {label: 1000 元以内, value: budget_max:1000}
+    - {label: 3000 元以内, value: budget_max:3000}
+    - {label: 5000 元以内, value: budget_max:5000}
+  usage_scenario:
+    - {label: 日常通勤, value: usage_scenario:commute}
+    - {label: 运动户外, value: usage_scenario:sports}
+    - {label: 办公学习, value: usage_scenario:work_study}
+    - {label: 游戏影音, value: usage_scenario:gaming_media}
+  quantity:
+    - {label: 1 件, value: quantity:1}
+    - {label: 2 件, value: quantity:2}
+    - {label: 5 件, value: quantity:5}
+    - {label: 10 件, value: quantity:10}
+  delivery_deadline:
+    - {label: 今天, value: delivery_deadline:today}
+    - {label: 明天, value: delivery_deadline:tomorrow}
+    - {label: 三天内, value: delivery_deadline:within_3_days}
+    - {label: 时间不限, value: delivery_deadline:anytime}
+  recipient_preference:
+    - {label: 实用优先, value: recipient_preference:practical}
+    - {label: 品质优先, value: recipient_preference:quality}
+    - {label: 大众口味, value: recipient_preference:popular}
+  freeform_preference:
+    - {label: 价格优先, value: freeform_preference:price}
+    - {label: 品质优先, value: freeform_preference:quality}
+    - {label: 使用方便, value: freeform_preference:convenience}
+
+slot_aliases:
+  - slot_key: recipient_preference
+    field: freeform_preference
+    question_keywords: [送人, 收礼, 礼物]

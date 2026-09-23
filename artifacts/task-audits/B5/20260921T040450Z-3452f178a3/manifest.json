@@ -1,0 +1,126 @@
+{
+  "acceptance_lock_sha256": "ed3e730e9289f85916657514e78ff51451bbd0cb49990d0b920dbd4870c0b179",
+  "baseline_commit": "2d76812e6f2c23d5c3d3e3a2feec4949d771c097",
+  "change_commits": [],
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/goal_orchestrator.py",
+    "services/ai-service/app/routers/AImodel/goal_repository.py",
+    "services/ai-service/app/routers/AImodel/memory.py",
+    "services/ai-service/app/routers/AImodel/service.py",
+    "services/ai-service/tests/test_aimodel_memory.py",
+    "services/ai-service/tests/test_shopping_goal_repository.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "bf4ef703a305069739bd8d881fc54574afc1fc9674995cac719c45266d3ca72c"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "d2823ce2577488be34ca3fff3545124adf172784319f7ea2ef5885f099cdef7d"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "ef7d13d02214e98ca902b05257cdbe6a8e84f3b4714508efdc19766460b54209"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "dbbec45e11dbb41d74a6e2189be03d30ab4c2df46468aa2ce7ea6413f1df5dd7"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "6 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "3 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check 2d76812e6f2c23d5c3d3e3a2feec4949d771c097..3452f178a3dd34765647b661999d2a7f92259c96",
+            "duration_seconds": 0.094,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/goal_orchestrator.py services/ai-service/app/routers/AImodel/goal_repository.py services/ai-service/app/routers/AImodel/memory.py services/ai-service/app/routers/AImodel/service.py services/ai-service/tests/test_aimodel_memory.py services/ai-service/tests/test_shopping_goal_repository.py",
+            "duration_seconds": 1.765,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/goal_orchestrator.py services/ai-service/app/routers/AImodel/goal_repository.py services/ai-service/app/routers/AImodel/memory.py services/ai-service/app/routers/AImodel/service.py services/ai-service/tests/test_aimodel_memory.py services/ai-service/tests/test_shopping_goal_repository.py",
+            "duration_seconds": 0.516,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/b5/test_b5_goal_orchestrator_contract.py tests/acceptance/b5/test_b5_shopping_goal_repository_contract.py -q",
+            "duration_seconds": 1.453,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_shopping_goal_repository.py services/ai-service/tests/test_aimodel_memory.py -q",
+            "duration_seconds": 1.359,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-21T04:05:00Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "3452f178a3dd34765647b661999d2a7f92259c96",
+  "task_id": "B5",
+  "task_title": "持久化目标状态并隔离长期偏好"
+}

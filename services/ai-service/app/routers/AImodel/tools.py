@@ -2,6 +2,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
 import threading
 from collections.abc import Coroutine
 from collections.abc import Callable
@@ -22,6 +23,10 @@ RAG_TOOL_NAME = "rag_tool"
 DEFAULT_RAG_TOP_K = 5
 DEFAULT_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 DEFAULT_TAVILY_MAX_RESULTS = 5
+SAFE_PRODUCT_ITEM_ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
+_PRODUCT_LINK_PATH_PATTERN = re.compile(
+    rf"/(?:items|ip)/(?P<item_id>{SAFE_PRODUCT_ITEM_ID_PATTERN})/?"
+)
 
 
 class TavilySearchClient:
@@ -345,6 +350,11 @@ class PersistentMcpRagKnowledgeClient:
         future = asyncio.run_coroutine_threadsafe(caller(payload), loop)
         return future.result()
 
+    def prewarm(self) -> None:
+        """Start the persistent MCP session before serving user traffic."""
+
+        self._ensure_session()
+
     def close(self) -> None:
         """Close the persistent MCP session and stop its background loop."""
 
@@ -421,8 +431,6 @@ class PersistentMcpRagKnowledgeClient:
 
             return self._session_factory(), noop_cleanup
 
-        from contextlib import AsyncExitStack
-
         from mcp import ClientSession
         from mcp.client.stdio import StdioServerParameters, stdio_client
 
@@ -431,30 +439,49 @@ class PersistentMcpRagKnowledgeClient:
             "PYTHONPATH": str(self._cwd),
             **(self._env or {}),
         }
-        stack = AsyncExitStack()
+        ready: asyncio.Future[McpPayloadCaller] = asyncio.get_running_loop().create_future()
+        stop = asyncio.Event()
+
+        async def own_session() -> None:
+            try:
+                server = StdioServerParameters(
+                    command=self._command,
+                    args=self._args,
+                    cwd=self._cwd,
+                    env=env,
+                )
+                async with stdio_client(server) as (read_stream, write_stream):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
+
+                        async def call_query_knowledge_hub(
+                            payload: dict[str, Any],
+                        ) -> dict[str, Any]:
+                            result = await session.call_tool(
+                                "query_knowledge_hub", payload
+                            )
+                            return _mcp_result_to_payload(result)
+
+                        ready.set_result(call_query_knowledge_hub)
+                        await stop.wait()
+            except BaseException as error:
+                if not ready.done():
+                    ready.set_exception(error)
+                    return
+                raise
+
+        owner = asyncio.create_task(own_session())
         try:
-            server = StdioServerParameters(
-                command=self._command,
-                args=self._args,
-                cwd=self._cwd,
-                env=env,
-            )
-            read_stream, write_stream = await stack.enter_async_context(
-                stdio_client(server)
-            )
-            session = await stack.enter_async_context(
-                ClientSession(read_stream, write_stream)
-            )
-            await session.initialize()
-        except Exception:
-            await stack.aclose()
+            caller = await ready
+        except BaseException:
+            await owner
             raise
 
-        async def call_query_knowledge_hub(payload: dict[str, Any]) -> dict[str, Any]:
-            result = await session.call_tool("query_knowledge_hub", payload)
-            return _mcp_result_to_payload(result)
+        async def cleanup() -> None:
+            stop.set()
+            await owner
 
-        return call_query_knowledge_hub, stack.aclose
+        return caller, cleanup
 
 
 @lru_cache(maxsize=1)
@@ -475,6 +502,15 @@ def close_rag_knowledge_client() -> None:
     get_rag_knowledge_client.cache_clear()
 
 
+def prewarm_rag_knowledge_client() -> None:
+    """Initialize reusable RAG resources without issuing a knowledge query."""
+
+    client = get_rag_knowledge_client()
+    prewarm = getattr(client, "prewarm", None)
+    if callable(prewarm):
+        prewarm()
+
+
 def _python_mcp_args() -> list[str]:
     """Return the documented Python module arguments for the RAG MCP server."""
 
@@ -482,15 +518,20 @@ def _python_mcp_args() -> list[str]:
 
 
 def parse_item_id_from_link(link: str) -> str | None:
-    parsed = urlparse(link)
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if "items" not in path_parts:
+    """Extract one canonical item ID from an exact product path."""
+
+    try:
+        parsed = urlparse(link)
+    except ValueError:
         return None
-    item_index = path_parts.index("items") + 1
-    if item_index >= len(path_parts):
+    raw_path = parsed.path
+    if "\\" in raw_path or re.search(r"%(?:2f|5c)", raw_path, re.IGNORECASE):
         return None
-    # 中文注释：前端商品详情页约定为 /items/{item_id}，工具只信任该路径中的商品 ID。
-    return unquote(path_parts[item_index]).strip() or None
+    decoded_path = unquote(raw_path)
+    if "\\" in decoded_path:
+        return None
+    match = _PRODUCT_LINK_PATH_PATTERN.fullmatch(decoded_path)
+    return match.group("item_id") if match else None
 
 
 def build_product_url(item_id: str) -> str:
@@ -573,12 +614,16 @@ def search_products(
     query: str,
     *,
     mock_api_url: str,
+    category: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> AiModelToolResult:
     client, should_close = _client_or_default(mock_api_url, http_client)
     try:
         # 中文注释：推荐场景必须先搜索后端真实商品库，推荐链接从真实 item_id 生成。
-        response = client.get("/search", params={"q": query})
+        params = {"q": query}
+        if category:
+            params["category"] = category
+        response = client.get("/search", params=params)
         if response.status_code != 200:
             return AiModelToolResult(
                 tool="search_products",
@@ -588,6 +633,19 @@ def search_products(
                 error=f"mock_api_status_{response.status_code}",
             )
         data = response.json()
+        if category and not data.get("items"):
+            category_response = client.get(
+                "/search",
+                params={"category": category},
+            )
+            if category_response.status_code == 200:
+                category_data = category_response.json()
+                if category_data.get("items"):
+                    data = {
+                        **category_data,
+                        "query": query,
+                        "search_strategy": "category_fallback",
+                    }
         items = [_item_with_url(item) for item in data.get("items", [])]
         return AiModelToolResult(
             tool="search_products",
@@ -654,7 +712,9 @@ def rag_tool(
         )
 
     active_collection = (
-        collection.strip() if isinstance(collection, str) and collection.strip() else None
+        collection.strip()
+        if isinstance(collection, str) and collection.strip()
+        else None
     )
     active_collections = _normalize_collections(collections)
     client = rag_client or get_rag_knowledge_client()

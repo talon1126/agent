@@ -67,7 +67,9 @@ class FakeFlashSaleRedis:
         if key.endswith(":users"):
             self.claimed_users.clear()
 
-    def eval(self, script: str, numkeys: int, stock_key: str, users_key: str, user_id: str):
+    def eval(
+        self, script: str, numkeys: int, stock_key: str, users_key: str, user_id: str
+    ):
         if user_id in self.claimed_users:
             return "already_claimed"
         if self.stock <= 0:
@@ -99,7 +101,11 @@ class FakeFlashSaleRepository:
         return None
 
     def list_flash_sales(self, *, status: str | None = None, limit: int = 20):
-        rows = [dict(sale) for sale in self.sales if status is None or sale["status"] == status]
+        rows = [
+            dict(sale)
+            for sale in self.sales
+            if status is None or sale["status"] == status
+        ]
         return rows[:limit]
 
     def list_flash_sale_claims(
@@ -111,7 +117,9 @@ class FakeFlashSaleRepository:
     ):
         rows = [dict(claim) for claim in self.claims.values()]
         if flash_sale_id is not None:
-            rows = [claim for claim in rows if int(claim["flash_sale_id"]) == flash_sale_id]
+            rows = [
+                claim for claim in rows if int(claim["flash_sale_id"]) == flash_sale_id
+            ]
         if status:
             rows = [claim for claim in rows if claim["status"] == status]
         return rows[:limit]
@@ -120,7 +128,9 @@ class FakeFlashSaleRepository:
         claim = self.claims.get((flash_sale_id, user_id))
         return dict(claim) if claim else None
 
-    def create_flash_sale_claim_pending(self, *, flash_sale_id: int, user_id: int, item_id: str, created_at: str):
+    def create_flash_sale_claim_pending(
+        self, *, flash_sale_id: int, user_id: int, item_id: str, created_at: str
+    ):
         claim = {
             "id": len(self.claims) + 1,
             "flash_sale_id": flash_sale_id,
@@ -134,7 +144,9 @@ class FakeFlashSaleRepository:
         self.claims[(flash_sale_id, user_id)] = claim
         return dict(claim)
 
-    def mark_flash_sale_claim_ordered(self, claim_id: int, *, order_id: str, updated_at: str):
+    def mark_flash_sale_claim_ordered(
+        self, claim_id: int, *, order_id: str, updated_at: str
+    ):
         for claim in self.claims.values():
             if int(claim["id"]) == claim_id:
                 claim["order_id"] = order_id
@@ -164,7 +176,9 @@ class FakeProductDetailRepository:
         return None
 
     def item_review_summary(self, item_id: str):
-        return self.review_summaries.get(item_id, {"average_rating": 0, "review_count": 0})
+        return self.review_summaries.get(
+            item_id, {"average_rating": 0, "review_count": 0}
+        )
 
 
 class FakeRankingRepository:
@@ -207,7 +221,9 @@ class FakeRankingRepository:
             },
         ]
 
-    def get_category_ranking(self, *, category_id: str, rank_type: str, window_type: str, limit: int):
+    def get_category_ranking(
+        self, *, category_id: str, rank_type: str, window_type: str, limit: int
+    ):
         return [
             dict(row)
             for row in self.snapshot_rows
@@ -236,7 +252,9 @@ class FakeRankingRepository:
         return hydrated
 
     def list_home_hot_rankings(self, *, rank_type: str, window_type: str, limit: int):
-        return sorted(self.snapshot_rows, key=lambda row: row["score"], reverse=True)[:limit]
+        return sorted(self.snapshot_rows, key=lambda row: row["score"], reverse=True)[
+            :limit
+        ]
 
 
 class FakeProductOperationsRepository(FakeRankingRepository):
@@ -262,7 +280,11 @@ class FakeProductOperationsRepository(FakeRankingRepository):
                 "image": "https://oss.example.com/products/item_wireless_earbuds.jpg",
             }
         ]
-        return [row for row in rows if category_id is None or row["category_id"] == category_id]
+        return [
+            row
+            for row in rows
+            if category_id is None or row["category_id"] == category_id
+        ]
 
     def item_review_summary(self, item_id: str):
         return {"average_rating": 4.8, "review_count": 128}
@@ -385,7 +407,9 @@ def test_get_order_fixture():
 
 
 def test_search_policy_returns_refund_clause_metadata():
-    response = client.post("/policies/search", json={"query": "ord_100 这个订单怎么退款"})
+    response = client.post(
+        "/policies/search", json={"query": "ord_100 这个订单怎么退款"}
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -406,7 +430,9 @@ def test_product_search_returns_item_with_inventory_balances(monkeypatch):
     monkeypatch.setattr(
         search_router,
         "load_item_rating",
-        lambda item_id: {"score": 4.5, "count": 2} if item_id == "item_milk_pure" else None,
+        lambda item_id: {"score": 4.5, "count": 2}
+        if item_id == "item_milk_pure"
+        else None,
     )
     monkeypatch.setattr(
         search_router,
@@ -439,7 +465,7 @@ def test_product_search_returns_item_with_inventory_balances(monkeypatch):
                 "item_id": "item_milk_pure",
                 "quantity_on_hand": 140,
                 "storage_status": "available",
-            }
+            },
         ],
     )
 
@@ -481,7 +507,9 @@ def test_product_search_returns_item_with_inventory_balances(monkeypatch):
 
 
 def test_product_search_does_not_match_category_id(monkeypatch):
-    monkeypatch.setattr(search_router, "load_search_items", lambda query=None, category=None: [])
+    monkeypatch.setattr(
+        search_router, "load_search_items", lambda query=None, category=None: []
+    )
     monkeypatch.setattr(search_router, "load_search_balance_rows", lambda: [])
 
     response = client.get("/search", params={"q": "dairy"})
@@ -548,8 +576,12 @@ def test_product_search_returns_items_by_category_without_query(monkeypatch):
 
 def test_category_ranking_endpoint_falls_back_to_postgres_snapshot(monkeypatch):
     repository = FakeRankingRepository()
-    monkeypatch.setattr(category_rankings_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(category_rankings_router, "get_category_ranking_redis", lambda: None)
+    monkeypatch.setattr(
+        category_rankings_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        category_rankings_router, "get_category_ranking_redis", lambda: None
+    )
 
     response = client.get("/rankings/categories/electronics", params={"limit": 2})
 
@@ -583,7 +615,9 @@ def test_order_fulfillment_table_schema_and_rows_expose_business_fields():
         },
     )
     assert create_response.status_code == 200
-    pay_response = client.post("/warehouse/orders/ORD-CODEX-TABLE-1/pay", json={"updated_by": "customer"})
+    pay_response = client.post(
+        "/warehouse/orders/ORD-CODEX-TABLE-1/pay", json={"updated_by": "customer"}
+    )
     assert pay_response.status_code == 200
 
     schema_response = client.get("/warehouse/orders/fulfillment/table-schema")
@@ -640,6 +674,7 @@ def test_order_fulfillment_table_schema_and_rows_expose_business_fields():
     assert "id" not in row["fields"]
     assert "created_by" not in row["fields"]
     assert "Item Summary" not in row["fields"]
+
 
 def test_order_items_table_schema_and_rows_expose_line_fields():
     """Protect the H8 Order Items read model used by Feishu detail tables."""
@@ -718,7 +753,9 @@ def test_order_items_table_rows_support_offset_pagination():
     assert body["items"][0]["fields"]["Item ID"] == "item_cola_zero"
 
 
-def test_product_operations_table_schema_and_rows_merge_catalog_deal_and_ranking(monkeypatch):
+def test_product_operations_table_schema_and_rows_merge_catalog_deal_and_ranking(
+    monkeypatch,
+):
     """Protect the H8 Product Operations read model contract for Feishu tables.
 
     Product Operations powers a future Feishu app page, so the route should
@@ -728,8 +765,12 @@ def test_product_operations_table_schema_and_rows_merge_catalog_deal_and_ranking
 
     repository = FakeProductOperationsRepository()
     monkeypatch.setattr(search_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(category_rankings_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(category_rankings_router, "get_category_ranking_redis", lambda: None)
+    monkeypatch.setattr(
+        category_rankings_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        category_rankings_router, "get_category_ranking_redis", lambda: None
+    )
 
     schema_response = client.get("/products/operations/table-schema")
     rows_response = client.post(
@@ -755,7 +796,10 @@ def test_product_operations_table_schema_and_rows_merge_catalog_deal_and_ranking
     row = body["items"][0]
     assert row["item_id"] == "item_wireless_earbuds"
     assert row["fields"]["Item ID"] == "item_wireless_earbuds"
-    assert row["fields"]["Image"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    assert (
+        row["fields"]["Image"]
+        == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    )
     assert row["fields"]["Category"] == "Electronics"
     assert row["fields"]["Rating"] == 4.8
     assert row["fields"]["Review Count"] == 128
@@ -771,7 +815,9 @@ def test_items_table_schema_and_rows_expose_catalog_fields(monkeypatch):
     monkeypatch.setattr(search_router, "get_warehouse_repository", lambda: repository)
 
     schema_response = client.get("/items/table-schema")
-    rows_response = client.post("/items/table-rows", json={"category_id": "electronics", "limit": 10})
+    rows_response = client.post(
+        "/items/table-rows", json={"category_id": "electronics", "limit": 10}
+    )
 
     assert schema_response.status_code == 200
     schema = schema_response.json()
@@ -779,7 +825,13 @@ def test_items_table_schema_and_rows_expose_catalog_fields(monkeypatch):
     assert schema["schema_id"] == "items"
     field_names = [field["name"] for field in schema["fields"]]
     field_types = {field["name"]: field["type"] for field in schema["fields"]}
-    assert field_names[:5] == ["Item ID", "Product Image", "Image URL", "Item Name", "Brand"]
+    assert field_names[:5] == [
+        "Item ID",
+        "Product Image",
+        "Image URL",
+        "Item Name",
+        "Brand",
+    ]
     assert field_types["Product Image"] == "image"
     assert field_types["Image URL"] == "text"
     assert "Image" not in field_names
@@ -791,7 +843,10 @@ def test_items_table_schema_and_rows_expose_catalog_fields(monkeypatch):
     assert body["schema_id"] == "items"
     row = body["items"][0]
     assert row["item_id"] == "item_wireless_earbuds"
-    assert row["fields"]["Image URL"] == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    assert (
+        row["fields"]["Image URL"]
+        == "https://oss.example.com/products/item_wireless_earbuds.jpg"
+    )
     assert "Product Image" not in row["fields"]
     assert "Image" not in row["fields"]
     assert row["fields"]["Category"] == "Electronics"
@@ -808,7 +863,9 @@ def test_items_table_rows_support_offset_pagination(monkeypatch):
     """
 
     class PaginatedItemsRepository(FakeProductOperationsRepository):
-        def search_items(self, query: str | None = None, *, category_id: str | None = None):
+        def search_items(
+            self, query: str | None = None, *, category_id: str | None = None
+        ):
             assert query is None
             return [
                 {
@@ -824,9 +881,14 @@ def test_items_table_rows_support_offset_pagination(monkeypatch):
                 for index in range(1, 4)
             ]
 
-    monkeypatch.setattr(search_router, "get_warehouse_repository", lambda: PaginatedItemsRepository())
+    monkeypatch.setattr(
+        search_router, "get_warehouse_repository", lambda: PaginatedItemsRepository()
+    )
 
-    response = client.post("/items/table-rows", json={"category_id": "electronics", "limit": 2, "offset": 2})
+    response = client.post(
+        "/items/table-rows",
+        json={"category_id": "electronics", "limit": 2, "offset": 2},
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -842,11 +904,17 @@ def test_flash_sales_table_schema_and_rows_expose_activity_fields(monkeypatch):
 
     repository = FakeFlashSaleRepository()
     redis_client = FakeFlashSaleRedis(stocks={1: 1})
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        flash_sales_router, "get_flash_sale_redis", lambda: redis_client
+    )
 
     schema_response = client.get("/flash-sales/table-schema")
-    rows_response = client.post("/flash-sales/table-rows", json={"status": "active", "limit": 10})
+    rows_response = client.post(
+        "/flash-sales/table-rows", json={"status": "active", "limit": 10}
+    )
 
     assert schema_response.status_code == 200
     assert schema_response.json()["schema_id"] == "flash_sales"
@@ -864,12 +932,23 @@ def test_flash_sales_table_schema_and_rows_expose_activity_fields(monkeypatch):
 def test_flash_sales_table_rows_support_offset_pagination(monkeypatch):
     """Protect the shared H1 pagination contract for H10 Flash Sales rows."""
 
-    sales = [active_flash_sale(id=index, item_id=f"item_flash_{index}") for index in range(1, 4)]
+    sales = [
+        active_flash_sale(id=index, item_id=f"item_flash_{index}")
+        for index in range(1, 4)
+    ]
     repository = FakeFlashSaleRepository(sales=sales)
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: FakeFlashSaleRedis(stocks={}))
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        flash_sales_router,
+        "get_flash_sale_redis",
+        lambda: FakeFlashSaleRedis(stocks={}),
+    )
 
-    response = client.post("/flash-sales/table-rows", json={"status": "active", "limit": 2, "offset": 2})
+    response = client.post(
+        "/flash-sales/table-rows", json={"status": "active", "limit": 2, "offset": 2}
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -894,10 +973,14 @@ def test_flash_sale_claims_table_schema_and_rows_expose_result_fields(monkeypatc
         "created_at": "2026-06-18T10:00:00+00:00",
         "updated_at": "2026-06-18T10:01:00+00:00",
     }
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
 
     schema_response = client.get("/flash-sales/claims/table-schema")
-    rows_response = client.post("/flash-sales/claims/table-rows", json={"status": "ordered", "limit": 10})
+    rows_response = client.post(
+        "/flash-sales/claims/table-rows", json={"status": "ordered", "limit": 10}
+    )
 
     assert schema_response.status_code == 200
     assert schema_response.json()["schema_id"] == "flash_sale_claims"
@@ -920,8 +1003,12 @@ def test_category_ranking_endpoint_uses_redis_zset_when_available(monkeypatch):
             ("item_wireless_earbuds", 96.0),
         ]
     )
-    monkeypatch.setattr(category_rankings_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(category_rankings_router, "get_category_ranking_redis", lambda: redis_client)
+    monkeypatch.setattr(
+        category_rankings_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        category_rankings_router, "get_category_ranking_redis", lambda: redis_client
+    )
 
     response = client.get("/rankings/categories/electronics", params={"limit": 2})
 
@@ -944,8 +1031,12 @@ def test_home_hot_ranking_endpoint_returns_cross_category_items(monkeypatch):
     detail rank tags.
     """
     repository = FakeRankingRepository()
-    monkeypatch.setattr(category_rankings_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(category_rankings_router, "get_category_ranking_redis", lambda: None)
+    monkeypatch.setattr(
+        category_rankings_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        category_rankings_router, "get_category_ranking_redis", lambda: None
+    )
 
     response = client.get("/rankings/home/hot", params={"limit": 2})
 
@@ -1034,8 +1125,13 @@ def test_product_detail_returns_enriched_item_from_repository(monkeypatch):
             "barcode": "690000000001",
         }
     )
-    repository.review_summaries["item_milk_pure"] = {"average_rating": 4.5, "review_count": 2}
-    monkeypatch.setattr(product_details_router, "get_warehouse_repository", lambda: repository)
+    repository.review_summaries["item_milk_pure"] = {
+        "average_rating": 4.5,
+        "review_count": 2,
+    }
+    monkeypatch.setattr(
+        product_details_router, "get_warehouse_repository", lambda: repository
+    )
 
     response = client.get("/ip/item_milk_pure")
 
@@ -1060,7 +1156,9 @@ def test_product_detail_returns_enriched_item_from_repository(monkeypatch):
 
 def test_product_detail_returns_404_for_missing_item(monkeypatch):
     repository = FakeProductDetailRepository()
-    monkeypatch.setattr(product_details_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(
+        product_details_router, "get_warehouse_repository", lambda: repository
+    )
 
     response = client.get("/ip/item_missing")
 
@@ -1251,7 +1349,9 @@ def test_item_reviews_list_returns_reviews_and_summary(monkeypatch, tmp_path):
     init_warehouse_schema(engine)
     seed_warehouse_fixtures(engine, FIXTURE_DIR)
     repository = WarehouseRepository(engine)
-    monkeypatch.setattr(product_reviews_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(
+        product_reviews_router, "get_warehouse_repository", lambda: repository
+    )
 
     response = client.get("/items/item_milk_pure/reviews")
 
@@ -1273,12 +1373,63 @@ def test_item_reviews_list_returns_reviews_and_summary(monkeypatch, tmp_path):
     }
 
 
+def test_item_reviews_batch_is_ordered_versioned_and_partial(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
+    init_warehouse_schema(engine)
+    seed_warehouse_fixtures(engine, FIXTURE_DIR)
+    repository = WarehouseRepository(engine)
+    monkeypatch.setattr(
+        product_reviews_router,
+        "get_warehouse_repository",
+        lambda: repository,
+    )
+
+    response = client.post(
+        "/items/reviews/batch",
+        json={
+            "item_ids": ["item_milk_pure", "item_missing", "item_office_pen"],
+            "limit": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["source_version"] == "mock-api-item-reviews-v1"
+    assert datetime.fromisoformat(body["captured_at"]).tzinfo is not None
+    assert [item["item_id"] for item in body["items"]] == [
+        "item_milk_pure",
+        "item_missing",
+        "item_office_pen",
+    ]
+    assert body["items"][0]["status"] == "ok"
+    assert body["items"][0]["summary"] == {
+        "average_rating": 4.5,
+        "review_count": 2,
+    }
+    assert len(body["items"][0]["reviews"]) == 1
+    assert body["items"][1] == {
+        "item_id": "item_missing",
+        "status": "error",
+        "error": {"code": "item_not_found", "message": "Item not found."},
+    }
+    assert body["items"][2]["status"] == "ok"
+
+    duplicate = client.post(
+        "/items/reviews/batch",
+        json={"item_ids": ["item_milk_pure", "item_milk_pure"]},
+    )
+    assert duplicate.status_code == 422
+
+
 def test_item_reviews_create_and_reject_invalid_payload(monkeypatch, tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'warehouse.db'}")
     init_warehouse_schema(engine)
     seed_warehouse_fixtures(engine, FIXTURE_DIR)
     repository = WarehouseRepository(engine)
-    monkeypatch.setattr(product_reviews_router, "get_warehouse_repository", lambda: repository)
+    monkeypatch.setattr(
+        product_reviews_router, "get_warehouse_repository", lambda: repository
+    )
 
     created = client.post(
         "/items/item_milk_pure/reviews",
@@ -1324,8 +1475,12 @@ def test_item_reviews_create_and_reject_invalid_payload(monkeypatch, tmp_path):
 def test_flash_sale_detail_returns_redis_remaining_stock(monkeypatch):
     repository = FakeFlashSaleRepository(active_flash_sale())
     redis_client = FakeFlashSaleRedis(stock=2)
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        flash_sales_router, "get_flash_sale_redis", lambda: redis_client
+    )
 
     response = client.get("/flash-sales/1")
 
@@ -1350,13 +1505,21 @@ def test_flash_sale_list_returns_multiple_sales_with_redis_stock(monkeypatch):
     repository = FakeFlashSaleRepository(
         sales=[
             active_flash_sale(id=1, item_id="item_milk_pure", stock_limit=2),
-            active_flash_sale(id=2, item_id="item_cola_zero", item_price=24.9, stock_limit=3),
-            active_flash_sale(id=3, item_id="item_vinda_tissue", status="draft", stock_limit=4),
+            active_flash_sale(
+                id=2, item_id="item_cola_zero", item_price=24.9, stock_limit=3
+            ),
+            active_flash_sale(
+                id=3, item_id="item_vinda_tissue", status="draft", stock_limit=4
+            ),
         ]
     )
     redis_client = FakeFlashSaleRedis(stocks={1: 1, 2: 3})
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        flash_sales_router, "get_flash_sale_redis", lambda: redis_client
+    )
 
     response = client.get("/flash-sales?status=active&limit=10")
 
@@ -1396,12 +1559,18 @@ def test_initialize_active_flash_sales_resets_active_stock(monkeypatch):
         sales=[
             active_flash_sale(id=1, item_id="item_milk_pure", stock_limit=2),
             active_flash_sale(id=2, item_id="item_cola_zero", stock_limit=3),
-            active_flash_sale(id=3, item_id="item_vinda_tissue", status="draft", stock_limit=4),
+            active_flash_sale(
+                id=3, item_id="item_vinda_tissue", status="draft", stock_limit=4
+            ),
         ]
     )
     redis_client = FakeFlashSaleRedis(stock=0, claimed_users={"1"})
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        flash_sales_router, "get_flash_sale_redis", lambda: redis_client
+    )
 
     result = flash_sales_router.initialize_active_flash_sales()
 
@@ -1410,11 +1579,17 @@ def test_initialize_active_flash_sales_resets_active_stock(monkeypatch):
     assert redis_client.claimed_users == set()
 
 
-def test_flash_sale_purchase_creates_fulfillment_review_order_and_records_claim(monkeypatch):
+def test_flash_sale_purchase_creates_fulfillment_review_order_and_records_claim(
+    monkeypatch,
+):
     repository = FakeFlashSaleRepository(active_flash_sale())
     redis_client = FakeFlashSaleRedis(stock=1)
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        flash_sales_router, "get_flash_sale_redis", lambda: redis_client
+    )
 
     response = client.post(
         "/flash-sales/1/purchase",
@@ -1436,8 +1611,12 @@ def test_flash_sale_purchase_creates_fulfillment_review_order_and_records_claim(
 def test_flash_sale_purchase_rejects_duplicate_user(monkeypatch):
     repository = FakeFlashSaleRepository(active_flash_sale())
     redis_client = FakeFlashSaleRedis(stock=1, claimed_users={"1"})
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        flash_sales_router, "get_flash_sale_redis", lambda: redis_client
+    )
 
     response = client.post(
         "/flash-sales/1/purchase",
@@ -1466,8 +1645,12 @@ def test_flash_sale_purchase_rejects_existing_ordered_claim(monkeypatch):
         "updated_at": "2026-06-01T00:00:00+00:00",
     }
     redis_client = FakeFlashSaleRedis(stock=1)
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        flash_sales_router, "get_flash_sale_redis", lambda: redis_client
+    )
 
     response = client.post(
         "/flash-sales/1/purchase",
@@ -1486,6 +1669,7 @@ def test_flash_sale_purchase_rejects_existing_ordered_claim(monkeypatch):
 def test_flash_sale_purchase_compensates_redis_when_order_creation_fails(monkeypatch):
     repository = FakeFlashSaleRepository(active_flash_sale(item_id="item_vinda_tissue"))
     redis_client = FakeFlashSaleRedis(stock=1)
+
     def fail_order_creation(payload):
         raise HTTPException(
             status_code=409,
@@ -1495,9 +1679,16 @@ def test_flash_sale_purchase_compensates_redis_when_order_creation_fails(monkeyp
                 "warehouse_id": "wh_sz_1",
             },
         )
-    monkeypatch.setattr(flash_sales_router, "get_warehouse_repository", lambda: repository)
-    monkeypatch.setattr(flash_sales_router, "get_flash_sale_redis", lambda: redis_client)
-    monkeypatch.setattr(flash_sales_router, "create_warehouse_order", fail_order_creation)
+
+    monkeypatch.setattr(
+        flash_sales_router, "get_warehouse_repository", lambda: repository
+    )
+    monkeypatch.setattr(
+        flash_sales_router, "get_flash_sale_redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        flash_sales_router, "create_warehouse_order", fail_order_creation
+    )
 
     response = client.post(
         "/flash-sales/1/purchase",
@@ -1523,7 +1714,9 @@ def test_create_approval_request():
 
     list_response = client.get("/approval-requests")
     assert list_response.status_code == 200
-    assert any(item["event_id"] == "evt_refund_high_value" for item in list_response.json())
+    assert any(
+        item["event_id"] == "evt_refund_high_value" for item in list_response.json()
+    )
 
 
 def test_records_internal_notifications_and_run_logs():
@@ -1540,7 +1733,9 @@ def test_records_internal_notifications_and_run_logs():
     )
     assert run_log.status_code == 200
 
-    assert client.get("/internal-notifications").json()[-1]["event_id"] == "evt_low_stock"
+    assert (
+        client.get("/internal-notifications").json()[-1]["event_id"] == "evt_low_stock"
+    )
     assert client.get("/run-logs").json()[-1]["status"] == "succeeded"
 
 
@@ -1567,9 +1762,18 @@ def test_legacy_replenishment_request_routes_are_removed():
         "created_by": "warehouse:user-001",
     }
 
-    assert client.post("/procurement/replenishment-requests", json=payload).status_code == 404
-    assert client.get("/procurement/replenishment-requests?status=pending").status_code == 404
-    assert client.get("/procurement/replenishment-requests/table-schema").status_code == 404
+    assert (
+        client.post("/procurement/replenishment-requests", json=payload).status_code
+        == 404
+    )
+    assert (
+        client.get("/procurement/replenishment-requests?status=pending").status_code
+        == 404
+    )
+    assert (
+        client.get("/procurement/replenishment-requests/table-schema").status_code
+        == 404
+    )
 
 
 def create_purchase_order_for_test(
@@ -1663,7 +1867,10 @@ def test_approve_purchase_order_updates_approval_status():
     orders = orders_response.json()
     assert orders["ok"] is True
     assert orders["count"] == 1
-    assert orders["items"][0]["purchase_order_id"] == body["purchase_order"]["purchase_order_id"]
+    assert (
+        orders["items"][0]["purchase_order_id"]
+        == body["purchase_order"]["purchase_order_id"]
+    )
     assert orders["items"][0]["approval_status"] == "approved"
 
 
@@ -1676,8 +1883,14 @@ def test_approve_purchase_order_is_idempotent():
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert second.json()["purchase_order"]["purchase_order_id"] == first.json()["purchase_order"]["purchase_order_id"]
-    assert second.json()["purchase_order"]["estimated_arrival_date"] == first.json()["purchase_order"]["estimated_arrival_date"]
+    assert (
+        second.json()["purchase_order"]["purchase_order_id"]
+        == first.json()["purchase_order"]["purchase_order_id"]
+    )
+    assert (
+        second.json()["purchase_order"]["estimated_arrival_date"]
+        == first.json()["purchase_order"]["estimated_arrival_date"]
+    )
     orders = client.get(
         f"/procurement/purchase-orders?purchase_order_id={order['purchase_order_id']}"
     ).json()
@@ -1689,7 +1902,10 @@ def test_reject_purchase_order_updates_approval_status_without_approving():
 
     response = client.post(
         f"/procurement/purchase-orders/{order['purchase_order_id']}/reject",
-        json={"reason": "供应商暂不稳定，先人工复核。", "updated_by": "procurement:user-001"},
+        json={
+            "reason": "供应商暂不稳定，先人工复核。",
+            "updated_by": "procurement:user-001",
+        },
     )
 
     assert response.status_code == 200
@@ -1733,9 +1949,15 @@ def test_create_purchase_order_requires_default_supplier():
 
 
 def test_approve_purchase_order_batch_processes_pending_orders():
-    first = create_purchase_order_for_test(item_id="item_vinda_tissue", location_code="A1")
-    second = create_purchase_order_for_test(item_id="item_milk_pure", location_code="C1")
-    rejected = create_purchase_order_for_test(item_id="item_vinda_tissue", location_code="A1")
+    first = create_purchase_order_for_test(
+        item_id="item_vinda_tissue", location_code="A1"
+    )
+    second = create_purchase_order_for_test(
+        item_id="item_milk_pure", location_code="C1"
+    )
+    rejected = create_purchase_order_for_test(
+        item_id="item_vinda_tissue", location_code="A1"
+    )
     client.post(
         f"/procurement/purchase-orders/{rejected['purchase_order_id']}/reject",
         json={"reason": "manual hold", "updated_by": "procurement:user-001"},
@@ -1754,10 +1976,15 @@ def test_approve_purchase_order_batch_processes_pending_orders():
     approved_order_ids = {
         item["purchase_order_id"] for item in body["approved_purchase_orders"]
     }
-    assert approved_order_ids == {first["purchase_order_id"], second["purchase_order_id"]}
+    assert approved_order_ids == {
+        first["purchase_order_id"],
+        second["purchase_order_id"],
+    }
 
     refreshed = client.get("/procurement/purchase-orders").json()["items"]
-    statuses = {item["purchase_order_id"]: item["approval_status"] for item in refreshed}
+    statuses = {
+        item["purchase_order_id"]: item["approval_status"] for item in refreshed
+    }
     assert statuses[first["purchase_order_id"]] == "approved"
     assert statuses[second["purchase_order_id"]] == "approved"
     assert statuses[rejected["purchase_order_id"]] == "rejected"
@@ -1804,10 +2031,16 @@ def test_confirm_purchase_order_arrival_batch_marks_unsynced_without_inventory_m
     }
     assert "warehouse_inventory_sync_jobs" not in body
     assert "warehouse_inventory_sync_requests" not in body
-    assert all(item["warehouse_sync_status"] == "arrived_unsynced" for item in body["confirmed_items"])
+    assert all(
+        item["warehouse_sync_status"] == "arrived_unsynced"
+        for item in body["confirmed_items"]
+    )
 
     refreshed_orders = client.get("/procurement/purchase-orders").json()["items"]
-    sync_statuses = {item["purchase_order_id"]: item["warehouse_sync_status"] for item in refreshed_orders}
+    sync_statuses = {
+        item["purchase_order_id"]: item["warehouse_sync_status"]
+        for item in refreshed_orders
+    }
     assert sync_statuses[first_order["purchase_order_id"]] == "arrived_unsynced"
     assert sync_statuses[second_order["purchase_order_id"]] == "arrived_unsynced"
 
@@ -1828,7 +2061,10 @@ def test_confirm_purchase_order_arrival_batch_marks_unsynced_without_inventory_m
 
     repeat = client.post(
         "/procurement/purchase-orders/confirm-arrival-batch",
-        json={"purchase_order_ids": [first_order["purchase_order_id"]], "received_by": "warehouse:user-001"},
+        json={
+            "purchase_order_ids": [first_order["purchase_order_id"]],
+            "received_by": "warehouse:user-001",
+        },
     )
 
     assert repeat.status_code == 200
@@ -1852,7 +2088,10 @@ def test_warehouse_syncs_paid_arrived_purchase_orders_to_inventory_balances():
 
     arrival = client.post(
         "/procurement/purchase-orders/confirm-arrival-batch",
-        json={"purchase_order_ids": [order["purchase_order_id"]], "received_by": "warehouse:user-001"},
+        json={
+            "purchase_order_ids": [order["purchase_order_id"]],
+            "received_by": "warehouse:user-001",
+        },
     ).json()
     assert arrival["confirmed_items"][0]["arrived_at"]
 
@@ -1873,7 +2112,6 @@ def test_warehouse_syncs_paid_arrived_purchase_orders_to_inventory_balances():
     assert synced["warehouse_sync_status"] == "synced"
     assert body["next_action"] == "已将已支付且未同步的采购到仓单写入库存余额表。"
 
-
     balances = client.get(
         "/warehouse/stock/balances",
         params={"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1"},
@@ -1887,10 +2125,14 @@ def test_warehouse_syncs_paid_arrived_purchase_orders_to_inventory_balances():
     ).json()["items"][0]
     assert refreshed["warehouse_sync_status"] == "synced"
     assert not any(
-        item["order_id"] == order["purchase_order_id"] for item in WAREHOUSE_INVENTORY_MOVEMENTS
+        item["order_id"] == order["purchase_order_id"]
+        for item in WAREHOUSE_INVENTORY_MOVEMENTS
     )
 
-def test_purchase_order_sync_inventory_endpoint_updates_one_order_without_movement(monkeypatch):
+
+def test_purchase_order_sync_inventory_endpoint_updates_one_order_without_movement(
+    monkeypatch,
+):
     table_sync_requests = []
 
     class FakeTableSyncResponse:
@@ -1922,7 +2164,9 @@ def test_purchase_order_sync_inventory_endpoint_updates_one_order_without_moveme
         "FEISHU_WAREHOUSE_INVENTORY_BALANCE_SYNC_URL",
         "http://feishu-adapter/warehouse/inventory-balances-table/sync",
     )
-    monkeypatch.setattr(warehouse_purchase_orders_router.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        warehouse_purchase_orders_router.urllib.request, "urlopen", fake_urlopen
+    )
     pending_order = create_purchase_order_for_test(
         item_id="item_vinda_tissue",
         location_code="A1",
@@ -1938,12 +2182,18 @@ def test_purchase_order_sync_inventory_endpoint_updates_one_order_without_moveme
 
     client.post(
         "/procurement/purchase-orders/confirm-arrival-batch",
-        json={"purchase_order_ids": [order["purchase_order_id"]], "received_by": "warehouse:user-001"},
+        json={
+            "purchase_order_ids": [order["purchase_order_id"]],
+            "received_by": "warehouse:user-001",
+        },
     )
 
     response = client.post(
         f"/warehouse/purchase-orders/{order['purchase_order_id']}/sync-inventory",
-        json={"processed_by": "feishu:user-001", "trigger_source": "feishu_bitable_button"},
+        json={
+            "processed_by": "feishu:user-001",
+            "trigger_source": "feishu_bitable_button",
+        },
     )
 
     assert response.status_code == 200
@@ -1975,11 +2225,14 @@ def test_purchase_order_sync_inventory_endpoint_updates_one_order_without_moveme
         },
     ]
     assert not any(
-        item["order_id"] == order["purchase_order_id"] for item in WAREHOUSE_INVENTORY_MOVEMENTS
+        item["order_id"] == order["purchase_order_id"]
+        for item in WAREHOUSE_INVENTORY_MOVEMENTS
     )
 
 
-def test_purchase_order_sync_inventory_endpoint_accepts_feishu_body_purchase_order_id(monkeypatch):
+def test_purchase_order_sync_inventory_endpoint_accepts_feishu_body_purchase_order_id(
+    monkeypatch,
+):
     table_sync_requests = []
 
     class FakeTableSyncResponse:
@@ -2004,7 +2257,9 @@ def test_purchase_order_sync_inventory_endpoint_accepts_feishu_body_purchase_ord
         "FEISHU_WAREHOUSE_INVENTORY_BALANCE_SYNC_URL",
         "http://feishu-adapter/warehouse/inventory-balances-table/sync",
     )
-    monkeypatch.setattr(warehouse_purchase_orders_router.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        warehouse_purchase_orders_router.urllib.request, "urlopen", fake_urlopen
+    )
     pending_order = create_purchase_order_for_test(
         item_id="item_vinda_tissue",
         location_code="A1",
@@ -2020,7 +2275,10 @@ def test_purchase_order_sync_inventory_endpoint_accepts_feishu_body_purchase_ord
 
     client.post(
         "/procurement/purchase-orders/confirm-arrival-batch",
-        json={"purchase_order_ids": [order["purchase_order_id"]], "received_by": "warehouse:user-001"},
+        json={
+            "purchase_order_ids": [order["purchase_order_id"]],
+            "received_by": "warehouse:user-001",
+        },
     )
 
     response = client.post(
@@ -2075,7 +2333,9 @@ def test_warehouse_lists_today_paid_purchase_order_arrivals_only():
     assert [item["purchase_order_id"] for item in body["items"]] == ["PO-TODAY-PAID"]
 
 
-def test_warehouse_purchase_arrival_notification_posts_without_changing_purchase_orders(monkeypatch):
+def test_warehouse_purchase_arrival_notification_posts_without_changing_purchase_orders(
+    monkeypatch,
+):
     calls: list[dict[str, Any]] = []
     PURCHASE_ORDERS.append(purchase_order_fixture(purchase_order_id="PO-TODAY-NOTIFY"))
 
@@ -2104,7 +2364,9 @@ def test_warehouse_purchase_arrival_notification_posts_without_changing_purchase
         "http://feishu-adapter.local/warehouse/purchase-arrival-review/send",
     )
     monkeypatch.setenv("FEISHU_PURCHASE_ARRIVAL_NOTIFY_CHAT_ID", "oc_warehouse_ops")
-    monkeypatch.setattr("app.routers.warehouse.purchase_orders.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "app.routers.warehouse.purchase_orders.urllib.request.urlopen", fake_urlopen
+    )
 
     response = client.post(
         "/warehouse/purchase-orders/arrival-notifications/send",
@@ -2115,15 +2377,22 @@ def test_warehouse_purchase_arrival_notification_posts_without_changing_purchase
     body = response.json()
     assert body["ok"] is True
     assert body["notification"]["status"] == "sent"
-    assert calls[0]["url"] == "http://feishu-adapter.local/warehouse/purchase-arrival-review/send"
+    assert (
+        calls[0]["url"]
+        == "http://feishu-adapter.local/warehouse/purchase-arrival-review/send"
+    )
     assert calls[0]["payload"]["chat_id"] == "oc_warehouse_ops"
     assert calls[0]["payload"]["items"][0]["purchase_order_id"] == "PO-TODAY-NOTIFY"
     assert PURCHASE_ORDERS[0]["warehouse_sync_status"] == "pending_arrival"
 
 
-def test_warehouse_purchase_arrival_notification_falls_back_to_fulfillment_review_chat(monkeypatch):
+def test_warehouse_purchase_arrival_notification_falls_back_to_fulfillment_review_chat(
+    monkeypatch,
+):
     calls: list[dict[str, Any]] = []
-    PURCHASE_ORDERS.append(purchase_order_fixture(purchase_order_id="PO-TODAY-FALLBACK-CHAT"))
+    PURCHASE_ORDERS.append(
+        purchase_order_fixture(purchase_order_id="PO-TODAY-FALLBACK-CHAT")
+    )
 
     class FakeUrlopenResponse:
         def __enter__(self):
@@ -2151,7 +2420,9 @@ def test_warehouse_purchase_arrival_notification_falls_back_to_fulfillment_revie
     )
     monkeypatch.delenv("FEISHU_PURCHASE_ARRIVAL_NOTIFY_CHAT_ID", raising=False)
     monkeypatch.setenv("FEISHU_FULFILLMENT_REVIEW_CHAT_ID", "oc_warehouse_ops")
-    monkeypatch.setattr("app.routers.warehouse.purchase_orders.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "app.routers.warehouse.purchase_orders.urllib.request.urlopen", fake_urlopen
+    )
 
     response = client.post(
         "/warehouse/purchase-orders/arrival-notifications/send",
@@ -2176,7 +2447,10 @@ def test_purchase_orders_can_be_filtered_by_arrived_unsynced_status():
 
     client.post(
         "/procurement/purchase-orders/confirm-arrival-batch",
-        json={"purchase_order_ids": [order["purchase_order_id"]], "received_by": "warehouse:user-001"},
+        json={
+            "purchase_order_ids": [order["purchase_order_id"]],
+            "received_by": "warehouse:user-001",
+        },
     )
 
     response = client.get(
@@ -2186,7 +2460,10 @@ def test_purchase_orders_can_be_filtered_by_arrived_unsynced_status():
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert any(item["purchase_order_id"] == order["purchase_order_id"] for item in body["items"])
+    assert any(
+        item["purchase_order_id"] == order["purchase_order_id"]
+        for item in body["items"]
+    )
 
 
 def test_procurement_table_schema_and_rows_are_feishu_ready():
@@ -2196,7 +2473,9 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
         json={"created_by": "procurement:user-001"},
     ).json()
 
-    request_schema_response = client.get("/procurement/replenishment-requests/table-schema")
+    request_schema_response = client.get(
+        "/procurement/replenishment-requests/table-schema"
+    )
     order_schema = client.get("/procurement/purchase-orders/table-schema").json()
     order_rows = client.post(
         "/procurement/purchase-orders/table-rows",
@@ -2215,7 +2494,9 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
     assert "Warehouse ID" in order_field_names
     assert "Location" in order_field_names
     assert "Reason" in order_field_names
-    sync_inventory_field = next(field for field in order_schema["fields"] if field["name"] == "Sync Inventory")
+    sync_inventory_field = next(
+        field for field in order_schema["fields"] if field["name"] == "Sync Inventory"
+    )
     assert sync_inventory_field["type"] == "button"
     assert "Payment Status" in order_field_names
     assert "Warehouse Sync Status" in order_field_names
@@ -2228,7 +2509,10 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
     assert order_rows["ok"] is True
     assert order_rows["count"] == 1
     order_fields = order_rows["items"][0]["fields"]
-    assert order_fields["Purchase Order ID"] == approve["purchase_order"]["purchase_order_id"]
+    assert (
+        order_fields["Purchase Order ID"]
+        == approve["purchase_order"]["purchase_order_id"]
+    )
     assert order_fields["Approval Status"] == "approved"
     assert "Request ID" not in order_fields
     assert "Supplier ID" not in order_fields
@@ -2239,7 +2523,10 @@ def test_procurement_table_schema_and_rows_are_feishu_ready():
     assert "Sync Inventory" not in order_fields
     assert order_fields["Payment Status"] == "unpaid"
     assert order_fields["Warehouse Sync Status"] == "pending_arrival"
-    assert order_fields["Estimated Arrival Date"] == approve["purchase_order"]["estimated_arrival_date"]
+    assert (
+        order_fields["Estimated Arrival Date"]
+        == approve["purchase_order"]["estimated_arrival_date"]
+    )
     assert order_fields["Arrived At"] == ""
     assert "Last Synced At" not in order_fields
     assert "Sync Status" not in order_fields
@@ -2282,7 +2569,9 @@ def test_procurement_purchase_order_table_rows_support_offset_pagination():
 
 
 def test_operations_summary_mock_returns_cross_domain_summary():
-    response = client.post("/operations/summary/mock", json={"query": "帮我总结今天的运营异常"})
+    response = client.post(
+        "/operations/summary/mock", json={"query": "帮我总结今天的运营异常"}
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -2340,7 +2629,11 @@ def test_warehouse_order_uses_english_statuses_and_delivery_provider_fields():
 
     confirmed = client.post(
         "/warehouse/orders/ORD-DELIVERY-1001/fulfillment/confirm",
-        json={"warehouse_id": "wh_sz_1", "delivery_provider_id": "yto", "updated_by": "warehouse-agent"},
+        json={
+            "warehouse_id": "wh_sz_1",
+            "delivery_provider_id": "yto",
+            "updated_by": "warehouse-agent",
+        },
     ).json()
     assert confirmed["order"]["status"] == "shipped"
     assert confirmed["order"]["delivery_provider_id"] == "yto"
@@ -2431,8 +2724,14 @@ def test_delivery_exceptions_search_returns_shipped_orders_from_warehouse_order_
         "/warehouse/orders/ORD-DELIVERY-1003/fulfillment/confirm",
         json={"warehouse_id": "wh_sz_1", "updated_by": "warehouse-agent"},
     )
-    client.post("/warehouse/orders/ORD-DELIVERY-1003/pay", json={"updated_by": "warehouse-agent"})
-    client.post("/warehouse/orders/ORD-DELIVERY-1003/ship", json={"updated_by": "warehouse-agent"})
+    client.post(
+        "/warehouse/orders/ORD-DELIVERY-1003/pay",
+        json={"updated_by": "warehouse-agent"},
+    )
+    client.post(
+        "/warehouse/orders/ORD-DELIVERY-1003/ship",
+        json={"updated_by": "warehouse-agent"},
+    )
 
     response = client.post("/delivery/exceptions/search", json={"status": "shipped"})
 
@@ -2515,7 +2814,11 @@ def test_warehouse_inventory_returns_perishable_batch_fixture():
 def test_warehouse_inventory_search_filters_by_warehouse_category_and_expiry_risk():
     response = client.post(
         "/warehouse/inventory/search",
-        json={"warehouse_id": "wh_hk_1", "category": "dairy", "expiry_risk": "expiring_soon"},
+        json={
+            "warehouse_id": "wh_hk_1",
+            "category": "dairy",
+            "expiry_risk": "expiring_soon",
+        },
     )
 
     assert response.status_code == 200
@@ -2857,22 +3160,33 @@ def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_
     assert candidate_body["recommended_warehouse_id"] == "wh_sz_1"
     assert candidate_body["candidates"][0]["can_fulfill"] is True
 
-    paid_response = client.post("/warehouse/orders/ORD-CODEX-9001/pay", json={"updated_by": "customer"})
+    paid_response = client.post(
+        "/warehouse/orders/ORD-CODEX-9001/pay", json={"updated_by": "customer"}
+    )
     assert paid_response.status_code == 200
     paid_before_review = paid_response.json()
     assert paid_before_review["order"]["status"] == "pending_fulfillment_review"
-    assert all(line["status"] == "pending_fulfillment_review" for line in paid_before_review["items"])
+    assert all(
+        line["status"] == "pending_fulfillment_review"
+        for line in paid_before_review["items"]
+    )
 
     confirmed_response = client.post(
         "/warehouse/orders/ORD-CODEX-9001/fulfillment/confirm",
-        json={"warehouse_id": "wh_sz_1", "delivery_provider_id": "jd", "updated_by": "warehouse-agent"},
+        json={
+            "warehouse_id": "wh_sz_1",
+            "delivery_provider_id": "jd",
+            "updated_by": "warehouse-agent",
+        },
     )
     assert confirmed_response.status_code == 200
     confirmed = confirmed_response.json()
     assert confirmed["order"]["status"] == "shipped"
     assert confirmed["order"]["delivery_provider_id"] == "jd"
     assert confirmed["order"]["delivery_provider_name"] == "京东"
-    vinda_lines = [line for line in confirmed["items"] if line["item_id"] == "item_vinda_tissue"]
+    vinda_lines = [
+        line for line in confirmed["items"] if line["item_id"] == "item_vinda_tissue"
+    ]
     assert [line["location_code"] for line in vinda_lines] == ["A1"]
     assert all("batch_no" not in line for line in vinda_lines)
     assert [line["quantity"] for line in vinda_lines] == [20]
@@ -2888,7 +3202,11 @@ def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_
     assert sum(int(batch["quantity_on_hand"]) for batch in inventory["batches"]) == 116
 
     assert all(line["status"] == "shipped" for line in confirmed["items"])
-    movements = [item for item in WAREHOUSE_INVENTORY_MOVEMENTS if item["order_id"] == "ORD-CODEX-9001"]
+    movements = [
+        item
+        for item in WAREHOUSE_INVENTORY_MOVEMENTS
+        if item["order_id"] == "ORD-CODEX-9001"
+    ]
     assert any(
         item["item_id"] == "item_vinda_tissue"
         and item["location_code"] == "A1"
@@ -2897,7 +3215,9 @@ def test_warehouse_order_fulfillment_confirmation_deducts_location_balances_and_
     )
 
 
-def test_warehouse_order_fulfillment_confirm_auto_selects_highest_stock_warehouse_and_syncs_tables(monkeypatch):
+def test_warehouse_order_fulfillment_confirm_auto_selects_highest_stock_warehouse_and_syncs_tables(
+    monkeypatch,
+):
     table_sync_requests: list[dict[str, Any]] = []
 
     class FakeTableSyncResponse:
@@ -2937,16 +3257,24 @@ def test_warehouse_order_fulfillment_confirm_auto_selects_highest_stock_warehous
             "order_id": "ORD-CODEX-AUTO-WH",
             "customer_id": "cus_100",
             "shipping_address": "香港",
-            "items": [{"item_id": "item_milk_pure", "warehouse_id": "wh_hk_1", "quantity": 10}],
+            "items": [
+                {"item_id": "item_milk_pure", "warehouse_id": "wh_hk_1", "quantity": 10}
+            ],
         },
     )
     assert created_response.status_code == 200
     assert created_response.json()["order"]["selected_warehouse_id"] == "wh_hk_1"
 
-    client.post("/warehouse/orders/ORD-CODEX-AUTO-WH/pay", json={"updated_by": "customer"})
+    client.post(
+        "/warehouse/orders/ORD-CODEX-AUTO-WH/pay", json={"updated_by": "customer"}
+    )
     confirmed_response = client.post(
         "/warehouse/orders/ORD-CODEX-AUTO-WH/fulfillment/confirm",
-        json={"delivery_provider_id": "jd", "tracking_no": "JD-AUTO-1", "updated_by": "warehouse-agent"},
+        json={
+            "delivery_provider_id": "jd",
+            "tracking_no": "JD-AUTO-1",
+            "updated_by": "warehouse-agent",
+        },
     )
 
     assert confirmed_response.status_code == 200
@@ -2988,7 +3316,10 @@ def test_warehouse_order_fulfillment_confirm_uses_body_order_id_when_path_is_tem
         },
     )
     assert create_response.status_code == 200
-    paid_response = client.post("/warehouse/orders/ORD-CODEX-FEISHU-BODY-ID/pay", json={"updated_by": "customer"})
+    paid_response = client.post(
+        "/warehouse/orders/ORD-CODEX-FEISHU-BODY-ID/pay",
+        json={"updated_by": "customer"},
+    )
     assert paid_response.status_code == 200
 
     confirmed_response = client.post(
@@ -3020,7 +3351,9 @@ def test_warehouse_order_tool_normalizes_lowercase_order_id_for_fulfillment_conf
     )
     assert create_response.status_code == 200
 
-    paid_response = client.post("/warehouse/orders/ORD-CODEX-LOWERCASE/pay", json={"updated_by": "customer"})
+    paid_response = client.post(
+        "/warehouse/orders/ORD-CODEX-LOWERCASE/pay", json={"updated_by": "customer"}
+    )
     assert paid_response.status_code == 200
 
     confirmed_response = client.post(
@@ -3054,7 +3387,9 @@ def test_warehouse_order_tool_merges_nested_json_input_for_fulfillment_confirmat
     )
     assert create_response.status_code == 200
 
-    paid_response = client.post("/warehouse/orders/ORD-CODEX-NESTED/pay", json={"updated_by": "customer"})
+    paid_response = client.post(
+        "/warehouse/orders/ORD-CODEX-NESTED/pay", json={"updated_by": "customer"}
+    )
     assert paid_response.status_code == 200
 
     confirmed_response = client.post(
@@ -3123,17 +3458,24 @@ def test_warehouse_order_payment_posts_fulfillment_review_notification(monkeypat
     assert create.json()["notification"]["status"] == "skipped"
     assert calls == []
 
-    response = client.post("/warehouse/orders/ORD-CODEX-NOTIFY/pay", json={"updated_by": "customer"})
+    response = client.post(
+        "/warehouse/orders/ORD-CODEX-NOTIFY/pay", json={"updated_by": "customer"}
+    )
 
     assert response.status_code == 200
     body = response.json()
     assert body["order"]["status"] == "pending_fulfillment_review"
     assert body["notification"]["status"] == "sent"
-    assert calls[0]["url"] == "http://feishu-adapter.local/warehouse/order-fulfillment-review/send"
+    assert (
+        calls[0]["url"]
+        == "http://feishu-adapter.local/warehouse/order-fulfillment-review/send"
+    )
     assert calls[0]["payload"]["chat_id"] == "oc_warehouse_ops"
     assert calls[0]["payload"]["order"]["order_id"] == "ORD-CODEX-NOTIFY"
     assert calls[0]["payload"]["candidates"][0]["warehouse_id"] == "wh_sz_1"
-    assert {item["provider_id"] for item in calls[0]["payload"]["delivery_providers"]} >= {"sf", "jd", "yto"}
+    assert {
+        item["provider_id"] for item in calls[0]["payload"]["delivery_providers"]
+    } >= {"sf", "jd", "yto"}
 
 
 def test_warehouse_order_rejects_empty_shipping_address():
@@ -3143,7 +3485,9 @@ def test_warehouse_order_rejects_empty_shipping_address():
             "order_id": "ORD-CODEX-EMPTY-ADDRESS",
             "customer_id": "1",
             "shipping_address": "   ",
-            "items": [{"item_id": "item_milk_pure", "warehouse_id": "wh_sz_1", "quantity": 1}],
+            "items": [
+                {"item_id": "item_milk_pure", "warehouse_id": "wh_sz_1", "quantity": 1}
+            ],
         },
     )
 
@@ -3158,7 +3502,13 @@ def test_warehouse_order_cancel_adds_paid_stock_back_to_original_batches():
             "order_id": "ORD-CODEX-9002",
             "customer_id": "cus_100",
             "shipping_address": "广东省深圳市",
-            "items": [{"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}],
+            "items": [
+                {
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "quantity": 20,
+                }
+            ],
         },
     )
     client.post("/warehouse/orders/ORD-CODEX-9002/pay", json={"updated_by": "customer"})
@@ -3167,7 +3517,10 @@ def test_warehouse_order_cancel_adds_paid_stock_back_to_original_batches():
         json={"warehouse_id": "wh_sz_1", "updated_by": "warehouse-agent"},
     )
 
-    response = client.post("/warehouse/orders/ORD-CODEX-9002/cancel", json={"updated_by": "warehouse-agent"})
+    response = client.post(
+        "/warehouse/orders/ORD-CODEX-9002/cancel",
+        json={"updated_by": "warehouse-agent"},
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -3178,7 +3531,10 @@ def test_warehouse_order_cancel_adds_paid_stock_back_to_original_batches():
     ).json()
     assert balances["total_quantity_available"] == 136
 
-    second_response = client.post("/warehouse/orders/ORD-CODEX-9002/cancel", json={"updated_by": "warehouse-agent"})
+    second_response = client.post(
+        "/warehouse/orders/ORD-CODEX-9002/cancel",
+        json={"updated_by": "warehouse-agent"},
+    )
     assert second_response.status_code == 200
     balances = client.get(
         "/warehouse/stock/balances",
@@ -3194,7 +3550,13 @@ def test_warehouse_order_return_after_arrival_adds_stock_back_to_original_batche
             "order_id": "ORD-CODEX-9003",
             "customer_id": "cus_100",
             "shipping_address": "广东省深圳市",
-            "items": [{"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 20}],
+            "items": [
+                {
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "quantity": 20,
+                }
+            ],
         },
     )
     client.post("/warehouse/orders/ORD-CODEX-9003/pay", json={"updated_by": "customer"})
@@ -3202,10 +3564,17 @@ def test_warehouse_order_return_after_arrival_adds_stock_back_to_original_batche
         "/warehouse/orders/ORD-CODEX-9003/fulfillment/confirm",
         json={"warehouse_id": "wh_sz_1", "updated_by": "warehouse-agent"},
     )
-    client.post("/warehouse/orders/ORD-CODEX-9003/ship", json={"updated_by": "delivery-agent"})
-    client.post("/warehouse/orders/ORD-CODEX-9003/arrive", json={"updated_by": "delivery-agent"})
+    client.post(
+        "/warehouse/orders/ORD-CODEX-9003/ship", json={"updated_by": "delivery-agent"}
+    )
+    client.post(
+        "/warehouse/orders/ORD-CODEX-9003/arrive", json={"updated_by": "delivery-agent"}
+    )
 
-    response = client.post("/warehouse/orders/ORD-CODEX-9003/return", json={"updated_by": "warehouse-agent"})
+    response = client.post(
+        "/warehouse/orders/ORD-CODEX-9003/return",
+        json={"updated_by": "warehouse-agent"},
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -3224,7 +3593,13 @@ def test_warehouse_order_pay_rejects_insufficient_stock():
             "order_id": "ORD-CODEX-9004",
             "customer_id": "cus_100",
             "shipping_address": "广东省深圳市",
-            "items": [{"item_id": "item_vinda_tissue", "warehouse_id": "wh_sz_1", "quantity": 200}],
+            "items": [
+                {
+                    "item_id": "item_vinda_tissue",
+                    "warehouse_id": "wh_sz_1",
+                    "quantity": 200,
+                }
+            ],
         },
     )
 
@@ -3252,7 +3627,10 @@ def test_warehouse_release_expired_orders_cancels_unpaid_and_restores_stock():
 
     response = client.post(
         "/warehouse/orders/release-expired",
-        json={"processed_by": "warehouse-timeout-job", "now": "2099-01-01T00:00:00+00:00"},
+        json={
+            "processed_by": "warehouse-timeout-job",
+            "now": "2099-01-01T00:00:00+00:00",
+        },
     )
 
     assert response.status_code == 200

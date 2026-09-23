@@ -17,18 +17,15 @@ jobs:
 
       - name: Install service test dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e "services/ai-service[test]"
-          python -m pip install -e "services/mock-api[test]"
-          python -m pip install -e "services/feishu-adapter[test]"
+          python -m pip install uv
 
       - name: Run tests
         run: |
-          pytest services/ai-service/tests -v
-          pytest services/mock-api/tests -v
-          pytest services/feishu-adapter/tests -v
-          pytest tests/test_department_workflows.py -v
-          pytest tests/test_chat_parent_son_workflow.py -v
+          python scripts/task_preflight.py --check-config
+          uv run --project services/ai-service --extra test pytest tests -v
+          uv run --project services/ai-service --extra test pytest services/ai-service/tests -v
+          uv run --project services/mock-api --extra test pytest services/mock-api/tests -v
+          uv run --project services/feishu-adapter --extra test pytest services/feishu-adapter/tests -v
 
       - name: Validate Docker Compose
         run: docker compose config --quiet

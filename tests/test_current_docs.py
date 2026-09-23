@@ -26,7 +26,6 @@ LEGACY_DOC_PATHS = (
     Path("docs/AGENTS/warehouse-agent/business-boundary.md"),
     Path("docs/AGENTS/warehouse-agent/mock-api.md"),
     Path("docs/AGENTS/warehouse-agent/database-tables.md"),
-    Path("AGENTS.md"),
 )
 
 DATA_OPS_CONTRACTS_PATH = Path("services/data-ops/src/data_ops/core/contracts.py")
@@ -45,6 +44,9 @@ JD_PRODUCT_DISCOVERY_PATH = Path(
 )
 JD_PRODUCT_PIPELINE_PATH = Path(
     "services/data-ops/src/data_ops/orchestration/jd_product_pipeline.py"
+)
+JD_PRODUCT_PLAYWRIGHT_COLLECTOR_PATH = Path(
+    "services/data-ops/src/data_ops/collectors/jd_product_playwright.py"
 )
 YINGDAO_RUNNER_PATH = Path(
     "services/data-ops/src/data_ops/orchestration/yingdao_runner.py"
@@ -135,7 +137,7 @@ def _read_csv_rows(path: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
 
 
 def test_removed_legacy_docs_are_not_reintroduced() -> None:
-    """Repository cleanup keeps retired docs and root AGENTS.md absent."""
+    """Repository cleanup keeps retired documentation absent."""
 
     assert all(not path.exists() for path in LEGACY_DOC_PATHS)
 
@@ -560,8 +562,47 @@ def test_j9_documents_real_jd_discovery_and_file_only_automation() -> None:
         assert token in readme
 
     script = JD_PRODUCT_PIPELINE_SCRIPT.read_text(encoding="utf-8")
-    for token in ("canResumeWithoutYingdao", "manifest.json", "rawCsvPath"):
+    for token in ("canResumeWithoutCollector", "manifest.json", "rawCsvPath"):
         assert token in script
 
     for token in ("batch_id", "input_csv", "raw_output_csv", "J9 自动启动参数"):
         assert token in implementation
+
+
+def test_j10_documents_discovery_only_and_dual_collectors() -> None:
+    """J10 documents both collectors, session safety, and the file-only boundary."""
+
+    spec = Path("DEV_SPEC.md").read_text(encoding="utf-8")
+    readme = RPA_README_PATH.read_text(encoding="utf-8")
+    script = JD_PRODUCT_PIPELINE_SCRIPT.read_text(encoding="utf-8")
+
+    assert JD_PRODUCT_PLAYWRIGHT_COLLECTOR_PATH.is_file()
+    for token in (
+        "DiscoveryOnly",
+        "CollectorMode=playwright",
+        "CollectorMode=yingdao",
+        "PlaywrightJdProductCollector",
+        "JD_PLAYWRIGHT_USER_DATA_DIR",
+        "manual_verification_required",
+        "不读取或修改 `items`",
+    ):
+        assert token in spec
+    for token in (
+        "J10 双采集器模式",
+        "-DiscoveryOnly",
+        "-CollectorMode playwright",
+        "-CollectorMode yingdao",
+        "JD_PLAYWRIGHT_USER_DATA_DIR",
+        "JD_PLAYWRIGHT_STORAGE_STATE",
+        "13 列",
+        "不识别或绕过验证",
+    ):
+        assert token in readme
+    for token in (
+        "DiscoveryOnly",
+        "CollectorMode",
+        "canResumeWithoutCollector",
+        "browser-user-data-dir",
+        "collector-mode",
+    ):
+        assert token in script

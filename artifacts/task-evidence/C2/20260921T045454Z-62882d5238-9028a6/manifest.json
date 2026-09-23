@@ -1,0 +1,50 @@
+{
+  "acceptance_files": [
+    "tests/acceptance/c2/candidate_filter_cases.json",
+    "tests/acceptance/c2/test_c2_candidate_filter_contract.py"
+  ],
+  "acceptance_lock_sha256": "7118b0fff0fa12c3b12eb6a81d75b204bbe1d37ef0e495cc7ae3ab3c66f29405",
+  "baseline_commit": "b7848af9280e963f142f3b0e1829f14a55dae4aa",
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/candidate_service.py",
+    "services/ai-service/app/routers/AImodel/product_models.py",
+    "services/ai-service/app/routers/AImodel/product_snapshot.py",
+    "services/ai-service/tests/test_candidate_filter.py",
+    "services/mock-api/app/routers/product_snapshots.py",
+    "services/mock-api/tests/test_product_snapshots.py"
+  ],
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_candidate_filter.py -q",
+      "duration_seconds": 3.109,
+      "exit_code": 0,
+      "log": "01.log"
+    }
+  ],
+  "commit": "62882d5238118e601e3a85280bd0a4a5bfd75377",
+  "evidence_files": [
+    {
+      "path": "commands/01.log",
+      "sha256": "864dd5c5456b6067962907d1953172257362c7958e1e38750997cc31fd3f6e87"
+    }
+  ],
+  "phase": "C",
+  "quality_gates_sha256": "161d4392600e37822b8aa77ffc74acb05de91c2413537f626450734c929087ca",
+  "quality_profile": null,
+  "quality_results": [],
+  "recorded_at": "2026-09-21T04:55:02Z",
+  "run_id": "20260921T045454Z-62882d5238-9028a6",
+  "runner": {
+    "ci": false,
+    "independent": true,
+    "verifier_id": "codex-c2-independent-reviewer"
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "C2",
+  "task_title": "实现候选召回与硬过滤",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "verification_workspace": "git_archive",
+  "working_tree_dirty": true
+}

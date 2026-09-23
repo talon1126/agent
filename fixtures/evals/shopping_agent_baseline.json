@@ -1,0 +1,415 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "baseline_id": "a1-local-mock-2026-09-20",
+    "captured_at": "2026-09-20T10:45:00Z",
+    "git_commit": "d42af26788665143524c9e219c6abd74218db3c6",
+    "intent_routes_sha256": "ec2633c157233bb3e8849561e5b13c6508009fc6cd919e89f650903e00642c16",
+    "model_mode": "injected deterministic runner",
+    "external_services": "mocked",
+    "timing_scope": "local deterministic tests; not production latency"
+  },
+  "route_cases": [
+    {
+      "case_id": "route_buying_recommendation",
+      "input": "无线耳机怎么选",
+      "expected_route": "support.presale.buying_recommendation",
+      "expected_action": "rag",
+      "expected_collection": "shopping_guides",
+      "expected_collections": ["shopping_guides"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_parameter_consulting",
+      "input": "冰箱容量参数怎么看",
+      "expected_route": "support.presale.parameter_consulting",
+      "expected_action": "rag",
+      "expected_collection": "shopping_guides",
+      "expected_collections": ["shopping_guides"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_comparison",
+      "input": "空调和风扇有什么区别",
+      "expected_route": "support.presale.comparison",
+      "expected_action": "rag",
+      "expected_collection": "shopping_guides",
+      "expected_collections": ["shopping_guides"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_price_promotion",
+      "input": "这款商品现在有什么优惠",
+      "expected_route": "support.presale.price_promotion",
+      "expected_action": "product_api",
+      "expected_collection": null,
+      "expected_collections": [],
+      "allowed_tools": ["get_product_detail_from_link", "search_product_catalog"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer_with_recommended_links"
+    },
+    {
+      "case_id": "route_operation_guide",
+      "input": "空气炸锅怎么用",
+      "expected_route": "support.usage.operation_guide",
+      "expected_action": "rag",
+      "expected_collection": "faq",
+      "expected_collections": ["faq"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_troubleshooting",
+      "input": "微波炉报错怎么办",
+      "expected_route": "support.usage.troubleshooting",
+      "expected_action": "rag",
+      "expected_collection": "faq",
+      "expected_collections": ["faq"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_maintenance",
+      "input": "净水器滤芯多久更换",
+      "expected_route": "support.usage.maintenance",
+      "expected_action": "rag",
+      "expected_collection": "faq",
+      "expected_collections": ["faq"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_order_status",
+      "input": "咨询订单号 ord_100，帮我查一下订单状态",
+      "expected_route": "support.aftersales.order_status",
+      "expected_action": "order_api",
+      "expected_collection": null,
+      "expected_collections": [],
+      "allowed_tools": ["get_order_status"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_shipping_policy",
+      "input": "平台一般多久发货",
+      "expected_route": "support.aftersales.shipping_policy",
+      "expected_action": "rag",
+      "expected_collection": "policies",
+      "expected_collections": ["policies"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_return_exchange",
+      "input": "退货后多久退款",
+      "expected_route": "support.aftersales.return_exchange",
+      "expected_action": "rag",
+      "expected_collection": "policies",
+      "expected_collections": ["policies"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_installation_service_limits",
+      "input": "大家电安装有什么限制",
+      "expected_route": "support.aftersales.installation_service_limits",
+      "expected_action": "rag",
+      "expected_collection": "policies",
+      "expected_collections": ["policies", "faq"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_account_invoice",
+      "input": "发票怎么开",
+      "expected_route": "support.aftersales.account_invoice",
+      "expected_action": "rag",
+      "expected_collection": "policies",
+      "expected_collections": ["policies"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_service_script",
+      "input": "客户生气了怎么安抚",
+      "expected_route": "support.aftersales.service_script",
+      "expected_action": "rag",
+      "expected_collection": "manual",
+      "expected_collections": ["manual"],
+      "allowed_tools": ["rag_tool"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_web_research",
+      "input": "最新家电市场趋势",
+      "expected_route": "external.public_market.web_research",
+      "expected_action": "web",
+      "expected_collection": null,
+      "expected_collections": [],
+      "allowed_tools": ["search_web_with_tavily"],
+      "execution_path": "agent_with_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_greeting",
+      "input": "你好",
+      "expected_route": "chat.chat_all.greeting",
+      "expected_action": "direct",
+      "expected_collection": null,
+      "expected_collections": [],
+      "allowed_tools": [],
+      "execution_path": "agent_without_tools",
+      "response_shape": "text_answer"
+    },
+    {
+      "case_id": "route_out_of_scope",
+      "input": "帮我写代码",
+      "expected_route": "chat.chat_all.out_of_scope",
+      "expected_action": "refuse",
+      "expected_collection": null,
+      "expected_collections": [],
+      "allowed_tools": [],
+      "execution_path": "agent_without_tools",
+      "response_shape": "controlled_refusal"
+    }
+  ],
+  "behavior_cases": [
+    {
+      "case_id": "behavior_product_search",
+      "behavior": "product_search",
+      "expected_outcome": "success",
+      "observable_assertions": ["mock-api /search is called", "catalog item links are returned"]
+    },
+    {
+      "case_id": "behavior_product_link_detail",
+      "behavior": "product_link_detail",
+      "expected_outcome": "success",
+      "observable_assertions": ["item id is parsed", "detail is fetched before the runner"]
+    },
+    {
+      "case_id": "behavior_rag",
+      "behavior": "rag",
+      "expected_outcome": "success",
+      "observable_assertions": ["only rag_tool is exposed", "query trace ids are persisted"]
+    },
+    {
+      "case_id": "behavior_multi_collection",
+      "behavior": "multi_collection",
+      "expected_outcome": "success",
+      "observable_assertions": ["policies and faq are selected", "raw query is preserved"]
+    },
+    {
+      "case_id": "behavior_tavily_unconfigured",
+      "behavior": "tavily_unconfigured",
+      "expected_outcome": "degraded",
+      "observable_assertions": ["no HTTP call is made", "web_search_unavailable is returned"]
+    },
+    {
+      "case_id": "behavior_order_status",
+      "behavior": "order_status",
+      "expected_outcome": "success",
+      "observable_assertions": ["order_api route is selected", "only get_order_status is exposed"]
+    },
+    {
+      "case_id": "behavior_direct",
+      "behavior": "direct",
+      "expected_outcome": "success",
+      "observable_assertions": ["direct route is selected", "no tool is exposed"]
+    },
+    {
+      "case_id": "behavior_refuse",
+      "behavior": "refuse",
+      "expected_outcome": "success",
+      "observable_assertions": ["refuse route is selected", "no tool is exposed"]
+    },
+    {
+      "case_id": "behavior_rag_unavailable",
+      "behavior": "rag_unavailable",
+      "expected_outcome": "degraded",
+      "observable_assertions": ["business error is returned", "no exception escapes the tool"]
+    },
+    {
+      "case_id": "behavior_mock_api_error",
+      "behavior": "mock_api_error",
+      "expected_outcome": "degraded",
+      "observable_assertions": ["mock_api_status_503 is recorded", "recommended links stay empty"]
+    },
+    {
+      "case_id": "behavior_conversation_history",
+      "behavior": "conversation_history",
+      "expected_outcome": "success",
+      "observable_assertions": ["conversation is created", "user and assistant messages are readable"]
+    },
+    {
+      "case_id": "behavior_recommended_links",
+      "behavior": "recommended_links",
+      "expected_outcome": "success",
+      "observable_assertions": ["links derive from successful tool results", "failed results create no links"]
+    },
+    {
+      "case_id": "behavior_sse_success",
+      "behavior": "sse_success",
+      "expected_outcome": "success",
+      "event_sequence": ["status", "delta", "done"],
+      "done_count": 1,
+      "forbidden_output": ["raw_tool_json", "trace_id", "chunk_id"],
+      "observable_assertions": ["status precedes delta", "done is terminal and unique"]
+    },
+    {
+      "case_id": "behavior_sse_generation_error",
+      "behavior": "sse_generation_error",
+      "expected_outcome": "error",
+      "event_sequence": ["status", "error"],
+      "done_count": 0,
+      "observable_assertions": ["error is terminal", "done is absent"]
+    }
+  ],
+  "trace_summaries": [
+    {
+      "trace_id": "baseline-trace-001",
+      "scenario_id": "route_buying",
+      "input_fingerprint": "sha256:e7808b1638c3099507eb169df71e0b11becd5875ae969b29d6c72940240d4c27",
+      "route": "support.presale.buying_recommendation",
+      "action": "rag",
+      "outcome": "success",
+      "failure_category": "none",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.012, "tool_ms": 0.043, "total_ms": 0.392}
+    },
+    {
+      "trace_id": "baseline-trace-002",
+      "scenario_id": "product_search",
+      "input_fingerprint": "sha256:6d988e9da3bc147b377787c13369a549716fd38b9487afe42520240d5e66b3b4",
+      "route": "support.presale.price_promotion",
+      "action": "product_api",
+      "outcome": "success",
+      "failure_category": "none",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.009, "tool_ms": 0.614, "total_ms": 0.911}
+    },
+    {
+      "trace_id": "baseline-trace-003",
+      "scenario_id": "product_link_detail",
+      "input_fingerprint": "sha256:dc267802aeef8313f675cfe77d8278703b9743b8a3e2c7bff7ace865d90a1bab",
+      "route": "support.presale.comparison",
+      "action": "product_link_prefetch",
+      "outcome": "success",
+      "failure_category": "none",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.011, "tool_ms": 0.587, "total_ms": 0.846}
+    },
+    {
+      "trace_id": "baseline-trace-004",
+      "scenario_id": "multi_collection",
+      "input_fingerprint": "sha256:3691c265f95910ff18194cc2662d403ae7feb605bb0b3fb06a7c80a495d007da",
+      "route": "support.aftersales.installation_service_limits",
+      "action": "rag",
+      "outcome": "success",
+      "failure_category": "none",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.010, "tool_ms": 0.071, "total_ms": 0.429}
+    },
+    {
+      "trace_id": "baseline-trace-005",
+      "scenario_id": "tavily_missing",
+      "input_fingerprint": "sha256:e3e64f9cdea2c10c8dcb016406bfb8872450a1ba7b3f0e0d354cef4c0e84fc09",
+      "route": "external.public_market.web_research",
+      "action": "web",
+      "outcome": "degraded",
+      "failure_category": "tavily_unconfigured",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.009, "tool_ms": 0.018, "total_ms": 0.354}
+    },
+    {
+      "trace_id": "baseline-trace-006",
+      "scenario_id": "order_status",
+      "input_fingerprint": "sha256:ce3533cb0b803a4e996087ce78d16116e11906cef187e88596fcda2e05579889",
+      "route": "support.aftersales.order_status",
+      "action": "order_api",
+      "outcome": "success",
+      "failure_category": "none",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.010, "tool_ms": 0.493, "total_ms": 0.799}
+    },
+    {
+      "trace_id": "baseline-trace-007",
+      "scenario_id": "direct",
+      "input_fingerprint": "sha256:670d9743542cae3ea7ebe36af56bd53648b0a1126162e78d81a32934a711302e",
+      "route": "chat.chat_all.greeting",
+      "action": "direct",
+      "outcome": "success",
+      "failure_category": "none",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.008, "tool_ms": 0.000, "total_ms": 0.306}
+    },
+    {
+      "trace_id": "baseline-trace-008",
+      "scenario_id": "refuse",
+      "input_fingerprint": "sha256:a90a9556eeb5dd3de2c3edc1baa12c05a293d1d58341184946b361056591fe92",
+      "route": "chat.chat_all.out_of_scope",
+      "action": "refuse",
+      "outcome": "success",
+      "failure_category": "none",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.008, "tool_ms": 0.000, "total_ms": 0.301}
+    },
+    {
+      "trace_id": "baseline-trace-009",
+      "scenario_id": "rag_unavailable",
+      "input_fingerprint": "sha256:71856100392227993e8aee241297910b81120bb75364904400358fbe88124eff",
+      "route": "support.aftersales.return_exchange",
+      "action": "rag",
+      "outcome": "degraded",
+      "failure_category": "rag_unavailable",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.010, "tool_ms": 0.026, "total_ms": 0.367}
+    },
+    {
+      "trace_id": "baseline-trace-010",
+      "scenario_id": "mock_api_error",
+      "input_fingerprint": "sha256:c42fc67f056a4d70124a0db07d850b608e62eedd4e7cd60498472b596fee1b02",
+      "route": "support.presale.comparison",
+      "action": "product_link_prefetch",
+      "outcome": "degraded",
+      "failure_category": "mock_api_error",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.012, "tool_ms": 0.441, "total_ms": 0.728}
+    },
+    {
+      "trace_id": "baseline-trace-011",
+      "scenario_id": "conversation_history",
+      "input_fingerprint": "sha256:6252c4be45c8b7f05f43baaef36f9102b34c69db8eaf05cbcfd5ebda4729d2a2",
+      "route": "support.presale.buying_recommendation",
+      "action": "memory",
+      "outcome": "success",
+      "failure_category": "none",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.011, "tool_ms": 0.022, "total_ms": 0.381}
+    },
+    {
+      "trace_id": "baseline-trace-012",
+      "scenario_id": "sse_generation_error",
+      "input_fingerprint": "sha256:589adcf18d0d500d12b5773149aa0f7a569ca513c4b95e6fdde3d07e4b758a14",
+      "route": "chat.chat_all.greeting",
+      "action": "direct",
+      "outcome": "error",
+      "failure_category": "generation_error",
+      "capture_mode": "deterministic_mock",
+      "timing_ms": {"model_ms": 0.014, "tool_ms": 0.000, "total_ms": 0.329}
+    }
+  ]
+}

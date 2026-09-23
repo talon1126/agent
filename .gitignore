@@ -3,7 +3,6 @@
 .env
 .env.*
 !.env.example
-AGENTS.md
 *.egg-info/
 .pytest_cache/
 pytest-cache-files-*/
@@ -12,4 +11,5 @@ services/ai-service/rag/data/
 var/rpa/
 .tmp/
 .playwright-cli/
+.jd-playwright/
 docker-compose.override.yml

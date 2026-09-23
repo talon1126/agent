@@ -1,4 +1,4 @@
-"""Run JD URL discovery, Yingdao capture, and pandas as one file pipeline.
+"""Run JD discovery, a selected detail collector, and pandas as one pipeline.
 
 The pipeline owns batch locking, resumable file handoffs, stable exit codes,
 and the final result JSON. It delegates live browsing, RPA execution, and
@@ -19,6 +19,12 @@ from enum import IntEnum
 from pathlib import Path
 
 from data_ops.cli import process_batch
+from data_ops.collectors.base import (
+    CaptureRequest,
+    CollectorMode,
+    ProductDetailCollector,
+)
+from data_ops.collectors.jd_product_playwright import PlaywrightJdProductCollector
 from data_ops.core.batch_manifest import BatchManifest, load_batch_manifest
 from data_ops.discovery.jd_product_urls import (
     DiscoveryResult,
@@ -26,9 +32,9 @@ from data_ops.discovery.jd_product_urls import (
     discover_jd_product_urls,
 )
 from data_ops.orchestration.yingdao_runner import (
-    CaptureRequest,
     YingdaoApiRunner,
     YingdaoCommandRunner,
+    YingdaoProductDetailCollector,
     YingdaoRunner,
 )
 from data_ops.processors.jd_product import register_jd_product_processor
@@ -39,11 +45,12 @@ _SAFE_BATCH_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 class PipelineExitCode(IntEnum):
-    """Define the stable process contract for J9 callers."""
+    """Define the stable process contract for all J9/J10 callers."""
 
     SUCCESS = 0
     PARTIAL_SUCCESS = 10
     DISCOVERY_FAILED = 20
+    CAPTURE_FAILED = 30
     YINGDAO_FAILED = 30
     PANDAS_FAILED = 40
 
@@ -243,23 +250,30 @@ def run_jd_product_pipeline(
     max_items: int,
     keyword: str | None = None,
     seed_url: str | None = None,
-    browser_channel: str = "msedge",
+    browser_channel: str = "chrome",
     browser_executable: str | Path | None = None,
     browser_storage_state: str | Path | None = None,
+    browser_user_data_dir: str | Path | None = None,
     headless: bool = True,
+    navigation_timeout_ms: int = 45_000,
+    discovery_only: bool = False,
+    collector_mode: CollectorMode | str = CollectorMode.YINGDAO,
+    collector: ProductDetailCollector | None = None,
     discoverer: DiscoveryCallable = discover_jd_product_urls,
     processor: ProcessorCallable = process_batch,
 ) -> PipelineResult:
     """Execute or resume one JD file pipeline and return a stable exit result.
 
     Side Effects:
-        Visits real JD pages when discovery is incomplete, starts Yingdao when
-        no raw CSV exists, writes normalized/archive files, and publishes a
-        result JSON. No database or business API is used.
+        Visits real JD pages when discovery is incomplete, optionally ends
+        after URL publication, otherwise runs the selected collector and
+        pandas before publishing a result JSON. No database or business API is
+        used.
     """
 
     if _SAFE_BATCH_ID_PATTERN.fullmatch(batch_id) is None:
         raise ValueError("batch_id must use safe filename characters")
+    mode = CollectorMode(collector_mode)
     root = Path(output_root).resolve()
     artifacts = _artifact_paths(root, batch_id)
     artifacts["lock"].parent.mkdir(parents=True, exist_ok=True)
@@ -273,13 +287,13 @@ def run_jd_product_pipeline(
             batch_id=batch_id,
             artifacts=artifacts,
             status="failed",
-            exit_code=PipelineExitCode.YINGDAO_FAILED,
+            exit_code=PipelineExitCode.CAPTURE_FAILED,
             error_code="batch_already_running",
-            retry_stage="yingdao",
+            retry_stage=mode.value,
         )
     os.close(lock_descriptor)
     try:
-        if artifacts["manifest"].is_file():
+        if artifacts["manifest"].is_file() and not discovery_only:
             manifest = load_batch_manifest(artifacts["manifest"])
             discovered_count = (
                 len(_read_discovery_csv(artifacts["input_csv"]).product_urls)
@@ -320,44 +334,57 @@ def run_jd_product_pipeline(
                 retry_stage="discovery",
             )
 
+        if discovery_only:
+            return _build_result(
+                batch_id=batch_id,
+                artifacts=artifacts,
+                status="discovery_complete",
+                exit_code=PipelineExitCode.SUCCESS,
+                discovered_count=len(discovery.product_urls),
+            )
+
         request = CaptureRequest(
             batch_id=batch_id,
             input_csv=discovery.output_path,
             raw_output_csv=artifacts["raw_csv"],
         )
         if not artifacts["raw_csv"].is_file():
-            if runner is None:
+            selected_collector = collector
+            if selected_collector is None and mode == CollectorMode.YINGDAO and runner is not None:
+                selected_collector = YingdaoProductDetailCollector(runner)
+            if selected_collector is None:
                 return _build_result(
                     batch_id=batch_id,
                     artifacts=artifacts,
                     status="failed",
-                    exit_code=PipelineExitCode.YINGDAO_FAILED,
+                    exit_code=PipelineExitCode.CAPTURE_FAILED,
                     discovered_count=len(discovery.product_urls),
-                    error_code="yingdao_runner_required",
-                    retry_stage="yingdao",
+                    error_code=f"{mode.value}_collector_required",
+                    retry_stage=mode.value,
                 )
             try:
-                handle = runner.start_capture(request)
-                capture = runner.wait_for_capture(handle, request)
+                capture = selected_collector.collect(request)
             except Exception as exc:
                 return _build_result(
                     batch_id=batch_id,
                     artifacts=artifacts,
                     status="failed",
-                    exit_code=PipelineExitCode.YINGDAO_FAILED,
+                    exit_code=PipelineExitCode.CAPTURE_FAILED,
                     discovered_count=len(discovery.product_urls),
-                    error_code=f"yingdao_start_failed_{type(exc).__name__}",
-                    retry_stage="yingdao",
+                    error_code=f"{mode.value}_capture_failed_{type(exc).__name__}",
+                    retry_stage=mode.value,
                 )
             if capture.status != "success" or not artifacts["raw_csv"].is_file():
                 return _build_result(
                     batch_id=batch_id,
                     artifacts=artifacts,
                     status="failed",
-                    exit_code=PipelineExitCode.YINGDAO_FAILED,
+                    exit_code=PipelineExitCode.CAPTURE_FAILED,
                     discovered_count=len(discovery.product_urls),
-                    error_code=capture.error_code or "yingdao_output_missing",
-                    retry_stage="yingdao",
+                    captured_count=capture.captured_count,
+                    failed_count=capture.failed_count,
+                    error_code=capture.error_code or f"{mode.value}_output_missing",
+                    retry_stage=mode.value,
                 )
 
         captured_count = _count_csv_rows(artifacts["raw_csv"])
@@ -386,7 +413,7 @@ def run_jd_product_pipeline(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build the one-command J9 interface."""
+    """Build the one-command J10 interface."""
 
     parser = argparse.ArgumentParser(prog="talonmart-jd-pipeline")
     source = parser.add_mutually_exclusive_group(required=True)
@@ -396,10 +423,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--max-pages", type=int, required=True)
     parser.add_argument("--max-items", type=int, required=True)
-    parser.add_argument("--browser-channel", default="msedge")
+    parser.add_argument("--browser-channel", default="chrome")
     parser.add_argument("--browser-executable", type=Path)
+    parser.add_argument("--browser-user-data-dir", type=Path)
+    parser.add_argument("--navigation-timeout-ms", type=int, default=45_000)
     parser.add_argument("--headful", action="store_true")
-    parser.add_argument("--yingdao-mode", choices=("command", "api"), required=True)
+    parser.add_argument("--discovery-only", action="store_true")
+    parser.add_argument(
+        "--collector-mode",
+        choices=tuple(mode.value for mode in CollectorMode),
+        default=CollectorMode.YINGDAO.value,
+    )
+    parser.add_argument("--yingdao-mode", choices=("command", "api"), default="command")
     parser.add_argument("--yingdao-runner-path", type=Path)
     parser.add_argument("--yingdao-app-file", type=Path)
     parser.add_argument("--yingdao-account-name")
@@ -448,16 +483,35 @@ def _can_resume_without_runner(args: argparse.Namespace) -> bool:
     )
 
 
+def _collector_from_args(args: argparse.Namespace) -> ProductDetailCollector | None:
+    """Construct only the collector required by the selected execution mode."""
+
+    if args.discovery_only or _can_resume_without_runner(args):
+        return None
+    mode = CollectorMode(args.collector_mode)
+    if mode == CollectorMode.PLAYWRIGHT:
+        return PlaywrightJdProductCollector(
+            browser_channel=args.browser_channel,
+            browser_executable=args.browser_executable,
+            user_data_dir=args.browser_user_data_dir
+            or os.environ.get("JD_PLAYWRIGHT_USER_DATA_DIR"),
+            storage_state=os.environ.get("JD_PLAYWRIGHT_STORAGE_STATE"),
+            headless=not args.headful,
+            navigation_timeout_ms=args.navigation_timeout_ms,
+        )
+    return YingdaoProductDetailCollector(_runner_from_args(args))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the J9 CLI, print its result JSON, and return the stable exit code."""
+    """Run the J10 CLI, print its result JSON, and return the stable exit code."""
 
     args = _build_parser().parse_args(argv)
     try:
-        runner = None if _can_resume_without_runner(args) else _runner_from_args(args)
+        collector = _collector_from_args(args)
         result = run_jd_product_pipeline(
             batch_id=args.batch_id,
             output_root=args.output_root,
-            runner=runner,
+            runner=None,
             keyword=args.keyword,
             seed_url=args.seed_url,
             max_pages=args.max_pages,
@@ -465,11 +519,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             browser_channel=args.browser_channel,
             browser_executable=args.browser_executable,
             browser_storage_state=os.environ.get("JD_PLAYWRIGHT_STORAGE_STATE"),
+            browser_user_data_dir=args.browser_user_data_dir
+            or os.environ.get("JD_PLAYWRIGHT_USER_DATA_DIR"),
             headless=not args.headful,
+            navigation_timeout_ms=args.navigation_timeout_ms,
+            discovery_only=args.discovery_only,
+            collector_mode=args.collector_mode,
+            collector=collector,
         )
     except (OSError, ValueError) as exc:
         print(str(exc), file=os.sys.stderr)
-        return int(PipelineExitCode.YINGDAO_FAILED)
+        return int(PipelineExitCode.CAPTURE_FAILED)
     print(json.dumps(result.to_dict(), ensure_ascii=True, sort_keys=True))
     return int(result.exit_code)
 

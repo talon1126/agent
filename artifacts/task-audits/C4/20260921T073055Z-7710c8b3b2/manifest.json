@@ -1,0 +1,126 @@
+{
+  "acceptance_lock_sha256": "424a37b9d51e0ca6cdccabe340eeedf77974a5b225219f0ce45a98d432141c2a",
+  "baseline_commit": "7a0f3213909a548909345ebc456b46778d0219b1",
+  "change_commits": [],
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/feature_normalizer.py",
+    "services/ai-service/app/routers/AImodel/ranking.py",
+    "services/ai-service/app/routers/AImodel/ranking_policy.yaml",
+    "services/ai-service/tests/test_product_ranker.py",
+    "tests/acceptance/c4/test_c4_product_ranker_contract.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "fcae3a17c00314b543399c60ea5d11767e786b36981cd109a979aea2b13e5838"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "5ca73602ee53455b470c3a2d16d2970f8d590cc32a5fdf3b88d6ebf07a9ad76d"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "177f260a5645724013185e4b140c7045cc39e56c0c97b120f5cb23599f85f0de"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "d5cad463dca075ce0547be8f305973f6f4bb4204b0258745e1a11b6f28245699"
+    }
+  ],
+  "implementation_fingerprint": "a9876c5cfcd16cac42a534bae85a093a92a43e52cf92056b464a235e0d94bc21",
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "5 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check 7a0f3213909a548909345ebc456b46778d0219b1..7710c8b3b29ba79be4507146fd85d0ff2cccd3be",
+            "duration_seconds": 0.062,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/feature_normalizer.py services/ai-service/app/routers/AImodel/ranking.py services/ai-service/tests/test_product_ranker.py tests/acceptance/c4/test_c4_product_ranker_contract.py",
+            "duration_seconds": 1.656,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/feature_normalizer.py services/ai-service/app/routers/AImodel/ranking.py services/ai-service/tests/test_product_ranker.py tests/acceptance/c4/test_c4_product_ranker_contract.py",
+            "duration_seconds": 0.469,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/c4/test_c4_product_ranker_contract.py -q",
+            "duration_seconds": 1.547,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_product_ranker.py -q",
+            "duration_seconds": 1.297,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-21T07:31:06Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "7710c8b3b29ba79be4507146fd85d0ff2cccd3be",
+  "task_id": "C4",
+  "task_title": "实现可解释排序与多样性"
+}

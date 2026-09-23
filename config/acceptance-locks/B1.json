@@ -1,0 +1,10 @@
+{
+  "files": {
+    "tests/acceptance/b1/test_b1_shopping_goal_contract.py": "6f88d8308e5c66ffb93bc7d07269afaa4d2e45c7d8cbdb85ef4c9470a7922369"
+  },
+  "generated_at": "2026-09-20T13:34:41Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "B1",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

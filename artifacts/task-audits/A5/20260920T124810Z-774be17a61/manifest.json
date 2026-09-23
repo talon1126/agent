@@ -1,0 +1,111 @@
+{
+  "acceptance_lock_sha256": "92216acf86f5e8b6f63d7a8c894582f99ad501f505d9f62350788f2713f3225a",
+  "baseline_commit": "cc1c62e0b85ed51018d6d85e5fdb3f3c737bfa56",
+  "changed_files": [
+    "docs/agent_trace_dictionary.md",
+    "services/ai-service/app/routers/AImodel/agent_trace.py",
+    "services/ai-service/app/routers/AImodel/memory.py",
+    "services/ai-service/app/routers/AImodel/quality_gates.py",
+    "services/ai-service/app/routers/AImodel/service.py",
+    "services/ai-service/tests/test_aimodel_agent.py",
+    "services/ai-service/tests/test_aimodel_memory.py",
+    "services/ai-service/tests/test_aimodel_trace.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "b6e2f573ab2c3840c3e4641f5b3f691d5d3211dfcfe127be5d51448576079a6e"
+    },
+    {
+      "path": "round-1/ruff-fix.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "round-1/ruff-format-fix.log",
+      "sha256": "43982cef81ca746d2f50c7c5dae95f658f97c0b38256cca1c7ae897d631216ce"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "0321fffcb91606a42c0a19d8c1121d5c544379d663821fce616c71a7bb62f6b5"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "8 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [
+              "openai_style_key",
+              "bearer_token"
+            ],
+            "name": "added_secret_scan",
+            "passed": false
+          },
+          {
+            "command": "git diff --check cc1c62e0b85ed51018d6d85e5fdb3f3c737bfa56..774be17a6181a5f8e76703bdffd177054fe529ca",
+            "duration_seconds": 0.062,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/agent_trace.py services/ai-service/app/routers/AImodel/memory.py services/ai-service/app/routers/AImodel/quality_gates.py services/ai-service/app/routers/AImodel/service.py services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_aimodel_memory.py services/ai-service/tests/test_aimodel_trace.py",
+            "duration_seconds": 1.657,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/agent_trace.py services/ai-service/app/routers/AImodel/memory.py services/ai-service/app/routers/AImodel/quality_gates.py services/ai-service/app/routers/AImodel/service.py services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_aimodel_memory.py services/ai-service/tests/test_aimodel_trace.py",
+            "duration_seconds": 0.484,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": false
+      },
+      "layer_2": null,
+      "passed": false,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-20T12:48:17Z",
+  "result": "failed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "774be17a6181a5f8e76703bdffd177054fe529ca",
+  "task_id": "A5",
+  "task_title": "扩展 Trace 与指标字典"
+}

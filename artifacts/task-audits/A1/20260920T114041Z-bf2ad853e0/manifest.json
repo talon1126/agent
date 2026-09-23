@@ -1,0 +1,121 @@
+{
+  "acceptance_lock_sha256": "7fe5de0ffaf5e8e01a55c216bf0979f785d18616b93d92b312e18a520009f546",
+  "baseline_commit": "d42af26788665143524c9e219c6abd74218db3c6",
+  "changed_files": [
+    "docs/agent_baseline.md",
+    "fixtures/evals/shopping_agent_baseline.json",
+    "services/ai-service/tests/test_aimodel_agent.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "d1978c1eb0cd573d5cf5e8ee23d605b25cb10239a5f893264096c00592fc2bbf"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "d2a2d5b1d9d169e0604e3b0a850422b17bd374110159f1fe0f9007068aad2445"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "fd2299c9f1c6dc869070883e281051bfe93aacf66c1a3b0069f45b4aa410ca50"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "f8ef056a6f93e318dd41c51eac70336f084a5af7ffec0bf3776fe62eaaa94710"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "3 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check d42af26788665143524c9e219c6abd74218db3c6..bf2ad853e00fa728777815cb1d4e64a6b81f7943",
+            "duration_seconds": 0.078,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/tests/test_aimodel_agent.py",
+            "duration_seconds": 1.813,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/tests/test_aimodel_agent.py",
+            "duration_seconds": 0.531,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/a1/test_a1_baseline_contract.py -q",
+            "duration_seconds": 0.891,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_aimodel_rag_tool.py services/ai-service/tests/test_aimodel_memory.py -q",
+            "duration_seconds": 1.546,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-20T11:40:50Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "bf2ad853e00fa728777815cb1d4e64a6b81f7943",
+  "task_id": "A1",
+  "task_title": "冻结现有 Agent 基线"
+}

@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: agent
       POSTGRES_PASSWORD: agent
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./services/postgres/initdb:/docker-entrypoint-initdb.d:ro
@@ -46,6 +46,11 @@ services:
       TAVILY_MAX_RESULTS: ${TAVILY_MAX_RESULTS:-5}
       RAG_PROJECT_DIR: /app/rag
       RAG_MCP_COMMAND: python
+      AIMODEL_RAG_PREWARM_ENABLED: ${AIMODEL_RAG_PREWARM_ENABLED:-true}
+      AIMODEL_INTENT_ROUTER_BACKEND: ${AIMODEL_INTENT_ROUTER_BACKEND:-rule}
+      HF_HOME: /root/.cache/huggingface
+      TORCH_HOME: /root/.cache/torch
+      XDG_CACHE_HOME: /root/.cache
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:5173}
@@ -56,6 +61,8 @@ services:
       TRANSCRIPTION_MODEL: qwen3.6plus
     volumes:
       - ./fixtures:/app/fixtures:ro
+      - ./services/ai-service/rag/data/models:/app/rag/data/models:ro
+      - ai_model_cache:/root/.cache
     ports:
       - "${AI_SERVICE_HOST_PORT:-18001}:8000"
     depends_on:
@@ -184,3 +191,4 @@ volumes:
   postgres_data:
   n8n_data:
   feishu_table_state:
+  ai_model_cache:

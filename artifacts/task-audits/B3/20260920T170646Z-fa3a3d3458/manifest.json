@@ -1,0 +1,123 @@
+{
+  "acceptance_lock_sha256": "ab2deabcb1c65f0047134ec21b1c2797fd547d32ad4b26f06208a6eb92e4d4b1",
+  "baseline_commit": "f15023e855538e1db65d34d3297f0468fc15b2d8",
+  "change_commits": [],
+  "changed_files": [
+    "docs/shopping_goal_merge_rules.md",
+    "services/ai-service/app/routers/AImodel/goal_state.py",
+    "services/ai-service/tests/test_goal_state_transition.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "f806b9c53c437ef690561038a8aaa6d3fe05941446ccd2bb1da3d252e00e1f74"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "885bcf4eae39c5413aeef1baa6d314fa3c46b89dd43581074ebc42b27ead0bba"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "525d249cd8bb5f4ebc672b99f8f94236bb0968745fa3b3bdfc9ad9f277425bc6"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "3 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check f15023e855538e1db65d34d3297f0468fc15b2d8..fa3a3d3458c4b003e2e1ae350e8a787136f784f9",
+            "duration_seconds": 0.078,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/goal_state.py services/ai-service/tests/test_goal_state_transition.py",
+            "duration_seconds": 1.985,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/goal_state.py services/ai-service/tests/test_goal_state_transition.py",
+            "duration_seconds": 0.562,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/b3/test_b3_goal_state_contract.py -q",
+            "duration_seconds": 1.344,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_goal_state_transition.py -q",
+            "duration_seconds": 1.281,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-20T17:06:56Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "fa3a3d3458c4b003e2e1ae350e8a787136f784f9",
+  "task_id": "B3",
+  "task_title": "实现状态合并与冲突检测"
+}

@@ -1,0 +1,15 @@
+
+=================================== ERRORS ====================================
+_____ ERROR collecting tests/acceptance/d1/test_d1_agent_plan_contract.py _____
+ImportError while importing test module 'C:\Users\32320\AppData\Local\Temp\agent-audit-d1-74p5lx0r\tests\acceptance\d1\test_d1_agent_plan_contract.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+D:\python\Lib\importlib\__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests\acceptance\d1\test_d1_agent_plan_contract.py:9: in <module>
+    from app.routers.AImodel.agent_trace import AgentTraceContext, AgentTraceEventType
+E   ModuleNotFoundError: No module named 'app'
+=========================== short test summary info ===========================
+ERROR tests/acceptance/d1/test_d1_agent_plan_contract.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.31s
