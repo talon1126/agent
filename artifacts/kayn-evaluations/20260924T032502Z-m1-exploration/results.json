@@ -1,0 +1,1232 @@
+{
+  "details": [
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:26:05.628332Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3",
+        "caseResultId": "56bfebb9-fe3a-4eb9-b6b7-7b0d9316a7e6",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:26:05.628332Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "uncertainty",
+          "expected_goal": {
+            "answer_contains": [
+              "库存",
+              "重试"
+            ],
+            "item_ids": [],
+            "reason_code": "required_fact_unavailable"
+          },
+          "expected_response_type": "fallback",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews",
+            "rag_lookup"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "response_contract",
+              "expected": "fallback",
+              "operator": "eq",
+              "target": "metadata.response_type"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "m1_unknown_stock_recommendation"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐这辆婴儿车，预算最多 89。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 8908,
+        "metadata": {
+          "category": "uncertainty",
+          "scenario_id": "m1_unknown_stock_recommendation",
+          "stages": [
+            "A",
+            "D"
+          ],
+          "tags": [
+            "m1",
+            "uncertainty"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.628332Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "required_tools includes 'product_snapshot' and it was successfully called (tool_calls contains 'product_snapshot' with status 'succeeded')",
+              "forbidden_tools ['product_reviews', 'rag_lookup'] were not called",
+              "expected_response_type is 'fallback' and metadata.response_type == 'fallback' satisfies hard_assertion 'response_contract'",
+              "output contains '库存' and '重试', matching expected_goal.answer_contains",
+              "reason_code in metadata.payload is 'required_fact_unavailable', consistent with category 'uncertainty' and failure_mode 'none'",
+              "output provides honest recovery: states stock fact is unavailable, preserves constraint 'baby_kids', and gives clear next step ('重试')",
+              "no hallucination: no fabricated item, price, review, or completed action; fallback is justified by missing verifiable stock data"
+            ],
+            "latencyMs": 6655,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "a1b574cb-182a-4c4c-b236-cb49dec74867",
+            "passed": true,
+            "reason": "All hard constraints are satisfied: required tool 'product_snapshot' was called successfully, forbidden tools were not used, response type matches 'fallback', output contains required keywords '库存' and '重试', reason_code aligns with uncertainty category, and the fallback message is honest, preserves constraints, and specifies a concrete recovery action. No evidence of fabrication or unsupported claims. The response fully meets the contract for m1_unknown_stock_recommendation.",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 2511,
+              "model": "qwen-plus",
+              "output_tokens": 286,
+              "provider": "litellm",
+              "total_tokens": 2797
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.628332Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "5a8162b98b3ad24c",
+                "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "1949b490-d7cb-4d49-8fb1-6c28e556230d",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:26:05.587863Z",
+        "output": "商品事实刷新后仍缺少可核验的库存，暂时不能给出可靠结论。已保留条件：品类 baby_kids。你可以直接回复“重试”，我会按原条件重新读取商品事实。",
+        "spanId": "fae8edd7a9401263",
+        "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3:metric:talonmart_abcd_quality:1",
+              "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3:metric:talonmart_contract_guard:1",
+              "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2797,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐这辆婴儿车，预算最多 89。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 8908,
+      "occurredAt": "2026-09-24T03:26:05.587863Z",
+      "startedAt": "2026-09-24T03:26:05.587863Z",
+      "testId": "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3",
+      "testResultId": "56bfebb9-fe3a-4eb9-b6b7-7b0d9316a7e6",
+      "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3:metric:talonmart_abcd_quality:1",
+            "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3:metric:talonmart_contract_guard:1",
+            "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2797,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:26:05.607733Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "25eea3a4-e859-4f92-988c-822aa166f3fb",
+        "caseResultId": "f02285f6-a493-4c14-a2e1-68ea07d818eb",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:26:05.607733Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "hard_constraint",
+          "expected_goal": {
+            "answer_contains": [
+              "超出预算"
+            ],
+            "item_ids": [],
+            "reason_code": null
+          },
+          "expected_response_type": "clarification",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews",
+            "rag_lookup"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "response_contract",
+              "expected": "clarification",
+              "operator": "eq",
+              "target": "metadata.response_type"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "m1_quantity_total_budget"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"买 2 盒中性笔，总价不超过 20 元。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_office_pen\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 10302,
+        "metadata": {
+          "category": "hard_constraint",
+          "scenario_id": "m1_quantity_total_budget",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "m1",
+            "hard_constraint"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.607733Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "metadata.response_type == 'clarification'",
+              "output contains '超出预算' (U+8D85+U+51FA+U+9884+U+7B97)",
+              "tool_calls contains exactly one 'product_snapshot' with status 'succeeded'",
+              "no 'product_reviews' or 'rag_lookup' in tool_calls",
+              "payload.options provides two actionable clarification paths",
+              "execution.steps[0].stepType == 'snapshot' and status == 'success'"
+            ],
+            "latencyMs": 9331,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "1df952d1-cd8e-41bf-9d26-116b9000d4d7",
+            "passed": true,
+            "reason": "1. 响应类型匹配：metadata.response_type = 'clarification'，与 expected_response_type 一致，满足 hard_assertions；2. 购物目标满足：output 明确指出'价格超出预算'，包含预期字符串'超出预算'（Unicode 解码后为'超出预算'），符合 expected_goal.answer_contains；3. 工具调用合规：required_tools=['product_snapshot'] 已成功调用（tool_calls 中 name='product_snapshot' 且 status='succeeded'），forbidden_tools=['product_reviews','rag_lookup'] 均未调用；4. 事实可支持：'当前指定商品的已核验价格超出预算'这一结论依赖 product_snapshot 工具结果，而 tool_calls 确实执行了该工具且 execution.status='success'，故有证据支撑；5. 终态可继续执行：响应提供了两个明确、可操作的澄清选项（提高预算 / 更换商品），并保留原始约束（数量2盒、中性笔），符合可继续执行的恢复终态定义；6. 无编造内容：未虚构商品、价格、评论或副作用，所有陈述均基于 snapshot 工具调用结果推断。全部硬条件满足，表达清晰、证据链完整。",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 2021,
+              "model": "qwen-plus",
+              "output_tokens": 406,
+              "provider": "litellm",
+              "total_tokens": 2427
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.607733Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "1f75e158763095e0",
+                "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 6,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "6f1d7122-2d8d-45cd-975a-934e2e90fef7",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:26:05.586801Z",
+        "output": "当前指定商品的已核验价格超出预算。请选择提高预算，或保留预算并改看其他商品。",
+        "spanId": "3f48c08b4c4e6632",
+        "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "25eea3a4-e859-4f92-988c-822aa166f3fb:metric:talonmart_abcd_quality:1",
+              "25eea3a4-e859-4f92-988c-822aa166f3fb:metric:talonmart_contract_guard:1",
+              "25eea3a4-e859-4f92-988c-822aa166f3fb:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2427,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"买 2 盒中性笔，总价不超过 20 元。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_office_pen\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 10302,
+      "occurredAt": "2026-09-24T03:26:05.586801Z",
+      "startedAt": "2026-09-24T03:26:05.586801Z",
+      "testId": "25eea3a4-e859-4f92-988c-822aa166f3fb",
+      "testResultId": "f02285f6-a493-4c14-a2e1-68ea07d818eb",
+      "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "25eea3a4-e859-4f92-988c-822aa166f3fb:metric:talonmart_abcd_quality:1",
+            "25eea3a4-e859-4f92-988c-822aa166f3fb:metric:talonmart_contract_guard:1",
+            "25eea3a4-e859-4f92-988c-822aa166f3fb:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2427,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:26:05.636490Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "69e1bca1-7eff-4121-904b-d82624ac11bd",
+        "caseResultId": "05a8b85c-2cb7-4eb3-b23f-fad278966f51",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:26:05.636490Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "catalog",
+          "expected_goal": {
+            "answer_contains": [
+              "中性笔",
+              "12.9 CNY"
+            ],
+            "item_ids": [
+              "item_office_pen"
+            ],
+            "reason_code": null
+          },
+          "expected_response_type": "product_list",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews",
+            "rag_lookup"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "response_contract",
+              "expected": "product_list",
+              "operator": "eq",
+              "target": "metadata.response_type"
+            },
+            {
+              "assertion_id": "product_ids",
+              "expected": [
+                "item_office_pen"
+              ],
+              "operator": "set_eq",
+              "target": "metadata.payload.products[*].item_id"
+            }
+          ],
+          "required_tools": [
+            "product_search",
+            "product_snapshot"
+          ],
+          "scenario_id": "m1_list_verified_pen"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"找中性笔，预算不超过 30 元。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_office_pen\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 1,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 8063,
+        "metadata": {
+          "category": "catalog",
+          "scenario_id": "m1_list_verified_pen",
+          "stages": [
+            "A",
+            "D"
+          ],
+          "tags": [
+            "m1",
+            "catalog"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.636490Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 1.0,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "expected_response_type 'product_list' matches metadata.response_type",
+              "product_ids assertion passed: ['item_office_pen'] matches metadata.payload.products[*].item_id",
+              "required tool 'product_search' was successfully called",
+              "required tool 'product_snapshot' was successfully called",
+              "forbidden tools 'product_reviews' and 'rag_lookup' were not called",
+              "output contains '中性笔' and '12.9 CNY' as required in answer_contains",
+              "item_id 'item_office_pen' is present in both expected_goal and metadata.payload.products",
+              "price '12.9 CNY' is supported by retrieved_context fact: current_price=12.9 and currency=CNY",
+              "product name '中性笔' is supported by retrieved_context fact: name='中性笔'"
+            ],
+            "latencyMs": 6207,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "bc8bd33d-d80d-4c61-be02-25b9773c6f5a",
+            "passed": true,
+            "reason": "All hard assertions pass: response type, product IDs, required tools (product_search and product_snapshot) succeeded, forbidden tools avoided. Output matches expected_answer_contains strings. All facts (name, price, currency) are directly supported by retrieved_context snapshot evidence. No hallucination, no missing constraints, no execution failure — full contract fulfillment.",
+            "score": 1.0,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 2653,
+              "model": "qwen-plus",
+              "output_tokens": 264,
+              "provider": "litellm",
+              "total_tokens": 2917
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.636490Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "c5eacc9d051bd41d",
+                "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "0c24faf0-5e71-436e-b17b-13bfca9d2cfe",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:26:05.585872Z",
+        "output": "中性笔：12.9 CNY。",
+        "spanId": "7692944d25d01def",
+        "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "69e1bca1-7eff-4121-904b-d82624ac11bd:metric:talonmart_abcd_quality:1",
+              "69e1bca1-7eff-4121-904b-d82624ac11bd:metric:talonmart_contract_guard:1",
+              "69e1bca1-7eff-4121-904b-d82624ac11bd:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2917,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"找中性笔，预算不超过 30 元。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_office_pen\"}]}}"
+      },
+      "latencyMs": 8063,
+      "occurredAt": "2026-09-24T03:26:05.585872Z",
+      "startedAt": "2026-09-24T03:26:05.585872Z",
+      "testId": "69e1bca1-7eff-4121-904b-d82624ac11bd",
+      "testResultId": "05a8b85c-2cb7-4eb3-b23f-fad278966f51",
+      "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "69e1bca1-7eff-4121-904b-d82624ac11bd:metric:talonmart_abcd_quality:1",
+            "69e1bca1-7eff-4121-904b-d82624ac11bd:metric:talonmart_contract_guard:1",
+            "69e1bca1-7eff-4121-904b-d82624ac11bd:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2917,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:26:05.618110Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d",
+        "caseResultId": "fa2ea8f2-51e8-417d-a3e5-51ecfa7c740a",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:26:05.618110Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "recommendation",
+          "expected_goal": {
+            "answer_contains": [
+              "Xiaomi Electric Kettle 2",
+              "34.99 CNY",
+              "规格"
+            ],
+            "item_ids": [
+              "item_xiaomi_electric_kettle_2"
+            ],
+            "reason_code": null
+          },
+          "expected_response_type": "recommendation",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews",
+            "rag_lookup"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "response_contract",
+              "expected": "recommendation",
+              "operator": "eq",
+              "target": "metadata.response_type"
+            },
+            {
+              "assertion_id": "product_ids",
+              "expected": [
+                "item_xiaomi_electric_kettle_2"
+              ],
+              "operator": "set_eq",
+              "target": "metadata.payload.candidates[*].item_id"
+            }
+          ],
+          "required_tools": [
+            "product_search",
+            "product_snapshot"
+          ],
+          "scenario_id": "m1_recommend_without_page"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐小米电水壶，预算不超过 40 元。\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 1,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 10551,
+        "metadata": {
+          "category": "recommendation",
+          "scenario_id": "m1_recommend_without_page",
+          "stages": [
+            "A",
+            "D"
+          ],
+          "tags": [
+            "m1",
+            "recommendation"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.618110Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 1.0,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "Expected response type 'recommendation' matches metadata.payload.response_type",
+              "Item ID 'item_xiaomi_electric_kettle_2' is present in metadata.payload.candidates[*].item_id",
+              "Required tool 'product_search' was successfully called with query '电水壶 Xiaomi'",
+              "Required tool 'product_snapshot' was successfully called and returned fresh facts including current_price=34.99 CNY and specifications.summary='1.7L stainless steel electric kettle'",
+              "Output contains all expected strings: 'Xiaomi Electric Kettle 2', '34.99 CNY', and '规格'",
+              "Forbidden tools 'product_reviews' and 'rag_lookup' were not called",
+              "Hard assertions on response_type and product_ids both satisfied",
+              "Price (34.99 CNY) satisfies budget constraint ≤ 40 CNY",
+              "All claims in output (brand, price, spec) are directly supported by retrieved_context facts"
+            ],
+            "latencyMs": 7898,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "db5f7c89-8317-4f6e-823b-99b05a939a41",
+            "passed": true,
+            "reason": "All evaluation criteria are fully satisfied: response type and structure match; shopping goal (Xiaomi electric kettle ≤40 CNY) is met with correct item, price, and spec; required tools product_search and product_snapshot succeeded; forbidden tools were not used; every factual claim in output is verifiably backed by retrieved_context (e.g., current_price=34.99, specifications.summary='1.7L stainless steel electric kettle'); no hallucination or unsupported assertion; recovery state is not needed as task completed successfully.",
+            "score": 1.0,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 3699,
+              "model": "qwen-plus",
+              "output_tokens": 337,
+              "provider": "litellm",
+              "total_tokens": 4036
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.618110Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "a8a2ea628d0a9b90",
+                "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "4ce9b82e-ca84-402e-a87d-dbef6a9420b9",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:26:05.581160Z",
+        "output": "1. Xiaomi Electric Kettle 2：价格 34.99 CNY，规格 1.7L stainless steel electric kettle，满足已核验条件：预算上限 40；通过硬约束过滤，排序第 1。",
+        "spanId": "3031e59ac6150c6b",
+        "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d:metric:talonmart_abcd_quality:1",
+              "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d:metric:talonmart_contract_guard:1",
+              "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 4036,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐小米电水壶，预算不超过 40 元。\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 10551,
+      "occurredAt": "2026-09-24T03:26:05.581160Z",
+      "startedAt": "2026-09-24T03:26:05.581160Z",
+      "testId": "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d",
+      "testResultId": "fa2ea8f2-51e8-417d-a3e5-51ecfa7c740a",
+      "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d:metric:talonmart_abcd_quality:1",
+            "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d:metric:talonmart_contract_guard:1",
+            "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 4036,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:26:05.599476Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "76f47732-7ff6-4715-9892-5e16c9b0e27b",
+        "caseResultId": "96521768-2b1e-4aea-b65f-55346fc1df81",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:26:05.599476Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "comparison",
+          "expected_goal": {
+            "answer_contains": [
+              "18.4 CNY",
+              "22.8 CNY",
+              "纯牛奶更低"
+            ],
+            "item_ids": [
+              "item_milk_pure",
+              "item_yogurt_plain"
+            ],
+            "reason_code": null
+          },
+          "expected_response_type": "comparison",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews",
+            "rag_lookup"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "response_contract",
+              "expected": "comparison",
+              "operator": "eq",
+              "target": "metadata.response_type"
+            },
+            {
+              "assertion_id": "product_ids",
+              "expected": [
+                "item_milk_pure",
+                "item_yogurt_plain"
+              ],
+              "operator": "set_eq",
+              "target": "metadata.payload.products[*].item_id"
+            }
+          ],
+          "required_tools": [
+            "product_search",
+            "product_snapshot"
+          ],
+          "scenario_id": "m1_compare_without_page"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"纯牛奶和原味酸奶的规格、价格有什么差别？\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 2,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 12178,
+        "metadata": {
+          "category": "comparison",
+          "scenario_id": "m1_compare_without_page",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "m1",
+            "comparison"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.599476Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "hard_assertion 'response_contract': metadata.response_type == 'comparison' → PASSED",
+              "hard_assertion 'product_ids': metadata.payload.products[*].item_id == ['item_milk_pure', 'item_yogurt_plain'] → PASSED",
+              "required_tool 'product_search' called and succeeded → PASSED",
+              "required_tool 'product_snapshot' called and succeeded → PASSED",
+              "forbidden_tool 'product_reviews' not called → PASSED",
+              "forbidden_tool 'rag_lookup' not called → PASSED",
+              "output contains '18.4 CNY' → verified in output and supported by retrieved_context (item_milk_pure.current_price)",
+              "output contains '22.8 CNY' → verified in output and supported by retrieved_context (item_yogurt_plain.current_price)",
+              "output contains '纯牛奶更低' → verified in output and logically follows from 18.4 < 22.8",
+              "specs '250ml*24盒' and '180g*12杯' appear in output and match retrieved_context specifications"
+            ],
+            "latencyMs": 10600,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "13ef7cd9-da4f-4cf1-9238-734ef9171e45",
+            "passed": true,
+            "reason": "All hard assertions pass: response_type is 'comparison', product_ids match ['item_milk_pure', 'item_yogurt_plain'], and required tools 'product_search' and 'product_snapshot' were successfully called. Forbidden tools 'product_reviews' and 'rag_lookup' were not invoked. The output contains all required strings: '18.4 CNY', '22.8 CNY', and '纯牛奶更低'. Price and spec facts are directly supported by retrieved_context (e.g., item_milk_pure current_price=18.4, spec='250ml*24盒'; item_yogurt_plain current_price=22.8, spec='180g*12杯'). The conclusion '纯牛奶更低' is logically sound and evidence-backed. No hallucination of prices, specs, brands, or sources occurs. Response is complete, interpretable, and fully aligned with the comparison contract.",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 6098,
+              "model": "qwen-plus",
+              "output_tokens": 455,
+              "provider": "litellm",
+              "total_tokens": 6553
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.599476Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "d6f0628dd60fad82",
+                "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "e87a3831-2745-4f78-a73e-08060e9a9e6f",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:26:05.580094Z",
+        "output": "纯牛奶：价格 18.4 CNY，规格 250ml*24盒；原味酸奶：价格 22.8 CNY，规格 180g*12杯。按已核验价格，纯牛奶更低。",
+        "spanId": "c5ef5480d049a86e",
+        "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "76f47732-7ff6-4715-9892-5e16c9b0e27b:metric:talonmart_abcd_quality:1",
+              "76f47732-7ff6-4715-9892-5e16c9b0e27b:metric:talonmart_contract_guard:1",
+              "76f47732-7ff6-4715-9892-5e16c9b0e27b:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 6553,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"纯牛奶和原味酸奶的规格、价格有什么差别？\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 12178,
+      "occurredAt": "2026-09-24T03:26:05.580094Z",
+      "startedAt": "2026-09-24T03:26:05.580094Z",
+      "testId": "76f47732-7ff6-4715-9892-5e16c9b0e27b",
+      "testResultId": "96521768-2b1e-4aea-b65f-55346fc1df81",
+      "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "76f47732-7ff6-4715-9892-5e16c9b0e27b:metric:talonmart_abcd_quality:1",
+            "76f47732-7ff6-4715-9892-5e16c9b0e27b:metric:talonmart_contract_guard:1",
+            "76f47732-7ff6-4715-9892-5e16c9b0e27b:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 6553,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:26:05.583044Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "ec001e32-a4b1-47e3-8f1c-4f7592411a7b",
+        "caseResultId": "303604fc-73d9-414d-956c-1a6c7eb62305",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:26:05.583044Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "recommendation",
+          "expected_goal": {
+            "answer_contains": [
+              "Xiaomi Electric Kettle 2",
+              "34.99 CNY",
+              "规格"
+            ],
+            "item_ids": [
+              "item_xiaomi_electric_kettle_2"
+            ],
+            "reason_code": null
+          },
+          "expected_response_type": "recommendation",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews",
+            "rag_lookup"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "response_contract",
+              "expected": "recommendation",
+              "operator": "eq",
+              "target": "metadata.response_type"
+            },
+            {
+              "assertion_id": "product_ids",
+              "expected": [
+                "item_xiaomi_electric_kettle_2"
+              ],
+              "operator": "set_eq",
+              "target": "metadata.payload.candidates[*].item_id"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "m1_recommend_verified_kettle"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐这款电水壶，预算不超过 40 元。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_xiaomi_electric_kettle_2\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 1,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 11660,
+        "metadata": {
+          "category": "recommendation",
+          "scenario_id": "m1_recommend_verified_kettle",
+          "stages": [
+            "A",
+            "D"
+          ],
+          "tags": [
+            "m1",
+            "recommendation"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.583044Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 1.0,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "Expected response type 'recommendation' matches metadata.payload.response_type",
+              "Item ID 'item_xiaomi_electric_kettle_2' is present in metadata.payload.candidates[*].item_id",
+              "Output contains 'Xiaomi Electric Kettle 2', '34.99 CNY', and '规格' (via '1.7L stainless steel electric kettle' — 'specifications.summary' from retrieved_context confirms '规格' is supported)",
+              "Required tool 'product_snapshot' was successfully called (tool_calls includes 'product_snapshot' with status 'succeeded')",
+              "Forbidden tools 'product_reviews' and 'rag_lookup' were not called",
+              "All hard assertions pass: response_contract (eq 'recommendation'), product_ids (set_eq ['item_xiaomi_electric_kettle_2'])",
+              "Price (34.99 CNY) ≤ 40 CNY budget — confirmed by retrieved_context.current_price",
+              "Specification '1.7L stainless steel electric kettle' is directly sourced from retrieved_context.specifications.values[0].value",
+              "No hallucinated facts: item_id, name, price, specs, and ranking rationale are all grounded in evidence (snapshot context + evidence_ids in payload)"
+            ],
+            "latencyMs": 9470,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "00148f91-adfc-4e43-8b5a-cca6a3389e9c",
+            "passed": true,
+            "reason": "All evaluation criteria are fully satisfied: response type and structure match expected_output.expected_response_type; shopping goal (Xiaomi Electric Kettle 2 within ≤40 CNY, with spec mention) is met; required tool product_snapshot was successfully invoked while forbidden tools were absent; all factual claims (price, spec, item identity, ranking) are verifiably supported by retrieved_context and evidence_ids; no hallucination, no missing candidates, no recovery needed. Evidence is complete, consistent, and traceable.",
+            "score": 1.0,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 3725,
+              "model": "qwen-plus",
+              "output_tokens": 388,
+              "provider": "litellm",
+              "total_tokens": 4113
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:26:05.583044Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "09508e01bc406a1d",
+                "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 6,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "d33b65fe-47ce-48e5-b425-35f230d9faff",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:26:05.578299Z",
+        "output": "1. Xiaomi Electric Kettle 2：价格 34.99 CNY，规格 1.7L stainless steel electric kettle，满足已核验条件：预算上限 40；通过硬约束过滤，排序第 1。",
+        "spanId": "0471bcec271a973a",
+        "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "ec001e32-a4b1-47e3-8f1c-4f7592411a7b:metric:talonmart_abcd_quality:1",
+              "ec001e32-a4b1-47e3-8f1c-4f7592411a7b:metric:talonmart_contract_guard:1",
+              "ec001e32-a4b1-47e3-8f1c-4f7592411a7b:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 4113,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐这款电水壶，预算不超过 40 元。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_xiaomi_electric_kettle_2\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 11660,
+      "occurredAt": "2026-09-24T03:26:05.578299Z",
+      "startedAt": "2026-09-24T03:26:05.578299Z",
+      "testId": "ec001e32-a4b1-47e3-8f1c-4f7592411a7b",
+      "testResultId": "303604fc-73d9-414d-956c-1a6c7eb62305",
+      "traceId": "faa6d273692afbbdbf191e61d1b6566d",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "ec001e32-a4b1-47e3-8f1c-4f7592411a7b:metric:talonmart_abcd_quality:1",
+            "ec001e32-a4b1-47e3-8f1c-4f7592411a7b:metric:talonmart_contract_guard:1",
+            "ec001e32-a4b1-47e3-8f1c-4f7592411a7b:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 4113,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    }
+  ],
+  "items": [
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐这辆婴儿车，预算最多 89。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 8908,
+      "occurredAt": "2026-09-24T03:26:05.587863Z",
+      "testId": "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3",
+      "testResultId": "56bfebb9-fe3a-4eb9-b6b7-7b0d9316a7e6",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"买 2 盒中性笔，总价不超过 20 元。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_office_pen\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 10302,
+      "occurredAt": "2026-09-24T03:26:05.586801Z",
+      "testId": "25eea3a4-e859-4f92-988c-822aa166f3fb",
+      "testResultId": "f02285f6-a493-4c14-a2e1-68ea07d818eb",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"找中性笔，预算不超过 30 元。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_office_pen\"}]}}"
+      },
+      "latencyMs": 8063,
+      "occurredAt": "2026-09-24T03:26:05.585872Z",
+      "testId": "69e1bca1-7eff-4121-904b-d82624ac11bd",
+      "testResultId": "05a8b85c-2cb7-4eb3-b23f-fad278966f51",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐小米电水壶，预算不超过 40 元。\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 10551,
+      "occurredAt": "2026-09-24T03:26:05.581160Z",
+      "testId": "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d",
+      "testResultId": "fa2ea8f2-51e8-417d-a3e5-51ecfa7c740a",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"纯牛奶和原味酸奶的规格、价格有什么差别？\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 12178,
+      "occurredAt": "2026-09-24T03:26:05.580094Z",
+      "testId": "76f47732-7ff6-4715-9892-5e16c9b0e27b",
+      "testResultId": "96521768-2b1e-4aea-b65f-55346fc1df81",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐这款电水壶，预算不超过 40 元。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_xiaomi_electric_kettle_2\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 11660,
+      "occurredAt": "2026-09-24T03:26:05.578299Z",
+      "testId": "ec001e32-a4b1-47e3-8f1c-4f7592411a7b",
+      "testResultId": "303604fc-73d9-414d-956c-1a6c7eb62305",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    }
+  ],
+  "summary": {
+    "availableResults": {
+      "count": 6,
+      "firstOccurredAt": "2026-09-24T03:26:05.578299Z",
+      "lastOccurredAt": "2026-09-24T03:26:05.587863Z"
+    },
+    "costKnown": false,
+    "counts": {
+      "cancelled": 0,
+      "completed": 6,
+      "errored": 0,
+      "failed": 0,
+      "passed": 6,
+      "total": 6
+    },
+    "durationMs": 61674,
+    "passRate": 100.0,
+    "runId": "1435392f-5d32-42fb-86ce-21a4cf3f88b1",
+    "status": "COMPLETED",
+    "testType": "SINGLE_TURN",
+    "totalCostUsd": null,
+    "totalTokens": 22843
+  }
+}

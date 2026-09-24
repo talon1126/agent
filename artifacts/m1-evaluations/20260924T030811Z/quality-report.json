@@ -1,0 +1,528 @@
+{
+  "schema_version": 1,
+  "profile_id": "M1",
+  "config_version": "agent-quality-gates-v1",
+  "config_sha256": "1a81d4a76f3aa45348b7ec0b5f21527d346f28de418c42b64664dcb42560109b",
+  "fixture_version": "m1-shopping-replay-v2",
+  "fixture_sha256": "c06b6b0b6e14cb2d809ac702dc142531ba186a5ed9a681e47ce5287fa102c933",
+  "implementation_fingerprint": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+  "metrics": {
+    "M1-01": {
+      "expected_cases": 11,
+      "scored_cases": 11,
+      "unscored_cases": 0,
+      "execution_errors": 0
+    },
+    "M1-02": {
+      "task_success_rate": 1.0,
+      "minimum_category_success_rate": 1.0
+    },
+    "M1-03": {
+      "hard_constraint_violations": 0,
+      "unsupported_price_claims": 0,
+      "unauthorized_tool_calls": 0
+    }
+  },
+  "category_counts": {
+    "recommendation": 2,
+    "comparison": 1,
+    "catalog": 1,
+    "hard_constraint": 2,
+    "uncertainty": 1,
+    "multi_turn": 2,
+    "reviews": 1,
+    "tool_fault": 1
+  },
+  "results": [
+    {
+      "id": "recommend_verified_kettle",
+      "category": "recommendation",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "recommendation",
+          "output": "1. Xiaomi Electric Kettle 2：价格 34.99 CNY，规格 1.7L stainless steel electric kettle，满足已核验条件：预算上限 40；通过硬约束过滤，排序第 1。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "电水壶"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 1.829,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 20
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 1.107
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "compare_without_page",
+      "category": "comparison",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "comparison",
+          "output": "纯牛奶：价格 18.4 CNY，规格 250ml*24盒；原味酸奶：价格 22.8 CNY，规格 180g*12杯。按已核验价格，纯牛奶更低。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "牛奶"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 0.897,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 2
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 1.008
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/search",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "recommend_without_page",
+      "category": "recommendation",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "recommendation",
+          "output": "1. Xiaomi Electric Kettle 2：价格 34.99 CNY，规格 1.7L stainless steel electric kettle，满足已核验条件：预算上限 40；通过硬约束过滤，排序第 1。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "电水壶 Xiaomi"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 0.879,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 20
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 5.934
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/products/snapshots",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "list_verified_pen",
+      "category": "catalog",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "product_list",
+          "output": "中性笔：12.9 CNY。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "中性笔"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 0.978,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 1
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 0.755
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quantity_total_budget",
+      "category": "hard_constraint",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "clarification",
+          "output": "当前指定商品的已核验价格超出预算。请选择提高预算，或保留预算并改看其他商品。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s01_snapshot",
+              "attemptCount": 1,
+              "durationMs": 1.007
+            }
+          ],
+          "mock_api_paths": [
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reject_usd_budget",
+      "category": "hard_constraint",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "fallback",
+          "output": "商品价格币种与 CNY 预算不一致，无法直接比较金额。已核验条件：品类 electronics、预算上限 40。请提供同币种价格后重试。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "电水壶"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 0.75,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 20
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 0.93
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unknown_stock_recommendation",
+      "category": "uncertainty",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "fallback",
+          "output": "商品事实刷新后仍缺少可核验的库存，暂时不能给出可靠结论。已保留条件：品类 baby_kids。你可以直接回复“重试”，我会按原条件重新读取商品事实。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "婴儿车"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 0.769,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 20
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 1.575
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/products/snapshots",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry_without_page",
+      "category": "multi_turn",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "fallback",
+          "output": "商品事实刷新后仍缺少可核验的库存，暂时不能给出可靠结论。已保留条件：品类 electronics、预算上限 60。你可以直接回复“重试”，我会按原条件重新读取商品事实。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s01_snapshot",
+              "attemptCount": 1,
+              "durationMs": 1.457
+            }
+          ],
+          "mock_api_paths": [
+            "/products/snapshots",
+            "/products/snapshots"
+          ]
+        },
+        {
+          "turn": 2,
+          "response_type": "fallback",
+          "output": "商品事实刷新后仍缺少可核验的库存，暂时不能给出可靠结论。已保留条件：品类 electronics、预算上限 60。你可以直接回复“重试”，我会按原条件重新读取商品事实。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "无线耳机"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 0.842,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 1
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 1.331
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/products/snapshots",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "review_nonempty_sample",
+      "category": "reviews",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "answer",
+          "output": "基于本次读取的 4 条评论：关于便携性的评论存在明显分歧。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s01_snapshot",
+              "attemptCount": 1,
+              "durationMs": 2.547
+            },
+            {
+              "name": "product_reviews",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_reviews",
+              "attemptCount": 1,
+              "durationMs": 1.409
+            }
+          ],
+          "mock_api_paths": [
+            "/products/snapshots",
+            "/items/reviews/batch",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "recommendation_reason_followup",
+      "category": "multi_turn",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "recommendation",
+          "output": "1. Xiaomi Electric Kettle 2：价格 34.99 CNY，规格 1.7L stainless steel electric kettle，满足已核验条件：预算上限 40；通过硬约束过滤，排序第 1。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "电水壶"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 0.651,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 20
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 0.858
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/products/snapshots"
+          ]
+        },
+        {
+          "turn": 2,
+          "response_type": "recommendation",
+          "output": "1. Xiaomi Electric Kettle 2：价格 34.99 CNY，规格 1.7L stainless steel electric kettle，满足已核验条件：预算上限 40；通过硬约束过滤，排序第 1。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "电水壶"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 0.738,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 20
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "succeeded",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 0.775
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "snapshot_service_failure",
+      "category": "tool_fault",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "response_type": "fallback",
+          "output": "商品详情读取未成功完成，本轮没有生成未经核验的结果。已保留条件：品类 electronics、预算上限 40。你可以直接回复“重试”，我会沿用这些条件继续执行。",
+          "errors": [],
+          "tool_calls": [
+            {
+              "name": "product_search",
+              "arguments": {
+                "query": "电水壶"
+              },
+              "status": "succeeded",
+              "stepId": "s01_search",
+              "attemptCount": 1,
+              "durationMs": 0.782,
+              "resultSummary": {
+                "ok": true,
+                "itemCount": 20
+              }
+            },
+            {
+              "name": "product_snapshot",
+              "arguments": {},
+              "status": "failed",
+              "stepId": "s02_snapshot",
+              "attemptCount": 1,
+              "durationMs": 0.464,
+              "errorCode": "step_execution_failed"
+            }
+          ],
+          "mock_api_paths": [
+            "/search",
+            "/products/snapshots"
+          ]
+        }
+      ]
+    }
+  ]
+}

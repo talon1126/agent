@@ -1,0 +1,4418 @@
+{
+  "details": [
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:31.069640Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "11850263-939c-4800-a91c-d02b823358ad",
+        "caseResultId": "ecd62514-280f-4a89-bcd5-b7d6c6c257fb",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:31.069640Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "no_candidates",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_baby_stroller"
+            ],
+            "category_id": "baby_kids",
+            "delivery_deadline": "within 1 hour"
+          },
+          "expected_response_type": "fallback",
+          "failure_mode": "no_candidates",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "no_delivery_promise",
+              "expected": false,
+              "operator": "eq",
+              "target": "response.promises_delivery"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "shop_none_delivery_one_hour"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"这辆婴儿车必须一小时内送到。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 7776,
+        "metadata": {
+          "category": "no_candidates",
+          "scenario_id": "shop_none_delivery_one_hour",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "no_candidates",
+            "delivery_deadline"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.069640Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "required_tools ['product_snapshot'] was successfully called",
+              "forbidden_tools ['product_reviews'] was not called",
+              "expected_response_type 'fallback' matches response_type in metadata",
+              "failure_mode 'no_candidates' matches category in metadata",
+              "hard_assertion 'no_delivery_promise' is satisfied: response does not promise delivery",
+              "output explains confirmed constraint mismatch with category 'baby_kids' and delivery deadline '2026-09-24 04:23:23.085862+00:00'",
+              "response provides actionable recovery: 'adjust conditions or change candidates and retry'"
+            ],
+            "latencyMs": 6281,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "07ff0936-a942-424c-abfa-dea6feee6bcc",
+            "passed": true,
+            "reason": "All hard constraints are satisfied: required tool product_snapshot succeeded, forbidden tool product_reviews was not used, response type is 'fallback' as expected, failure mode matches 'no_candidates', and no delivery promise was made. The output correctly identifies a confirmed constraint mismatch (category and delivery deadline), cites verified conditions, and gives a clear, executable recovery path — adjusting conditions or changing candidates before retrying. No hallucination, no unsupported claims, no empty fallback — this is a fully compliant, evidence-grounded fallback response.",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 2271,
+              "model": "qwen-plus",
+              "output_tokens": 267,
+              "provider": "litellm",
+              "total_tokens": 2538
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.069640Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "b550c345ee1dbeb7",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "16d1c9f1-952d-405b-9bd6-4dca4610910f",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.832353Z",
+        "output": "当前候选与已确认的硬约束冲突，不能据此推荐无关商品。已核验条件：品类 baby_kids、送达时间 2026-09-24 04:23:23.085862+00:00。请调整条件或更换候选后再试。",
+        "spanId": "97c4dadf92b473e2",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "11850263-939c-4800-a91c-d02b823358ad:metric:talonmart_abcd_quality:1",
+              "11850263-939c-4800-a91c-d02b823358ad:metric:talonmart_contract_guard:1",
+              "11850263-939c-4800-a91c-d02b823358ad:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2538,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"这辆婴儿车必须一小时内送到。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 7776,
+      "occurredAt": "2026-09-24T03:23:30.832353Z",
+      "startedAt": "2026-09-24T03:23:30.832353Z",
+      "testId": "11850263-939c-4800-a91c-d02b823358ad",
+      "testResultId": "ecd62514-280f-4a89-bcd5-b7d6c6c257fb",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "11850263-939c-4800-a91c-d02b823358ad:metric:talonmart_abcd_quality:1",
+            "11850263-939c-4800-a91c-d02b823358ad:metric:talonmart_contract_guard:1",
+            "11850263-939c-4800-a91c-d02b823358ad:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2538,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:31.024367Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "7264869e-82a6-4be4-9002-88d3349962a1",
+        "caseResultId": "f683de81-1432-44cb-bf86-8b17302f1e53",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:31.024367Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "no_candidates",
+          "expected_goal": {
+            "budget_max": 100,
+            "candidate_item_ids": [
+              "item_smart_tv_43"
+            ],
+            "category_id": "electronics",
+            "required_specs": [
+              "4K"
+            ]
+          },
+          "expected_response_type": "fallback",
+          "failure_mode": "no_candidates",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "empty_tv_results",
+              "expected": [],
+              "operator": "eq",
+              "target": "recommended_items"
+            }
+          ],
+          "required_tools": [
+            "product_search"
+          ],
+          "scenario_id": "shop_none_tv_under_100"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"要 4K 电视，预算不超过 100。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_smart_tv_43\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 11715,
+        "metadata": {
+          "category": "no_candidates",
+          "scenario_id": "shop_none_tv_under_100",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "no_candidates",
+            "budget_boundary",
+            "specification"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.024367Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "response_type == 'fallback' matches expected_response_type",
+              "recommended_items is empty and explicitly attributed to confirmed_constraint_mismatch",
+              "product_search called successfully with query='电视' and returned 6 items",
+              "product_reviews not called (forbidden_tools respected)",
+              "output message aligns with metadata.payload.answer and explains constraint conflict clearly",
+              "recovery instruction specifies concrete next steps: 'adjust conditions or change candidate'"
+            ],
+            "latencyMs": 9587,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "df126c96-abd6-474a-b9a4-8d00e59e2d71",
+            "passed": true,
+            "reason": "1. 响应类型为 fallback，符合 expected_response_type；2. 购物目标中 budget_max=100、category_id='electronics'、required_specs=['4K']、candidate_item_ids=['item_smart_tv_43'] 均被明确核验并指出硬约束冲突（预算上限与4K电视市场现实不兼容），满足 hard_assertions（recommended_items 为空且明确归因于约束冲突）；3. required_tools 中 product_search 成功调用（itemCount=6），product_snapshot 属于后续快照步骤，非 required_tools 所列，且 forbidden_tools（product_reviews）未调用；4. 推荐失败理由‘当前候选与已确认的硬约束冲突’有 tool_calls 中 product_search 返回 6 个结果但无一满足 4K+≤100 的上下文支持（retrieved_context 空，但 metadata.payload.reason_code='confirmed_constraint_mismatch' 佐证）；5. 终态为诚实 fallback：指出具体冲突（budget 100 vs 4K TV 市场现实）、保留全部原始约束、明确建议‘调整条件或更换候选后再试’，具备可继续执行性；6. 无编造商品/价格/评论/来源，output 与 metadata.payload.answer 完全一致，未引入额外信息。全部硬条件满足，表达清晰、证据链完整。",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 2362,
+              "model": "qwen-plus",
+              "output_tokens": 420,
+              "provider": "litellm",
+              "total_tokens": 2782
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.024367Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "a29582d3bba65cb0",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "1cf2e3f6-1611-4dc0-884c-6084e74ae1d6",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.831468Z",
+        "output": "当前候选与已确认的硬约束冲突，不能据此推荐无关商品。已核验条件：品类 electronics、预算上限 100。请调整条件或更换候选后再试。",
+        "spanId": "44a34e19aa8b27ff",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "7264869e-82a6-4be4-9002-88d3349962a1:metric:talonmart_abcd_quality:1",
+              "7264869e-82a6-4be4-9002-88d3349962a1:metric:talonmart_contract_guard:1",
+              "7264869e-82a6-4be4-9002-88d3349962a1:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2782,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"要 4K 电视，预算不超过 100。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_smart_tv_43\"}]}}"
+      },
+      "latencyMs": 11715,
+      "occurredAt": "2026-09-24T03:23:30.831468Z",
+      "startedAt": "2026-09-24T03:23:30.831468Z",
+      "testId": "7264869e-82a6-4be4-9002-88d3349962a1",
+      "testResultId": "f683de81-1432-44cb-bf86-8b17302f1e53",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "7264869e-82a6-4be4-9002-88d3349962a1:metric:talonmart_abcd_quality:1",
+            "7264869e-82a6-4be4-9002-88d3349962a1:metric:talonmart_contract_guard:1",
+            "7264869e-82a6-4be4-9002-88d3349962a1:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2782,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:31.034340Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "291d9ede-6887-4226-8977-3db2286b7f35",
+        "caseResultId": "14045a95-5be2-454f-901a-d2a19ec078e6",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:31.034340Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "no_candidates",
+          "expected_goal": {
+            "budget_max": 5,
+            "category_id": "electronics"
+          },
+          "expected_response_type": "fallback",
+          "failure_mode": "no_candidates",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "never_break_budget",
+              "expected": 5,
+              "operator": "lte",
+              "target": "recommended_items[*].price"
+            }
+          ],
+          "required_tools": [
+            "product_search"
+          ],
+          "scenario_id": "shop_none_electronics_under_5"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"找 5 元以内的电子产品。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"电子产品\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 7194,
+        "metadata": {
+          "category": "no_candidates",
+          "scenario_id": "shop_none_electronics_under_5",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "no_candidates",
+            "budget_boundary"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.034340Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "product_search was called with query \"电子产品\" and returned 6 items",
+              "product_snapshot was called successfully",
+              "hard_assertion \"never_break_budget\" requires all recommended_items[*].price <= 5, but no candidates were found so no items violate budget",
+              "failure_mode is \"no_candidates\", matching expected failure mode",
+              "forbidden_tools includes \"product_reviews\", which was not called",
+              "required_tools includes \"product_search\", which was successfully called",
+              "response_type is \"fallback\", matching expected_response_type",
+              "output explains the hard constraint mismatch (category electronics + budget_max 5) and suggests actionable next steps (adjust conditions or change candidates)"
+            ],
+            "latencyMs": 5133,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "22ba4e81-7a74-45c4-937b-7c70028b68b4",
+            "passed": true,
+            "reason": "All hard constraints are satisfied: product_search was required and called successfully; product_reviews (forbidden) was not called; the fallback response correctly identifies the confirmed constraint mismatch (electronics category + $5 budget boundary) and provides actionable recovery guidance. No candidates exist, so the empty candidate set is justified and the response avoids fabrication. Evidence from tool_calls and metadata fully supports the stated reason.",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 2347,
+              "model": "qwen-plus",
+              "output_tokens": 217,
+              "provider": "litellm",
+              "total_tokens": 2564
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.034340Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "684bb12185ef0a74",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 6,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "651fe39c-66ee-4e42-8eaf-b0f3b926ae89",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.830469Z",
+        "output": "当前候选与已确认的硬约束冲突，不能据此推荐无关商品。已核验条件：品类 electronics、预算上限 5。请调整条件或更换候选后再试。",
+        "spanId": "64a5313d9889d462",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "291d9ede-6887-4226-8977-3db2286b7f35:metric:talonmart_abcd_quality:1",
+              "291d9ede-6887-4226-8977-3db2286b7f35:metric:talonmart_contract_guard:1",
+              "291d9ede-6887-4226-8977-3db2286b7f35:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2564,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"找 5 元以内的电子产品。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"电子产品\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 7194,
+      "occurredAt": "2026-09-24T03:23:30.830469Z",
+      "startedAt": "2026-09-24T03:23:30.830469Z",
+      "testId": "291d9ede-6887-4226-8977-3db2286b7f35",
+      "testResultId": "14045a95-5be2-454f-901a-d2a19ec078e6",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "291d9ede-6887-4226-8977-3db2286b7f35:metric:talonmart_abcd_quality:1",
+            "291d9ede-6887-4226-8977-3db2286b7f35:metric:talonmart_contract_guard:1",
+            "291d9ede-6887-4226-8977-3db2286b7f35:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2564,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.951945Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "16b0186b-74bb-43b9-8b92-ba34d00cd867",
+        "caseResultId": "a28e7f7a-2d17-4fb9-ae01-81be2967cb25",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.951945Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "no_candidates",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_wireless_earbuds"
+            ],
+            "category_id": "electronics",
+            "include_brands": [
+              "NovaSound"
+            ]
+          },
+          "expected_response_type": "fallback",
+          "failure_mode": "no_candidates",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "empty_results",
+              "expected": [],
+              "operator": "eq",
+              "target": "recommended_items"
+            }
+          ],
+          "required_tools": [
+            "product_search"
+          ],
+          "scenario_id": "shop_none_unknown_earbud_brand"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"只要不存在的 NovaSound 品牌无线耳机。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"无线耳机\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 13149,
+        "metadata": {
+          "category": "no_candidates",
+          "scenario_id": "shop_none_unknown_earbud_brand",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "no_candidates",
+            "brand_preference"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.951945Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "expected_response_type='fallback' matches output's fallback nature",
+              "hard_assertion 'recommended_items == []' satisfied as no recommendation was made",
+              "required_tool 'product_search' successfully called with query '无线耳机 NovaSound'",
+              "forbidden_tool 'product_reviews' not invoked",
+              "response explicitly cites 'category electronics, brand NovaSound' as verified constraints",
+              "metadata.payload.reason_code='confirmed_constraint_mismatch' corroborates explanation",
+              "recovery instruction '请调整条件或更换候选后再试' is specific and actionable",
+              "no fabricated facts: all claims align with tool results and metadata"
+            ],
+            "latencyMs": 10785,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "2ca3e87e-b0c1-4f89-b2e0-56ed5c82fcde",
+            "passed": true,
+            "reason": "1. 响应类型为 fallback，符合 expected_response_type；2. 契约要求 category=no_candidates 且 hard_assertion 要求 recommended_items=[]，output 为空推荐（fallback 响应不包含 recommended_items 字段，符合 no_candidates 终态）；3. required_tools 中 product_search 已调用（tool_calls 包含 product_search，resultSummary.itemCount=6 表明执行成功），product_snapshot 属于额外调用但非 forbidden，forbidden_tools=['product_reviews'] 确实未调用；4. 响应明确指出 '硬约束冲突：品类 electronics、品牌 NovaSound'，与 expected_goal 中 category_id='electronics' 和 include_brands=['NovaSound'] 一致，且 product_search 查询为 '无线耳机 NovaSound' 返回 6 项但后续过滤为空（metadata.payload.reason_code='confirmed_constraint_mismatch'），说明工具链已验证无满足全部硬约束的候选，结论有证据支持；5. 响应给出可继续执行的恢复终态：'请调整条件或更换候选后再试'，明确指向约束冲突，并保留了原始目标要素（品类/品牌），具备可操作性；6. 无编造商品、价格、评论等；所有工具名标准化匹配（product_search 正确，无别名混淆）。证据完整闭环：product_search 执行成功但最终 no_candidates，reason_code 和 response 内容一致，符合 failure_mode='no_candidates'。",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 2359,
+              "model": "qwen-plus",
+              "output_tokens": 471,
+              "provider": "litellm",
+              "total_tokens": 2830
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.951945Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "46916cf87ea92e8d",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 6,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "6674d9e1-1831-40d0-b99c-a004f87efdca",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.829570Z",
+        "output": "当前候选与已确认的硬约束冲突，不能据此推荐无关商品。已核验条件：品类 electronics、品牌 NovaSound。请调整条件或更换候选后再试。",
+        "spanId": "63761fc79697822d",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "16b0186b-74bb-43b9-8b92-ba34d00cd867:metric:talonmart_abcd_quality:1",
+              "16b0186b-74bb-43b9-8b92-ba34d00cd867:metric:talonmart_contract_guard:1",
+              "16b0186b-74bb-43b9-8b92-ba34d00cd867:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2830,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"只要不存在的 NovaSound 品牌无线耳机。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"无线耳机\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"}]}}"
+      },
+      "latencyMs": 13149,
+      "occurredAt": "2026-09-24T03:23:30.829570Z",
+      "startedAt": "2026-09-24T03:23:30.829570Z",
+      "testId": "16b0186b-74bb-43b9-8b92-ba34d00cd867",
+      "testResultId": "a28e7f7a-2d17-4fb9-ae01-81be2967cb25",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "16b0186b-74bb-43b9-8b92-ba34d00cd867:metric:talonmart_abcd_quality:1",
+            "16b0186b-74bb-43b9-8b92-ba34d00cd867:metric:talonmart_contract_guard:1",
+            "16b0186b-74bb-43b9-8b92-ba34d00cd867:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2830,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:31.055914Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "a5a782a6-ff86-4629-bc4f-670e54ecdbee",
+        "caseResultId": "91514ea5-8935-4837-a367-a9515fb83a1a",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:31.055914Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "constraint_conflict",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_xiaomi_air_fryer_6_5l"
+            ],
+            "category_id": "electronics",
+            "exclude_brands": [
+              "Xiaomi"
+            ],
+            "required_specs": [
+              "容量至少 6.5L"
+            ]
+          },
+          "expected_response_type": "fallback",
+          "failure_mode": "constraint_conflict",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "no_invalid_candidate",
+              "expected": [],
+              "operator": "eq",
+              "target": "recommended_items"
+            }
+          ],
+          "required_tools": [
+            "product_search"
+          ],
+          "scenario_id": "shop_conflict_capacity_brand"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"空气炸锅必须 6.5L，但不要小米。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_fryer_6_5l\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 12833,
+        "metadata": {
+          "category": "constraint_conflict",
+          "scenario_id": "shop_conflict_capacity_brand",
+          "stages": [
+            "A",
+            "B",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "constraint_conflict",
+            "brand_exclusion",
+            "specification"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.055914Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "expected_response_type='fallback' matches output response_type='fallback'",
+              "hard_assertion 'no_invalid_candidate': recommended_items=[] and expected=[] → pass",
+              "candidate_item_ids=['item_xiaomi_air_fryer_6_5l'] conflicts with exclude_brands=['Xiaomi'] → constraint conflict confirmed",
+              "required_tool 'product_search' successfully called (tool_calls contains product_search)",
+              "forbidden_tool 'product_reviews' absent in tool_calls",
+              "output states explicit conflict: '候选与已确认的硬约束冲突' + lists 'electronics, 排除品牌 Xiaomi'",
+              "recovery instruction '调整条件或更换候选后再试' is actionable and preserves constraint semantics",
+              "no fabricated facts: no price, stock, review, or source claims made"
+            ],
+            "latencyMs": 11374,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "5d473d45-cc72-4f33-b522-545115326d5b",
+            "passed": true,
+            "reason": "1. 响应类型符合 expected_response_type='fallback'，且 failure_mode='constraint_conflict' 明确标识冲突；2. 硬约束 fully satisfied：candidate_item_ids=['item_xiaomi_air_fryer_6_5l'] 与 exclude_brands=['Xiaomi'] 冲突，该候选唯一满足容量≥6.5L但品牌被硬排除，故 recommended_items=[] 正确（hard_assertion 'no_invalid_candidate' passes）；3. required_tools=['product_search'] 已成功调用（tool_calls 包含 product_search），forbidden_tools=['product_reviews'] 未调用；4. 推荐失败理由诚实可验证：输出明确指出'候选与已确认的硬约束冲突'，并复述约束（electronics类、排除Xiaomi），与 expected_goal 和 metadata 中的 confirmed_constraint_mismatch 一致；5. 终态为可继续执行的恢复：建议'调整条件或更换候选后再试'，虽未列具体替代方案，但已保留全部原始约束语义并指向明确操作（非泛泛'稍后重试'），符合 fallback 定义；6. 无编造事实：未声称商品存在/缺货/价格/评论，未调用 product_reviews，snapshot 调用属过滤环节必要步骤，不违反 forbidden_tools；所有判断均基于契约中给定的冲突事实，证据链完整。",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 2407,
+              "model": "qwen-plus",
+              "output_tokens": 499,
+              "provider": "litellm",
+              "total_tokens": 2906
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.055914Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "cb50fd731cbd068d",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "9f6b2ba5-d148-4c24-bb44-d41a6760ceb5",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.828744Z",
+        "output": "当前候选与已确认的硬约束冲突，不能据此推荐无关商品。已核验条件：品类 electronics、排除品牌 Xiaomi。请调整条件或更换候选后再试。",
+        "spanId": "91508114e78075fe",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "a5a782a6-ff86-4629-bc4f-670e54ecdbee:metric:talonmart_abcd_quality:1",
+              "a5a782a6-ff86-4629-bc4f-670e54ecdbee:metric:talonmart_contract_guard:1",
+              "a5a782a6-ff86-4629-bc4f-670e54ecdbee:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2906,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"空气炸锅必须 6.5L，但不要小米。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_fryer_6_5l\"}]}}"
+      },
+      "latencyMs": 12833,
+      "occurredAt": "2026-09-24T03:23:30.828744Z",
+      "startedAt": "2026-09-24T03:23:30.828744Z",
+      "testId": "a5a782a6-ff86-4629-bc4f-670e54ecdbee",
+      "testResultId": "91514ea5-8935-4837-a367-a9515fb83a1a",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "a5a782a6-ff86-4629-bc4f-670e54ecdbee:metric:talonmart_abcd_quality:1",
+            "a5a782a6-ff86-4629-bc4f-670e54ecdbee:metric:talonmart_contract_guard:1",
+            "a5a782a6-ff86-4629-bc4f-670e54ecdbee:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2906,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.998233Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "2ad92e7b-3617-46b6-82b8-8e403d9e592d",
+        "caseResultId": "4e74b662-657c-4192-b600-81fe64a62e79",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.998233Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "constraint_conflict",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_xiaomi_air_purifier_4"
+            ],
+            "category_id": "electronics",
+            "exclude_brands": [
+              "Xiaomi"
+            ],
+            "include_brands": [
+              "Xiaomi"
+            ]
+          },
+          "expected_response_type": "clarification",
+          "failure_mode": "constraint_conflict",
+          "forbidden_tools": [
+            "product_search"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "brand_conflict",
+              "expected": "brand",
+              "operator": "contains",
+              "target": "conflicts[*].field"
+            }
+          ],
+          "required_tools": [],
+          "scenario_id": "shop_conflict_include_exclude_xiaomi"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"只要小米，但同时排除小米品牌。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_purifier_4\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 6898,
+        "metadata": {
+          "category": "constraint_conflict",
+          "scenario_id": "shop_conflict_include_exclude_xiaomi",
+          "stages": [
+            "A",
+            "B",
+            "C"
+          ],
+          "tags": [
+            "constraint_conflict",
+            "brand_preference",
+            "brand_exclusion"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.998233Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 1.0,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "Constraint conflict correctly detected: include_brands=[\"Xiaomi\"] vs exclude_brands=[\"Xiaomi\"]",
+              "Response type is 'clarification', matching expected_response_type",
+              "Three options provided: resolve:brand:hard:Xiaomi, resolve:brand:exclude:Xiaomi, skip:brand",
+              "No forbidden tool (product_search) was called",
+              "No required tools were missing or needed",
+              "Output string matches metadata.payload.answer exactly",
+              "No hallucinated facts, prices, inventory, or reviews",
+              "Clarification preserves full context and enables unambiguous user resolution"
+            ],
+            "latencyMs": 6731,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "b173bbd9-6172-44b5-80f1-52920242ebd9",
+            "passed": true,
+            "reason": "The response correctly identifies a brand constraint conflict between 'include_brands: [\"Xiaomi\"]' and 'exclude_brands: [\"Xiaomi\"]', matching the expected failure_mode 'constraint_conflict'. It produces a clarification response (expected_response_type) with three valid, labeled options that directly resolve the brand conflict per hard_assertion 'brand_conflict' — one for keeping inclusion, one for keeping exclusion, and one for skipping. No forbidden tools (product_search) were called, and no required tools were needed. The output matches metadata.payload.answer exactly and contains no hallucinated facts, unsupported claims, or incorrect business state. All hard constraints are satisfied, and the clarification is actionable and preserves all context for next-step resolution.",
+            "score": 1.0,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 1736,
+              "model": "qwen-plus",
+              "output_tokens": 287,
+              "provider": "litellm",
+              "total_tokens": 2023
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.998233Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "ac6e6988a996d5d8",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "1281c2c9-c4f1-4dc8-9ea8-fa55d5f7d411",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.827802Z",
+        "output": "品牌要求和排除条件冲突了，你想保留哪一个？",
+        "spanId": "89d030e11a854dd4",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "2ad92e7b-3617-46b6-82b8-8e403d9e592d:metric:talonmart_abcd_quality:1",
+              "2ad92e7b-3617-46b6-82b8-8e403d9e592d:metric:talonmart_contract_guard:1",
+              "2ad92e7b-3617-46b6-82b8-8e403d9e592d:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2023,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"只要小米，但同时排除小米品牌。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_purifier_4\"}]}}"
+      },
+      "latencyMs": 6898,
+      "occurredAt": "2026-09-24T03:23:30.827802Z",
+      "startedAt": "2026-09-24T03:23:30.827802Z",
+      "testId": "2ad92e7b-3617-46b6-82b8-8e403d9e592d",
+      "testResultId": "4e74b662-657c-4192-b600-81fe64a62e79",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "2ad92e7b-3617-46b6-82b8-8e403d9e592d:metric:talonmart_abcd_quality:1",
+            "2ad92e7b-3617-46b6-82b8-8e403d9e592d:metric:talonmart_contract_guard:1",
+            "2ad92e7b-3617-46b6-82b8-8e403d9e592d:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2023,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:31.014608Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "f0854d9e-7f3e-40df-aa8c-128a602f833c",
+        "caseResultId": "f87f025b-971c-4c80-95b4-7f0c397b93d7",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:31.014608Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "constraint_conflict",
+          "expected_goal": {
+            "budget_max": 50,
+            "candidate_item_ids": [
+              "item_smart_tv_43"
+            ],
+            "category_id": "electronics"
+          },
+          "expected_response_type": "clarification",
+          "failure_mode": "constraint_conflict",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "surface_price_conflict",
+              "expected": "budget_max",
+              "operator": "contains",
+              "target": "conflicts[*].field"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "shop_conflict_tv_budget"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"要这台 43 英寸电视，但预算不能超过 50。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_smart_tv_43\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 7704,
+        "metadata": {
+          "category": "constraint_conflict",
+          "scenario_id": "shop_conflict_tv_budget",
+          "stages": [
+            "A",
+            "B",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "constraint_conflict",
+            "budget_boundary"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.014608Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "response_type matches 'clarification'",
+              "required_tool 'product_snapshot' called and succeeded",
+              "forbidden_tool 'product_reviews' not called",
+              "hard_assertion 'surface_price_conflict' satisfied via 'budget_max' conflict surface",
+              "recovery options are specific and executable: 'relax_budget' and 'change_candidate'",
+              "no hallucinated facts; conflict logically derived from product_snapshot result"
+            ],
+            "latencyMs": 6100,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "ff2a7650-873f-4ff4-bd21-535ee8d3d8ac",
+            "passed": true,
+            "reason": "The response correctly identifies a budget constraint conflict for the specified item (item_smart_tv_43) and matches expected_response_type 'clarification'. It calls the required tool 'product_snapshot' successfully and avoids forbidden 'product_reviews'. The hard assertion 'surface_price_conflict' is satisfied: the conflict is surfaced in the response and maps to 'budget_max' via the clarification options ('relax_budget' and 'change_candidate'). The output provides two actionable, non-generic recovery options with clear intent — raising budget or switching candidates — satisfying 'honest and executable recovery'. No hallucination: price conflict is inferred from tool call (product_snapshot), and no unsupported facts are stated. Evidence is empty but appropriate since no external context was retrieved and the conflict is derived solely from the required tool's outcome.",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 2049,
+              "model": "qwen-plus",
+              "output_tokens": 259,
+              "provider": "litellm",
+              "total_tokens": 2308
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.014608Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "73d32337f6c1c3f1",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "d15aa9ab-039f-4006-b16a-53b2133fa397",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.826392Z",
+        "output": "当前指定商品的已核验价格超出预算。请选择提高预算，或保留预算并改看其他商品。",
+        "spanId": "cf19349184cb35cd",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "f0854d9e-7f3e-40df-aa8c-128a602f833c:metric:talonmart_abcd_quality:1",
+              "f0854d9e-7f3e-40df-aa8c-128a602f833c:metric:talonmart_contract_guard:1",
+              "f0854d9e-7f3e-40df-aa8c-128a602f833c:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2308,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"要这台 43 英寸电视，但预算不能超过 50。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_smart_tv_43\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 7704,
+      "occurredAt": "2026-09-24T03:23:30.826392Z",
+      "startedAt": "2026-09-24T03:23:30.826392Z",
+      "testId": "f0854d9e-7f3e-40df-aa8c-128a602f833c",
+      "testResultId": "f87f025b-971c-4c80-95b4-7f0c397b93d7",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "f0854d9e-7f3e-40df-aa8c-128a602f833c:metric:talonmart_abcd_quality:1",
+            "f0854d9e-7f3e-40df-aa8c-128a602f833c:metric:talonmart_contract_guard:1",
+            "f0854d9e-7f3e-40df-aa8c-128a602f833c:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2308,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.918153Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "0833752a-9962-4056-a47a-04f915a3e460",
+        "caseResultId": "6a5a74f8-d01d-4c8c-9bc4-f0d7158a1ca4",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.918153Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "review_summary",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_baby_stroller"
+            ],
+            "category_id": "baby_kids",
+            "required_specs": [
+              "便携性"
+            ]
+          },
+          "expected_response_type": "answer",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_search"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "portable_topic",
+              "expected": "便携性",
+              "operator": "contains",
+              "target": "review_summary.requested_topics"
+            }
+          ],
+          "required_tools": [
+            "product_reviews"
+          ],
+          "scenario_id": "shop_review_stroller_summary"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"总结这辆婴儿车评论中的便携性反馈。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 1,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 10297,
+        "metadata": {
+          "category": "review_summary",
+          "scenario_id": "shop_review_stroller_summary",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "review_summary",
+            "specification",
+            "evidence_required"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.918153Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "retrieved_context contains {\"status\":\"no_reviews\",\"requested_topics\":[\"便携性\"]}",
+              "tool_calls includes 'product_reviews' with status 'succeeded'",
+              "output truthfully states inability to summarize '便携性' due to no reviews",
+              "forbidden_tools ['product_search'] not present in tool_calls",
+              "hard_assertion 'portable_topic' satisfied: requested_topics contains '便携性'"
+            ],
+            "latencyMs": 8595,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "c5281f1f-e4fb-4489-9e36-791b71498630",
+            "passed": true,
+            "reason": "1. 响应类型和结构符合 expected_response_type='answer'；2. 购物目标中 candidate_item_ids=['item_baby_stroller']、category_id='baby_kids'、required_specs=['便携性']均被尊重；hard_assertions 中要求 review_summary.requested_topics 包含 '便携性'，retrieved_context 显示 \"requested_topics\":[\"便携性\"]，满足；3. required_tools=['product_reviews'] 已成功调用（tool_calls 包含 name='product_reviews' 且 status='succeeded'），forbidden_tools=['product_search'] 未调用；4. 商品事实（无可用评论）与 retrieved_context 中 \"status\":\"no_reviews\" 和 \"reported_review_count\":0 一致，推荐理由（无法总结便携性）有证据支持；5. 空评论导致无法生成总结，响应明确说明'当前商品没有可用于总结便携性的评论，因此无法判断该主题'，属诚实且可继续执行的恢复终态（用户可换商品或补充需求）；6. 未编造商品、价格、评论等。所有硬约束均满足，表达清晰、证据链完整。",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 2125,
+              "model": "qwen-plus",
+              "output_tokens": 374,
+              "provider": "litellm",
+              "total_tokens": 2499
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.918153Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "ae923dceeda6cdd9",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "c437d104-4347-457a-9347-7b5c1b8a0305",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.825188Z",
+        "output": "当前商品没有可用于总结“便携性”的评论，因此无法判断该主题。",
+        "spanId": "9e381a4bab7e85e4",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "0833752a-9962-4056-a47a-04f915a3e460:metric:talonmart_abcd_quality:1",
+              "0833752a-9962-4056-a47a-04f915a3e460:metric:talonmart_contract_guard:1",
+              "0833752a-9962-4056-a47a-04f915a3e460:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2499,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"总结这辆婴儿车评论中的便携性反馈。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 10297,
+      "occurredAt": "2026-09-24T03:23:30.825188Z",
+      "startedAt": "2026-09-24T03:23:30.825188Z",
+      "testId": "0833752a-9962-4056-a47a-04f915a3e460",
+      "testResultId": "6a5a74f8-d01d-4c8c-9bc4-f0d7158a1ca4",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "0833752a-9962-4056-a47a-04f915a3e460:metric:talonmart_abcd_quality:1",
+            "0833752a-9962-4056-a47a-04f915a3e460:metric:talonmart_contract_guard:1",
+            "0833752a-9962-4056-a47a-04f915a3e460:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2499,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:31.043334Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "e3cc2522-c15c-45da-9758-63d5b2c2a082",
+        "caseResultId": "9332686e-1434-4fd0-b6ca-38eb219bbb01",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:31.043334Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "review_summary",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_smart_tv_43"
+            ],
+            "category_id": "electronics"
+          },
+          "expected_response_type": "answer",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_search"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "review_count_present",
+              "expected": 0,
+              "operator": "gte",
+              "target": "review_summary.review_count"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot",
+            "product_reviews"
+          ],
+          "scenario_id": "shop_review_tv_summary"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"这台 43 英寸电视的评价集中反映什么？\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_smart_tv_43\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 1,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 6005,
+        "metadata": {
+          "category": "review_summary",
+          "scenario_id": "shop_review_tv_summary",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "review_summary",
+            "evidence_required"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.043334Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "product_snapshot succeeded",
+              "product_reviews succeeded",
+              "retrieved_context contains \"reported_review_count\":0 and \"status\":\"no_reviews\"",
+              "hard_assertion review_count_present requires >=0 reviews, and 0 satisfies gte 0"
+            ],
+            "latencyMs": 4302,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "b4c70640-47e3-4fa0-84be-b8784b952f14",
+            "passed": true,
+            "reason": "All required tools (product_snapshot and product_reviews) were successfully called. The retrieved context explicitly states \"reported_review_count\":0 and \"status\":\"no_reviews\", which satisfies the hard assertion 'review_count_present' (0 >= 0). The output honestly states no usable reviews exist for the topic, which is consistent with evidence and constitutes an honest, actionable recovery state — it correctly conveys inability to summarize due to absence of reviews, with no fabrication. Response type is 'answer', matching expected_response_type. No forbidden tools were used. All constraints are satisfied; no critical or hard violations occurred.",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 2059,
+              "model": "qwen-plus",
+              "output_tokens": 180,
+              "provider": "litellm",
+              "total_tokens": 2239
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:31.043334Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "1f7d2439ce0435ed",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "ebfede9e-a729-41c9-a44a-8cdf56d76687",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.824433Z",
+        "output": "当前商品没有可用于总结指定主题的评论，因此无法判断该主题。",
+        "spanId": "6d11e0c31d37fe98",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "e3cc2522-c15c-45da-9758-63d5b2c2a082:metric:talonmart_abcd_quality:1",
+              "e3cc2522-c15c-45da-9758-63d5b2c2a082:metric:talonmart_contract_guard:1",
+              "e3cc2522-c15c-45da-9758-63d5b2c2a082:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2239,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"这台 43 英寸电视的评价集中反映什么？\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_smart_tv_43\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 6005,
+      "occurredAt": "2026-09-24T03:23:30.824433Z",
+      "startedAt": "2026-09-24T03:23:30.824433Z",
+      "testId": "e3cc2522-c15c-45da-9758-63d5b2c2a082",
+      "testResultId": "9332686e-1434-4fd0-b6ca-38eb219bbb01",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "e3cc2522-c15c-45da-9758-63d5b2c2a082:metric:talonmart_abcd_quality:1",
+            "e3cc2522-c15c-45da-9758-63d5b2c2a082:metric:talonmart_contract_guard:1",
+            "e3cc2522-c15c-45da-9758-63d5b2c2a082:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2239,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.975158Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "63ac266f-2033-4278-a4de-80302026a753",
+        "caseResultId": "632b07dd-4548-450d-b3d2-c1acf412db44",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.975158Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "review_summary",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_wireless_earbuds"
+            ],
+            "category_id": "electronics"
+          },
+          "expected_response_type": "answer",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_search"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "review_item_bound",
+              "expected": "item_wireless_earbuds",
+              "operator": "eq",
+              "target": "review_summary.item_id"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot",
+            "product_reviews"
+          ],
+          "scenario_id": "shop_review_earbuds_summary"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"总结这款无线耳机评价中的优缺点。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_wireless_earbuds\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 1,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 11980,
+        "metadata": {
+          "category": "review_summary",
+          "scenario_id": "shop_review_earbuds_summary",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "review_summary",
+            "evidence_required"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.975158Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "retrieved_context contains {\"item_id\":\"item_wireless_earbuds\",\"status\":\"no_reviews\"}",
+              "tool_calls include both product_snapshot and product_reviews with status 'succeeded'",
+              "output truthfully states '当前商品没有可用于总结“缺点”的评论' matching retrieved_context",
+              "forbidden_tools['product_search'] not present in tool_calls",
+              "expected_response_type 'answer' matches output format"
+            ],
+            "latencyMs": 9929,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "9fb5aed8-2aa0-4afb-a709-2ce1f784339c",
+            "passed": true,
+            "reason": "1. 响应类型为 'answer'，符合 expected_response_type；2. 购物目标中 candidate_item_ids=['item_wireless_earbuds']，hard_assertion 要求 review_summary.item_id == 'item_wireless_earbuds' —— 虽 output 未显式输出 item_id 字段，但 retrieved_context 明确包含 '\"item_id\":\"item_wireless_earbuds\"'，且整个响应聚焦于该商品的评论总结，满足约束；3. required_tools ['product_snapshot', 'product_reviews'] 均成功调用（tool_calls 中 status: 'succeeded'），forbidden_tools ['product_search'] 未调用；4. 商品事实（无可用评论）被 retrieved_context 和 tool_calls 共同支持：retrieved_context 是 '{\"insights\":[],\"item_id\":\"item_wireless_earbuds\",\"reported_review_count\":0,...\"status\":\"no_reviews\"}'，与 output '当前商品没有可用于总结“缺点”的评论' 完全一致，结论有强证据；5. 空评论场景下，响应诚实声明无法判断主题，并给出明确终态（非编造、非模糊引导），属于可继续执行的恢复终态（例如用户可换主题如'优点'或请求重试）；6. 未编造商品、价格、评论等任何信息。全部硬条件满足，表达清晰、证据链完整且可解释。",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 2081,
+              "model": "qwen-plus",
+              "output_tokens": 430,
+              "provider": "litellm",
+              "total_tokens": 2511
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.975158Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "d7b05dbb9e7697df",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 6,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "904342dd-60e4-4a78-a8eb-80276e6a3f55",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.823545Z",
+        "output": "当前商品没有可用于总结“缺点”的评论，因此无法判断该主题。",
+        "spanId": "a7652a1e8d48ac2a",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "63ac266f-2033-4278-a4de-80302026a753:metric:talonmart_abcd_quality:1",
+              "63ac266f-2033-4278-a4de-80302026a753:metric:talonmart_contract_guard:1",
+              "63ac266f-2033-4278-a4de-80302026a753:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2511,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"总结这款无线耳机评价中的优缺点。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_wireless_earbuds\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 11980,
+      "occurredAt": "2026-09-24T03:23:30.823545Z",
+      "startedAt": "2026-09-24T03:23:30.823545Z",
+      "testId": "63ac266f-2033-4278-a4de-80302026a753",
+      "testResultId": "632b07dd-4548-450d-b3d2-c1acf412db44",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "63ac266f-2033-4278-a4de-80302026a753:metric:talonmart_abcd_quality:1",
+            "63ac266f-2033-4278-a4de-80302026a753:metric:talonmart_contract_guard:1",
+            "63ac266f-2033-4278-a4de-80302026a753:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2511,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.986702Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "4540da25-6fea-4e1f-8219-478e0ad573af",
+        "caseResultId": "337499a9-6410-4fd4-9c41-5a2b95aa6c29",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.986702Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "comparison",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_xiaomi_air_purifier_4",
+              "item_xiaomi_robot_vacuum_x20_plus"
+            ],
+            "category_id": "electronics",
+            "include_brands": [
+              "Xiaomi"
+            ]
+          },
+          "expected_response_type": "comparison",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "compare_candidate_ids",
+              "expected": [
+                "item_xiaomi_air_purifier_4",
+                "item_xiaomi_robot_vacuum_x20_plus"
+              ],
+              "operator": "contains",
+              "target": "comparison.product_ids"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "shop_compare_xiaomi_cleaning"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"比较小米空气净化器和扫拖机器人，不要混淆功能。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_purifier_4\"},{\"item_id\":\"item_xiaomi_robot_vacuum_x20_plus\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 2,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 11591,
+        "metadata": {
+          "category": "comparison",
+          "scenario_id": "shop_compare_xiaomi_cleaning",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "comparison",
+            "brand_preference"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.986702Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 1.0,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "Response type 'comparison' matches expected_response_type.",
+              "candidate_item_ids ['item_xiaomi_air_purifier_4', 'item_xiaomi_robot_vacuum_x20_plus'] are both present in output comparison.product_ids (inferred from payload.products and rows, and explicitly referenced in answer).",
+              "Both items belong to category 'electronics' and brand 'Xiaomi' — confirmed via retrieved_context facts and metadata.",
+              "required_tools: ['product_snapshot'] was successfully called (tool_calls contains 'product_snapshot' with status 'succeeded').",
+              "forbidden_tools: ['product_reviews'] was not called — verified in tool_calls.",
+              "All stated facts (prices: 179.99 CNY and 399.99 CNY; specs: 'Smart air purifier for rooms up to 48m2' and 'Robot vacuum and mop with auto-empty station') are directly supported by retrieved_context and evidence.fact entries (e.g., 'fact:snapshot-...:current_price', 'fact:snapshot-...:spec').",
+              "No hallucinated items, prices, specs, or sources — all match snapshot facts.",
+              "No uncertain/unsupported claims: 'Xiaomi Smart Air Purifier 4 is lower' is correctly derived from verified prices.",
+              "Output is a valid comparison response with side-by-side factual attributes — satisfies structural and semantic expectations."
+            ],
+            "latencyMs": 9902,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "f06b0413-361e-44c7-92ac-5e335295190b",
+            "passed": true,
+            "reason": "All hard assertions pass: candidate IDs are present and correct; category and brand constraints are satisfied; required tool 'product_snapshot' was used and succeeded; forbidden tool 'product_reviews' was not invoked; every factual claim (price, spec) is backed by retrieved product_snapshot evidence; no hallucination or unsupported inference occurs. The response is concise, accurate, evidence-grounded, and fully aligned with the comparison contract. No expression defects or omissions — full fidelity to expected_output schema and intent.",
+            "score": 1.0,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 6685,
+              "model": "qwen-plus",
+              "output_tokens": 421,
+              "provider": "litellm",
+              "total_tokens": 7106
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.986702Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "ce36976f0cd5e3c6",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "fa55c768-ba8b-47ef-884c-ccae588c0c6a",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.822946Z",
+        "output": "Xiaomi Smart Air Purifier 4：价格 179.99 CNY，规格 Smart air purifier for rooms up to 48m2；Xiaomi Robot Vacuum X20+：价格 399.99 CNY，规格 Robot vacuum and mop with auto-empty station。按已核验价格，Xiaomi Smart Air Purifier 4更低。",
+        "spanId": "e9709a3e316ae713",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "4540da25-6fea-4e1f-8219-478e0ad573af:metric:talonmart_abcd_quality:1",
+              "4540da25-6fea-4e1f-8219-478e0ad573af:metric:talonmart_contract_guard:1",
+              "4540da25-6fea-4e1f-8219-478e0ad573af:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 7106,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"比较小米空气净化器和扫拖机器人，不要混淆功能。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_purifier_4\"},{\"item_id\":\"item_xiaomi_robot_vacuum_x20_plus\"}]}}"
+      },
+      "latencyMs": 11591,
+      "occurredAt": "2026-09-24T03:23:30.822946Z",
+      "startedAt": "2026-09-24T03:23:30.822946Z",
+      "testId": "4540da25-6fea-4e1f-8219-478e0ad573af",
+      "testResultId": "337499a9-6410-4fd4-9c41-5a2b95aa6c29",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "4540da25-6fea-4e1f-8219-478e0ad573af:metric:talonmart_abcd_quality:1",
+            "4540da25-6fea-4e1f-8219-478e0ad573af:metric:talonmart_contract_guard:1",
+            "4540da25-6fea-4e1f-8219-478e0ad573af:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 7106,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.885185Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "f4c5b4eb-5056-4aaa-a8ec-62817b24fbb3",
+        "caseResultId": "c9f14fee-4374-4440-bec0-c24b48448c66",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.885185Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "comparison",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_milk_pure",
+              "item_yogurt_plain"
+            ],
+            "category_id": "dairy"
+          },
+          "expected_response_type": "comparison",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "compare_specs",
+              "expected": "spec",
+              "operator": "contains",
+              "target": "comparison.columns"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "shop_compare_dairy"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"纯牛奶和原味酸奶的规格、价格有什么差别？\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_milk_pure\"},{\"item_id\":\"item_yogurt_plain\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 2,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 11087,
+        "metadata": {
+          "category": "comparison",
+          "scenario_id": "shop_compare_dairy",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "comparison",
+            "specification"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.885185Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 1.0,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "Expected response type 'comparison' matches output type.",
+              "candidate_item_ids ['item_milk_pure', 'item_yogurt_plain'] are both present in output and retrieved_context.",
+              "required_tools ['product_snapshot'] were successfully called (tool_calls contains 'product_snapshot').",
+              "forbidden_tools ['product_reviews'] were not called.",
+              "hard_assertion 'compare_specs' requires 'spec' to be in comparison.columns — confirmed: 'columns' includes {'key': 'spec', 'label': '规格'}.",
+              "All price and spec facts in output (18.4 CNY / 250ml*24盒; 22.8 CNY / 180g*12杯) are directly supported by retrieved_context and evidence.fact entries (e.g., 'fact:snapshot-...:item_milk_pure:current_price', 'fact:snapshot-...:item_milk_pure:spec').",
+              "Output contains no fabricated, unsupported, or hallucinated facts (e.g., no made-up shelf life, lactose-free status, or reviews — correctly omits unknown fields like 'volume_ml', 'shelf_life_days', 'lactose_free' where context lacks values).",
+              "Response is concise, bilingual-clean (Chinese only), and answers the user's exact question about规格 and价格 differences."
+            ],
+            "latencyMs": 9373,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "8c6a2836-ff7c-4e03-8f60-dbd3fb1f0358",
+            "passed": true,
+            "reason": "All hard constraints are satisfied: correct response type, correct candidates, required tool (product_snapshot) used and forbidden tool (product_reviews) avoided, spec column present in comparison schema, and all stated facts (price, spec) are verifiably backed by snapshot evidence. No hallucination, no omission of required comparison elements, and output is actionable and faithful. This is a complete, evidence-consistent, structurally compliant comparison response.",
+            "score": 1.0,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 6024,
+              "model": "qwen-plus",
+              "output_tokens": 397,
+              "provider": "litellm",
+              "total_tokens": 6421
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.885185Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "625cd89aa99633e0",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "f9dbf063-f381-46a2-8007-085281813cd3",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.822215Z",
+        "output": "纯牛奶：价格 18.4 CNY，规格 250ml*24盒；原味酸奶：价格 22.8 CNY，规格 180g*12杯。按已核验价格，纯牛奶更低。",
+        "spanId": "51150f7207962385",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "f4c5b4eb-5056-4aaa-a8ec-62817b24fbb3:metric:talonmart_abcd_quality:1",
+              "f4c5b4eb-5056-4aaa-a8ec-62817b24fbb3:metric:talonmart_contract_guard:1",
+              "f4c5b4eb-5056-4aaa-a8ec-62817b24fbb3:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 6421,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"纯牛奶和原味酸奶的规格、价格有什么差别？\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_milk_pure\"},{\"item_id\":\"item_yogurt_plain\"}]}}"
+      },
+      "latencyMs": 11087,
+      "occurredAt": "2026-09-24T03:23:30.822215Z",
+      "startedAt": "2026-09-24T03:23:30.822215Z",
+      "testId": "f4c5b4eb-5056-4aaa-a8ec-62817b24fbb3",
+      "testResultId": "c9f14fee-4374-4440-bec0-c24b48448c66",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "f4c5b4eb-5056-4aaa-a8ec-62817b24fbb3:metric:talonmart_abcd_quality:1",
+            "f4c5b4eb-5056-4aaa-a8ec-62817b24fbb3:metric:talonmart_contract_guard:1",
+            "f4c5b4eb-5056-4aaa-a8ec-62817b24fbb3:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 6421,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.963752Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "e9bd0ce8-44b4-4db6-bf60-398db8dba10f",
+        "caseResultId": "ab3c9897-1cd9-4b5a-948b-d66570035d91",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.963752Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "comparison",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_xiaomi_air_fryer_6_5l",
+              "item_xiaomi_electric_kettle_2"
+            ],
+            "category_id": "electronics",
+            "include_brands": [
+              "Xiaomi"
+            ]
+          },
+          "expected_response_type": "comparison",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "compare_prices",
+              "expected": "price",
+              "operator": "contains",
+              "target": "comparison.columns"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "shop_compare_xiaomi_kitchen"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"对比小米空气炸锅和电水壶的价格与用途。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_fryer_6_5l\"},{\"item_id\":\"item_xiaomi_electric_kettle_2\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 2,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 12283,
+        "metadata": {
+          "category": "comparison",
+          "scenario_id": "shop_compare_xiaomi_kitchen",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "comparison",
+            "brand_preference"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.963752Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 1.0,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "Expected response type 'comparison' matches output structure and intent.",
+              "Candidate item IDs ['item_xiaomi_air_fryer_6_5l', 'item_xiaomi_electric_kettle_2'] are both present in retrieved_context and tool_calls (via product_snapshot).",
+              "Both items are confirmed Xiaomi-branded and in 'electronics' category per retrieved_context facts.",
+              "required_tools: ['product_snapshot'] was successfully called (step s02_snapshot, status succeeded).",
+              "forbidden_tools: ['product_reviews'] was not called — verified in tool_calls array.",
+              "Hard assertion 'compare_prices' is satisfied: 'current_price' appears in expected_output.columns and is included in output text and payload.rows.",
+              "All stated prices (34.99 CNY, 89.99 CNY) and specs ('1.7L stainless steel electric kettle', '6.5L smart air fryer with app recipes') are directly supported by product_fact evidence (e.g., fact:snapshot-...:current_price, fact:snapshot-...:spec).",
+              "No fabricated facts: no reviews, inventory counts beyond snapshot, or unsupported claims (e.g., no mention of 'rating' or 'review_count' despite their 'unknown' status in context).",
+              "Output is a valid comparison — explicitly names both items, states price and spec for each, and draws a price-based conclusion ('Xiaomi Electric Kettle 2 更低').",
+              "No recovery logic needed: tools succeeded, constraints satisfied, and response is complete and actionable."
+            ],
+            "latencyMs": 10773,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "8138f620-eddd-43d8-86dd-c951adaed88c",
+            "passed": true,
+            "reason": "All hard constraints are satisfied: correct response type, full candidate coverage, Xiaomi brand and electronics category confirmed, required tool (product_snapshot) used and forbidden tool (product_reviews) avoided, price comparison explicitly supported by evidence and reflected in columns and output. All factual claims (price, spec) are verifiably backed by product_snapshot facts. No hallucination, no missing critical info, and the comparison is clear and faithful to the contract. This is a complete, evidence-consistent, and well-structured comparison response.",
+            "score": 1.0,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 6682,
+              "model": "qwen-plus",
+              "output_tokens": 460,
+              "provider": "litellm",
+              "total_tokens": 7142
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.963752Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "04c94bdd40e1692c",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 7,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "8c442c00-1006-41b5-b5be-e2e685fe40b3",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.821539Z",
+        "output": "Xiaomi Electric Kettle 2：价格 34.99 CNY，规格 1.7L stainless steel electric kettle；Xiaomi Smart Air Fryer 6.5L：价格 89.99 CNY，规格 6.5L smart air fryer with app recipes。按已核验价格，Xiaomi Electric Kettle 2更低。",
+        "spanId": "e1dd2f338d60d38d",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "e9bd0ce8-44b4-4db6-bf60-398db8dba10f:metric:talonmart_abcd_quality:1",
+              "e9bd0ce8-44b4-4db6-bf60-398db8dba10f:metric:talonmart_contract_guard:1",
+              "e9bd0ce8-44b4-4db6-bf60-398db8dba10f:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 7142,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"对比小米空气炸锅和电水壶的价格与用途。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_fryer_6_5l\"},{\"item_id\":\"item_xiaomi_electric_kettle_2\"}]}}"
+      },
+      "latencyMs": 12283,
+      "occurredAt": "2026-09-24T03:23:30.821539Z",
+      "startedAt": "2026-09-24T03:23:30.821539Z",
+      "testId": "e9bd0ce8-44b4-4db6-bf60-398db8dba10f",
+      "testResultId": "ab3c9897-1cd9-4b5a-948b-d66570035d91",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "e9bd0ce8-44b4-4db6-bf60-398db8dba10f:metric:talonmart_abcd_quality:1",
+            "e9bd0ce8-44b4-4db6-bf60-398db8dba10f:metric:talonmart_contract_guard:1",
+            "e9bd0ce8-44b4-4db6-bf60-398db8dba10f:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 7142,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.929779Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "b73b27e6-df06-4c41-8902-6f841ad9df55",
+        "caseResultId": "2276fb74-9694-41e4-9425-091d3703b11e",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.929779Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "comparison",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_wireless_earbuds",
+              "item_smart_tv_43"
+            ],
+            "category_id": "electronics"
+          },
+          "expected_response_type": "comparison",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "compare_both",
+              "expected": [
+                "item_wireless_earbuds",
+                "item_smart_tv_43"
+              ],
+              "operator": "contains",
+              "target": "comparison.product_ids"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "shop_compare_earbuds_tv"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"比较候选中的耳机和电视，只列真实参数。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"},{\"item_id\":\"item_smart_tv_43\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 2,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 15476,
+        "metadata": {
+          "category": "comparison",
+          "scenario_id": "shop_compare_earbuds_tv",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "comparison",
+            "specification"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.929779Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "expected_response_type 'comparison' matches output structure and content",
+              "hard_assertion 'compare_both' satisfied: comparison.product_ids contains ['item_wireless_earbuds', 'item_smart_tv_43'] (inferred from output focus and metadata.products)",
+              "required_tool 'product_snapshot' successfully called (tool_calls includes name='product_snapshot')",
+              "forbidden_tool 'product_reviews' not invoked",
+              "price '59.99 CNY' for item_wireless_earbuds verified in retrieved_context and evidence_id 'fact:snapshot-...:current_price'",
+              "price '249.0 CNY' for item_smart_tv_43 verified in metadata.evidence (fact:snapshot-...:current_price) and payload.rows",
+              "spec 'Bluetooth 5.3, 28-hour case' for earbuds verified in retrieved_context.specifications.values and evidence_id 'fact:snapshot-...:spec'",
+              "spec 'HDR LED display with voice remote' for TV verified in payload.rows and evidence_id 'fact:snapshot-...:spec'",
+              "no fabricated facts: all stated attributes (price, spec, units) are directly supported by snapshot facts",
+              "no forbidden tool usage, no hallucinated reviews/stock/delivery details"
+            ],
+            "latencyMs": 13784,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "d029be4d-6259-47b0-95c1-0e5baaf85fc4",
+            "passed": true,
+            "reason": "响应完全符合 comparison 类型要求，输出结构与 expected_response_type 一致；候选商品 item_wireless_earbuds 和 item_smart_tv_43 均被明确比较，满足 hard_assertions 中 compare_both 断言（comparison.product_ids 包含二者）；required_tools 中的 product_snapshot 已成功调用（tool_calls 包含 'product_snapshot'），forbidden_tools 中的 product_reviews 未调用；所有呈现参数（价格、规格）均能在 retrieved_context 和 evidence 中找到直接支持：例如 '59.99 CNY' 和 'Bluetooth 5.3, 28-hour case' 来自 item_wireless_earbuds 的 snapshot-fact，'249.0 CNY' 和 'HDR LED display with voice remote' 来自 item_smart_tv_43 的 snapshot-fact（尽管后者 context 截断，但 metadata.evidence 明确列出 fact:snapshot-...:current_price 和 :spec 条目）；无编造内容（品牌、价格、规格、单位均与上下文一致）；未引入评论、库存、配送时效等未提供证据的字段；结论‘按已核验价格，耳机电价更低’是事实性推导，且价格对比本身是契约唯一要求的量化比较维度；表达简洁准确，中英文混排符合产品命名惯例，无歧义或冗余。",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 6339,
+              "model": "qwen-plus",
+              "output_tokens": 597,
+              "provider": "litellm",
+              "total_tokens": 6936
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.929779Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "3f9daeffdf79dd88",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "a23fe3b0-1808-4f40-a566-075b6fc7aa69",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.820751Z",
+        "output": "Wireless Noise Cancelling Earbuds：价格 59.99 CNY，规格 Bluetooth 5.3, 28-hour case；43-inch 4K Smart TV：价格 249.0 CNY，规格 HDR LED display with voice remote。按已核验价格，Wireless Noise Cancelling Earbuds更低。",
+        "spanId": "9b29e65b1dd74c68",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "b73b27e6-df06-4c41-8902-6f841ad9df55:metric:talonmart_abcd_quality:1",
+              "b73b27e6-df06-4c41-8902-6f841ad9df55:metric:talonmart_contract_guard:1",
+              "b73b27e6-df06-4c41-8902-6f841ad9df55:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 6936,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"比较候选中的耳机和电视，只列真实参数。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"},{\"item_id\":\"item_smart_tv_43\"}]}}"
+      },
+      "latencyMs": 15476,
+      "occurredAt": "2026-09-24T03:23:30.820751Z",
+      "startedAt": "2026-09-24T03:23:30.820751Z",
+      "testId": "b73b27e6-df06-4c41-8902-6f841ad9df55",
+      "testResultId": "2276fb74-9694-41e4-9425-091d3703b11e",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "b73b27e6-df06-4c41-8902-6f841ad9df55:metric:talonmart_abcd_quality:1",
+            "b73b27e6-df06-4c41-8902-6f841ad9df55:metric:talonmart_contract_guard:1",
+            "b73b27e6-df06-4c41-8902-6f841ad9df55:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 6936,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.896761Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "03a1c53a-0bc0-4fd4-8511-c42199b15bd5",
+        "caseResultId": "7abb7e96-4218-47de-9fd2-6e2e492777ab",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.896761Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "hard_constraint",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_xiaomi_air_fryer_6_5l"
+            ],
+            "category_id": "electronics",
+            "required_specs": [
+              "容量至少 6.5L"
+            ]
+          },
+          "expected_response_type": "recommendation",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "capacity_6_5l",
+              "expected": "6.5L",
+              "operator": "contains",
+              "target": "recommended_items[*].spec"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "shop_hard_air_fryer_capacity"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"空气炸锅容量必须至少 6.5L。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_xiaomi_air_fryer_6_5l\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 1,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 12512,
+        "metadata": {
+          "category": "hard_constraint",
+          "scenario_id": "shop_hard_air_fryer_capacity",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "specification",
+            "hard_constraint"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.896761Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "response_type matches expected_response_type: 'recommendation'",
+              "candidate_item_ids match: output contains 'item_xiaomi_air_fryer_6_5l' and expected includes it",
+              "required_specs['容量至少 6.5L'] is satisfied: retrieved_context specifies 'summary': '6.5L smart air fryer with app recipes'",
+              "hard_assertion 'capacity_6_5l' passes: '6.5L' is contained in recommended_items[*].spec (via specifications.summary)",
+              "required_tool 'product_snapshot' was called successfully (tool_calls.name='product_snapshot' and status='succeeded')",
+              "forbidden_tool 'product_reviews' absent from tool_calls",
+              "all key facts (price=89.99 CNY, capacity=6.5L, brand=Xiaomi, category=electronics) are present and fresh in retrieved_context.facts",
+              "no hallucinated content: all claims trace to snapshot evidence, no invented reviews, inventory states, or external sources"
+            ],
+            "latencyMs": 11674,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "5b291001-f518-4215-932c-0ed217760ac8",
+            "passed": true,
+            "reason": "All hard constraints are satisfied: (1) response type is 'recommendation' as required; (2) candidate item_id 'item_xiaomi_air_fryer_6_5l' matches expected_candidate_item_ids; (3) required_specs ['容量至少 6.5L'] is verified via retrieved_context.specifications.values[0].value = '6.5L smart air fryer with app recipes', which contains '6.5L'; (4) required_tool 'product_snapshot' was successfully called (tool_calls includes 'product_snapshot' with status 'succeeded'); (5) forbidden_tool 'product_reviews' was not called; (6) all factual claims (price 89.99 CNY, capacity 6.5L, brand Xiaomi, category electronics) are directly supported by retrieved_context facts; (7) recommendation is specific, evidence-backed, and includes explicit justification referencing the hard constraint ('capacity 至少 6.5L'); (8) no hallucination — no invented items, prices, reviews, or side effects. Minor deduction (0.05) for slight redundancy in phrasing ('满足已核验条件：capacity 至少 6.5L；通过硬约束过滤，排序第 1') but does not impair correctness or usability.",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 3537,
+              "model": "qwen-plus",
+              "output_tokens": 511,
+              "provider": "litellm",
+              "total_tokens": 4048
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.896761Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "981432cacb227814",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 6,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "1b0db7b6-76f4-48ce-9e7c-dd919990f92e",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.819886Z",
+        "output": "1. Xiaomi Smart Air Fryer 6.5L：价格 89.99 CNY，规格 6.5L smart air fryer with app recipes，满足已核验条件：capacity 至少 6.5L；通过硬约束过滤，排序第 1。",
+        "spanId": "966aedd127d724c4",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "03a1c53a-0bc0-4fd4-8511-c42199b15bd5:metric:talonmart_abcd_quality:1",
+              "03a1c53a-0bc0-4fd4-8511-c42199b15bd5:metric:talonmart_contract_guard:1",
+              "03a1c53a-0bc0-4fd4-8511-c42199b15bd5:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 4048,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"空气炸锅容量必须至少 6.5L。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_xiaomi_air_fryer_6_5l\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 12512,
+      "occurredAt": "2026-09-24T03:23:30.819886Z",
+      "startedAt": "2026-09-24T03:23:30.819886Z",
+      "testId": "03a1c53a-0bc0-4fd4-8511-c42199b15bd5",
+      "testResultId": "7abb7e96-4218-47de-9fd2-6e2e492777ab",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "03a1c53a-0bc0-4fd4-8511-c42199b15bd5:metric:talonmart_abcd_quality:1",
+            "03a1c53a-0bc0-4fd4-8511-c42199b15bd5:metric:talonmart_contract_guard:1",
+            "03a1c53a-0bc0-4fd4-8511-c42199b15bd5:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 4048,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.861222Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "f267c10e-9845-4bc3-9fd9-b183621bf33b",
+        "caseResultId": "4030b255-5b7f-4075-997d-38a80ff85455",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.861222Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "hard_constraint",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_wireless_earbuds",
+              "item_smart_tv_43",
+              "item_xiaomi_electric_kettle_2"
+            ],
+            "category_id": "electronics",
+            "exclude_brands": [
+              "Xiaomi"
+            ]
+          },
+          "expected_response_type": "product_list",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "exclude_xiaomi",
+              "expected": [
+                "Xiaomi"
+              ],
+              "operator": "not_in",
+              "target": "recommended_items[*].brand"
+            }
+          ],
+          "required_tools": [
+            "product_search"
+          ],
+          "scenario_id": "shop_hard_exclude_xiaomi"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"电子产品不要小米品牌。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"电子产品\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"},{\"item_id\":\"item_smart_tv_43\"},{\"item_id\":\"item_xiaomi_electric_kettle_2\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 11836,
+        "metadata": {
+          "category": "hard_constraint",
+          "scenario_id": "shop_hard_exclude_xiaomi",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "brand_exclusion",
+            "hard_constraint"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.861222Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "expected_goal specifies exclude_brands: ['Xiaomi'] and candidate_item_ids includes 'item_xiaomi_electric_kettle_2' (Xiaomi-branded)",
+              "hard_assertions requires 'Xiaomi' not_in recommended_items[*].brand — but no recommended_items were returned",
+              "required_tools includes 'product_search' — successfully called with query '电子产品' (electronics), returning 6 items",
+              "forbidden_tools includes 'product_reviews' — correctly not called",
+              "output is fallback response stating constraint mismatch, citing 'category electronics' and 'exclude brand Xiaomi'",
+              "metadata.reason_code is 'confirmed_constraint_mismatch', response_type is 'fallback', and scenario_id matches shop_hard_exclude_xiaomi",
+              "The fallback message explicitly states the conflict ('current candidates conflict with confirmed hard constraint') and advises actionable recovery ('adjust conditions or replace candidates'), satisfying criterion #5 for honest & executable recovery"
+            ],
+            "latencyMs": 9690,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "dec67d08-e5df-4f3a-8b46-694ac40090d7",
+            "passed": true,
+            "reason": "All hard constraints are respected: (1) required tool product_search was successfully called; (2) forbidden tool product_reviews was never invoked; (3) the exclusion of Xiaomi is correctly identified as a hard conflict — since one candidate (item_xiaomi_electric_kettle_2) violates exclude_brands, and no Xiaomi-branded item can be recommended, the agent correctly abstains from recommending any item rather than violating the hard assertion; (4) the fallback response is honest, cites the exact violated condition (electronics category + Xiaomi exclusion), and gives clear, actionable next steps ('adjust conditions or replace candidates'). No facts are fabricated; no tools misused; no false claims about stock, price, or reviews. The response type is fallback, matching expected_response_type's implicit allowance for constraint-violating cases (as per scoring rules: 'empty recommended_items cannot be considered vacuously satisfied' — so abstention is correct). This satisfies all hard conditions and provides a robust, explainable recovery — qualifying for top-tier score.",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 2427,
+              "model": "qwen-plus",
+              "output_tokens": 425,
+              "provider": "litellm",
+              "total_tokens": 2852
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.861222Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "2016a4bf6ab4cd13",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 7,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "cebe4798-e800-4c0b-b9fb-bc9616a7d980",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.819182Z",
+        "output": "当前候选与已确认的硬约束冲突，不能据此推荐无关商品。已核验条件：品类 electronics、排除品牌 Xiaomi。请调整条件或更换候选后再试。",
+        "spanId": "920602af4b10c024",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "f267c10e-9845-4bc3-9fd9-b183621bf33b:metric:talonmart_abcd_quality:1",
+              "f267c10e-9845-4bc3-9fd9-b183621bf33b:metric:talonmart_contract_guard:1",
+              "f267c10e-9845-4bc3-9fd9-b183621bf33b:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2852,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"电子产品不要小米品牌。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"电子产品\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"},{\"item_id\":\"item_smart_tv_43\"},{\"item_id\":\"item_xiaomi_electric_kettle_2\"}]}}"
+      },
+      "latencyMs": 11836,
+      "occurredAt": "2026-09-24T03:23:30.819182Z",
+      "startedAt": "2026-09-24T03:23:30.819182Z",
+      "testId": "f267c10e-9845-4bc3-9fd9-b183621bf33b",
+      "testResultId": "4030b255-5b7f-4075-997d-38a80ff85455",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "f267c10e-9845-4bc3-9fd9-b183621bf33b:metric:talonmart_abcd_quality:1",
+            "f267c10e-9845-4bc3-9fd9-b183621bf33b:metric:talonmart_contract_guard:1",
+            "f267c10e-9845-4bc3-9fd9-b183621bf33b:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2852,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.939888Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "48e7f6a0-d875-4110-b1d6-4dfe8befa6dc",
+        "caseResultId": "ecfdcbea-aeb9-45d9-9ae9-dc0b33e5075b",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.939888Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "hard_constraint",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_xiaomi_air_fryer_6_5l"
+            ],
+            "category_id": "electronics",
+            "include_brands": [
+              "Xiaomi"
+            ]
+          },
+          "expected_response_type": "product_list",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "xiaomi_only",
+              "expected": "Xiaomi",
+              "operator": "eq",
+              "target": "recommended_items[*].brand"
+            }
+          ],
+          "required_tools": [
+            "product_search"
+          ],
+          "scenario_id": "shop_hard_xiaomi_air_fryer"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"只看小米空气炸锅。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"空气炸锅\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_fryer_6_5l\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 1,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 13136,
+        "metadata": {
+          "category": "hard_constraint",
+          "scenario_id": "shop_hard_xiaomi_air_fryer",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "brand_preference",
+            "hard_constraint"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.939888Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 1.0,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "expected_response_type 'product_list' matches output format (single-product textual listing)",
+              "hard_assertion 'xiaomi_only': recommended_items[*].brand == 'Xiaomi' — confirmed by retrieved_context.facts.brand.value == 'Xiaomi'",
+              "candidate_item_ids contains 'item_xiaomi_air_fryer_6_5l' — present in metadata.recommended_links and retrieved_context.item_id",
+              "required_tool 'product_search' was called and succeeded — tool_calls[0].name == 'product_search' and status == 'succeeded'",
+              "forbidden_tool 'product_reviews' was not invoked — tool_calls contains only 'product_search' and 'product_snapshot'",
+              "All output facts (Xiaomi brand, 6.5L model, 89.99 CNY) are verifiable in retrieved_context.facts",
+              "No hallucinated details: no fake reviews, ratings, or unsupported specs — rating and review_count are marked 'unknown' in context and omitted from output"
+            ],
+            "latencyMs": 11691,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "449e4659-db65-432e-952c-751427837541",
+            "passed": true,
+            "reason": "The response satisfies all hard constraints: (1) expected_response_type is 'product_list' and output is a product listing string containing exactly one Xiaomi air fryer; (2) expected_goal requires candidate_item_ids to include 'item_xiaomi_air_fryer_6_5l' and brand to be 'Xiaomi' — both are met, as the output names 'Xiaomi Smart Air Fryer 6.5L' and retrieved_context confirms brand='Xiaomi', item_id='item_xiaomi_air_fryer_6_5l', category='electronics'; (3) required_tool 'product_search' was successfully called (tool_calls includes 'product_search' with status 'succeeded'); (4) forbidden_tool 'product_reviews' was not called; (5) all factual claims (brand, name, price=89.99 CNY) are directly supported by retrieved_context (e.g., facts.brand.value='Xiaomi', facts.name.value='Xiaomi Smart Air Fryer 6.5L', facts.current_price.value='89.99'); (6) no hallucination: item_id, name, price, brand, category all match context; no inventory/stock/price/brand/availability claims beyond evidence. Evidence field lists the snapshot fact supporting price — sufficient for verification.",
+            "score": 1.0,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 2699,
+              "model": "qwen-plus",
+              "output_tokens": 514,
+              "provider": "litellm",
+              "total_tokens": 3213
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.939888Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "5c9445b3898087c0",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 6,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "1b5296e0-7eb5-422a-a78f-48a5a86d8701",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.818451Z",
+        "output": "Xiaomi Smart Air Fryer 6.5L：89.99 CNY。",
+        "spanId": "bd8e07a4cf8d1122",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "48e7f6a0-d875-4110-b1d6-4dfe8befa6dc:metric:talonmart_abcd_quality:1",
+              "48e7f6a0-d875-4110-b1d6-4dfe8befa6dc:metric:talonmart_contract_guard:1",
+              "48e7f6a0-d875-4110-b1d6-4dfe8befa6dc:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 3213,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"只看小米空气炸锅。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"空气炸锅\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_fryer_6_5l\"}]}}"
+      },
+      "latencyMs": 13136,
+      "occurredAt": "2026-09-24T03:23:30.818451Z",
+      "startedAt": "2026-09-24T03:23:30.818451Z",
+      "testId": "48e7f6a0-d875-4110-b1d6-4dfe8befa6dc",
+      "testResultId": "ecfdcbea-aeb9-45d9-9ae9-dc0b33e5075b",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "48e7f6a0-d875-4110-b1d6-4dfe8befa6dc:metric:talonmart_abcd_quality:1",
+            "48e7f6a0-d875-4110-b1d6-4dfe8befa6dc:metric:talonmart_contract_guard:1",
+            "48e7f6a0-d875-4110-b1d6-4dfe8befa6dc:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 3213,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.906633Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "b1193abc-5940-44e6-8f80-bd07a6b4a252",
+        "caseResultId": "5b9acccb-7ede-44a3-929c-1376a5d26edc",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.906633Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "hard_constraint",
+          "expected_goal": {
+            "budget_max": 89,
+            "candidate_item_ids": [
+              "item_baby_stroller"
+            ],
+            "category_id": "baby_kids"
+          },
+          "expected_response_type": "recommendation",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "inclusive_price",
+              "expected": 89,
+              "operator": "lte",
+              "target": "recommended_items[*].price"
+            }
+          ],
+          "required_tools": [
+            "product_snapshot"
+          ],
+          "scenario_id": "shop_hard_stroller_exact_boundary"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"婴儿车预算最高 89，可以等于 89。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 9148,
+        "metadata": {
+          "category": "hard_constraint",
+          "scenario_id": "shop_hard_stroller_exact_boundary",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "budget_boundary",
+            "hard_constraint"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.906633Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.69,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "required_tools fulfilled: product_snapshot called and succeeded",
+              "forbidden_tools not called: product_reviews absent",
+              "expected_response_type mismatch: expected 'recommendation' but got 'fallback'",
+              "hard_assertions unverifiable: no recommended_items to check price <= 89",
+              "failure_mode is 'none' but response indicates required_fact_unavailable",
+              "output states inventory unavailable, no candidate items returned"
+            ],
+            "latencyMs": 7749,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "0cb94a2c-d387-4ce1-bae2-29c47fe7fed9",
+            "passed": false,
+            "reason": "The agent was required to produce a recommendation for a baby stroller within budget $89 (inclusive), with category 'baby_kids' and candidate item 'item_baby_stroller'. It correctly called the required tool 'product_snapshot' and avoided forbidden 'product_reviews'. However, it failed to return a recommendation — instead returning a fallback response citing unavailable inventory. Since failure_mode is 'none' (i.e., no declared tool failure), this constitutes main goal incompleteness: no recommended_items were provided, making hard_assertions (e.g., price ≤ 89) uncheckable. The response type 'fallback' violates expected_response_type='recommendation', capping score at 0.69 per rubric. No evidence supports price, availability, or compliance — only absence of data. Honest recovery is present ('you can say \"retry\"'), but lacks specific next step beyond repetition and omits retained constraints in actionable form (e.g., no re-assertion of candidate_item_ids or boundary logic). Thus, highest permissible score is 0.69.",
+            "score": 0.69,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 2372,
+              "model": "qwen-plus",
+              "output_tokens": 324,
+              "provider": "litellm",
+              "total_tokens": 2696
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.906633Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "b8024b7d24617d29",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 6,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "fbbacc74-5596-4e43-9049-da51dc9e3d43",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.817704Z",
+        "output": "商品事实刷新后仍缺少可核验的库存，暂时不能给出可靠结论。已保留条件：品类 baby_kids、预算上限 89。你可以直接回复“重试”，我会按原条件重新读取商品事实。",
+        "spanId": "4ca490b661863983",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "b1193abc-5940-44e6-8f80-bd07a6b4a252:metric:talonmart_abcd_quality:1",
+              "b1193abc-5940-44e6-8f80-bd07a6b4a252:metric:talonmart_contract_guard:1",
+              "b1193abc-5940-44e6-8f80-bd07a6b4a252:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2696,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "FAIL"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"婴儿车预算最高 89，可以等于 89。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 9148,
+      "occurredAt": "2026-09-24T03:23:30.817704Z",
+      "startedAt": "2026-09-24T03:23:30.817704Z",
+      "testId": "b1193abc-5940-44e6-8f80-bd07a6b4a252",
+      "testResultId": "5b9acccb-7ede-44a3-929c-1376a5d26edc",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "b1193abc-5940-44e6-8f80-bd07a6b4a252:metric:talonmart_abcd_quality:1",
+            "b1193abc-5940-44e6-8f80-bd07a6b4a252:metric:talonmart_contract_guard:1",
+            "b1193abc-5940-44e6-8f80-bd07a6b4a252:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2696,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "FAIL"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.850116Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "7616e5dd-7215-45ad-837a-3277cea160ba",
+        "caseResultId": "31ec191d-44e5-4c6e-b9d6-ec4b88a23c8b",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.850116Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "hard_constraint",
+          "expected_goal": {
+            "budget_max": 60,
+            "candidate_item_ids": [
+              "item_wireless_earbuds"
+            ],
+            "category_id": "electronics"
+          },
+          "expected_response_type": "product_list",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "max_price_60",
+              "expected": 60,
+              "operator": "lte",
+              "target": "recommended_items[*].price"
+            }
+          ],
+          "required_tools": [
+            "product_search"
+          ],
+          "scenario_id": "shop_hard_earbuds_budget_60"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"无线耳机预算不超过 60。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"无线耳机\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 11610,
+        "metadata": {
+          "category": "hard_constraint",
+          "scenario_id": "shop_hard_earbuds_budget_60",
+          "stages": [
+            "A",
+            "C",
+            "D"
+          ],
+          "tags": [
+            "budget_boundary",
+            "hard_constraint"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.850116Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.59,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "expected_response_type is 'product_list', but output response_type is 'fallback'",
+              "hard_assertions require validation of recommended_items[*].price <= 60, but recommended_items is empty in output",
+              "product_snapshot tool succeeded (stepId: s02_snapshot), yet no item facts (price, stock, etc.) are surfaced in output",
+              "fallback message says 'lack verifiable inventory' despite successful snapshot — contradicts tool evidence",
+              "'You can reply 'retry'' lacks specificity: no failure root cause, no preserved candidate_item_ids context, no clear next action"
+            ],
+            "latencyMs": 9507,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "3f08de13-70f8-4838-b982-b6837d8aeeeb",
+            "passed": false,
+            "reason": "响应类型为 fallback，但契约要求 expected_response_type: product_list，类型不匹配；required_tools 中 product_search 已调用且成功（itemCount: 6），但 product_snapshot 被调用而未在 required_tools 中声明，且 forbidden_tools 中未禁止它，此属中性；然而，硬约束要求 candidate_item_ids=['item_wireless_earbuds'] 必须被验证，但 output 中未返回任何 recommended_items，也未提供该候选商品的价格、库存等可验证事实，违反 hard_assertions['max_price_60'] 的检查前提（无 recommended_items[*].price 可校验）；响应声称'缺少可验证库存'，但 tool_calls 显示 product_snapshot 成功执行（status: succeeded），说明事实已获取却未呈现，构成关键事实未输出；fallback 响应虽提示'重试'，但未指出具体失败原因（如 snapshot 返回空/价格超限/缺货）、未保留 candidate_item_ids 约束上下文、未明确下一步是重试搜索还是切换工具，不可继续执行；综上，存在响应类型不匹配、硬约束无法验证、关键事实未呈现、恢复终态不明确四项严重缺陷。",
+            "score": 0.59,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 2571,
+              "model": "qwen-plus",
+              "output_tokens": 411,
+              "provider": "litellm",
+              "total_tokens": 2982
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.850116Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "24b9a12d2b4a1562",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "8ada5b38-8b54-4c38-b359-5492f2ee1f44",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.816601Z",
+        "output": "商品事实刷新后仍缺少可核验的库存，暂时不能给出可靠结论。已保留条件：品类 electronics、预算上限 60。你可以直接回复“重试”，我会按原条件重新读取商品事实。",
+        "spanId": "7769b080eda35fc0",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "7616e5dd-7215-45ad-837a-3277cea160ba:metric:talonmart_abcd_quality:1",
+              "7616e5dd-7215-45ad-837a-3277cea160ba:metric:talonmart_contract_guard:1",
+              "7616e5dd-7215-45ad-837a-3277cea160ba:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 2982,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "FAIL"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"无线耳机预算不超过 60。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"无线耳机\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"}]}}"
+      },
+      "latencyMs": 11610,
+      "occurredAt": "2026-09-24T03:23:30.816601Z",
+      "startedAt": "2026-09-24T03:23:30.816601Z",
+      "testId": "7616e5dd-7215-45ad-837a-3277cea160ba",
+      "testResultId": "31ec191d-44e5-4c6e-b9d6-ec4b88a23c8b",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "7616e5dd-7215-45ad-837a-3277cea160ba:metric:talonmart_abcd_quality:1",
+            "7616e5dd-7215-45ad-837a-3277cea160ba:metric:talonmart_contract_guard:1",
+            "7616e5dd-7215-45ad-837a-3277cea160ba:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 2982,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "FAIL"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.826098Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "cee9a936-1aa9-41c3-80e3-2ce3e295cb34",
+        "caseResultId": "b60e7878-7f96-41c2-8418-a581c0235f9b",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.826098Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "vague_need",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_water_spring",
+              "item_cola_zero"
+            ],
+            "category_id": "beverage",
+            "quantity": 1
+          },
+          "expected_response_type": "clarification",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_search"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "ask_recipient",
+              "expected": "recipient_preference",
+              "operator": "eq",
+              "target": "clarification.field"
+            }
+          ],
+          "required_tools": [],
+          "scenario_id": "shop_vague_beverage_gift"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"想买一箱饮料送人。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"饮料\",\"candidate_refs\":[{\"item_id\":\"item_water_spring\"},{\"item_id\":\"item_cola_zero\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 8728,
+        "metadata": {
+          "category": "vague_need",
+          "scenario_id": "shop_vague_beverage_gift",
+          "stages": [
+            "A",
+            "B"
+          ],
+          "tags": [
+            "vague_need",
+            "missing_preference"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.826098Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "expected_response_type == 'clarification' → matched",
+              "output contains question about recipient preference → satisfies hard_assertion 'ask_recipient'",
+              "payload.options.value includes 'recipient_preference:practical', 'recipient_preference:quality', etc. → confirms field is 'recipient_preference'",
+              "forbidden_tools ['product_search'] not present in tool_calls → satisfied",
+              "required_tools is empty → no tool call required",
+              "response provides 4 actionable, labeled options with skip → qualifies as '可继续执行的恢复终态'",
+              "candidate_item_ids ['item_water_spring', 'item_cola_zero'] and category_id 'beverage' remain intact in context → constraints preserved"
+            ],
+            "latencyMs": 8481,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "1328a71c-404e-4532-a81c-3a81375226f3",
+            "passed": true,
+            "reason": "响应类型为clarification，符合expected_response_type；购物目标为模糊饮料需求，需澄清收礼人偏好，hard_assertions要求clarification.field等于'recipient_preference'，而output中问题明确指向收礼人偏好（'收礼人更偏好哪一类？'），且payload.options中value字段包含'recipient_preference:...'，满足assertion_id 'ask_recipient'；forbidden_tools=['product_search']未被调用；required_tools=[]，故无缺失；output无商品事实、评论等需证据支持的内容；无编造信息；响应是可继续执行的恢复终态：提供4个结构化选项（practical/quality/popular/skip），明确保留了候选商品（item_water_spring, item_cola_zero）和品类约束（beverage），并给出具体下一步（选择偏好类型）；所有硬约束均满足，表达清晰、结构化、符合TalonMart Agent交互规范。",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 1543,
+              "model": "qwen-plus",
+              "output_tokens": 371,
+              "provider": "litellm",
+              "total_tokens": 1914
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.826098Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "9b2fcc024f5845df",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "b7e3869a-376b-4c6c-803d-17bc36363080",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.815485Z",
+        "output": "收礼人更偏好哪一类？",
+        "spanId": "5311e113919c7509",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "cee9a936-1aa9-41c3-80e3-2ce3e295cb34:metric:talonmart_abcd_quality:1",
+              "cee9a936-1aa9-41c3-80e3-2ce3e295cb34:metric:talonmart_contract_guard:1",
+              "cee9a936-1aa9-41c3-80e3-2ce3e295cb34:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 1914,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"想买一箱饮料送人。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"饮料\",\"candidate_refs\":[{\"item_id\":\"item_water_spring\"},{\"item_id\":\"item_cola_zero\"}]}}"
+      },
+      "latencyMs": 8728,
+      "occurredAt": "2026-09-24T03:23:30.815485Z",
+      "startedAt": "2026-09-24T03:23:30.815485Z",
+      "testId": "cee9a936-1aa9-41c3-80e3-2ce3e295cb34",
+      "testResultId": "b60e7878-7f96-41c2-8418-a581c0235f9b",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "cee9a936-1aa9-41c3-80e3-2ce3e295cb34:metric:talonmart_abcd_quality:1",
+            "cee9a936-1aa9-41c3-80e3-2ce3e295cb34:metric:talonmart_contract_guard:1",
+            "cee9a936-1aa9-41c3-80e3-2ce3e295cb34:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 1914,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.839674Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "a33d3e63-fe09-4295-be94-bb0243fee785",
+        "caseResultId": "02398b46-1349-40eb-a037-4777f70dbcda",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.839674Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "vague_need",
+          "expected_goal": {
+            "candidate_item_ids": [
+              "item_office_pen",
+              "item_copy_paper"
+            ],
+            "category_id": "office_supply"
+          },
+          "expected_response_type": "clarification",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_search"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "ask_quantity",
+              "expected": "quantity",
+              "operator": "eq",
+              "target": "clarification.field"
+            }
+          ],
+          "required_tools": [],
+          "scenario_id": "shop_vague_office_restock"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"办公室要补点耗材。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"办公耗材\",\"candidate_refs\":[{\"item_id\":\"item_office_pen\"},{\"item_id\":\"item_copy_paper\"}]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 7793,
+        "metadata": {
+          "category": "vague_need",
+          "scenario_id": "shop_vague_office_restock",
+          "stages": [
+            "A",
+            "B"
+          ],
+          "tags": [
+            "vague_need",
+            "missing_quantity"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.839674Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "response_type == 'clarification' matches expected_response_type",
+              "candidate_item_ids ['item_office_pen', 'item_copy_paper'] present in input.page_context.candidate_refs",
+              "category_id 'office_supply' consistent with scenario_id 'shop_vague_office_restock'",
+              "question '你需要多少件？' unambiguously targets quantity clarification",
+              "no forbidden tool 'product_search' was called",
+              "clarification options provide actionable next steps with quantity values 1/2/5/10 and skip"
+            ],
+            "latencyMs": 7600,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "a41e479b-623e-4193-b431-f08b3feea709",
+            "passed": true,
+            "reason": "响应类型为'clarification'，与expected_response_type完全匹配；购物目标中candidate_item_ids（item_office_pen, item_copy_paper）和category_id（office_supply）均在上下文input.page_context.candidate_refs中明确存在；hard_assertions要求clarification.field必须为'quantity'，响应虽未显式声明field名，但问题'你需要多少件？'唯一且精准指向数量澄清，符合语义等价；forbidden_tools（product_search）未被调用；required_tools为空，故无缺失；无工具调用需求，故不涉及证据支持问题；响应附带5个quantity选项及跳过选项，构成可继续执行的明确恢复终态；所有内容均未编造事实，忠实反映vague_need场景。唯一轻微缺陷：未在文本中显式写出'quantity'字段标识（如'请说明所需数量：'），但口语化表达已充分达成澄清目的，属表达风格范畴，不影响功能正确性，故扣0.05分。",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 1528,
+              "model": "qwen-plus",
+              "output_tokens": 332,
+              "provider": "litellm",
+              "total_tokens": 1860
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.839674Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "eb4e7d18b014297e",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "7d892233-d3e4-4640-aa29-8b547412a19b",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.814446Z",
+        "output": "你大约需要多少件？",
+        "spanId": "0f77907204de62e5",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "a33d3e63-fe09-4295-be94-bb0243fee785:metric:talonmart_abcd_quality:1",
+              "a33d3e63-fe09-4295-be94-bb0243fee785:metric:talonmart_contract_guard:1",
+              "a33d3e63-fe09-4295-be94-bb0243fee785:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 1860,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"办公室要补点耗材。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"办公耗材\",\"candidate_refs\":[{\"item_id\":\"item_office_pen\"},{\"item_id\":\"item_copy_paper\"}]}}"
+      },
+      "latencyMs": 7793,
+      "occurredAt": "2026-09-24T03:23:30.814446Z",
+      "startedAt": "2026-09-24T03:23:30.814446Z",
+      "testId": "a33d3e63-fe09-4295-be94-bb0243fee785",
+      "testResultId": "02398b46-1349-40eb-a037-4777f70dbcda",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "a33d3e63-fe09-4295-be94-bb0243fee785:metric:talonmart_abcd_quality:1",
+            "a33d3e63-fe09-4295-be94-bb0243fee785:metric:talonmart_contract_guard:1",
+            "a33d3e63-fe09-4295-be94-bb0243fee785:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 1860,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.871613Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "e6636ef9-44a1-4086-8bb8-ec77a59e3dac",
+        "caseResultId": "dc6a6007-88d5-4ec4-b6e3-d60c95bd0810",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.871613Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "vague_need",
+          "expected_goal": {},
+          "expected_response_type": "clarification",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_search"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "ask_food_type",
+              "expected": "category",
+              "operator": "eq",
+              "target": "clarification.field"
+            }
+          ],
+          "required_tools": [],
+          "scenario_id": "shop_vague_breakfast_food"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐一些适合早餐的东西。\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 9644,
+        "metadata": {
+          "category": "vague_need",
+          "scenario_id": "shop_vague_breakfast_food",
+          "stages": [
+            "A",
+            "B"
+          ],
+          "tags": [
+            "vague_need",
+            "missing_category"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.871613Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 0.95,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "response_type matches 'clarification'",
+              "hard_assertion 'ask_food_type' satisfied via category-targeting question and options",
+              "no forbidden tools called (product_search absent)",
+              "no required tools needed or missing",
+              "response provides actionable, non-hallucinated clarification with valid options",
+              "metadata.payload.answer matches output verbatim",
+              "scenario_id 'shop_vague_breakfast_food' and input message confirm breakfast context is preserved implicitly"
+            ],
+            "latencyMs": 9458,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "e1cef9aa-d443-41df-9401-568895f500ce",
+            "passed": true,
+            "reason": "The response fully satisfies the evaluation criteria: (1) It matches expected_response_type 'clarification' with a clear, open-ended question prompting category specification; (2) The vague_need scenario correctly identifies missing category and triggers clarification — hard_assertion 'ask_food_type' is satisfied as the response targets 'category' field via natural language and supported by four category options in metadata.payload.options (including 'category:food_beverage'); (3) No forbidden tools (e.g., product_search) were called, and no required tools were needed; (4) All factual elements (question intent, option labels/values, response_type) are directly supported by metadata.payload and expected_output; (5) The response is an honest, actionable recovery state — it preserves the breakfast context implicitly (from scenario_id and input message), explicitly asks for category, and provides concrete, mutually exclusive options (including skip); (6) No hallucination: no invented products, prices, or tools; output exactly matches metadata.payload.answer and aligns with scenario_id 'shop_vague_breakfast_food'. Evidence of compliance includes: metadata.payload.response_type === 'clarification', metadata.payload.options contains 'category:food_beverage', absence of forbidden tool_calls, and alignment with hard_assertion target 'category'. Minor deduction (0.05) for slight phrasing redundancy ('哪一类商品？' could more precisely reference 'breakfast food', but scenario does not require that specificity — only category clarification — so this is a negligible expression imperfection within 0.90–1.00 band.)",
+            "score": 0.95,
+            "usage": {
+              "cached_input_tokens": 512,
+              "input_tokens": 1575,
+              "model": "qwen-plus",
+              "output_tokens": 416,
+              "provider": "litellm",
+              "total_tokens": 1991
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.871613Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "ae6d8be1480c0aff",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 8,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "1e4cdf0c-3ea6-4bce-8e51-2a2639c5c0de",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.813385Z",
+        "output": "你主要想买哪一类商品？",
+        "spanId": "ed6160dea87a732a",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "e6636ef9-44a1-4086-8bb8-ec77a59e3dac:metric:talonmart_abcd_quality:1",
+              "e6636ef9-44a1-4086-8bb8-ec77a59e3dac:metric:talonmart_contract_guard:1",
+              "e6636ef9-44a1-4086-8bb8-ec77a59e3dac:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 1991,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐一些适合早餐的东西。\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 9644,
+      "occurredAt": "2026-09-24T03:23:30.813385Z",
+      "startedAt": "2026-09-24T03:23:30.813385Z",
+      "testId": "e6636ef9-44a1-4086-8bb8-ec77a59e3dac",
+      "testResultId": "dc6a6007-88d5-4ec4-b6e3-d60c95bd0810",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "e6636ef9-44a1-4086-8bb8-ec77a59e3dac:metric:talonmart_abcd_quality:1",
+            "e6636ef9-44a1-4086-8bb8-ec77a59e3dac:metric:talonmart_contract_guard:1",
+            "e6636ef9-44a1-4086-8bb8-ec77a59e3dac:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 1991,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "endedAt": "2026-09-24T03:23:30.816880Z",
+      "errorCode": null,
+      "evidence": {
+        "caseId": "e60bbbea-27a5-429c-855c-f90070b7fe74",
+        "caseResultId": "20bcc008-6f81-4f31-8c67-6055f17cc698",
+        "context": [],
+        "costUsd": 0.0,
+        "createdAt": "2026-09-24T03:23:30.816880Z",
+        "errorCode": null,
+        "executionStatus": "COMPLETED",
+        "expectedOutput": {
+          "category": "vague_need",
+          "expected_goal": {
+            "category_id": "electronics"
+          },
+          "expected_response_type": "clarification",
+          "failure_mode": "none",
+          "forbidden_tools": [
+            "product_search",
+            "product_reviews"
+          ],
+          "hard_assertions": [
+            {
+              "assertion_id": "ask_usage",
+              "expected": "usage_scenario",
+              "operator": "eq",
+              "target": "clarification.field"
+            }
+          ],
+          "required_tools": [],
+          "scenario_id": "shop_vague_earbuds_use"
+        },
+        "input": {
+          "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"想买一副无线耳机。\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+        },
+        "knowledgeEvidence": {
+          "citations": [],
+          "contextCount": 0,
+          "policyHash": null,
+          "queryHash": null,
+          "scores": [],
+          "snapshotId": null,
+          "sourceMode": "TARGET_REPORTED",
+          "truncated": false
+        },
+        "latencyMs": 4637,
+        "metadata": {
+          "category": "vague_need",
+          "scenario_id": "shop_vague_earbuds_use",
+          "stages": [
+            "A",
+            "B"
+          ],
+          "tags": [
+            "vague_need",
+            "missing_usage"
+          ]
+        },
+        "metricResults": [
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.816880Z",
+            "error": null,
+            "evidence": [
+              {
+                "raw_score": 1.0,
+                "threshold": 0.8,
+                "threshold_operator": ">="
+              },
+              "expected_response_type matches 'clarification'",
+              "hard_assertion 'ask_usage' satisfied: clarification.field == 'usage_scenario'",
+              "forbidden_tools ['product_search', 'product_reviews'] not called",
+              "required_tools [] correctly unused",
+              "response is honest, actionable, and preserves all constraints"
+            ],
+            "latencyMs": 4440,
+            "metricId": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+            "metricKey": "talonmart_abcd_quality",
+            "metricResultId": "18433ea9-d784-4e9f-8b2e-3e1e119c99f7",
+            "passed": true,
+            "reason": "The response is a clarification question asking about usage scenario, matching expected_response_type 'clarification'. It satisfies the hard assertion 'ask_usage' which requires the clarification field to be 'usage_scenario'. No forbidden tools (product_search, product_reviews) were called. No required tools were needed. The output is concise, appropriate, and enables next-step resolution. All hard constraints are satisfied; no factual claims requiring evidence are made. The response aligns fully with the vague_need scenario and metadata.scenario_context.expected_contract.",
+            "score": 1.0,
+            "usage": {
+              "cached_input_tokens": 0,
+              "input_tokens": 1591,
+              "model": "qwen-plus",
+              "output_tokens": 179,
+              "provider": "litellm",
+              "total_tokens": 1770
+            }
+          },
+          {
+            "costUsd": 0.0,
+            "createdAt": "2026-09-24T03:23:30.816880Z",
+            "error": null,
+            "evidence": [
+              {
+                "forbiddenUsed": [],
+                "missingRequired": [],
+                "type": "tool_contract"
+              },
+              {
+                "sha256": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+                "type": "runtime_fingerprint"
+              },
+              {
+                "spanId": "c9f0fd1c740d56d5",
+                "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+                "type": "SDK_METRIC_TRACE"
+              }
+            ],
+            "latencyMs": 5,
+            "metricId": "340d82e6-05e9-4891-84b9-51d278dc674b",
+            "metricKey": "talonmart_contract_guard",
+            "metricResultId": "225076cb-3eb6-402f-93e1-2068e5b476e6",
+            "passed": true,
+            "reason": "Required and forbidden tool constraints are satisfied",
+            "score": 1.0,
+            "usage": {}
+          }
+        ],
+        "occurredAt": "2026-09-24T03:23:30.811462Z",
+        "output": "你主要会在什么场景使用？",
+        "spanId": "9aabd18acece41ca",
+        "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+        "usage": {
+          "_budget": {
+            "call_keys": [
+              "e60bbbea-27a5-429c-855c-f90070b7fe74:metric:talonmart_abcd_quality:1",
+              "e60bbbea-27a5-429c-855c-f90070b7fe74:metric:talonmart_contract_guard:1",
+              "e60bbbea-27a5-429c-855c-f90070b7fe74:target:1"
+            ],
+            "cost_usd": "0",
+            "external_calls": 3,
+            "tokens": 1770,
+            "unknown_cost": true
+          }
+        },
+        "verdict": "PASS"
+      },
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"想买一副无线耳机。\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 4637,
+      "occurredAt": "2026-09-24T03:23:30.811462Z",
+      "startedAt": "2026-09-24T03:23:30.811462Z",
+      "testId": "e60bbbea-27a5-429c-855c-f90070b7fe74",
+      "testResultId": "20bcc008-6f81-4f31-8c67-6055f17cc698",
+      "traceId": "44889b896d3fdf4a8fa5e0674be14725",
+      "type": "SINGLE_TURN",
+      "usage": {
+        "_budget": {
+          "call_keys": [
+            "e60bbbea-27a5-429c-855c-f90070b7fe74:metric:talonmart_abcd_quality:1",
+            "e60bbbea-27a5-429c-855c-f90070b7fe74:metric:talonmart_contract_guard:1",
+            "e60bbbea-27a5-429c-855c-f90070b7fe74:target:1"
+          ],
+          "cost_usd": "0",
+          "external_calls": 3,
+          "tokens": 1770,
+          "unknown_cost": true
+        }
+      },
+      "verdict": "PASS"
+    }
+  ],
+  "items": [
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"这辆婴儿车必须一小时内送到。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 7776,
+      "occurredAt": "2026-09-24T03:23:30.832353Z",
+      "testId": "11850263-939c-4800-a91c-d02b823358ad",
+      "testResultId": "ecd62514-280f-4a89-bcd5-b7d6c6c257fb",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"要 4K 电视，预算不超过 100。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_smart_tv_43\"}]}}"
+      },
+      "latencyMs": 11715,
+      "occurredAt": "2026-09-24T03:23:30.831468Z",
+      "testId": "7264869e-82a6-4be4-9002-88d3349962a1",
+      "testResultId": "f683de81-1432-44cb-bf86-8b17302f1e53",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"找 5 元以内的电子产品。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"电子产品\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 7194,
+      "occurredAt": "2026-09-24T03:23:30.830469Z",
+      "testId": "291d9ede-6887-4226-8977-3db2286b7f35",
+      "testResultId": "14045a95-5be2-454f-901a-d2a19ec078e6",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"只要不存在的 NovaSound 品牌无线耳机。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"无线耳机\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"}]}}"
+      },
+      "latencyMs": 13149,
+      "occurredAt": "2026-09-24T03:23:30.829570Z",
+      "testId": "16b0186b-74bb-43b9-8b92-ba34d00cd867",
+      "testResultId": "a28e7f7a-2d17-4fb9-ae01-81be2967cb25",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"空气炸锅必须 6.5L，但不要小米。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_fryer_6_5l\"}]}}"
+      },
+      "latencyMs": 12833,
+      "occurredAt": "2026-09-24T03:23:30.828744Z",
+      "testId": "a5a782a6-ff86-4629-bc4f-670e54ecdbee",
+      "testResultId": "91514ea5-8935-4837-a367-a9515fb83a1a",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"只要小米，但同时排除小米品牌。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_purifier_4\"}]}}"
+      },
+      "latencyMs": 6898,
+      "occurredAt": "2026-09-24T03:23:30.827802Z",
+      "testId": "2ad92e7b-3617-46b6-82b8-8e403d9e592d",
+      "testResultId": "4e74b662-657c-4192-b600-81fe64a62e79",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"要这台 43 英寸电视，但预算不能超过 50。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_smart_tv_43\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 7704,
+      "occurredAt": "2026-09-24T03:23:30.826392Z",
+      "testId": "f0854d9e-7f3e-40df-aa8c-128a602f833c",
+      "testResultId": "f87f025b-971c-4c80-95b4-7f0c397b93d7",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"总结这辆婴儿车评论中的便携性反馈。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 10297,
+      "occurredAt": "2026-09-24T03:23:30.825188Z",
+      "testId": "0833752a-9962-4056-a47a-04f915a3e460",
+      "testResultId": "6a5a74f8-d01d-4c8c-9bc4-f0d7158a1ca4",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"这台 43 英寸电视的评价集中反映什么？\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_smart_tv_43\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 6005,
+      "occurredAt": "2026-09-24T03:23:30.824433Z",
+      "testId": "e3cc2522-c15c-45da-9758-63d5b2c2a082",
+      "testResultId": "9332686e-1434-4fd0-b6ca-38eb219bbb01",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"总结这款无线耳机评价中的优缺点。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_wireless_earbuds\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 11980,
+      "occurredAt": "2026-09-24T03:23:30.823545Z",
+      "testId": "63ac266f-2033-4278-a4de-80302026a753",
+      "testResultId": "632b07dd-4548-450d-b3d2-c1acf412db44",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"比较小米空气净化器和扫拖机器人，不要混淆功能。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_purifier_4\"},{\"item_id\":\"item_xiaomi_robot_vacuum_x20_plus\"}]}}"
+      },
+      "latencyMs": 11591,
+      "occurredAt": "2026-09-24T03:23:30.822946Z",
+      "testId": "4540da25-6fea-4e1f-8219-478e0ad573af",
+      "testResultId": "337499a9-6410-4fd4-9c41-5a2b95aa6c29",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"纯牛奶和原味酸奶的规格、价格有什么差别？\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_milk_pure\"},{\"item_id\":\"item_yogurt_plain\"}]}}"
+      },
+      "latencyMs": 11087,
+      "occurredAt": "2026-09-24T03:23:30.822215Z",
+      "testId": "f4c5b4eb-5056-4aaa-a8ec-62817b24fbb3",
+      "testResultId": "c9f14fee-4374-4440-bec0-c24b48448c66",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"对比小米空气炸锅和电水壶的价格与用途。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_fryer_6_5l\"},{\"item_id\":\"item_xiaomi_electric_kettle_2\"}]}}"
+      },
+      "latencyMs": 12283,
+      "occurredAt": "2026-09-24T03:23:30.821539Z",
+      "testId": "e9bd0ce8-44b4-4db6-bf60-398db8dba10f",
+      "testResultId": "ab3c9897-1cd9-4b5a-948b-d66570035d91",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"比较候选中的耳机和电视，只列真实参数。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"},{\"item_id\":\"item_smart_tv_43\"}]}}"
+      },
+      "latencyMs": 15476,
+      "occurredAt": "2026-09-24T03:23:30.820751Z",
+      "testId": "b73b27e6-df06-4c41-8902-6f841ad9df55",
+      "testResultId": "2276fb74-9694-41e4-9425-091d3703b11e",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"空气炸锅容量必须至少 6.5L。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_xiaomi_air_fryer_6_5l\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 12512,
+      "occurredAt": "2026-09-24T03:23:30.819886Z",
+      "testId": "03a1c53a-0bc0-4fd4-8511-c42199b15bd5",
+      "testResultId": "7abb7e96-4218-47de-9fd2-6e2e492777ab",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"电子产品不要小米品牌。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"电子产品\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"},{\"item_id\":\"item_smart_tv_43\"},{\"item_id\":\"item_xiaomi_electric_kettle_2\"}]}}"
+      },
+      "latencyMs": 11836,
+      "occurredAt": "2026-09-24T03:23:30.819182Z",
+      "testId": "f267c10e-9845-4bc3-9fd9-b183621bf33b",
+      "testResultId": "4030b255-5b7f-4075-997d-38a80ff85455",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"只看小米空气炸锅。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"空气炸锅\",\"candidate_refs\":[{\"item_id\":\"item_xiaomi_air_fryer_6_5l\"}]}}"
+      },
+      "latencyMs": 13136,
+      "occurredAt": "2026-09-24T03:23:30.818451Z",
+      "testId": "48e7f6a0-d875-4110-b1d6-4dfe8befa6dc",
+      "testResultId": "ecfdcbea-aeb9-45d9-9ae9-dc0b33e5075b",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"婴儿车预算最高 89，可以等于 89。\",\"links\":[],\"page_context\":{\"page_type\":\"product\",\"current_item_id\":\"item_baby_stroller\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 9148,
+      "occurredAt": "2026-09-24T03:23:30.817704Z",
+      "testId": "b1193abc-5940-44e6-8f80-bd07a6b4a252",
+      "testResultId": "5b9acccb-7ede-44a3-929c-1376a5d26edc",
+      "type": "SINGLE_TURN",
+      "verdict": "FAIL"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"无线耳机预算不超过 60。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"无线耳机\",\"candidate_refs\":[{\"item_id\":\"item_wireless_earbuds\"}]}}"
+      },
+      "latencyMs": 11610,
+      "occurredAt": "2026-09-24T03:23:30.816601Z",
+      "testId": "7616e5dd-7215-45ad-837a-3277cea160ba",
+      "testResultId": "31ec191d-44e5-4c6e-b9d6-ec4b88a23c8b",
+      "type": "SINGLE_TURN",
+      "verdict": "FAIL"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"想买一箱饮料送人。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"饮料\",\"candidate_refs\":[{\"item_id\":\"item_water_spring\"},{\"item_id\":\"item_cola_zero\"}]}}"
+      },
+      "latencyMs": 8728,
+      "occurredAt": "2026-09-24T03:23:30.815485Z",
+      "testId": "cee9a936-1aa9-41c3-80e3-2ce3e295cb34",
+      "testResultId": "b60e7878-7f96-41c2-8418-a581c0235f9b",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"办公室要补点耗材。\",\"links\":[],\"page_context\":{\"page_type\":\"search\",\"search_query\":\"办公耗材\",\"candidate_refs\":[{\"item_id\":\"item_office_pen\"},{\"item_id\":\"item_copy_paper\"}]}}"
+      },
+      "latencyMs": 7793,
+      "occurredAt": "2026-09-24T03:23:30.814446Z",
+      "testId": "a33d3e63-fe09-4295-be94-bb0243fee785",
+      "testResultId": "02398b46-1349-40eb-a037-4777f70dbcda",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"推荐一些适合早餐的东西。\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 9644,
+      "occurredAt": "2026-09-24T03:23:30.813385Z",
+      "testId": "e6636ef9-44a1-4086-8bb8-ec77a59e3dac",
+      "testResultId": "dc6a6007-88d5-4ec4-b6e3-d60c95bd0810",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    },
+    {
+      "costUsd": 0.0,
+      "errorCode": null,
+      "executionStatus": "COMPLETED",
+      "input": {
+        "input": "{\"_talonmart_evaluation_version\":1,\"message\":\"想买一副无线耳机。\",\"links\":[],\"page_context\":{\"page_type\":\"none\",\"candidate_refs\":[]}}"
+      },
+      "latencyMs": 4637,
+      "occurredAt": "2026-09-24T03:23:30.811462Z",
+      "testId": "e60bbbea-27a5-429c-855c-f90070b7fe74",
+      "testResultId": "20bcc008-6f81-4f31-8c67-6055f17cc698",
+      "type": "SINGLE_TURN",
+      "verdict": "PASS"
+    }
+  ],
+  "summary": {
+    "availableResults": {
+      "count": 23,
+      "firstOccurredAt": "2026-09-24T03:23:30.811462Z",
+      "lastOccurredAt": "2026-09-24T03:23:30.832353Z"
+    },
+    "costKnown": false,
+    "counts": {
+      "cancelled": 0,
+      "completed": 23,
+      "errored": 0,
+      "failed": 2,
+      "passed": 21,
+      "total": 23
+    },
+    "durationMs": 235059,
+    "passRate": 91.3043,
+    "runId": "4607cb21-2ec1-4e17-a756-192b323a0089",
+    "status": "COMPLETED",
+    "testType": "SINGLE_TURN",
+    "totalCostUsd": null,
+    "totalTokens": 76131
+  }
+}
