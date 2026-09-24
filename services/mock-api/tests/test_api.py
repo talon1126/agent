@@ -1144,7 +1144,7 @@ def test_product_detail_returns_enriched_item_from_repository(monkeypatch):
     assert body["item"]["spec"] == "1L x 6"
     assert body["item"]["category_id"] == "dairy"
     assert body["item"]["price"] == 18.4
-    assert body["item"]["currency"] == "USD"
+    assert body["item"]["currency"] == "CNY"
     assert body["item"]["images"][0]["alt"] == "纯牛奶 main product image"
     assert body["item"]["rating"] == {"score": 4.5, "count": 2}
     assert body["item"]["features"]

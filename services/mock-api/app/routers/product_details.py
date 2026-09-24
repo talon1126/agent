@@ -82,7 +82,7 @@ def build_product_detail(
         "spec": spec,
         "category_id": category_id,
         "price": float(item["price"]),
-        "currency": "USD",
+        "currency": "CNY",
         "images": [
             {
                 "url": image_url,

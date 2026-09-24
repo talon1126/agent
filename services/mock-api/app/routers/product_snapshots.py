@@ -228,7 +228,7 @@ def get_product_snapshots(
                     category=str(row["category_id"]),
                     brand=str(row["brand"]),
                     current_price=Decimal(str(row["price"])),
-                    currency="USD",
+                    currency="CNY",
                     stock=row.get("stock"),
                     specifications={"summary": str(row["spec"])},
                     rating=(
