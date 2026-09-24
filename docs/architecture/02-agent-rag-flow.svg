@@ -1,0 +1,263 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="3220" viewBox="0 0 2400 3220" role="img" aria-labelledby="title desc">
+<title id="title">Agent × RAG · 完全体目标架构</title><desc id="desc">以购物目标驱动决策，融合授权画像、商品知识、实时事实与检索证据，形成反馈学习闭环。</desc>
+<defs><filter id="shadow" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="5" stdDeviation="9" flood-color="#172A46" flood-opacity=".055"/></filter>
+<marker id="arrow-blue" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 1 1 L 10 6 L 1 11 Z" fill="#315CDD"/></marker>
+<marker id="arrow-teal" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 1 1 L 10 6 L 1 11 Z" fill="#087F79"/></marker>
+<marker id="arrow-orange" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 1 1 L 10 6 L 1 11 Z" fill="#B76817"/></marker>
+<marker id="arrow-purple" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 1 1 L 10 6 L 1 11 Z" fill="#7452B7"/></marker>
+<marker id="arrow-muted" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 1 1 L 10 6 L 1 11 Z" fill="#52647B"/></marker>
+</defs><style>text{font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",Arial,sans-serif}path{stroke-linejoin:round;stroke-linecap:round}</style>
+<rect x="0" y="0" width="2400" height="3220" fill="#F6F8FC" rx="0"/>
+<rect x="64" y="56" width="7" height="100" fill="#315CDD" rx="3"/>
+<text x="92" y="70" font-size="18" fill="#315CDD" font-weight="700" text-anchor="start" letter-spacing="2">TALONMART  /  ARCHITECTURE ATLAS</text>
+<text x="92" y="126" font-size="43" fill="#16243B" font-weight="700" text-anchor="start">Agent × RAG · 完全体目标架构</text>
+<text x="92" y="166" font-size="22" fill="#52647B" font-weight="400" text-anchor="start">以购物目标驱动决策，融合授权画像、商品知识、实时事实与检索证据，形成反馈学习闭环。</text>
+<text x="2336" y="87" font-size="24" fill="#52647B" font-weight="600" text-anchor="end">02  /  03</text>
+<text x="2336" y="126" font-size="22" fill="#52647B" font-weight="400" text-anchor="end">2026.09.23</text>
+<rect x="696" y="220" width="1016" height="2048" fill="white" rx="18" stroke="#DDE5F0" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="696" y="246" width="5" height="43" fill="#315CDD" rx="2"/>
+<text x="724" y="270" font-size="29" fill="#16243B" font-weight="700" text-anchor="start">购物决策 Agent · 在线主链</text>
+<text x="724" y="304" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">API / SSE + 单 Agent 编排 · 按计划选择、并行或跳过步骤</text>
+<rect x="1588" y="242" width="100" height="34" fill="#EEF3FF" rx="17"/>
+<text x="1638.0" y="266" font-size="18" fill="#315CDD" font-weight="600" text-anchor="middle">完整设计</text>
+<rect x="724" y="352" width="960" height="108" fill="#EEF3FF" rx="12"/>
+<text x="744" y="388" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">01  API Consumer → HTTP / SSE Adapter</text>
+<text x="744" y="422" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">用户问题 / 页面引用 / 候选 ID / 聚合行为信号；版本化输入</text>
+<path d="M1204 460 V510" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<rect x="724" y="510" width="960" height="108" fill="#EEF3FF" rx="12"/>
+<text x="744" y="546" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">02  Identity Context + Consent Policy Gate</text>
+<text x="744" y="580" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">主体隔离 / purpose / scope / 撤回与过期；无授权走非个性化</text>
+<path d="M1204 618 V668" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<rect x="724" y="668" width="960" height="150" fill="#EEF3FF" rx="12"/>
+<text x="744" y="704" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">03  Context Assembler + Proactive Policy</text>
+<text x="744" y="738" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">服务端事实 / 页面 / 会话 / 授权画像 → 带来源与预算的上下文</text>
+<text x="744" y="769" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">主动建议按规则、冷却与免打扰生成；用户接入后启动完整决策</text>
+<path d="M1204 818 V870" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<rect x="724" y="870" width="960" height="132" fill="#EEF3FF" rx="12"/>
+<text x="744" y="906" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">04  Shopping Goal Manager</text>
+<text x="744" y="940" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">目标抽取 / 多轮合并 / 冲突检测 / 最少澄清 / goal_version</text>
+<text x="744" y="971" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">本轮硬约束与明确偏好优先；长期偏好只提供受控软信号</text>
+<path d="M1204 1002 V1054" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<rect x="724" y="1054" width="960" height="170" fill="#EEF3FF" rx="12"/>
+<text x="744" y="1090" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">05  Intent Router → Planner → Step Policy Gate</text>
+<text x="744" y="1124" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">路由 / 执行 DAG / 依赖 / 工具白名单 → Bounded Executor</text>
+<text x="744" y="1155" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">有界并发 / 超时 / 重试 / 取消 / 失败恢复；工具逐步授权</text>
+<text x="744" y="1186" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">商品 / 评论 / 购物车 / Web / RAG 通过受控工具接口调用</text>
+<path d="M1204 1224 V1276" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<rect x="724" y="1276" width="960" height="170" fill="#EEF3FF" rx="12"/>
+<text x="744" y="1312" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">06  Multi-route Recall · 多路召回与融合</text>
+<text x="744" y="1346" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">lexical_search / semantic_search / graph_relation</text>
+<text x="744" y="1377" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">behavior_affinity / category_popular → 配额或 RRF 融合</text>
+<text x="744" y="1408" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">canonical ID 去重 / lane 来源 / 索引版本 / 全局候选预算</text>
+<path d="M1204 1446 V1498" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<rect x="724" y="1498" width="960" height="132" fill="#EEF3FF" rx="12"/>
+<text x="744" y="1534" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">07  Commerce Fact Gateway → Hard Filter</text>
+<text x="744" y="1568" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">批量补全价格 / 促销 / 库存 / 配送 → 同一 fact_snapshot_id</text>
+<text x="744" y="1599" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">fresh / stale / unknown / conflict；校验预算、品牌与必需规格</text>
+<path d="M1204 1630 V1682" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<rect x="724" y="1682" width="960" height="170" fill="#EEF3FF" rx="12"/>
+<text x="744" y="1718" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">08  Personalized Ranker + Safety Blend</text>
+<text x="744" y="1752" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">注册模型批量排序 → 后置硬约束复核 → 多样性 / 去重</text>
+<text x="744" y="1783" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">保留 baseline / model / 最终顺序与可解释原因代码</text>
+<text x="744" y="1814" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">关闭个性化、无授权、超时、版本异常 → 确定性 baseline</text>
+<path d="M1204 1852 V1904" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<rect x="724" y="1904" width="960" height="132" fill="#EEF3FF" rx="12"/>
+<text x="744" y="1940" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">09  Comparator / Review Insights → Grounding Verifier</text>
+<text x="744" y="1974" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">对比矩阵 / 评论观点 / 知识引用 → 事实、约束与证据校验</text>
+<text x="744" y="2005" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">结论绑定同一事实快照；一次有界恢复，失败返回安全降级</text>
+<path d="M1204 2036 V2088" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<rect x="724" y="2088" width="960" height="132" fill="#EEF3FF" rx="12"/>
+<text x="744" y="2124" font-size="24" fill="#16243B" font-weight="600" text-anchor="start">10  Structured Response Composer → API / SSE</text>
+<text x="744" y="2158" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">推荐 / 比较 / 澄清 / action_preview / fallback + 来源证据</text>
+<text x="744" y="2189" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">request_id / sequence / 幂等 done / 历史恢复 / 兼容文本</text>
+<text x="724" y="2250" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">在线领域：personalization / catalog / recommendation；统一基础设施适配。</text>
+<rect x="64" y="220" width="536" height="568" fill="white" rx="18" stroke="#DDE5F0" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="64" y="246" width="5" height="43" fill="#7452B7" rx="2"/>
+<text x="92" y="270" font-size="29" fill="#16243B" font-weight="700" text-anchor="start">授权画像与实时特征</text>
+<text x="92" y="304" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">personalization domain</text>
+<rect x="92" y="344" width="480" height="134" fill="#F3EFFB" rx="12"/>
+<text x="112" y="380" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">Explainable User Profile</text>
+<text x="112" y="414" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">显式 / 推断 / 临时偏好分层</text>
+<text x="112" y="445" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">置信度 / 衰减 / 证据量 / profile_version</text>
+<path d="M332 532 V478" fill="none" stroke="#7452B7" stroke-width="3" marker-end="url(#arrow-purple)"/>
+<rect x="92" y="532" width="480" height="190" fill="#F3EFFB" rx="12"/>
+<text x="112" y="568" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">Feature Registry + Online Store</text>
+<text x="112" y="602" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">共享特征定义 / 在线低延迟快照</text>
+<text x="112" y="633" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">purpose 校验 / TTL / 撤回立即阻断</text>
+<text x="112" y="664" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">画像仅提供软特征；读取失败安全回退</text>
+<text x="92" y="758" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">授权检查覆盖事件、画像、特征与训练出口</text>
+<path d="M572 410 H616 V742 H724" fill="none" stroke="#7452B7" stroke-width="3" marker-end="url(#arrow-purple)"/>
+<rect x="612.0" y="705" width="96" height="32" fill="#F6F8FC" rx="6"/>
+<text x="660" y="727" font-size="18" fill="#7452B7" font-weight="500" text-anchor="middle">授权画像</text>
+<rect x="64" y="860" width="536" height="364" fill="white" rx="18" stroke="#DDE5F0" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="64" y="886" width="5" height="43" fill="#315CDD" rx="2"/>
+<text x="92" y="910" font-size="29" fill="#16243B" font-weight="700" text-anchor="start">购物状态与会话记忆</text>
+<text x="92" y="944" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">Goal Repository + LangGraph Checkpoint</text>
+<rect x="92" y="974" width="480" height="194" fill="#EEF3FF" rx="12"/>
+<text x="112" y="1010" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">按用户 / 会话隔离的状态</text>
+<text x="112" y="1044" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">ShoppingGoal / goal_version / 历史消息</text>
+<text x="112" y="1075" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">长期明确偏好与本轮目标分别持久化</text>
+<text x="112" y="1106" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">会话续接 / 幂等状态迁移 / Trace 关联</text>
+<path d="M572 988 H724" fill="none" stroke="#315CDD" stroke-width="3" marker-end="url(#arrow-blue)" marker-start="url(#arrow-blue)"/>
+<rect x="612.0" y="946" width="96" height="32" fill="#F6F8FC" rx="6"/>
+<text x="660" y="968" font-size="18" fill="#315CDD" font-weight="500" text-anchor="middle">目标状态</text>
+<text x="92" y="1199" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">用户本轮需求与页面上下文共同驱动计划</text>
+<rect x="64" y="1300" width="536" height="944" fill="white" rx="18" stroke="#DDE5F0" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="64" y="1326" width="5" height="43" fill="#B76817" rx="2"/>
+<text x="92" y="1350" font-size="29" fill="#16243B" font-weight="700" text-anchor="start">商品知识与权威事实</text>
+<text x="92" y="1384" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">catalog / recommendation</text>
+<rect x="92" y="1420" width="480" height="132" fill="#FFF5E7" rx="12"/>
+<text x="112" y="1456" font-size="21" fill="#16243B" font-weight="600" text-anchor="start">Product Ontology / Entity Resolution</text>
+<text x="112" y="1490" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">SPU / SKU / offer · 属性规范与版本</text>
+<text x="112" y="1521" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">来源映射 / 实体消歧 / 质量隔离</text>
+<path d="M332 1552 V1604" fill="none" stroke="#B76817" stroke-width="3" marker-end="url(#arrow-orange)"/>
+<rect x="92" y="1604" width="480" height="132" fill="#FFF5E7" rx="12"/>
+<text x="112" y="1640" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">Product Graph + 商品召回索引</text>
+<text x="112" y="1674" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">受控图查询 / 关系证据 / canonical ID</text>
+<text x="112" y="1705" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">独立商品 embedding / 版本化索引</text>
+<text x="92" y="1781" font-size="19" fill="#B76817" font-weight="500" text-anchor="start">商品语义索引与 RAG 文档 Chunk 索引分开维护</text>
+<path d="M572 1668 H620 V1390 H724" fill="none" stroke="#B76817" stroke-width="3" marker-end="url(#arrow-orange)"/>
+<rect x="605.88" y="1353" width="108.24000000000001" height="32" fill="#F6F8FC" rx="6"/>
+<text x="660" y="1375" font-size="18" fill="#B76817" font-weight="500" text-anchor="middle">图 / 索引</text>
+<rect x="92" y="1824" width="480" height="164" fill="#FFF5E7" rx="12"/>
+<text x="112" y="1860" font-size="22" fill="#16243B" font-weight="600" text-anchor="start">权威来源适配器 + Fact Cache</text>
+<text x="112" y="1894" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">mock-api / 商品库 / 受控 RPA 数据契约</text>
+<text x="112" y="1925" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">catalog / price / promotion / inventory</text>
+<text x="112" y="1956" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">delivery · 来源优先级 / 时效 / 熔断</text>
+<path d="M572 1906 H648 V1564 H724" fill="none" stroke="#B76817" stroke-width="3" marker-end="url(#arrow-orange)"/>
+<rect x="611.0" y="1521" width="96" height="32" fill="#F6F8FC" rx="6"/>
+<text x="659" y="1543" font-size="18" fill="#B76817" font-weight="500" text-anchor="middle">实时事实</text>
+<rect x="92" y="2024" width="480" height="164" fill="#FFF5E7" rx="12"/>
+<text x="112" y="2060" font-size="22" fill="#16243B" font-weight="600" text-anchor="start">一致的 CommerceFactSnapshot</text>
+<text x="112" y="2094" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">SKU / seller / region / quantity / as_of</text>
+<text x="112" y="2125" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">可追溯来源 / 证据 / fresh_until</text>
+<text x="112" y="2156" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">排序、比较与回答消费同一决策快照</text>
+<text x="92" y="2220" font-size="19" fill="#52647B" font-weight="400" text-anchor="start">业务事实由权威服务拥有；Agent 保存决策快照</text>
+<rect x="1808" y="220" width="528" height="1216" fill="white" rx="18" stroke="#DDE5F0" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="1808" y="246" width="5" height="43" fill="#087F79" rx="2"/>
+<text x="1836" y="270" font-size="29" fill="#16243B" font-weight="700" text-anchor="start">独立 RAG 知识服务</text>
+<text x="1836" y="304" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">MCP 公共契约 · 持久 stdio Client</text>
+<rect x="1836" y="352" width="472" height="126" fill="#EAF7F4" rx="12"/>
+<text x="1856" y="388" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">01  原始问题 + collections</text>
+<text x="1856" y="422" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">内部 Query Processing / Intent Router</text>
+<text x="1856" y="453" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">按需改写 / 扩展；保留原问题绑定</text>
+<path d="M2072 478 V520" fill="none" stroke="#087F79" stroke-width="3" marker-end="url(#arrow-teal)"/>
+<rect x="1836" y="520" width="472" height="126" fill="#EAF7F4" rx="12"/>
+<text x="1856" y="556" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">02  多知识库并行混合召回</text>
+<text x="1856" y="590" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">Dense + BM25 → RRF / 元数据过滤</text>
+<text x="1856" y="621" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">collection 并发、限时与部分失败隔离</text>
+<path d="M2072 646 V688" fill="none" stroke="#087F79" stroke-width="3" marker-end="url(#arrow-teal)"/>
+<rect x="1836" y="688" width="472" height="126" fill="#EAF7F4" rx="12"/>
+<text x="1856" y="724" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">03  Reranker → Self-RAG Judge</text>
+<text x="1856" y="758" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">相关性 / 充分性 / 证据筛选</text>
+<text x="1856" y="789" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">CrossEncoder / Qwen / LLM 可插拔</text>
+<path d="M2072 814 V856" fill="none" stroke="#087F79" stroke-width="3" marker-end="url(#arrow-teal)"/>
+<rect x="1836" y="856" width="472" height="126" fill="#EAF7F4" rx="12"/>
+<text x="1856" y="892" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">04  Evidence Response</text>
+<text x="1856" y="926" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">知识上下文 / 引用 / query_trace</text>
+<text x="1856" y="957" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">选购指南 / FAQ / 政策 / 品牌知识</text>
+<rect x="1836" y="1040" width="472" height="302" fill="#EAF7F4" rx="12"/>
+<text x="1856" y="1076" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">摄取与文档索引</text>
+<text x="1856" y="1110" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">Markdown / PDF → Loader / Chunker</text>
+<text x="1856" y="1141" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">Transform：Caption / 去噪 / Rewrite</text>
+<text x="1856" y="1172" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">Embedding → pgvector + BM25</text>
+<text x="1856" y="1203" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">文档 / Chunk / 来源 / 版本 / 去重</text>
+<text x="1856" y="1234" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">LLM / Embedding / Rerank 工厂接口</text>
+<text x="1856" y="1265" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">Ingestion Trace / Query Trace</text>
+<text x="1836" y="1405" font-size="19" fill="#52647B" font-weight="400" text-anchor="start">知识证据进入解释与校验；实时商品事实走网关</text>
+<path d="M2308 1232 H2322 V584 H2308" fill="none" stroke="#087F79" stroke-width="3" marker-end="url(#arrow-teal)"/>
+<path d="M1684 1134 H1740 V416 H1836" fill="none" stroke="#087F79" stroke-width="3" marker-end="url(#arrow-teal)"/>
+<rect x="1697.84" y="1096" width="100.32000000000001" height="32" fill="#F6F8FC" rx="6"/>
+<text x="1748" y="1118" font-size="18" fill="#087F79" font-weight="500" text-anchor="middle">MCP 请求</text>
+<path d="M1836 932 H1772 V1970 H1684" fill="none" stroke="#087F79" stroke-width="3" marker-end="url(#arrow-teal)"/>
+<rect x="1702.0" y="1926" width="96" height="32" fill="#F6F8FC" rx="6"/>
+<text x="1750" y="1948" font-size="18" fill="#087F79" font-weight="500" text-anchor="middle">引用证据</text>
+<rect x="1808" y="1496" width="528" height="274" fill="white" rx="18" stroke="#DDE5F0" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="1808" y="1522" width="5" height="43" fill="#315CDD" rx="2"/>
+<text x="1836" y="1546" font-size="29" fill="#16243B" font-weight="700" text-anchor="start">工具与模型依赖</text>
+<text x="1836" y="1580" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">统一授权、限时、错误与 Trace 契约</text>
+<text x="1836" y="1620" font-size="21" fill="#52647B" font-weight="400" text-anchor="start">LLM：理解 / 规划 / 基于证据的解释</text>
+<text x="1836" y="1657" font-size="21" fill="#52647B" font-weight="400" text-anchor="start">商品 / 评论 / 购物车 / 订单：业务工具</text>
+<text x="1836" y="1694" font-size="21" fill="#52647B" font-weight="400" text-anchor="start">Tavily：受控公开网页搜索</text>
+<text x="1836" y="1731" font-size="21" fill="#52647B" font-weight="400" text-anchor="start">Embedding / Reranker：按配置调用</text>
+<rect x="1808" y="1830" width="528" height="414" fill="white" rx="18" stroke="#DDE5F0" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="1808" y="1856" width="5" height="43" fill="#B76817" rx="2"/>
+<text x="1836" y="1880" font-size="29" fill="#16243B" font-weight="700" text-anchor="start">确认式动作闭环</text>
+<text x="1836" y="1914" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">动作预览 / 用户确认 / 加入购物车</text>
+<rect x="1836" y="1946" width="472" height="118" fill="#FFF5E7" rx="12"/>
+<text x="1856" y="1982" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">Action Guard / 独立确认 API</text>
+<text x="1856" y="2016" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">预览 → 用户确认 → 令牌 / 幂等校验</text>
+<text x="1856" y="2047" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">重查价格、库存；条件变化则重新预览</text>
+<path d="M2072 2064 V2116" fill="none" stroke="#B76817" stroke-width="3" marker-end="url(#arrow-orange)"/>
+<rect x="2163.0" y="2075" width="114" height="32" fill="white" rx="6"/>
+<text x="2220" y="2097" font-size="18" fill="#B76817" font-weight="500" text-anchor="middle">有效确认后</text>
+<rect x="1836" y="2116" width="472" height="100" fill="#FFF5E7" rx="12"/>
+<text x="1856" y="2152" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">mock-api /cart → 权威结果</text>
+<text x="1856" y="2186" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">写入至多一次；记录 executed 审计</text>
+<path d="M1684 2140 H1740 V2024 H1836" fill="none" stroke="#B76817" stroke-width="3" marker-end="url(#arrow-orange)" marker-start="url(#arrow-orange)"/>
+<rect x="1680.88" y="2156" width="126.24" height="32" fill="#F6F8FC" rx="6"/>
+<text x="1744" y="2178" font-size="18" fill="#B76817" font-weight="500" text-anchor="middle">预览 / 确认</text>
+<path d="M1204 2268 V2318 H660 V2360" fill="none" stroke="#7452B7" stroke-width="3" marker-end="url(#arrow-purple)"/>
+<rect x="871.2" y="2276" width="337.59999999999997" height="34" fill="#F6F8FC" rx="6"/>
+<text x="1040" y="2300" font-size="20" fill="#7452B7" font-weight="500" text-anchor="middle">消费方真实回执 / 服务端可信事件</text>
+<path d="M280 2360 V2288 H28 V626 H92" fill="none" stroke="#7452B7" stroke-width="3" marker-end="url(#arrow-purple)"/>
+<rect x="152.88" y="2252" width="198.24" height="32" fill="#F6F8FC" rx="6"/>
+<text x="252" y="2274" font-size="18" fill="#7452B7" font-weight="500" text-anchor="middle">在线特征 / 画像更新</text>
+<path d="M2336 2610 H2372 V1806 H1684" fill="none" stroke="#7452B7" stroke-width="3" stroke-dasharray="8 7" marker-end="url(#arrow-purple)"/>
+<rect x="1955.88" y="1771" width="216.24" height="32" fill="#F6F8FC" rx="6"/>
+<text x="2064" y="1793" font-size="18" fill="#7452B7" font-weight="500" text-anchor="middle">版本化模型 / 受控切换</text>
+<rect x="64" y="2360" width="2272" height="420" fill="white" rx="18" stroke="#DDE5F0" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="64" y="2386" width="5" height="43" fill="#7452B7" rx="2"/>
+<text x="92" y="2410" font-size="29" fill="#16243B" font-weight="700" text-anchor="start">反馈 → 特征 → 训练 → 受控发布</text>
+<text x="92" y="2444" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">workers / ml 独立于在线 Web 进程运行；训练、回填与索引构建异步执行。</text>
+<rect x="2176" y="2382" width="136" height="34" fill="#F3EFFB" rx="17"/>
+<text x="2244.0" y="2406" font-size="18" fill="#7452B7" font-weight="600" text-anchor="middle">持续优化闭环</text>
+<rect x="92" y="2490" width="500" height="216" fill="#F3EFFB" rx="12"/>
+<text x="112" y="2526" font-size="21" fill="#16243B" font-weight="600" text-anchor="start">01  Feedback API / Event Store</text>
+<text x="112" y="2560" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">认证 / Consent Gate / 有效曝光回执</text>
+<text x="112" y="2591" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">render_token → impression_rendered</text>
+<text x="112" y="2622" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">购买 / 退货来自服务端可信适配器</text>
+<text x="112" y="2653" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">append-only / outbox / 去重 / 隔离</text>
+<rect x="664" y="2490" width="500" height="216" fill="#F3EFFB" rx="12"/>
+<text x="684" y="2526" font-size="21" fill="#16243B" font-weight="600" text-anchor="start">02  Event Worker / Feature Store</text>
+<text x="684" y="2560" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">乱序 / 迟到 / 重试 / DLQ / 回放</text>
+<text x="684" y="2591" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">共享特征定义 → Online / Offline</text>
+<text x="684" y="2622" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">时间窗 / TTL / 版本 / 授权数据血缘</text>
+<text x="684" y="2653" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">撤回、删除传播到特征与训练候选</text>
+<rect x="1236" y="2490" width="500" height="216" fill="#F3EFFB" rx="12"/>
+<text x="1256" y="2526" font-size="21" fill="#16243B" font-weight="600" text-anchor="start">03  PIT 数据集 / 排序训练</text>
+<text x="1256" y="2560" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">model_training 授权独立校验</text>
+<text x="1256" y="2591" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">真实曝光 / 成熟标签 / 时间切分</text>
+<text x="1256" y="2622" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">数据质量校验 → 可审计排序训练</text>
+<text x="1256" y="2653" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">固定评测集 / 分群指标 / 数据集血缘</text>
+<rect x="1808" y="2490" width="500" height="216" fill="#F3EFFB" rx="12"/>
+<text x="1828" y="2526" font-size="21" fill="#16243B" font-weight="600" text-anchor="start">04  Model Registry / Release</text>
+<text x="1828" y="2560" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">hash / signature / 版本兼容 manifest</text>
+<text x="1828" y="2591" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">模型与数据血缘 / Approved 制品</text>
+<text x="1828" y="2622" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">Shadow → 审批与受控启用</text>
+<text x="1828" y="2653" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">指标门禁 / kill switch / baseline 回退</text>
+<path d="M592 2600 H664" fill="none" stroke="#7452B7" stroke-width="3" marker-end="url(#arrow-purple)"/>
+<path d="M1164 2600 H1236" fill="none" stroke="#7452B7" stroke-width="3" marker-end="url(#arrow-purple)"/>
+<path d="M1736 2600 H1808" fill="none" stroke="#7452B7" stroke-width="3" marker-end="url(#arrow-purple)"/>
+<text x="92" y="2745" font-size="22" fill="#52647B" font-weight="400" text-anchor="start">独立索引构建与增量更新：商品语义索引 / 行为共现 / 品类热门；manifest 校验、原子切换与回滚。</text>
+<rect x="64" y="2860" width="2272" height="224" fill="white" rx="18" stroke="#DDE5F0" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="64" y="2886" width="5" height="43" fill="#7452B7" rx="2"/>
+<text x="92" y="2910" font-size="29" fill="#16243B" font-weight="700" text-anchor="start">贯穿全链路的治理与运行底座</text>
+<text x="92" y="2944" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">授权、事实、特征、索引和模型版本共同进入可重放的决策证据。</text>
+<text x="92" y="3000" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">Trace 与审计</text>
+<text x="92" y="3034" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">Agent / RAG / 工具 / 反馈关联</text>
+<text x="92" y="3064" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">fact / profile / feature / model 版本</text>
+<text x="668" y="3000" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">评测与发布门禁</text>
+<text x="668" y="3034" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">Golden Set / Ragas / 排序质量 / 性能</text>
+<text x="668" y="3064" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">事实准确率 / 分群表现 / 稳定性护栏</text>
+<text x="1244" y="3000" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">安全与可恢复性</text>
+<text x="1244" y="3034" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">内容信任分层 / URL 安全 / 最小授权</text>
+<text x="1244" y="3064" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">用户隔离 / 脱敏 / 硬约束 / 自动回退</text>
+<text x="1820" y="3000" font-size="23" fill="#16243B" font-weight="600" text-anchor="start">持久化与制品</text>
+<text x="1820" y="3034" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">PostgreSQL / pgvector / 缓存适配</text>
+<text x="1820" y="3064" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">图存储 / 事件 / 特征 / 索引 / 模型制品</text>
+<text x="64" y="3140" font-size="21" fill="#52647B" font-weight="400" text-anchor="start">图例：蓝色 = 在线决策；橙色 = 商品事实与确认动作；绿色 = RAG 知识；紫色 = 数据与模型闭环。虚线 = 受控制品更新。</text>
+<path d="M64 3162 H2336" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="64" y="3202" font-size="19" fill="#52647B" font-weight="400" text-anchor="start">完整目标设计 · 在线决策、知识证据、实时事实与数据学习各司其职。</text>
+<text x="2336" y="3202" font-size="17" fill="#52647B" font-weight="500" text-anchor="end">LOCAL-FIRST  ·  FACT-GROUNDED  ·  TRACEABLE</text>
+</svg>

@@ -1,0 +1,88 @@
+{
+  "project": "TalonMart Agent A-D",
+  "title": "TalonMart Agent · 链路与失败诊断",
+  "intro": "当前实现、Kayn 测试归因与期望链路。以真实代码和 2026-09-24 评测记录为依据；目标图不表示已经实现。",
+  "png_ready": true,
+  "diagrams": [
+    {
+      "id": "current-flow",
+      "title": "一次购物问题 · 当前 Agent 如何处理",
+      "tab": "01 · 当前链路",
+      "caption": "沿编号向下看：每步说明输入、负责模块、实际动作、输出；分支栏指出本轮可见的风险。",
+      "width": 2400,
+      "height": 2710,
+      "steps": [
+        {
+          "id": "current-flow-request",
+          "label": "01 接收"
+        },
+        {
+          "id": "current-flow-goal",
+          "label": "02 目标"
+        },
+        {
+          "id": "current-flow-route",
+          "label": "03 路由"
+        },
+        {
+          "id": "current-flow-tools",
+          "label": "04 查证"
+        },
+        {
+          "id": "current-flow-decide",
+          "label": "05 决策"
+        },
+        {
+          "id": "current-flow-verify",
+          "label": "06 校验"
+        },
+        {
+          "id": "current-flow-deliver",
+          "label": "07 交付"
+        }
+      ],
+      "sha256": "4f325a3b9e2f022a62840fc60448adbe390646ec2f3cc9d3e28f928b2236ed6f"
+    },
+    {
+      "id": "failure-map",
+      "title": "测试为什么失败 · 三类原因分开看",
+      "tab": "02 · 失败归因",
+      "caption": "同一低分同时受 Agent 行为、业务事实及评测输入影响；各项需用 Trace 和复现实例分别核实。",
+      "width": 2400,
+      "height": 1260,
+      "steps": [],
+      "sha256": "1d10580a9855256e7e1027f240a6445c0ad9d4289c18737b090c52a436772482"
+    },
+    {
+      "id": "target-flow",
+      "title": "同一道题 · 理想 Agent 应如何完成",
+      "tab": "03 · 理想链路",
+      "caption": "目标行为与验收口径；这张图是待实现的改进方向，并非当前系统已全部做到。",
+      "width": 2400,
+      "height": 2068,
+      "steps": [
+        {
+          "id": "target-flow-merge",
+          "label": "01 合并目标"
+        },
+        {
+          "id": "target-flow-plan",
+          "label": "02 限定工具"
+        },
+        {
+          "id": "target-flow-facts",
+          "label": "03 核实事实"
+        },
+        {
+          "id": "target-flow-guard",
+          "label": "04 校验输出"
+        },
+        {
+          "id": "target-flow-respond",
+          "label": "05 交付与续问"
+        }
+      ],
+      "sha256": "115cdf1440141800d88e139358cdc66c2c192a5c702f914768befde6700d8644"
+    }
+  ]
+}

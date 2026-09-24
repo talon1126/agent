@@ -1,0 +1,109 @@
+{
+  "generated_at": "2026-09-24T06:27:47.297490+00:00",
+  "browser_checks": {
+    "project": "TalonMart Agent A-D",
+    "views": [
+      {
+        "id": "current-flow",
+        "sha256": "4f325a3b9e2f022a62840fc60448adbe390646ec2f3cc9d3e28f928b2236ed6f",
+        "textCount": 124,
+        "overlaps": [],
+        "outOfBounds": [],
+        "outsideCard": [],
+        "png": {
+          "width": 4800,
+          "height": 5420,
+          "scale": 2
+        }
+      },
+      {
+        "id": "failure-map",
+        "sha256": "1d10580a9855256e7e1027f240a6445c0ad9d4289c18737b090c52a436772482",
+        "textCount": 35,
+        "overlaps": [],
+        "outOfBounds": [],
+        "outsideCard": [],
+        "png": {
+          "width": 4800,
+          "height": 2520,
+          "scale": 2
+        }
+      },
+      {
+        "id": "target-flow",
+        "sha256": "115cdf1440141800d88e139358cdc66c2c192a5c702f914768befde6700d8644",
+        "textCount": 93,
+        "overlaps": [],
+        "outOfBounds": [],
+        "outsideCard": [],
+        "png": {
+          "width": 4800,
+          "height": 4136,
+          "scale": 2
+        }
+      }
+    ],
+    "interactions": [
+      {
+        "id": "current-flow",
+        "zoom": "150%",
+        "mobile": {
+          "width": 390,
+          "contentWidth": 390,
+          "visiblePanels": 1
+        },
+        "navigation": {
+          "top": 458.0443420410156,
+          "bottom": 242.65625
+        },
+        "deepLink": "true"
+      },
+      {
+        "id": "failure-map",
+        "zoom": "150%",
+        "mobile": {
+          "width": 390,
+          "contentWidth": 390,
+          "visiblePanels": 1
+        },
+        "navigation": null,
+        "deepLink": "true"
+      },
+      {
+        "id": "target-flow",
+        "zoom": "150%",
+        "mobile": {
+          "width": 390,
+          "contentWidth": 390,
+          "visiblePanels": 1
+        },
+        "navigation": {
+          "top": 506.16156005859375,
+          "bottom": 338.65625
+        },
+        "deepLink": "true"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "file": "current-flow.png",
+      "width": 4800,
+      "height": 5420,
+      "sha256": "39fc0b8272ad34f20eb54a23740baadfaed7554bcb1fa66e542a548d116f5808"
+    },
+    {
+      "file": "failure-map.png",
+      "width": 4800,
+      "height": 2520,
+      "sha256": "6f02b0935ed098e567408542ff7f23ed79b9979bf9cb67aa0617b0261458cfcb"
+    },
+    {
+      "file": "target-flow.png",
+      "width": 4800,
+      "height": 4136,
+      "sha256": "fa0b5cdc4489c94b56a4de8c2114caeb877183cbbadc8f2b13e285f80f9b686d"
+    }
+  ],
+  "visual_review": "Inspect exported images before delivery; automated geometry checks do not validate architecture semantics or connector clarity."
+}

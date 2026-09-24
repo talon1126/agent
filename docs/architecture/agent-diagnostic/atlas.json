@@ -1,0 +1,594 @@
+{
+  "project": "TalonMart Agent A-D",
+  "brand": "TALONMART AGENT",
+  "date": "2026-09-24",
+  "title": "TalonMart Agent · 链路与失败诊断",
+  "intro": "当前实现、Kayn 测试归因与期望链路。以真实代码和 2026-09-24 评测记录为依据；目标图不表示已经实现。",
+  "diagrams": [
+    {
+      "id": "current-flow",
+      "kind": "flow",
+      "tab": "01 · 当前链路",
+      "title": "一次购物问题 · 当前 Agent 如何处理",
+      "subtitle": "沿编号向下看：每步说明输入、负责模块、实际动作、输出；分支栏指出本轮可见的风险。",
+      "scenario_label": "贯穿测试题",
+      "scenario": "用户：只比较燕麦和橄榄油的包装材质与容量单位，不涉及价格。",
+      "steps": [
+        {
+          "id": "request",
+          "nav": "01 接收",
+          "title": "接收请求并关联会话",
+          "owner": "service.py / stream_chat_events",
+          "color": "blue",
+          "input": [
+            "本轮文字、用户与会话 ID",
+            "页面引用 / page_context"
+          ],
+          "operations": [
+            {
+              "title": "建立会话",
+              "lines": [
+                "校验配置并取得会话",
+                "写入本轮用户消息"
+              ]
+            },
+            {
+              "title": "准备追踪",
+              "lines": [
+                "创建 Agent Trace",
+                "发出正在理解的 SSE 状态"
+              ]
+            }
+          ],
+          "output": [
+            "会话 ID 与本轮请求",
+            "可关联的执行追踪"
+          ],
+          "branch": "会话写入失败 → 错误事件；页面引用只能作为本轮显式上下文。"
+        },
+        {
+          "id": "goal",
+          "nav": "02 目标",
+          "title": "抽取并保存购物目标",
+          "owner": "ShoppingGoalOrchestrator",
+          "color": "purple",
+          "input": [
+            "本轮表达与页面上下文",
+            "已有 ShoppingGoal（若有）"
+          ],
+          "operations": [
+            {
+              "title": "抽取变化",
+              "lines": [
+                "识别品类、预算、排除项",
+                "合并到已有目标并留版本"
+              ]
+            },
+            {
+              "title": "判断澄清",
+              "lines": [
+                "缺项或冲突时可提前提问",
+                "否则把目标交给运行时"
+              ]
+            }
+          ],
+          "output": [
+            "持久化的购物目标",
+            "或提前返回澄清问题"
+          ],
+          "branch": "已观察：目标保存了，但下游意图仍先从本轮短句重判；只说“再加一条”时可能断开原任务。"
+        },
+        {
+          "id": "route",
+          "nav": "03 路由",
+          "title": "按意图选择计划与工具",
+          "owner": "ShoppingAgentRuntime + Planner",
+          "color": "blue",
+          "input": [
+            "本轮文字、购物目标",
+            "页面上下文与候选商品"
+          ],
+          "operations": [
+            {
+              "title": "选择意图",
+              "lines": [
+                "route_with_candidates 先看本轮",
+                "部分回退路由再参考目标"
+              ]
+            },
+            {
+              "title": "生成执行计划",
+              "lines": [
+                "选择推荐 / 比较 / 评论等任务",
+                "设步骤依赖与工具授权"
+              ]
+            }
+          ],
+          "output": [
+            "任务类型与 AgentPlan",
+            "允许调用的工具集合"
+          ],
+          "branch": "已观察：“只比较数据，不需要推荐”的追问仍调用 product_reviews；工具选择超出用户所问。"
+        },
+        {
+          "id": "tools",
+          "nav": "04 查证",
+          "title": "执行工具并取得候选事实",
+          "owner": "PlanExecutor / tools / mock-api / RAG",
+          "color": "orange",
+          "input": [
+            "计划与工具参数",
+            "商品 ID、搜索词、页面引用"
+          ],
+          "operations": [
+            {
+              "title": "查商品",
+              "lines": [
+                "product_search 找候选",
+                "product_snapshot 核实事实"
+              ]
+            },
+            {
+              "title": "按计划补证",
+              "lines": [
+                "必要时查评论或 RAG",
+                "记录调用、耗时与结果"
+              ]
+            }
+          ],
+          "output": [
+            "候选集、事实快照",
+            "评论 / 知识证据及工具 Trace"
+          ],
+          "branch": "已观察：部分商品库存为 unknown；重复读取仍无新证据时，当前链路可能只让用户继续“重试”。"
+        },
+        {
+          "id": "decide",
+          "nav": "05 决策",
+          "title": "过滤、排序、比较并起草回答",
+          "owner": "CandidatePolicy / Comparator / Composer",
+          "color": "teal",
+          "input": [
+            "目标约束与候选集",
+            "价格、规格、库存等事实"
+          ],
+          "operations": [
+            {
+              "title": "确定性决策",
+              "lines": [
+                "硬过滤并排序候选",
+                "形成比较矩阵或评论摘要"
+              ]
+            },
+            {
+              "title": "组织回答",
+              "lines": [
+                "比较回答固定读价格与规格",
+                "已知价格还会追加低价结论"
+              ]
+            }
+          ],
+          "output": [
+            "带商品事实的回答草稿",
+            "推荐 / 比较 / 降级结果"
+          ],
+          "branch": "已观察：即使用户明确“不涉及价格”，比较草稿仍可能包含价格；库存未知时推荐可能停在兜底。"
+        },
+        {
+          "id": "verify",
+          "nav": "06 校验",
+          "title": "核对证据并形成终态",
+          "owner": "GroundingVerifier",
+          "color": "teal",
+          "input": [
+            "回答草稿及其 claim",
+            "快照、候选、排序与证据"
+          ],
+          "operations": [
+            {
+              "title": "校验与修复",
+              "lines": [
+                "核对商品、数值和证据绑定",
+                "失败时尝试有界修复"
+              ]
+            }
+          ],
+          "output": [
+            "核验后的结构化 payload",
+            "或 fallback / clarification"
+          ],
+          "branch": "当前校验聚焦事实有无依据；有证据的“未请求价格”仍可能穿过，说明约束没有贯穿到最终输出。"
+        },
+        {
+          "id": "deliver",
+          "nav": "07 交付",
+          "title": "流式返回并持久化结果",
+          "owner": "service.py / SSE + MemoryStore",
+          "color": "purple",
+          "input": [
+            "结构化终态 payload",
+            "工具与证据追踪"
+          ],
+          "operations": [
+            {
+              "title": "交付给用户",
+              "lines": [
+                "发送 status / delta / done",
+                "前端读取回答和商品引用"
+              ]
+            },
+            {
+              "title": "留下续问状态",
+              "lines": [
+                "写入助手消息与结构化响应",
+                "关联 Agent Trace 和 query trace"
+              ]
+            }
+          ],
+          "output": [
+            "用户看到的推荐 / 比较 / 兜底",
+            "下一轮可恢复的会话记录"
+          ],
+          "branch": "上一轮输出若只有固定兜底、缺少可执行的新路径，多轮测试会反复得到相同答复。"
+        }
+      ],
+      "footer": "实线箭头为逻辑主链。分支栏的“已观察”基于代码与 Kayn 样例，不代表每轮都会触发。"
+    },
+    {
+      "id": "failure-map",
+      "kind": "architecture",
+      "tab": "02 · 失败归因",
+      "title": "测试为什么失败 · 三类原因分开看",
+      "subtitle": "同一低分同时受 Agent 行为、业务事实及评测输入影响；各项需用 Trace 和复现实例分别核实。",
+      "height": 1260,
+      "panels": [
+        {
+          "title": "Agent 行为缺口",
+          "subtitle": "代码和工具 Trace 已观察到",
+          "color": "blue",
+          "rect": [
+            64,
+            220,
+            720,
+            620
+          ],
+          "boxes": [
+            {
+              "id": "route-gap",
+              "rect": [
+                28,
+                124,
+                664,
+                190
+              ],
+              "title": "多轮目标未贯穿路由",
+              "lines": [
+                "路由先判本轮短句，恢复规则覆盖有限",
+                "比较追问可能走错任务或多查评论"
+              ]
+            },
+            {
+              "id": "answer-gap",
+              "rect": [
+                28,
+                336,
+                664,
+                190
+              ],
+              "title": "回答不守输出范围",
+              "lines": [
+                "比较模板固定加入价格、规格",
+                "有证据不等于符合“不要价格”"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "事实与恢复缺口",
+          "subtitle": "真实工具返回决定能否完成任务",
+          "color": "orange",
+          "rect": [
+            840,
+            220,
+            720,
+            620
+          ],
+          "boxes": [
+            {
+              "id": "fact-gap",
+              "rect": [
+                28,
+                124,
+                664,
+                190
+              ],
+              "title": "关键事实缺失",
+              "lines": [
+                "婴儿车等样例的库存为 unknown",
+                "无法核验可购买性时推荐被阻断"
+              ]
+            },
+            {
+              "id": "recovery-gap",
+              "rect": [
+                28,
+                336,
+                664,
+                190
+              ],
+              "title": "重复兜底不产生进展",
+              "lines": [
+                "同一快照再次读取仍然缺事实",
+                "低评样本不足时多轮重复提示"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Kayn 测试与判定",
+          "subtitle": "影响分数解释，不替 Agent 开脱",
+          "color": "purple",
+          "rect": [
+            1616,
+            220,
+            720,
+            620
+          ],
+          "boxes": [
+            {
+              "id": "context-gap",
+              "rect": [
+                28,
+                124,
+                664,
+                190
+              ],
+              "title": "参考历史不等于实际历史",
+              "lines": [
+                "reference_turns 给模拟器和评审",
+                "Agent 只收到模拟器实际发出的轮次"
+              ]
+            },
+            {
+              "id": "judge-gap",
+              "rect": [
+                28,
+                336,
+                664,
+                190
+              ],
+              "title": "判定存在空项与不一致",
+              "lines": [
+                "12 个多轮中有 2 个未评分",
+                "个别 Judge 描述与工具 Trace 矛盾"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "结果怎样读",
+          "subtitle": "2026-09-24 同一实现指纹的不同测试范围",
+          "color": "teal",
+          "rect": [
+            64,
+            928,
+            2272,
+            220
+          ],
+          "boxes": [
+            {
+              "id": "single-score",
+              "rect": [
+                28,
+                105,
+                680,
+                88
+              ],
+              "title": "A-D 单轮 21/23 通过",
+              "lines": [],
+              "color": "teal"
+            },
+            {
+              "id": "multi-score",
+              "rect": [
+                796,
+                105,
+                680,
+                88
+              ],
+              "title": "多轮首次 1/10；重跑 0/10",
+              "lines": [],
+              "color": "orange"
+            },
+            {
+              "id": "m1-score",
+              "rect": [
+                1564,
+                105,
+                680,
+                88
+              ],
+              "title": "M1 固定回放 11/11",
+              "lines": [],
+              "color": "purple"
+            }
+          ]
+        }
+      ],
+      "edges": [],
+      "footer": "多轮分母为每次可评分的 10 例；另 2 例未评分。M1 固定回放通过不能替代 Kayn 开放式多轮通过。"
+    },
+    {
+      "id": "target-flow",
+      "kind": "flow",
+      "tab": "03 · 理想链路",
+      "title": "同一道题 · 理想 Agent 应如何完成",
+      "subtitle": "目标行为与验收口径；这张图是待实现的改进方向，并非当前系统已全部做到。",
+      "scenario_label": "多轮示例",
+      "scenario": "上一轮：预算 100 元、排除小米，关注两款候选商品。本轮：只比较它们的包装材质与容量单位，不涉及价格。",
+      "steps": [
+        {
+          "id": "merge",
+          "nav": "01 合并目标",
+          "title": "先合并多轮目标，再解释本轮任务",
+          "owner": "Goal Manager → Intent Router（目标）",
+          "color": "purple",
+          "input": [
+            "本轮“只比较”请求",
+            "历史预算 / 排除项 / 两款候选"
+          ],
+          "operations": [
+            {
+              "title": "明确继承关系",
+              "lines": [
+                "保留未撤销的硬约束",
+                "识别本轮仅修改输出范围"
+              ]
+            },
+            {
+              "title": "确定比较意图",
+              "lines": [
+                "锁定两款候选和所问维度",
+                "不把短句当成全新任务"
+              ]
+            }
+          ],
+          "output": [
+            "完整 ShoppingGoal",
+            "本轮比较任务与禁用输出项"
+          ],
+          "branch": "若实际会话里没有上一轮和候选 ID → 明确澄清；评测也必须真实发送这些前置轮次。"
+        },
+        {
+          "id": "plan",
+          "nav": "02 限定工具",
+          "title": "按请求维度规划必要查询",
+          "owner": "Planner / Step Policy Gate（目标）",
+          "color": "blue",
+          "input": [
+            "比较对象：两款候选",
+            "允许：材质、容量、单位"
+          ],
+          "operations": [
+            {
+              "title": "选择最小工具集",
+              "lines": [
+                "核实候选与相关商品事实",
+                "无需评论就不调用评论工具"
+              ]
+            },
+            {
+              "title": "区分内部与展示",
+              "lines": [
+                "预算可用于内部约束复核",
+                "价格字段不得进入用户答案"
+              ]
+            }
+          ],
+          "output": [
+            "带字段白名单的计划",
+            "必要工具与调用理由"
+          ],
+          "branch": "比较维度不明确 → 问一个澄清问题；禁止用无关工具填充计划。"
+        },
+        {
+          "id": "facts",
+          "nav": "03 核实事实",
+          "title": "读取两款商品的对应事实",
+          "owner": "Product Snapshot / Comparator（目标）",
+          "color": "orange",
+          "input": [
+            "两款商品 ID",
+            "包装材质、容量及原始单位"
+          ],
+          "operations": [
+            {
+              "title": "形成对齐矩阵",
+              "lines": [
+                "每件商品逐项保留来源与时效",
+                "仅在可换算时统一单位"
+              ]
+            },
+            {
+              "title": "标注缺口",
+              "lines": [
+                "未知材质或容量明确标记",
+                "不拿规格摘要冒充指定字段"
+              ]
+            }
+          ],
+          "output": [
+            "两行指定维度比较",
+            "来源、单位及未知字段"
+          ],
+          "branch": "原始数据没有包装材质 → 说“未查到”，不推测；两种容量单位不可直接比大小时只并列展示。"
+        },
+        {
+          "id": "guard",
+          "nav": "04 校验输出",
+          "title": "同时核对事实和用户约束",
+          "owner": "Grounding + Constraint Verifier（目标）",
+          "color": "teal",
+          "input": [
+            "指定维度的比较草稿",
+            "事实证据与禁用输出项"
+          ],
+          "operations": [
+            {
+              "title": "逐项复核",
+              "lines": [
+                "数值、商品 ID 与证据一致",
+                "阻断价格、无关评论及额外结论"
+              ]
+            },
+            {
+              "title": "检查多轮约束",
+              "lines": [
+                "不遗漏预算和排除品牌",
+                "但不把内部约束硬塞进答案"
+              ]
+            }
+          ],
+          "output": [
+            "只含指定维度的核验结果",
+            "或明确的事实缺口"
+          ],
+          "branch": "不合规则有界修复并复核；仍缺证据就说明无法比较哪一项。"
+        },
+        {
+          "id": "respond",
+          "nav": "05 交付与续问",
+          "title": "给出可用结论并记录下一轮状态",
+          "owner": "Response Composer / SSE（目标）",
+          "color": "purple",
+          "input": [
+            "通过双重校验的比较",
+            "会话目标与事实快照 ID"
+          ],
+          "operations": [
+            {
+              "title": "输出表格",
+              "lines": [
+                "商品 × 材质 × 容量 / 单位",
+                "每个缺失项附简短说明"
+              ]
+            },
+            {
+              "title": "保留可续接状态",
+              "lines": [
+                "返回结构化结果与来源",
+                "持久化目标、引用和 Trace"
+              ]
+            }
+          ],
+          "output": [
+            "不含价格的两商品比较",
+            "有证据、有缺口、可继续追问"
+          ],
+          "branch": "若库存等事实一直 unknown，不无限要求“重试”；说明阻碍和能继续完成的比较部分。"
+        }
+      ],
+      "footer": "理想输出：只答被要求的维度，保存多轮硬约束，工具调用有必要性，事实缺失时仍给出可用部分。"
+    }
+  ]
+}
