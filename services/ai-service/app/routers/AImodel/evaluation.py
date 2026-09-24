@@ -22,8 +22,9 @@ from app.routers.AImodel.service import (
 )
 from app.routers.AImodel.tool_executor import ExecutionCancellation
 
-_MAX_EVALUATION_CONTEXTS = 20
-_MAX_CONTEXT_CHARS = 16_000
+_MAX_EVALUATION_CONTEXTS = 8
+_MAX_CONTEXT_CHARS = 2_000
+_MAX_CONTEXT_BYTES = 2_048
 _MAX_TOOL_INPUT_CHARS = 256
 _PHONE_PATTERN = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
@@ -209,7 +210,9 @@ def _evaluation_contexts(
                         content,
                         {
                             "sourceType": "rag_final_context",
-                            "sourceId": str(result.data.get("trace_id") or "rag-context"),
+                            "sourceId": str(
+                                result.data.get("trace_id") or "rag-context"
+                            ),
                             "title": "RAG final context",
                         },
                     )
@@ -231,17 +234,31 @@ def _evaluation_contexts(
     contexts: list[str] = []
     refs: list[dict[str, Any]] = []
     seen: set[str] = set()
+    remaining_bytes = _MAX_CONTEXT_BYTES
     for content, reference in candidates:
-        bounded = content[:_MAX_CONTEXT_CHARS].rstrip()
+        bounded = _truncate_utf8(
+            content[:_MAX_CONTEXT_CHARS].rstrip(),
+            remaining_bytes,
+        )
         fingerprint = hashlib.sha256(bounded.encode("utf-8")).hexdigest()
         if not bounded or fingerprint in seen:
             continue
         seen.add(fingerprint)
         contexts.append(bounded)
         refs.append({**reference, "sha256": fingerprint, "chars": len(bounded)})
+        remaining_bytes -= len(bounded.encode("utf-8"))
         if len(contexts) >= _MAX_EVALUATION_CONTEXTS:
             break
     return contexts, refs
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    if max_bytes <= 0:
+        return ""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore").rstrip()
 
 
 def _evaluation_metadata(

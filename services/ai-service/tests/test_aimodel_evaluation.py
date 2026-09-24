@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from app.routers.AImodel.evaluation import (
     AiModelEvaluationError,
+    _evaluation_contexts,
     collect_chat_evaluation,
     evaluate_chat_non_streaming,
 )
@@ -124,11 +126,36 @@ def test_evaluation_exports_final_rag_context_citations_and_safe_tool_call(
     assert "must-not-leak" not in rendered
 
 
+def test_evaluation_contexts_enforce_aggregate_utf8_budget() -> None:
+    capture = SimpleNamespace(
+        runtime_result=SimpleNamespace(
+            evaluation_contexts=[
+                SimpleNamespace(
+                    content="证据" * 2_000,
+                    source_type="product_fact",
+                    source_id=f"item-{index}",
+                    title=f"商品 {index}",
+                )
+                for index in range(3)
+            ]
+        ),
+        tool_results=(),
+    )
+
+    contexts, references = _evaluation_contexts(capture)
+
+    assert sum(len(item.encode("utf-8")) for item in contexts) <= 2_048
+    assert len(contexts) == len(references)
+    assert contexts
+    assert all(
+        reference["chars"] == len(context)
+        for context, reference in zip(contexts, references)
+    )
+
+
 def test_evaluation_rejects_agent_error_without_echoing_payload() -> None:
     with pytest.raises(AiModelEvaluationError, match="^agent_error$") as failure:
-        collect_chat_evaluation(
-            [_event("error", {"content": "private model failure"})]
-        )
+        collect_chat_evaluation([_event("error", {"content": "private model failure"})])
 
     assert "private model failure" not in str(failure.value)
 

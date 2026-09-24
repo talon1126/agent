@@ -15,14 +15,16 @@ $sdkProject = Join-Path $sdkRoot "pyproject.toml"
 if (-not (Test-Path -LiteralPath $sdkProject -PathType Leaf)) {
     throw "Kayn SDK pyproject.toml was not found under: $sdkRoot"
 }
+$uvSdkRoot = $sdkRoot.Replace('\', '/')
+$uvEnvFile = $envFile.Replace('\', '/')
 
 Push-Location $serviceRoot
 try {
     if (Test-Path -LiteralPath $envFile -PathType Leaf) {
-        uv run --project . --env-file $envFile --with-editable $sdkRoot python -m app.kayn_target
+        uv run --project . --env-file $uvEnvFile --with-editable $uvSdkRoot python -m app.kayn_target
     }
     else {
-        uv run --project . --with-editable $sdkRoot python -m app.kayn_target
+        uv run --project . --with-editable $uvSdkRoot python -m app.kayn_target
     }
 }
 finally {

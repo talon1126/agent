@@ -231,6 +231,19 @@ Kayn Agent 评测入口：
 RAG/商品事实上下文和脱敏工具调用，并把现有 Agent Trace 及旧 LangChain 兜底链映射到
 同一条 Kayn/OpenTelemetry Trace。SDK 尚未发布到包仓库时，脚本默认加载相邻的
 `Kayn/packages/python-sdk` 源码，也可通过 `KAYN_SDK_PATH` 指定其他检出目录。
+Kayn 多轮评测提供的 `conversation_id_int` 会同时映射为隔离的 Agent 用户与会话 ID；
+同一场景复用状态，不同场景不会共享购物任务或用户记忆。
+单轮 Golden Set 可把消息、链接和页面上下文封装进带
+`_talonmart_evaluation_version` 的版本化输入；适配器会在进入 Agent 前还原请求，
+因此页面事实不会被伪装成用户自然语言。
+Connector 默认允许最多 16 MiB 的 Kayn 控制消息；可用
+`KAYN_CONNECTOR_MAX_MESSAGE_BYTES` 在 1-16 MiB 范围内收紧。评测响应中的证据上下文
+另按 UTF-8 字节数限制为 2 KiB，使完整控制帧兼容仍使用约 8 KiB WebSocket 接收缓冲区
+的 Kayn 部署。
+用于 `KAYN_TELEMETRY_TOKEN` 的令牌必须同时绑定 Project 和当前 Target；仅绑定 Project
+的令牌可以执行 Target，但 OTel Span 会因资源作用域冲突被遥测入口拒绝。
+本地正式评测还应叠加 `config/kayn_evaluation_compose.override.yaml`，使 Kayn
+控制面的执行超时、心跳窗口和消息上限与 300 秒 Golden Set Run 对齐。
 
 ## 开发约束
 
