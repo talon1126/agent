@@ -28,6 +28,12 @@ from app.routers.AImodel.product_models import (
     ProductSpecifications,
 )
 from app.routers.AImodel.shopping_goal import ShoppingGoal
+from app.routers.AImodel.shopping_goal import (
+    Constraint,
+    GoalEvidence,
+    GoalField,
+    GoalSourceType,
+)
 
 
 NOW = datetime(2026, 9, 21, 12, tzinfo=UTC)
@@ -98,6 +104,26 @@ def snapshot(*products: ProductSnapshotItem) -> ProductSnapshot:
     )
 
 
+def specification_goal(attribute: str, value: str) -> ShoppingGoal:
+    return ShoppingGoal(
+        hard_constraints=(
+            Constraint(
+                field=GoalField.SPECIFICATION,
+                attribute=attribute,
+                value=value,
+                evidence=GoalEvidence(
+                    source_type=GoalSourceType.USER_TURN,
+                    source_turn=1,
+                    quote=value,
+                    confidence=1,
+                    created_at=NOW,
+                    updated_at=NOW,
+                ),
+            ),
+        )
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -146,6 +172,36 @@ def test_configured_specification_is_a_hard_filter() -> None:
                 RequiredSpecification(attribute="memory", value="16GB"),
             )
         ),
+    )
+
+    assert result.eligible == ()
+    assert result.excluded[0].reasons[0].code == "specification_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("attribute", "requirement", "summary"),
+    [
+        ("capacity", "至少 6.5L", "6.5L smart air fryer with app recipes"),
+        ("room_area", "至少 40 平方米", "Smart air purifier for rooms up to 48m2"),
+    ],
+)
+def test_numeric_specification_threshold_matches_catalog_summary(
+    attribute: str,
+    requirement: str,
+    summary: str,
+) -> None:
+    result = apply_hard_filters(
+        specification_goal(attribute, requirement),
+        snapshot(product(specifications={"summary": summary})),
+    )
+
+    assert [item.item_id for item in result.eligible] == ["sku-1"]
+
+
+def test_numeric_specification_threshold_rejects_value_below_minimum() -> None:
+    result = apply_hard_filters(
+        specification_goal("capacity", "至少 6.5L"),
+        snapshot(product(specifications={"summary": "5L air fryer"})),
     )
 
     assert result.eligible == ()

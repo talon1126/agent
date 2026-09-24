@@ -232,7 +232,18 @@ _ACTION_INTENTS = frozenset(
     {"action_preview", "add_to_cart", "cart_preview", "cart_add"}
 )
 _COMPARE_INTENTS = frozenset(
-    {"compare", "comparison", "product_compare", "product_comparison"}
+    {
+        "compare",
+        "comparison",
+        "fact_compare",
+        "fact_comparison",
+        "product_compare",
+        "product_comparison",
+    }
+)
+_FACT_ONLY_COMPARE_INTENTS = frozenset({"fact_compare", "fact_comparison"})
+_REVIEW_INTENTS = frozenset(
+    {"product_review", "product_reviews", "review", "review_summary", "reviews"}
 )
 _RECOMMEND_INTENTS = frozenset(
     {
@@ -254,6 +265,7 @@ _DETAIL_INTENTS = frozenset(
 )
 _COMPLEX_TASKS = frozenset({PlanningTaskType.COMPARE, PlanningTaskType.RECOMMEND})
 _KNOWLEDGE_STEP_TIMEOUT_MS = 10_000
+_TOOL_STEP_TIMEOUT_MS = 10_000
 
 
 class HierarchicalPlanner:
@@ -308,6 +320,9 @@ class HierarchicalPlanner:
             source = PlanningSource.FALLBACK
             fallback_reason = PlannerFallbackReason.MISSING_PAGE_ITEM
 
+        intent = (intent_route.intent or "").strip().casefold()
+        compare_requires_reviews = intent not in _FACT_ONLY_COMPARE_INTENTS
+
         if task_type in _COMPLEX_TASKS and self.model_backend is not None:
             model_plan, model_attempts, model_fallback = self._try_model_plan(
                 task_type=task_type,
@@ -316,6 +331,7 @@ class HierarchicalPlanner:
                 page_context=page_context,
                 requested_budget=requested_budget,
                 trace_context=trace_context,
+                compare_requires_reviews=compare_requires_reviews,
             )
             if model_plan is not None:
                 result = PlanningResult(
@@ -337,6 +353,7 @@ class HierarchicalPlanner:
             page_context=page_context,
             requested_budget=requested_budget,
             trace_context=trace_context,
+            compare_requires_reviews=compare_requires_reviews,
         )
         result = PlanningResult(
             task_type=task_type,
@@ -365,6 +382,8 @@ class HierarchicalPlanner:
             return PlanningTaskType.ACTION_PREVIEW, False
         if intent in _COMPARE_INTENTS:
             return PlanningTaskType.COMPARE, False
+        if intent in _REVIEW_INTENTS:
+            return PlanningTaskType.PRODUCT_DETAIL, False
         if intent in _RECOMMEND_INTENTS:
             return PlanningTaskType.RECOMMEND, False
         if (
@@ -394,6 +413,7 @@ class HierarchicalPlanner:
         page_context: AiModelPageContext | None,
         requested_budget: ExecutionBudgetRequest | Mapping[str, Any] | None,
         trace_context: AgentTraceContext | None,
+        compare_requires_reviews: bool,
     ) -> tuple[AgentPlan | None, int, PlannerFallbackReason]:
         previous_error_code: str | None = None
         backend_failed_only = True
@@ -418,7 +438,11 @@ class HierarchicalPlanner:
                     requested_budget=requested_budget,
                     trace_context=trace_context,
                 )
-                _validate_task_shape(task_type, plan)
+                _validate_task_shape(
+                    task_type,
+                    plan,
+                    compare_requires_reviews=compare_requires_reviews,
+                )
             except PlanValidationError as error:
                 previous_error_code = error.code
                 continue
@@ -443,6 +467,7 @@ class HierarchicalPlanner:
         page_context: AiModelPageContext | None,
         requested_budget: ExecutionBudgetRequest | Mapping[str, Any] | None,
         trace_context: AgentTraceContext | None,
+        compare_requires_reviews: bool,
     ) -> AgentPlan:
         plan_id = _stable_plan_id(
             task_type,
@@ -481,6 +506,10 @@ class HierarchicalPlanner:
                 task_type,
                 plan_id,
                 knowledge_timeout_ms=knowledge_timeout_ms,
+                review_summary=(
+                    (intent_route.intent or "").strip().casefold() in _REVIEW_INTENTS
+                ),
+                compare_requires_reviews=compare_requires_reviews,
             ),
             requested_budget=effective_budget,
             trace_context=trace_context,
@@ -648,6 +677,7 @@ def _search_step() -> dict[str, Any]:
         output_type="candidate_refs",
         risk_level="medium",
         allowed_tools=["product_search"],
+        timeout_ms=_TOOL_STEP_TIMEOUT_MS,
     )
 
 
@@ -660,6 +690,7 @@ def _snapshot_after_search() -> dict[str, Any]:
         output_type="product_snapshot",
         risk_level="medium",
         allowed_tools=["product_snapshot"],
+        timeout_ms=_TOOL_STEP_TIMEOUT_MS,
     )
 
 
@@ -698,6 +729,8 @@ def _template_draft(
     plan_id: str,
     *,
     knowledge_timeout_ms: int = _KNOWLEDGE_STEP_TIMEOUT_MS,
+    review_summary: bool = False,
+    compare_requires_reviews: bool = True,
 ) -> dict[str, Any]:
     if task_type is PlanningTaskType.DIRECT:
         steps = [
@@ -740,23 +773,52 @@ def _template_draft(
         ]
         stop_reasons = ["completed", "tool_denied", "timeout", "safe_fallback"]
     elif task_type is PlanningTaskType.PRODUCT_DETAIL:
-        steps = [
-            _step(
-                "s01_snapshot",
-                "snapshot",
-                inputs=[_root_input("page_context", "context", "page_context")],
-                output_type="product_snapshot",
-                risk_level="medium",
-                allowed_tools=["product_snapshot"],
-            ),
-            _step(
-                "s02_compose",
-                "compose",
-                dependencies=[_dependency("s01_snapshot", "product_snapshot")],
-                inputs=[_step_input("product", "s01_snapshot", "product_snapshot")],
-                output_type="response_draft",
-            ),
-        ]
+        snapshot_step = _step(
+            "s01_snapshot",
+            "snapshot",
+            inputs=[_root_input("page_context", "context", "page_context")],
+            output_type="product_snapshot",
+            risk_level="medium",
+            allowed_tools=["product_snapshot"],
+            timeout_ms=_TOOL_STEP_TIMEOUT_MS,
+        )
+        if review_summary:
+            steps = [
+                snapshot_step,
+                _step(
+                    "s02_reviews",
+                    "review_fetch",
+                    inputs=[_root_input("page_context", "context", "page_context")],
+                    output_type="review_collection",
+                    risk_level="medium",
+                    allowed_tools=["product_reviews"],
+                    timeout_ms=_TOOL_STEP_TIMEOUT_MS,
+                ),
+                _step(
+                    "s03_compose",
+                    "compose",
+                    dependencies=[
+                        _dependency("s01_snapshot", "product_snapshot"),
+                        _dependency("s02_reviews", "review_collection"),
+                    ],
+                    inputs=[
+                        _step_input("product", "s01_snapshot", "product_snapshot"),
+                        _step_input("reviews", "s02_reviews", "review_collection"),
+                    ],
+                    output_type="response_draft",
+                ),
+            ]
+        else:
+            steps = [
+                snapshot_step,
+                _step(
+                    "s02_compose",
+                    "compose",
+                    dependencies=[_dependency("s01_snapshot", "product_snapshot")],
+                    inputs=[_step_input("product", "s01_snapshot", "product_snapshot")],
+                    output_type="response_draft",
+                ),
+            ]
         stop_reasons = ["completed", "tool_denied", "timeout", "safe_fallback"]
     elif task_type is PlanningTaskType.PRODUCT_SEARCH:
         steps = [
@@ -807,33 +869,48 @@ def _template_draft(
             "safe_fallback",
         ]
     elif task_type is PlanningTaskType.COMPARE:
+        review_steps = (
+            [
+                _step(
+                    "s03_reviews",
+                    "review_fetch",
+                    dependencies=[_dependency("s01_search", "candidate_refs")],
+                    inputs=[_step_input("candidate_refs", "s01_search", "candidate_refs")],
+                    output_type="review_collection",
+                    risk_level="medium",
+                    allowed_tools=["product_reviews"],
+                    timeout_ms=_TOOL_STEP_TIMEOUT_MS,
+                )
+            ]
+            if compare_requires_reviews
+            else []
+        )
+        compare_dependencies = [
+            _dependency("s02_snapshot", "product_snapshot"),
+            _dependency("s05_rank", "ranking_result"),
+        ]
+        compare_inputs = [
+            _step_input("products", "s02_snapshot", "product_snapshot"),
+            _step_input("ranking", "s05_rank", "ranking_result"),
+        ]
+        if compare_requires_reviews:
+            compare_dependencies.insert(
+                1, _dependency("s03_reviews", "review_collection")
+            )
+            compare_inputs.insert(
+                1, _step_input("reviews", "s03_reviews", "review_collection")
+            )
         steps = [
             _search_step(),
             _snapshot_after_search(),
-            _step(
-                "s03_reviews",
-                "review_fetch",
-                dependencies=[_dependency("s01_search", "candidate_refs")],
-                inputs=[_step_input("candidate_refs", "s01_search", "candidate_refs")],
-                output_type="review_collection",
-                risk_level="medium",
-                allowed_tools=["product_reviews"],
-            ),
+            *review_steps,
             _filter_step(),
             _rank_step(),
             _step(
                 "s06_compare",
                 "compare",
-                dependencies=[
-                    _dependency("s02_snapshot", "product_snapshot"),
-                    _dependency("s03_reviews", "review_collection"),
-                    _dependency("s05_rank", "ranking_result"),
-                ],
-                inputs=[
-                    _step_input("products", "s02_snapshot", "product_snapshot"),
-                    _step_input("reviews", "s03_reviews", "review_collection"),
-                    _step_input("ranking", "s05_rank", "ranking_result"),
-                ],
+                dependencies=compare_dependencies,
+                inputs=compare_inputs,
                 output_type="comparison_matrix",
             ),
             _step(
@@ -861,6 +938,7 @@ def _template_draft(
                 output_type="product_snapshot",
                 risk_level="medium",
                 allowed_tools=["product_snapshot"],
+                timeout_ms=_TOOL_STEP_TIMEOUT_MS,
             ),
             _step(
                 "s02_action_preview",
@@ -890,7 +968,12 @@ def _template_draft(
     }
 
 
-def _validate_task_shape(task_type: PlanningTaskType, plan: AgentPlan) -> None:
+def _validate_task_shape(
+    task_type: PlanningTaskType,
+    plan: AgentPlan,
+    *,
+    compare_requires_reviews: bool = True,
+) -> None:
     if task_type not in _COMPLEX_TASKS:
         raise _ModelPlanRejected("model_not_allowed_for_task")
     by_type: dict[StepType, list[Any]] = {}
@@ -905,8 +988,11 @@ def _validate_task_shape(task_type: PlanningTaskType, plan: AgentPlan) -> None:
     }
     allowed = set(required)
     if task_type is PlanningTaskType.COMPARE:
-        required.update({StepType.REVIEW_FETCH, StepType.COMPARE})
-        allowed.update({StepType.REVIEW_FETCH, StepType.COMPARE})
+        required.add(StepType.COMPARE)
+        allowed.add(StepType.COMPARE)
+        if compare_requires_reviews:
+            required.add(StepType.REVIEW_FETCH)
+            allowed.add(StepType.REVIEW_FETCH)
     else:
         allowed.add(StepType.REVIEW_FETCH)
     actual = set(by_type)
@@ -942,11 +1028,10 @@ def _validate_task_shape(task_type: PlanningTaskType, plan: AgentPlan) -> None:
         raise _ModelPlanRejected("task_shape_mismatch")
     if task_type is PlanningTaskType.COMPARE:
         compare_dependencies = dependency_types(StepType.COMPARE)
-        if compare_dependencies != {
-            StepType.SNAPSHOT,
-            StepType.REVIEW_FETCH,
-            StepType.RANK,
-        }:
+        expected_compare_dependencies = {StepType.SNAPSHOT, StepType.RANK}
+        if compare_requires_reviews:
+            expected_compare_dependencies.add(StepType.REVIEW_FETCH)
+        if compare_dependencies != expected_compare_dependencies:
             raise _ModelPlanRejected("task_shape_mismatch")
         if dependency_types(StepType.COMPOSE) != {StepType.COMPARE}:
             raise _ModelPlanRejected("task_shape_mismatch")

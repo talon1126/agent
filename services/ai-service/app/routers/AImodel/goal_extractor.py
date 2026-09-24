@@ -265,7 +265,10 @@ _CATEGORY_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "electronics",
     ),
     (re.compile(r"婴儿车|母婴"), "baby_kids"),
-    (re.compile(r"中性笔|办公耗材|复印纸|办公用品"), "office_supply"),
+    (
+        re.compile(r"中性笔|办公耗材|办公室[^,，.。;；!！?？\r\n]{0,12}耗材|复印纸|办公用品"),
+        "office_supply",
+    ),
     (re.compile(r"牛奶|酸奶|乳制品|奶制品"), "dairy"),
     (re.compile(r"饮料|矿泉水|可乐"), "beverage"),
 )
@@ -297,6 +300,11 @@ _BRAND_HARD_INCLUDE = re.compile(
     rf"(?P<span>(?:只看|只要|认准|必须(?:选择)?|就要)\s*(?P<brand>{_BRAND_TEXT}))",
     re.IGNORECASE,
 )
+_GENERIC_BRAND_HARD_INCLUDE = re.compile(
+    r"(?P<span>(?:只看|只要|认准|必须(?:选择)?|就要)\s*"
+    r"(?:不存在的\s*)?(?P<brand>[A-Za-z][A-Za-z0-9_-]{1,31})\s*(?:品牌)?)",
+    re.IGNORECASE,
+)
 _BRAND_ANY = re.compile(rf"(?P<brand>{_BRAND_TEXT})", re.IGNORECASE)
 _BRAND_WITHDRAW = re.compile(r"品牌无所谓|撤销品牌偏好|取消品牌(?:偏好|限制)")
 _BUDGET_CORRECTION = re.compile(
@@ -322,6 +330,9 @@ _BUDGET_MAX_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"(?P<span>预算(?:上限)?\s*(?:仍然)?(?:是|为)?\s*"
         r"(?P<value>[+\-]?[\d,.]+))(?:\s*元)?"
+    ),
+    re.compile(
+        r"(?P<span>(?P<value>[+\-]?[\d,.]+)\s*元\s*(?:以内|以下|封顶))"
     ),
 )
 _BUDGET_MIN = re.compile(
@@ -402,6 +413,12 @@ _SCENARIO_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"通勤(?:使用|用)?"), "通勤"),
     (re.compile(r"送人|送礼"), "送礼"),
 )
+_SHOPPING_REQUEST = re.compile(r"想买|要买|购买|推荐|选购|挑选|找|只看|只要|补点|补充")
+_REVIEW_OR_COMPARISON_REQUEST = re.compile(r"评价|评论|口碑|差评|好评|对比|比较|区别|差异|差别")
+_EARBUD_REQUEST = re.compile(r"无线耳机|耳机")
+_OFFICE_RESTOCK_REQUEST = re.compile(r"办公室[^,，.。;；!！?？\r\n]{0,12}(?:补|耗材)|办公耗材")
+_BREAKFAST_REQUEST = re.compile(r"早餐")
+_GIFT_REQUEST = re.compile(r"送人|送礼|礼物|收礼")
 _DEICTIC_REFERENCE = re.compile(
     r"(?:这款|这台|这辆|这个|该款|它)(?:的)?"
     r"(?:容量|规格|尺寸|价格|适用|怎么样|能买吗|好不好)"
@@ -1008,6 +1025,27 @@ def _extract_brands(
             ),
         )
 
+    for match in _GENERIC_BRAND_HARD_INCLUDE.finditer(text):
+        if any(start <= match.start("brand") < end for start, end in consumed_spans):
+            continue
+        consumed_spans.append(match.span("brand"))
+        _append_value(
+            operations,
+            action=_action_for(
+                text,
+                GoalField.BRAND,
+                span_start=match.start("span"),
+                span_end=match.end("span"),
+            ),
+            item=_constraint(
+                GoalField.BRAND,
+                match.group("brand"),
+                quote=match.group("span"),
+                source_turn=source_turn,
+                observed_at=observed_at,
+            ),
+        )
+
     for match in _BRAND_ANY.finditer(text):
         if any(start <= match.start("brand") < end for start, end in consumed_spans):
             continue
@@ -1439,6 +1477,112 @@ def _extract_delivery(
     )
 
 
+def _has_goal_field(operations: Sequence[GoalMutation], field: GoalField) -> bool:
+    return any(
+        isinstance(operation, GoalValueMutation) and operation.item.field is field
+        for operation in operations
+    )
+
+
+def _has_decision_detail(operations: Sequence[GoalMutation]) -> bool:
+    low_impact = {GoalField.CATEGORY, GoalField.QUANTITY}
+    return any(
+        isinstance(operation, GoalValueMutation)
+        and operation.item.field not in low_impact
+        and operation.item.kind != "unknown"
+        for operation in operations
+    )
+
+
+def _append_open_slot(
+    operations: list[GoalMutation],
+    *,
+    field: GoalField,
+    question: str,
+    text: str,
+    source_turn: int,
+    observed_at: datetime,
+) -> None:
+    _append_value(
+        operations,
+        action=DeltaAction.ADD,
+        item=OpenSlot(
+            field=field,
+            question=question,
+            evidence=_evidence(
+                source_type=GoalSourceType.USER_TURN,
+                source_turn=source_turn,
+                quote=text,
+                confidence=1.0,
+                observed_at=observed_at,
+            ),
+        ),
+        source_span=text,
+    )
+
+
+def _extract_vague_open_slots(
+    text: str,
+    *,
+    source_turn: int,
+    observed_at: datetime,
+    operations: list[GoalMutation],
+) -> None:
+    if not _SHOPPING_REQUEST.search(text):
+        return
+
+    if _BREAKFAST_REQUEST.search(text) and not _has_goal_field(
+        operations, GoalField.CATEGORY
+    ):
+        _append_open_slot(
+            operations,
+            field=GoalField.CATEGORY,
+            question="早餐更想选饮品、主食还是即食食品？",
+            text=text,
+            source_turn=source_turn,
+            observed_at=observed_at,
+        )
+
+    if _OFFICE_RESTOCK_REQUEST.search(text) and not _has_goal_field(
+        operations, GoalField.QUANTITY
+    ):
+        _append_open_slot(
+            operations,
+            field=GoalField.QUANTITY,
+            question="办公室大约需要补充多少件？",
+            text=text,
+            source_turn=source_turn,
+            observed_at=observed_at,
+        )
+
+    if _GIFT_REQUEST.search(text) and not _has_goal_field(
+        operations, GoalField.FREEFORM_PREFERENCE
+    ):
+        _append_open_slot(
+            operations,
+            field=GoalField.FREEFORM_PREFERENCE,
+            question="收礼人更偏好哪一类口味或风格？",
+            text=text,
+            source_turn=source_turn,
+            observed_at=observed_at,
+        )
+
+    if (
+        _EARBUD_REQUEST.search(text)
+        and not _REVIEW_OR_COMPARISON_REQUEST.search(text)
+        and not _has_decision_detail(operations)
+        and not _has_goal_field(operations, GoalField.USAGE_SCENARIO)
+    ):
+        _append_open_slot(
+            operations,
+            field=GoalField.USAGE_SCENARIO,
+            question="无线耳机主要用于通勤、运动、办公还是游戏影音？",
+            text=text,
+            source_turn=source_turn,
+            observed_at=observed_at,
+        )
+
+
 def _rule_extract(
     text: str,
     *,
@@ -1481,6 +1625,12 @@ def _rule_extract(
         observed_at=observed_at,
         operations=operations,
         rejected_fields=rejected_fields,
+    )
+    _extract_vague_open_slots(
+        text,
+        source_turn=source_turn,
+        observed_at=observed_at,
+        operations=operations,
     )
     return operations, rejected_fields
 

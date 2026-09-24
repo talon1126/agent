@@ -272,7 +272,12 @@ class GroundingVerifier:
             VerificationErrorCode.SNAPSHOT_LINEAGE_MISMATCH,
         )
 
-        rechecked_eligible = self._rechecked_eligible(goal, snapshot, candidate_set)
+        rechecked_eligible = self._rechecked_eligible(
+            goal,
+            snapshot,
+            candidate_set,
+            read_only_comparison=isinstance(draft.payload, AiModelComparisonPayload),
+        )
         evidence_by_id, duplicate_evidence_ids = _evidence_index(evidence)
         _append_check(
             checks,
@@ -503,13 +508,20 @@ class GroundingVerifier:
         goal: ShoppingGoal,
         snapshot: ProductSnapshot,
         candidate_set: CandidateSet,
+        *,
+        read_only_comparison: bool = False,
     ) -> set[str]:
         if not candidate_set.recalled:
             return set()
+        policy = (
+            self._candidate_policy.model_copy(update={"minimum_stock": 0})
+            if read_only_comparison
+            else self._candidate_policy
+        )
         result = apply_hard_filters(
             goal,
             snapshot,
-            policy=self._candidate_policy,
+            policy=policy,
             candidates=candidate_set.recalled,
         )
         return {item.item_id for item in result.eligible}

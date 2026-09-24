@@ -278,6 +278,7 @@ class PersistentMcpRagKnowledgeClient:
         args: list[str] | None = None,
         cwd: str | Path | None = None,
         env: dict[str, str] | None = None,
+        call_timeout_seconds: float = 8.0,
         session_factory: Callable[[], McpPayloadCaller] | None = None,
         on_session_start: Callable[[], None] | None = None,
         on_session_close: Callable[[], None] | None = None,
@@ -289,11 +290,15 @@ class PersistentMcpRagKnowledgeClient:
             args: Optional command arguments for the MCP server.
             cwd: RAG project working directory.
             env: Environment overlay passed to the MCP server process.
+            call_timeout_seconds: Maximum wait for one MCP tool response.
             session_factory: Optional test hook returning an async payload
                 caller. Production leaves this as ``None`` to use stdio MCP.
             on_session_start: Optional lifecycle hook used by tests.
             on_session_close: Optional lifecycle hook used by tests.
         """
+
+        if call_timeout_seconds <= 0:
+            raise ValueError("call_timeout_seconds must be positive")
 
         delegate = StdioMcpRagKnowledgeClient(
             command=command,
@@ -305,6 +310,7 @@ class PersistentMcpRagKnowledgeClient:
         self._args = delegate._args
         self._cwd = delegate._cwd
         self._env = delegate._env
+        self._call_timeout_seconds = call_timeout_seconds
         self._session_factory = session_factory
         self._on_session_start = on_session_start
         self._on_session_close = on_session_close
@@ -348,7 +354,11 @@ class PersistentMcpRagKnowledgeClient:
         }
         loop, caller = self._ensure_session()
         future = asyncio.run_coroutine_threadsafe(caller(payload), loop)
-        return future.result()
+        try:
+            return future.result(timeout=self._call_timeout_seconds)
+        except TimeoutError as error:
+            future.cancel()
+            raise TimeoutError("RAG MCP query timed out") from error
 
     def prewarm(self) -> None:
         """Start the persistent MCP session before serving user traffic."""
@@ -615,6 +625,7 @@ def search_products(
     *,
     mock_api_url: str,
     category: str | None = None,
+    minimum_results: int = 1,
     http_client: httpx.Client | None = None,
 ) -> AiModelToolResult:
     client, should_close = _client_or_default(mock_api_url, http_client)
@@ -633,14 +644,14 @@ def search_products(
                 error=f"mock_api_status_{response.status_code}",
             )
         data = response.json()
-        if category and not data.get("items"):
+        if category and len(data.get("items") or []) < minimum_results:
             category_response = client.get(
                 "/search",
                 params={"category": category},
             )
             if category_response.status_code == 200:
                 category_data = category_response.json()
-                if category_data.get("items"):
+                if len(category_data.get("items") or []) > len(data.get("items") or []):
                     data = {
                         **category_data,
                         "query": query,

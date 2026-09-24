@@ -7,6 +7,7 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+import re
 from typing import Annotated, Any, Literal, Protocol, Self
 
 import httpx
@@ -255,6 +256,51 @@ def _normalized_text(value: object) -> str:
     return " ".join(str(value).strip().split()).casefold()
 
 
+_SPECIFICATION_FALLBACK_KEYS: dict[str, tuple[str, ...]] = {
+    "capacity": ("capacity", "capacity_liters", "summary"),
+    "room_area": ("room_area", "room_area_m2", "coverage", "summary"),
+}
+_NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?")
+_MINIMUM_MARKERS = ("至少", "不低于", ">=", "at least", "minimum")
+_MAXIMUM_MARKERS = ("至多", "不超过", "<=", "at most", "maximum")
+
+
+def _specification_value(
+    values: dict[str, str],
+    attribute: str,
+) -> tuple[str | None, bool]:
+    keys = _SPECIFICATION_FALLBACK_KEYS.get(attribute, (attribute,))
+    for key in keys:
+        if key in values:
+            return values[key], key == "summary"
+    return None, False
+
+
+def _first_number(value: object) -> Decimal | None:
+    match = _NUMBER_PATTERN.search(str(value).replace(",", ""))
+    return Decimal(match.group()) if match is not None else None
+
+
+def _specification_matches(
+    expected: object,
+    actual: object,
+    *,
+    summary_fallback: bool,
+) -> bool:
+    normalized_expected = _normalized_text(expected)
+    normalized_actual = _normalized_text(actual)
+    expected_number = _first_number(expected)
+    actual_number = _first_number(actual)
+    if expected_number is not None and actual_number is not None:
+        if any(marker in normalized_expected for marker in _MINIMUM_MARKERS):
+            return actual_number >= expected_number
+        if any(marker in normalized_expected for marker in _MAXIMUM_MARKERS):
+            return actual_number <= expected_number
+    if normalized_actual == normalized_expected:
+        return True
+    return summary_fallback and normalized_expected in normalized_actual
+
+
 def _display_value(value: object) -> ReasonValue:
     if isinstance(value, (str, int, bool, Decimal, datetime)) or value is None:
         return value
@@ -365,12 +411,34 @@ def _price_reasons(
         policy=policy,
     ):
         return reasons
+    if _append_fact_problem(
+        reasons,
+        item.currency,
+        field="currency",
+        expected="CNY",
+        policy=policy,
+    ):
+        return reasons
+    if item.currency.value != "CNY":
+        return [_reason("currency_mismatch", "currency", "CNY", item.currency.value)]
     price = item.current_price.value
     assert isinstance(price, Decimal)
-    if minimum is not None and price < minimum:
-        reasons.append(_reason("budget_below_minimum", "budget_min", minimum, price))
-    if maximum is not None and price > maximum:
-        reasons.append(_reason("budget_above_maximum", "budget_max", maximum, price))
+    quantity = _constraint_value(goal, GoalField.QUANTITY)
+    for field, limit, comparison in (
+        (GoalField.BUDGET_MIN, minimum, "minimum"),
+        (GoalField.BUDGET_MAX, maximum, "maximum"),
+    ):
+        if limit is None:
+            continue
+        constraint = next(
+            item for item in goal.hard_constraints if item.field is field
+        )
+        total_budget = "总价" in (constraint.evidence.quote or "")
+        actual = price * int(quantity) if total_budget and quantity is not None else price
+        if comparison == "minimum" and actual < limit:
+            reasons.append(_reason("budget_below_minimum", "budget_min", limit, actual))
+        if comparison == "maximum" and actual > limit:
+            reasons.append(_reason("budget_above_maximum", "budget_max", limit, actual))
     return reasons
 
 
@@ -536,7 +604,7 @@ def _specification_reasons(
     assert specifications is not None
     actual = {value.key.casefold(): value.value for value in specifications.values}
     for attribute, expected in required:
-        actual_value = actual.get(attribute)
+        actual_value, summary_fallback = _specification_value(actual, attribute)
         if actual_value is None:
             reasons.append(
                 _reason(
@@ -547,7 +615,11 @@ def _specification_reasons(
                     action=policy.unknown_fact_action,
                 )
             )
-        elif _normalized_text(actual_value) != _normalized_text(expected):
+        elif not _specification_matches(
+            expected,
+            actual_value,
+            summary_fallback=summary_fallback,
+        ):
             reasons.append(
                 _reason(
                     "specification_mismatch",

@@ -12,6 +12,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass, field, replace
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -23,6 +24,7 @@ from .agent_trace import (
     record_intent_route,
 )
 from .candidate_service import (
+    CandidatePolicy,
     CandidateReference,
     CandidateSet,
     CandidateSetStatus,
@@ -32,24 +34,36 @@ from .candidate_service import (
 )
 from .clarification import ClarificationDecision, ClarificationReason
 from .comparison import (
+    ComparisonCell,
+    ComparisonCellStatus,
     ComparisonMatrix,
+    ComparisonRow,
     EvidenceRef,
     EvidenceSourceType,
     ProductComparisonService,
     ReviewBatchClient,
     ReviewCollection,
+    ReviewInsightReport,
+    ReviewInsightStatus,
     load_comparison_policy,
 )
 from .feature_normalizer import FeatureNormalizer, load_feature_profiles
 from .intent_router import AImodelIntentRoute, load_default_aimodel_intent_router
 from .plan_models import AgentPlanValidator, PlanValueType, StepType, load_plan_policy
 from .planner import HierarchicalPlanner, PlanningResult, PlanningTaskType
-from .product_models import FactStatus, ProductSnapshot
+from .product_models import (
+    FactStatus,
+    FreshnessState,
+    ProductSnapshot,
+    ProductSpecifications,
+)
 from .product_snapshot import ProductSnapshotClient
 from .ranking import ProductRanker, RankingResult, load_ranking_policy
 from .schemas import (
     AiModelAnswerPayload,
     AiModelChatRequest,
+    AiModelClarificationOption,
+    AiModelClarificationPayload,
     AiModelFallbackPayload,
     AiModelPageContext,
     AiModelProductListPayload,
@@ -66,6 +80,7 @@ from .tool_executor import (
     ExecutionValue,
     PlanExecutionResult,
     PlanExecutionStatus,
+    StepExecutionStatus,
     StepExecutionContext,
     StepExecutionError,
     StepHandler,
@@ -137,9 +152,11 @@ class _TurnState:
     ranking: RankingResult | None = None
     comparison: ComparisonMatrix | None = None
     reviews: tuple[ReviewCollection, ...] = ()
+    review_reports: tuple[ReviewInsightReport, ...] = ()
     evidence: tuple[EvidenceRef, ...] = ()
     canonical_draft: GroundedResponseDraft | None = None
     search_query: str | None = None
+    requested_review_topics: tuple[str, ...] = ()
 
 
 class ShoppingAgentRuntime:
@@ -177,7 +194,13 @@ class ShoppingAgentRuntime:
         route, route_candidates = (
             load_default_aimodel_intent_router().route_with_candidates(request.message)
         )
-        route = _recover_goal_backed_route(route, goal, request.message)
+        page_context = _effective_page_context(request)
+        route = _recover_goal_backed_route(
+            route,
+            goal,
+            request.message,
+            page_context,
+        )
         if trace_context is not None:
             record_intent_route(
                 trace_context,
@@ -185,7 +208,6 @@ class ShoppingAgentRuntime:
                 candidates=route_candidates,
             )
         decision = clarification or _proceed_decision()
-        page_context = _effective_page_context(request)
         planning = self._planner.plan(
             intent_route=route,
             shopping_goal=goal,
@@ -258,9 +280,9 @@ class ShoppingAgentRuntime:
             ),
         )
         if execution.status is not PlanExecutionStatus.SUCCESS:
-            payload: AiModelResponsePayload = AiModelFallbackPayload(
-                answer="本轮任务未能安全完成，请稍后重试或缩小商品范围。",
-                reason_code=f"plan_{execution.stop_reason.value}",
+            payload: AiModelResponsePayload = _execution_failure_payload(
+                execution,
+                state.goal,
             )
         else:
             terminal = execution.steps[-1].output
@@ -324,6 +346,11 @@ class ShoppingAgentRuntime:
             state.mock_api_url,
             http_client=state.http_client,
         )
+        candidate_policy = (
+            CandidatePolicy(minimum_stock=0)
+            if task_type is PlanningTaskType.COMPARE
+            else CandidatePolicy()
+        )
         derived_search_query = _product_search_query(
             state.goal,
             page_context,
@@ -338,6 +365,7 @@ class ShoppingAgentRuntime:
                 derived_search_query,
                 mock_api_url=state.mock_api_url,
                 category=derived_search_category,
+                minimum_results=(2 if task_type is PlanningTaskType.COMPARE else 1),
                 http_client=state.http_client,
             )
             state.tool_results.append(result)
@@ -382,6 +410,7 @@ class ShoppingAgentRuntime:
             initial_set = apply_hard_filters(
                 state.goal,
                 state.snapshot,
+                policy=candidate_policy,
                 candidates=initial_candidates,
                 search_query=state.search_query or derived_search_query,
             )
@@ -415,6 +444,7 @@ class ShoppingAgentRuntime:
                 refreshed_set = apply_hard_filters(
                     state.goal,
                     state.snapshot,
+                    policy=candidate_policy,
                     candidates=initial_candidates,
                     search_query=state.search_query or derived_search_query,
                 )
@@ -444,8 +474,7 @@ class ShoppingAgentRuntime:
             )
 
         async def reviews(invocation: StepInvocation) -> ExecutionValue:
-            candidates = _candidate_refs(invocation.inputs["candidate_refs"].value)
-            item_ids = [candidate.item_id for candidate in candidates[:5]]
+            item_ids = list(_review_item_ids(invocation, page_context)[:5])
             state.reviews = await asyncio.to_thread(
                 _fetch_reviews,
                 state.mock_api_url,
@@ -458,12 +487,11 @@ class ShoppingAgentRuntime:
             )
 
         def reviews_call(invocation: StepInvocation) -> AgentToolCall:
-            candidates = _candidate_refs(invocation.inputs["candidate_refs"].value)
             return AgentToolCall(
                 tool_name=AgentToolName.PRODUCT_REVIEWS.value,
                 arguments=_scope_arguments(
                     state,
-                    item_ids=tuple(item.item_id for item in candidates[:5]),
+                    item_ids=_review_item_ids(invocation, page_context)[:5],
                 ),
             )
 
@@ -510,6 +538,7 @@ class ShoppingAgentRuntime:
             state.candidate_set = apply_hard_filters(
                 state.goal,
                 snapshot_value,
+                policy=candidate_policy,
                 candidates=candidates,
                 search_query=state.search_query or derived_search_query,
             )
@@ -546,6 +575,10 @@ class ShoppingAgentRuntime:
                 products=state.snapshot.items_by_id,
                 normalized_features=normalized,
                 selected_item_ids=selected,
+            )
+            state.comparison = _augment_comparison_core_facts(
+                state.comparison,
+                state.snapshot,
             )
             state.evidence = state.comparison.evidence
             return ExecutionValue(
@@ -601,8 +634,9 @@ def _recover_goal_backed_route(
     route: AImodelIntentRoute,
     goal: ShoppingGoal,
     message: str,
+    page_context: AiModelPageContext | None = None,
 ) -> AImodelIntentRoute:
-    """Resume recommendation only when this turn supplies the category evidence."""
+    """Resume an existing shopping goal for explicit follow-up commands."""
 
     if not route.fallback_used or goal.decision_stage not in {
         DecisionStage.SEARCHING,
@@ -623,8 +657,43 @@ def _recover_goal_backed_route(
         if category is not None and category.evidence.quote
         else ""
     )
-    if not category_quote or category_quote not in normalized_message:
+    retry_request = re.search(r"重试|再试|重新查|列出商品|列出候选", normalized_message)
+    if not category_quote or (
+        category_quote not in normalized_message and retry_request is None
+    ):
         return route
+    if page_context is not None and page_context.current_item_id is not None:
+        return replace(
+            route,
+            action="product_api",
+            collection=None,
+            collections=(),
+            domain="support",
+            category="presale",
+            intent="product_detail",
+            confidence=max(route.confidence, 0.85),
+            reason="page_item_goal_context_recovered_after_clarification",
+            matched_rule="goal_context_recovery",
+            rag_enabled=False,
+        )
+    if retry_request is not None or re.search(
+        r"只看|只要|不要|排除|预算|\d+(?:\.\d+)?\s*元\s*(?:以内|以下)|"
+        r"不能超过|不超过|最高|至少|必须|找|搜索",
+        normalized_message,
+    ):
+        return replace(
+            route,
+            action="product_api",
+            collection=None,
+            collections=(),
+            domain="support",
+            category="presale",
+            intent="catalog_search",
+            confidence=max(route.confidence, 0.85),
+            reason="goal_constraints_recovered_for_catalog_search",
+            matched_rule="goal_context_recovery",
+            rag_enabled=False,
+        )
     return replace(
         route,
         action="rag",
@@ -702,10 +771,13 @@ def _merge_candidates(
             add(page_context.current_item_id, CandidateSource.PAGE)
         for item in page_context.candidate_refs:
             add(item.item_id, CandidateSource.PAGE)
+    scoped_item_ids = frozenset(sources)
     if search_result.ok:
         for item in search_result.data.get("items", []):
             if isinstance(item, dict) and item.get("item_id") is not None:
-                add(item["item_id"], CandidateSource.SEARCH)
+                item_id = str(item["item_id"]).strip()
+                if not scoped_item_ids or item_id in scoped_item_ids:
+                    add(item_id, CandidateSource.SEARCH)
     source_order = {
         CandidateSource.EXPLICIT: 0,
         CandidateSource.PAGE: 1,
@@ -738,6 +810,25 @@ def _snapshot_item_ids(
     if page_context is None or page_context.current_item_id is None:
         raise StepExecutionError("product_reference_missing")
     return (str(page_context.current_item_id),)
+
+
+def _review_item_ids(
+    invocation: StepInvocation,
+    page_context: AiModelPageContext | None,
+) -> tuple[str, ...]:
+    candidate_value = invocation.inputs.get("candidate_refs")
+    if candidate_value is not None:
+        return tuple(item.item_id for item in _candidate_refs(candidate_value.value))
+    if page_context is None:
+        raise StepExecutionError("product_reference_missing")
+    values: list[str] = []
+    if page_context.current_item_id is not None:
+        values.append(str(page_context.current_item_id))
+    values.extend(str(item.item_id) for item in page_context.candidate_refs)
+    item_ids = tuple(dict.fromkeys(values))
+    if not item_ids:
+        raise StepExecutionError("product_reference_missing")
+    return item_ids
 
 
 def _scope_arguments(state: _TurnState, **arguments: Any) -> dict[str, Any]:
@@ -847,6 +938,206 @@ def _fact_refresh_reason_codes(candidate_set: CandidateSet) -> tuple[str, ...]:
     return tuple(sorted(codes))
 
 
+_CONFIRMED_MISMATCH_CODES = frozenset(
+    {
+        "brand_excluded",
+        "brand_not_included",
+        "budget_above_maximum",
+        "budget_below_minimum",
+        "currency_mismatch",
+        "category_mismatch",
+        "delivery_after_deadline",
+        "delivery_unavailable",
+        "insufficient_stock",
+        "specification_mismatch",
+    }
+)
+
+
+def _confirmed_mismatch_reason_codes(
+    candidate_set: CandidateSet,
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                reason.code
+                for candidate in candidate_set.excluded
+                for reason in candidate.reasons
+                if reason.code in _CONFIRMED_MISMATCH_CODES
+            }
+        )
+    )
+
+
+def _known_mismatch_draft(
+    state: _TurnState,
+    reason_codes: tuple[str, ...],
+) -> GroundedResponseDraft:
+    budget_conflict = any(code.startswith("budget_") for code in reason_codes)
+    page_context = _effective_page_context(state.request)
+    if (
+        budget_conflict
+        and page_context is not None
+        and page_context.current_item_id is not None
+    ):
+        return GroundedResponseDraft(
+            payload=AiModelClarificationPayload(
+                answer=(
+                    "当前指定商品的已核验价格超出预算。请选择提高预算，"
+                    "或保留预算并改看其他商品。"
+                ),
+                options=[
+                    AiModelClarificationOption(
+                        option_id="relax_budget",
+                        label="提高预算",
+                        value="budget_max:relax",
+                    ),
+                    AiModelClarificationOption(
+                        option_id="change_candidate",
+                        label="更换商品",
+                        value="candidate:alternative",
+                    ),
+                ],
+            )
+        )
+    constraints = _goal_constraint_summary(state.goal)
+    retained = f"已核验条件：{constraints}。" if constraints else ""
+    if "currency_mismatch" in reason_codes:
+        return GroundedResponseDraft(
+            payload=AiModelFallbackPayload(
+                answer=(
+                    "商品价格币种与 CNY 预算不一致，无法直接比较金额。"
+                    f"{retained}请提供同币种价格后重试。"
+                ),
+                reason_code="currency_mismatch",
+            )
+        )
+    return GroundedResponseDraft(
+        payload=AiModelFallbackPayload(
+            answer=(
+                "当前候选与已确认的硬约束冲突，不能据此推荐无关商品。"
+                f"{retained}请调整条件或更换候选后再试。"
+            ),
+            reason_code="confirmed_constraint_mismatch",
+        )
+    )
+
+
+_STEP_LABELS = {
+    StepType.PRODUCT_SEARCH.value: "商品搜索",
+    StepType.SNAPSHOT.value: "商品详情读取",
+    StepType.REVIEW_FETCH.value: "商品评论读取",
+    StepType.RAG_LOOKUP.value: "知识检索",
+    StepType.FILTER.value: "硬约束筛选",
+    StepType.RANK.value: "候选排序",
+    StepType.COMPARE.value: "商品比较",
+    StepType.COMPOSE.value: "结果生成",
+}
+_GOAL_FIELD_LABELS = {
+    GoalField.BRAND: "品牌",
+    GoalField.BUDGET_MIN: "最低预算",
+    GoalField.BUDGET_MAX: "预算上限",
+    GoalField.CATEGORY: "品类",
+    GoalField.DELIVERY_DEADLINE: "送达时间",
+    GoalField.QUANTITY: "数量",
+    GoalField.SPECIFICATION: "规格",
+    GoalField.USAGE_SCENARIO: "使用场景",
+}
+
+
+def _goal_constraint_summary(
+    goal: ShoppingGoal,
+    *,
+    include_category: bool = True,
+) -> str:
+    parts: list[str] = []
+    for item in goal.hard_constraints:
+        if item.field is GoalField.CATEGORY and not include_category:
+            continue
+        label = _GOAL_FIELD_LABELS.get(item.field, item.field.value)
+        if item.field is GoalField.SPECIFICATION and item.attribute:
+            label = item.attribute
+        parts.append(f"{label} {item.value}")
+    for item in goal.exclusions:
+        label = _GOAL_FIELD_LABELS.get(item.field, item.field.value)
+        parts.append(f"排除{label} {item.value}")
+    return "、".join(parts[:4])
+
+
+def _execution_failure_payload(
+    execution: PlanExecutionResult,
+    goal: ShoppingGoal,
+) -> AiModelFallbackPayload:
+    failed = next(
+        (
+            step
+            for step in execution.steps
+            if step.status
+            in {
+                StepExecutionStatus.FAILED,
+                StepExecutionStatus.TIMED_OUT,
+                StepExecutionStatus.CANCELLED,
+            }
+        ),
+        None,
+    )
+    step_type = failed.step_type if failed is not None else "execution"
+    step_label = _STEP_LABELS.get(step_type, "任务执行")
+    error_code = (
+        failed.error_code if failed is not None else execution.stop_reason.value
+    )
+    if failed is not None and (
+        failed.status is StepExecutionStatus.TIMED_OUT or error_code == "step_timeout"
+    ):
+        cause = f"{step_label}超时"
+    elif error_code == "no_candidate":
+        cause = f"{step_label}没有返回可用候选"
+    elif error_code == "product_reference_missing":
+        cause = "缺少需要查询的商品"
+    elif execution.stop_reason.value == "tool_denied":
+        cause = f"{step_label}未通过工具权限校验"
+    else:
+        cause = f"{step_label}未成功完成"
+    constraints = _goal_constraint_summary(goal)
+    retained = f"已保留条件：{constraints}。" if constraints else ""
+    answer = (
+        f"{cause}，本轮没有生成未经核验的结果。{retained}"
+        "你可以直接回复“重试”，我会沿用这些条件继续执行。"
+    )
+    return AiModelFallbackPayload(
+        answer=answer,
+        reason_code=f"plan_{execution.stop_reason.value}_{step_type}",
+    )
+
+
+def _required_fact_fallback(
+    state: _TurnState,
+    reason_codes: tuple[str, ...],
+) -> AiModelFallbackPayload:
+    labels: list[str] = []
+    for code in reason_codes:
+        field = code.split("_", maxsplit=1)[0]
+        label = {
+            "delivery": "履约信息",
+            "price": "价格",
+            "rating": "评分",
+            "specification": "规格",
+            "stock": "库存",
+        }.get(field, "商品事实")
+        if label not in labels:
+            labels.append(label)
+    missing = "、".join(labels) or "必要商品事实"
+    constraints = _goal_constraint_summary(state.goal)
+    retained = f"已保留条件：{constraints}。" if constraints else ""
+    return AiModelFallbackPayload(
+        answer=(
+            f"商品事实刷新后仍缺少可核验的{missing}，暂时不能给出可靠结论。"
+            f"{retained}你可以直接回复“重试”，我会按原条件重新读取商品事实。"
+        ),
+        reason_code="required_fact_unavailable",
+    )
+
+
 def _bounded_rag_query(query: str) -> str:
     return " ".join(query.split())[:2_000].rstrip()
 
@@ -914,6 +1205,363 @@ def _ranking_evidence(
     )
 
 
+def _is_review_summary(route: AImodelIntentRoute) -> bool:
+    return (route.intent or "").strip().casefold() in {
+        "product_review",
+        "product_reviews",
+        "review",
+        "review_summary",
+        "reviews",
+    }
+
+
+def _requested_review_topics(message: str) -> tuple[str, ...]:
+    topics: list[str] = []
+    for pattern in (
+        r"(?:评论|评价)(?:中的|里的|中)?(?P<topic>[\u4e00-\u9fffA-Za-z0-9]{2,12})(?:反馈|表现|问题|情况)",
+        r"只(?:补充|总结|看)(?P<topic>[\u4e00-\u9fffA-Za-z0-9]{2,12})(?:主题|评价|评论)",
+    ):
+        for match in re.finditer(pattern, message):
+            topic = match.group("topic").strip()
+            if topic and topic not in topics:
+                topics.append(topic)
+    for topic in ("便携性", "低分", "负面", "优点", "缺点"):
+        if topic in message and topic not in topics:
+            topics.append(topic)
+    return tuple(topics[:6])
+
+
+def _filter_requested_review_insights(
+    insights: list[Any],
+    requested_topics: tuple[str, ...],
+) -> tuple[list[Any], tuple[str, ...]]:
+    attribute_topics = tuple(
+        topic
+        for topic in requested_topics
+        if topic not in {"低分", "负面", "优点", "缺点"}
+    )
+    if not attribute_topics:
+        return insights, ()
+    matched = [
+        insight
+        for insight in insights
+        if any(
+            topic.casefold() in insight.label.casefold()
+            or insight.label.casefold() in topic.casefold()
+            or topic.casefold() == insight.topic_code.casefold()
+            for topic in attribute_topics
+        )
+    ]
+    return matched, attribute_topics
+
+
+def _review_summary_draft(state: _TurnState) -> GroundedResponseDraft:
+    assert state.snapshot is not None
+    service = ProductComparisonService(
+        load_feature_profiles(),
+        load_comparison_policy(),
+    )
+    reports = tuple(service.summarize_reviews(item) for item in state.reviews)
+    state.requested_review_topics = _requested_review_topics(state.request.message)
+    state.review_reports = reports
+    state.evidence = tuple(
+        evidence for report in reports for evidence in report.evidence
+    )
+    if not reports:
+        return GroundedResponseDraft(
+            payload=AiModelFallbackPayload(
+                answer=(
+                    "评论服务没有返回当前商品的可核验评论。你可以直接回复“重试”，"
+                    "我会继续查询同一商品。"
+                ),
+                reason_code="review_unavailable",
+            )
+        )
+
+    all_insights = [insight for report in reports for insight in report.insights]
+    insights, attribute_topics = _filter_requested_review_insights(
+        all_insights,
+        state.requested_review_topics,
+    )
+    sample_count = sum(report.sample_count for report in reports)
+    if insights:
+        insight_text = "；".join(insight.summary for insight in insights[:6])
+        answer = f"基于本次读取的 {sample_count} 条评论：{insight_text}。"
+    elif attribute_topics and all_insights:
+        answer = (
+            f"本次读取了 {sample_count} 条评论，但没有形成关于"
+            f"“{'、'.join(attribute_topics)}”的达到阈值主题，因此不扩展到无关评价。"
+        )
+    elif any(report.status is ReviewInsightStatus.LOW_SAMPLE for report in reports):
+        answer = (
+            f"本次只读取到 {sample_count} 条评论，低于形成稳定主题所需的样本量，"
+            "暂不放大个别评价。"
+        )
+    elif all(report.status is ReviewInsightStatus.NO_REVIEWS for report in reports):
+        topic_text = (
+            f"“{'、'.join(state.requested_review_topics)}”"
+            if state.requested_review_topics
+            else "指定主题"
+        )
+        answer = f"当前商品没有可用于总结{topic_text}的评论，因此无法判断该主题。"
+    else:
+        answer = f"本次读取了 {sample_count} 条评论，但没有形成达到阈值的集中主题。"
+
+    return GroundedResponseDraft(
+        payload=AiModelAnswerPayload(
+            answer=answer,
+            products=[],
+            evidence=[item.to_payload() for item in state.evidence],
+        )
+    )
+
+
+def _has_decision_constraints(goal: ShoppingGoal) -> bool:
+    return bool(goal.exclusions) or any(
+        item.field is not GoalField.CATEGORY for item in goal.hard_constraints
+    )
+
+
+def _recommendation_reason(goal: ShoppingGoal, rank: int) -> str:
+    constraints = _goal_constraint_summary(goal, include_category=False)
+    if constraints:
+        return f"满足已核验条件：{constraints}；通过硬约束过滤，排序第 {rank}。"
+    return f"通过硬约束过滤，排序第 {rank}。"
+
+
+def _recommendation_content(
+    item_id: str,
+    snapshot: ProductSnapshot,
+    goal: ShoppingGoal,
+    rank: int,
+    ranking_evidence: EvidenceRef,
+) -> tuple[str, tuple[EvidenceRef, ...], tuple[ResponseClaim, ...]]:
+    product = snapshot.items_by_id[item_id]
+    details: list[str] = []
+    evidence = [ranking_evidence]
+    claims = [
+        ResponseClaim(
+            claim_id=f"rank-{rank}",
+            claim_type=ClaimType.RANK,
+            item_id=item_id,
+            value=rank,
+            evidence_ids=(ranking_evidence.evidence_id,),
+        )
+    ]
+    if (
+        product.current_price.status is FactStatus.KNOWN
+        and product.current_price.freshness.state is FreshnessState.FRESH
+        and product.current_price.value is not None
+        and product.currency.status is FactStatus.KNOWN
+        and product.currency.value is not None
+    ):
+        price_evidence = EvidenceRef(
+            evidence_id=f"fact:{snapshot.snapshot_id}:{item_id}:current_price",
+            source_type=EvidenceSourceType.PRODUCT_FACT,
+            source_id=f"{item_id}.current_price",
+            item_id=item_id,
+            snapshot_id=snapshot.snapshot_id,
+            title=f"{product.name.value} 价格",
+        )
+        details.append(
+            f"价格 {product.current_price.value} {product.currency.value}"
+        )
+        evidence.append(price_evidence)
+        claims.append(
+            ResponseClaim(
+                claim_id=f"recommend-{rank}-price",
+                claim_type=ClaimType.PRICE,
+                item_id=item_id,
+                value=product.current_price.value,
+                evidence_ids=(price_evidence.evidence_id,),
+            )
+        )
+    specs = product.specifications.value
+    if (
+        product.specifications.status is FactStatus.KNOWN
+        and product.specifications.freshness.state is FreshnessState.FRESH
+        and isinstance(specs, ProductSpecifications)
+    ):
+        summary = next((part.value for part in specs.values if part.key == "summary"), None)
+        if summary:
+            spec_evidence = EvidenceRef(
+                evidence_id=f"fact:{snapshot.snapshot_id}:{item_id}:specifications.summary",
+                source_type=EvidenceSourceType.PRODUCT_FACT,
+                source_id=f"{item_id}.specifications.summary",
+                item_id=item_id,
+                snapshot_id=snapshot.snapshot_id,
+                title=f"{product.name.value} 规格",
+            )
+            details.append(f"规格 {summary}")
+            evidence.append(spec_evidence)
+            claims.append(
+                ResponseClaim(
+                    claim_id=f"recommend-{rank}-spec",
+                    claim_type=ClaimType.SPECIFICATION,
+                    item_id=item_id,
+                    field="summary",
+                    value=summary,
+                    evidence_ids=(spec_evidence.evidence_id,),
+                )
+            )
+    details.append(_recommendation_reason(goal, rank))
+    return "，".join(details), tuple(evidence), tuple(claims)
+
+
+def _augment_comparison_core_facts(
+    matrix: ComparisonMatrix,
+    snapshot: ProductSnapshot,
+) -> ComparisonMatrix:
+    existing_keys = {row.feature_key for row in matrix.rows}
+    evidence = list(matrix.evidence)
+    rows: list[ComparisonRow] = []
+    for feature_key, label in (("current_price", "价格"), ("spec", "规格")):
+        if feature_key in existing_keys:
+            continue
+        cells: list[ComparisonCell] = []
+        for column in matrix.columns:
+            product = snapshot.items_by_id[column.item_id]
+            fact = (
+                product.current_price
+                if feature_key == "current_price"
+                else product.specifications
+            )
+            evidence_id = f"fact:{snapshot.snapshot_id}:{column.item_id}:{feature_key}"
+            evidence.append(
+                EvidenceRef(
+                    evidence_id=evidence_id,
+                    source_type=EvidenceSourceType.PRODUCT_FACT,
+                    source_id=f"{column.item_id}.{feature_key}",
+                    item_id=column.item_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    title=f"{product.name.value} {label}",
+                )
+            )
+            value: object | None = fact.value
+            if feature_key == "spec" and isinstance(value, ProductSpecifications):
+                value = next(
+                    (
+                        item.value
+                        for item in value.values
+                        if item.key.casefold() == "summary"
+                    ),
+                    None,
+                )
+            known = (
+                fact.status is FactStatus.KNOWN
+                and fact.freshness.state is FreshnessState.FRESH
+                and value is not None
+            )
+            display_value = None
+            if known and feature_key == "current_price":
+                currency = (
+                    str(product.currency.value)
+                    if product.currency.status is FactStatus.KNOWN
+                    and product.currency.value is not None
+                    else ""
+                )
+                display_value = f"{value} {currency}".strip()
+            elif known:
+                display_value = str(value)
+            cells.append(
+                ComparisonCell(
+                    item_id=column.item_id,
+                    status=(
+                        ComparisonCellStatus.KNOWN
+                        if known
+                        else ComparisonCellStatus.UNKNOWN
+                    ),
+                    normalized_value=value if known else None,
+                    display_value=display_value,
+                    source_version=fact.source.source_version,
+                    freshness=fact.freshness.state,
+                    evidence_id=evidence_id,
+                )
+            )
+        rows.append(
+            ComparisonRow(
+                feature_key=feature_key,
+                label=label,
+                cells=tuple(cells),
+            )
+        )
+    if not rows:
+        return matrix
+    return ComparisonMatrix.model_validate(
+        {
+            **matrix.model_dump(mode="python"),
+            "rows": [
+                *(row.model_dump(mode="python") for row in rows),
+                *(row.model_dump(mode="python") for row in matrix.rows),
+            ],
+            "evidence": [item.model_dump(mode="python") for item in evidence],
+        }
+    )
+
+
+def _comparison_answer_and_claims(
+    matrix: ComparisonMatrix,
+) -> tuple[str, tuple[ResponseClaim, ...]]:
+    rows = {
+        row.feature_key: row
+        for row in matrix.rows
+        if row.feature_key in {"current_price", "spec"}
+    }
+    parts: list[str] = []
+    claims: list[ResponseClaim] = []
+    for column_index, column in enumerate(matrix.columns):
+        values: list[str] = []
+        for feature_key in ("current_price", "spec"):
+            row = rows.get(feature_key)
+            if row is None:
+                continue
+            cell = row.cells[column_index]
+            if (
+                cell.status is not ComparisonCellStatus.KNOWN
+                or cell.display_value is None
+                or cell.evidence_id is None
+            ):
+                continue
+            values.append(f"{row.label} {cell.display_value}")
+            claims.append(
+                ResponseClaim(
+                    claim_id=f"compare-{column_index + 1}-{feature_key}",
+                    claim_type=(
+                        ClaimType.PRICE
+                        if feature_key == "current_price"
+                        else ClaimType.COMPARISON_CELL
+                    ),
+                    item_id=column.item_id,
+                    field=(feature_key if feature_key != "current_price" else None),
+                    value=(
+                        cell.normalized_value
+                        if feature_key == "current_price"
+                        else cell.display_value
+                    ),
+                    evidence_ids=(cell.evidence_id,),
+                )
+            )
+        parts.append(
+            f"{column.item_name}：{'，'.join(values)}"
+            if values
+            else f"{column.item_name}：相关事实暂不可核验"
+        )
+    answer = "；".join(parts) + "。"
+    price_row = rows.get("current_price")
+    if price_row is not None and len(matrix.columns) > 1:
+        prices = [cell.normalized_value for cell in price_row.cells]
+        currencies = [
+            cell.display_value.rsplit(" ", 1)[-1]
+            if cell.display_value is not None else None
+            for cell in price_row.cells
+        ]
+        if all(isinstance(price, (int, float, Decimal)) for price in prices) and len(set(currencies)) == 1:
+            lowest = min(range(len(prices)), key=lambda index: Decimal(str(prices[index])))
+            if len(set(prices)) > 1:
+                answer += f"按已核验价格，{matrix.columns[lowest].item_name}更低。"
+    return answer, tuple(claims)
+
+
 def _compose_draft(
     state: _TurnState,
     task_type: PlanningTaskType,
@@ -945,6 +1593,22 @@ def _compose_draft(
                 reason_code="snapshot_unavailable",
             )
         )
+    if _is_review_summary(state.route):
+        review_candidates = state.candidates or tuple(
+            CandidateReference(
+                item_id=item_id,
+                sources=(CandidateSource.PAGE,),
+            )
+            for item_id in state.snapshot.requested_item_ids
+        )
+        state.candidate_set = apply_hard_filters(
+            state.goal,
+            state.snapshot,
+            policy=CandidatePolicy(minimum_stock=0),
+            candidates=review_candidates,
+        )
+        state.ranking = _rank_products(state, state.snapshot, state.candidate_set)
+        return _review_summary_draft(state)
     if state.candidate_set is None:
         candidates = state.candidates or tuple(
             CandidateReference(
@@ -959,16 +1623,13 @@ def _compose_draft(
             candidates=candidates,
         )
     if state.candidate_set.status is CandidateSetStatus.NO_CANDIDATE:
+        mismatch_reasons = _confirmed_mismatch_reason_codes(state.candidate_set)
+        if mismatch_reasons:
+            return _known_mismatch_draft(state, mismatch_reasons)
         unavailable_reasons = _fact_refresh_reason_codes(state.candidate_set)
         if unavailable_reasons:
             return GroundedResponseDraft(
-                payload=AiModelFallbackPayload(
-                    answer=(
-                        "已刷新商品事实，但必要的价格、库存或履约信息仍不可用，"
-                        "暂时无法给出可靠推荐。"
-                    ),
-                    reason_code="required_fact_unavailable",
-                )
+                payload=_required_fact_fallback(state, unavailable_reasons)
             )
         return GroundedResponseDraft(
             payload=AiModelFallbackPayload(
@@ -986,57 +1647,103 @@ def _compose_draft(
             item_id: _product_ref(item_id, state.snapshot)
             for item_id in state.snapshot.items_by_id
         }
+        answer, claims = _comparison_answer_and_claims(state.comparison)
         return GroundedResponseDraft(
             payload=state.comparison.to_payload(
-                answer="已按同一事实快照生成商品对比。",
+                answer=answer,
                 products=products,
-            )
+            ),
+            claims=claims,
         )
 
     eligible_ids = [item.item_id for item in state.candidate_set.eligible]
-    if task_type is PlanningTaskType.RECOMMEND:
+    if task_type is PlanningTaskType.RECOMMEND or (
+        task_type is PlanningTaskType.PRODUCT_DETAIL
+        and _has_decision_constraints(state.goal)
+    ):
         ranked = state.ranking.ranked[:3]
-        evidence = tuple(_ranking_evidence(state.ranking, item.item_id) for item in ranked)
-        evidence_by_item = {item.item_id: item for item in evidence}
-        state.evidence = evidence
+        reasons: list[AiModelRecommendationReason] = []
+        evidence: list[EvidenceRef] = []
+        claims: list[ResponseClaim] = []
+        answer_lines: list[str] = []
+        for item in ranked:
+            ranking_evidence = _ranking_evidence(state.ranking, item.item_id)
+            reason, item_evidence, item_claims = _recommendation_content(
+                item.item_id,
+                state.snapshot,
+                state.goal,
+                item.rank,
+                ranking_evidence,
+            )
+            product = _product_ref(item.item_id, state.snapshot)
+            reasons.append(
+                AiModelRecommendationReason(
+                    item_id=item.item_id,
+                    reason=reason,
+                    evidence_ids=[part.evidence_id for part in item_evidence],
+                )
+            )
+            answer_lines.append(f"{item.rank}. {product.item_name}：{reason}")
+            evidence.extend(item_evidence)
+            claims.extend(item_claims)
+        state.evidence = tuple(evidence)
         return GroundedResponseDraft(
             payload=AiModelRecommendationPayload(
-                answer="以下商品通过了硬约束过滤，并按确定性规则排序。",
+                answer="\n".join(answer_lines),
                 candidates=[
                     _product_ref(item.item_id, state.snapshot) for item in ranked
                 ],
-                recommendations=[
-                    AiModelRecommendationReason(
-                        item_id=item.item_id,
-                        reason=f"通过硬约束过滤，排序第 {item.rank}。",
-                        evidence_ids=[evidence_by_item[item.item_id].evidence_id],
-                    )
-                    for item in ranked
-                ],
+                recommendations=reasons,
                 evidence=[item.to_payload() for item in evidence],
             ),
-            claims=tuple(
-                ResponseClaim(
-                    claim_id=f"rank-{index}",
-                    claim_type=ClaimType.RANK,
-                    item_id=item.item_id,
-                    value=item.rank,
-                    evidence_ids=(evidence_by_item[item.item_id].evidence_id,),
-                )
-                for index, item in enumerate(ranked, start=1)
-            ),
+            claims=tuple(claims),
         )
 
     selected_ids = eligible_ids[:20]
+    list_evidence: list[EvidenceRef] = []
+    list_claims: list[ResponseClaim] = []
+    answer_lines: list[str] = []
+    for item_id in selected_ids:
+        product = state.snapshot.items_by_id[item_id]
+        name = _product_ref(item_id, state.snapshot).item_name
+        price = product.current_price
+        currency = product.currency
+        if (
+            price.status is FactStatus.KNOWN
+            and price.freshness.state is FreshnessState.FRESH
+            and price.value is not None
+            and currency.status is FactStatus.KNOWN
+            and currency.value is not None
+        ):
+            fact_evidence = EvidenceRef(
+                evidence_id=f"fact:{state.snapshot.snapshot_id}:{item_id}:current_price",
+                source_type=EvidenceSourceType.PRODUCT_FACT,
+                source_id=f"{item_id}.current_price",
+                item_id=item_id,
+                snapshot_id=state.snapshot.snapshot_id,
+                title=f"{name} 价格",
+            )
+            list_evidence.append(fact_evidence)
+            list_claims.append(
+                ResponseClaim(
+                    claim_id=f"list-{item_id}-price",
+                    claim_type=ClaimType.PRICE,
+                    item_id=item_id,
+                    value=price.value,
+                    evidence_ids=(fact_evidence.evidence_id,),
+                )
+            )
+            answer_lines.append(f"{name}：{price.value} {currency.value}")
+        else:
+            answer_lines.append(f"{name}：价格待核验")
+    state.evidence = tuple(list_evidence)
     return GroundedResponseDraft(
         payload=AiModelProductListPayload(
-            answer=(
-                "已读取当前商品的可验证信息。"
-                if task_type is PlanningTaskType.PRODUCT_DETAIL
-                else "已找到符合当前硬约束的商品。"
-            ),
+            answer="；".join(answer_lines) + "。",
             products=[_product_ref(item_id, state.snapshot) for item_id in selected_ids],
-        )
+            evidence=[item.to_payload() for item in list_evidence],
+        ),
+        claims=tuple(list_claims),
     )
 
 
@@ -1061,6 +1768,38 @@ def _build_evaluation_contexts(
                     title="RAG final context",
                 )
             )
+
+    for report in state.review_reports:
+        contexts.append(
+            AgentEvaluationContext(
+                content=json.dumps(
+                    {
+                        "item_id": report.item_id,
+                        "status": report.status.value,
+                        "sample_count": report.sample_count,
+                        "reported_review_count": report.reported_review_count,
+                        "requested_topics": list(state.requested_review_topics),
+                        "insights": [
+                            {
+                                "topic": insight.topic_code,
+                                "kind": insight.kind.value,
+                                "summary": insight.summary,
+                                "positive_count": insight.positive_count,
+                                "negative_count": insight.negative_count,
+                                "evidence_ids": list(insight.evidence_ids),
+                            }
+                            for insight in report.insights
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                source_type="review_summary",
+                source_id=f"{report.policy_version}:{report.item_id}",
+                title=f"Review summary {report.item_id}",
+            )
+        )
 
     snapshot = state.snapshot
     if snapshot is None:

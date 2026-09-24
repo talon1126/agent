@@ -275,9 +275,16 @@ _CONTRACTS: dict[StepType, _StepContract] = {
         output_type=PlanValueType.REVIEW_COLLECTION,
         risk_level=RiskLevel.MEDIUM,
         allowed_tools=frozenset({PlanTool.PRODUCT_REVIEWS}),
-        required_input_types=frozenset({PlanValueType.CANDIDATE_REFS}),
+        required_input_types=frozenset(),
+        required_any_input_types=frozenset(
+            {PlanValueType.CANDIDATE_REFS, PlanValueType.PAGE_CONTEXT}
+        ),
         allowed_input_types=frozenset(
-            {PlanValueType.CANDIDATE_REFS, PlanValueType.RANKING_RESULT}
+            {
+                PlanValueType.CANDIDATE_REFS,
+                PlanValueType.PAGE_CONTEXT,
+                PlanValueType.RANKING_RESULT,
+            }
         ),
     ),
     StepType.RAG_LOOKUP: _StepContract(

@@ -1,11 +1,11 @@
 schema_version: "1.0"
-policy_version: "d1-plan-policy-v1"
+policy_version: "d1-plan-policy-v2"
 defaults:
   max_steps: 12
   max_candidates: 24
   max_concurrency: 3
-  step_timeout_ms: 5000
-  total_timeout_ms: 30000
+  step_timeout_ms: 10000
+  total_timeout_ms: 60000
   max_model_calls: 2
   max_retries: 1
 limits:

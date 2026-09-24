@@ -14,6 +14,9 @@ topics:
   packaging:
     label: 包装
     keywords: [packaging, package, 包装]
+  portability:
+    label: 便携性
+    keywords: [portable, portability, lightweight, fold, 便携, 轻便, 折叠]
   delivery:
     label: 配送
     keywords: [delivery, shipping, 物流, 配送]

@@ -77,7 +77,7 @@ def test_validator_injects_server_policy_and_effective_budget(
         },
     )
 
-    assert plan.policy_version == "d1-plan-policy-v1"
+    assert plan.policy_version == "d1-plan-policy-v2"
     assert plan.budget.max_steps == 4
     assert plan.budget.max_candidates == 10
     assert plan.budget.max_concurrency == 1

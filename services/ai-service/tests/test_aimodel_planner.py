@@ -124,6 +124,13 @@ class _Backend:
         ),
         (
             "product_api",
+            "review_summary",
+            AiModelPageContext(page_type="product", current_item_id="sku-1"),
+            "product_detail",
+            ["snapshot", "review_fetch", "compose"],
+        ),
+        (
+            "product_api",
             "catalog_search",
             None,
             "product_search",
@@ -265,6 +272,26 @@ def test_knowledge_template_has_dedicated_rag_timeout_budget() -> None:
     assert rag_step.step_type.value == "rag_lookup"
     assert rag_step.timeout_ms == 10_000
     assert compose_step.timeout_ms == 2_000
+
+
+def test_product_io_steps_have_realistic_timeout_headroom() -> None:
+    result = _planner().plan(
+        intent_route=_route("rag", "comparison"),
+        shopping_goal=_goal(),
+        clarification=_proceed(),
+    )
+
+    io_steps = {
+        step.step_type.value: step.timeout_ms
+        for step in result.plan.steps
+        if step.step_type.value in {"product_search", "snapshot", "review_fetch"}
+    }
+    assert result.plan.budget.step_timeout_ms == 10_000
+    assert io_steps == {
+        "product_search": 10_000,
+        "snapshot": 10_000,
+        "review_fetch": 10_000,
+    }
 
 
 def test_partial_knowledge_budget_keeps_dedicated_rag_timeout() -> None:
