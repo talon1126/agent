@@ -123,7 +123,16 @@ def main() -> int:
             taskbook,
             list(milestone.get("required_tasks", [])),
         )
+        command_specs.extend(
+            {
+                "task_id": milestone_id,
+                "kind": "milestone_verification",
+                "command": command,
+            }
+            for command in milestone.get("verification_commands", [])
+        )
         command_results: list[dict[str, Any]] = []
+        generated_report: dict[str, Any] | None = None
         with tempfile.TemporaryDirectory(
             prefix=f"agent-phase-{milestone_id.lower()}-"
         ) as raw:
@@ -138,20 +147,31 @@ def main() -> int:
                 )
                 result.update({"task_id": spec["task_id"], "kind": spec["kind"]})
                 command_results.append(result)
+            generated_path = milestone.get("generated_quality_report")
+            if generated_path:
+                report_path = (snapshot / generated_path).resolve()
+                if not report_path.is_relative_to(snapshot):
+                    raise PipelineError("generated quality report must stay in snapshot")
+                if not report_path.is_file():
+                    raise PipelineError("milestone did not generate its quality report")
+                generated_report = load_structured(report_path)
 
         quality_results = []
         evidence_paths: list[Path] = list(command_directory.glob("*.log"))
         report_copy: Path | None = None
         metric_ids = milestone.get("metric_ids", [])
         if metric_ids:
-            if not args.quality_report:
+            if generated_report is not None:
+                report = generated_report
+            elif not args.quality_report:
                 raise PipelineError(
                     f"milestone {milestone_id} requires --quality-report"
                 )
-            report_path = (root / args.quality_report).resolve()
-            if not report_path.is_relative_to(root):
-                raise PipelineError("quality report must be inside the repository")
-            report = load_structured(report_path)
+            else:
+                report_path = (root / args.quality_report).resolve()
+                if not report_path.is_relative_to(root):
+                    raise PipelineError("quality report must be inside the repository")
+                report = load_structured(report_path)
             quality_results = evaluate_quality_profile(
                 quality_config, milestone_id, report
             )
@@ -160,11 +180,7 @@ def main() -> int:
             ):
                 raise PipelineError(f"quality checks failed for {milestone_id}")
 
-        if metric_ids and args.quality_report:
-            report_path = (root / args.quality_report).resolve()
-            if not report_path.is_relative_to(root):
-                raise PipelineError("quality report must be inside the repository")
-            report = load_structured(report_path)
+        if metric_ids:
             report_copy = run_directory / "quality-report.json"
             write_json(report_copy, report)
             evidence_paths.append(report_copy)

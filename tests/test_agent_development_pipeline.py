@@ -66,9 +66,18 @@ def test_task_registry_matches_all_taskbook_sections_and_commands() -> None:
     assert set(taskbook) == set(task_config["tasks"])
     assert all(section.verification_commands for section in taskbook.values())
     assert set(task_config["phases"]) == set("ABCDEFGHI")
-    assert {"M3", "M4", "M5", "M6-A", "I-DATA-READY", "M6-B"}.issubset(
+    assert {"M1", "M3", "M4", "M5", "M6-A", "I-DATA-READY", "M6-B"}.issubset(
         quality_config["milestones"]
     )
+
+
+def test_m1_gate_replays_in_a_clean_snapshot() -> None:
+    _, quality_config, _ = load_pipeline(ROOT)
+    milestone = quality_config["milestones"]["M1"]
+
+    assert milestone["required_tasks"] == ["D1", "D2", "D3", "D4", "D5"]
+    assert any("run_m1_replay.py" in command for command in milestone["verification_commands"])
+    assert milestone["generated_quality_report"].endswith("quality-report.json")
 
 
 def test_taskbook_lock_matches_current_contracts() -> None:
@@ -88,7 +97,7 @@ def test_completion_markers_do_not_change_taskbook_semantics() -> None:
     assert canonical_taskbook_text(plain) == canonical_taskbook_text(marked)
     _, _, taskbook = load_pipeline(ROOT)
     assert taskbook["C2"].completed
-    assert not taskbook["C3"].completed
+    assert taskbook["C3"].completed
 
 
 def test_single_commit_metadata_is_not_an_implementation_change() -> None:
