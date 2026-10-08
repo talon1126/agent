@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "version": "m1-shopping-replay-v2",
+  "sources": {
+    "fixtures/data/items.json": "986ccf72d7943212e6eeb8c45b252817f62607f1558a9afac6dfa4cf769f38a3",
+    "fixtures/data/inventory_location_balances.json": "2f963f6055bb4b440a7c0e3ef4e0fadf98814dfe5d24ba384c1233c1bcb037e9"
+  },
+  "cases": [
+    {
+      "id": "recommend_verified_kettle",
+      "category": "recommendation",
+      "turns": [{
+        "message": "推荐这款电水壶，预算不超过 40 元。",
+        "page_context": {"page_type": "product", "current_item_id": "item_xiaomi_electric_kettle_2"},
+        "response_type": "recommendation",
+        "item_ids": ["item_xiaomi_electric_kettle_2"],
+        "answer_contains": ["Xiaomi Electric Kettle 2", "34.99 CNY", "规格"],
+        "required_tools": ["product_snapshot"],
+        "forbidden_tools": ["product_reviews", "rag_lookup"]
+      }]
+    },
+    {
+      "id": "compare_without_page",
+      "category": "comparison",
+      "search_results_by_query": {
+        "牛奶": ["item_milk_pure"],
+        "": ["item_milk_pure", "item_yogurt_plain"]
+      },
+      "turns": [{
+        "message": "纯牛奶和原味酸奶的规格、价格有什么差别？",
+        "page_context": {"page_type": "none"},
+        "response_type": "comparison",
+        "item_ids": ["item_milk_pure", "item_yogurt_plain"],
+        "answer_contains": ["18.4 CNY", "22.8 CNY", "纯牛奶更低"],
+        "required_tools": ["product_search", "product_snapshot"],
+        "forbidden_tools": ["product_reviews", "rag_lookup"]
+      }]
+    },
+    {
+      "id": "recommend_without_page",
+      "category": "recommendation",
+      "turns": [{
+        "message": "推荐小米电水壶，预算不超过 40 元。",
+        "page_context": {"page_type": "none"},
+        "response_type": "recommendation",
+        "item_ids": ["item_xiaomi_electric_kettle_2"],
+        "answer_contains": ["Xiaomi Electric Kettle 2", "34.99 CNY", "规格"],
+        "required_tools": ["product_search", "product_snapshot"],
+        "forbidden_tools": ["product_reviews", "rag_lookup"]
+      }]
+    },
+    {
+      "id": "list_verified_pen",
+      "category": "catalog",
+      "search_item_ids": ["item_office_pen"],
+      "turns": [{
+        "message": "找中性笔，预算不超过 30 元。",
+        "page_context": {"page_type": "search", "candidate_refs": [{"item_id": "item_office_pen"}]},
+        "response_type": "product_list",
+        "item_ids": ["item_office_pen"],
+        "answer_contains": ["中性笔", "12.9 CNY"],
+        "required_tools": ["product_search", "product_snapshot"],
+        "forbidden_tools": ["product_reviews", "rag_lookup"]
+      }]
+    },
+    {
+      "id": "quantity_total_budget",
+      "category": "hard_constraint",
+      "turns": [{
+        "message": "买 2 盒中性笔，总价不超过 20 元。",
+        "page_context": {"page_type": "product", "current_item_id": "item_office_pen"},
+        "response_type": "clarification",
+        "item_ids": [],
+        "answer_contains": ["超出预算"],
+        "required_tools": ["product_snapshot"],
+        "forbidden_tools": ["product_reviews", "rag_lookup"]
+      }]
+    },
+    {
+      "id": "reject_usd_budget",
+      "category": "hard_constraint",
+      "snapshot_currency": "USD",
+      "turns": [{
+        "message": "推荐这款电水壶，预算不超过 40 元。",
+        "page_context": {"page_type": "product", "current_item_id": "item_xiaomi_electric_kettle_2"},
+        "response_type": "fallback",
+        "reason_code": "currency_mismatch",
+        "item_ids": [],
+        "answer_contains": ["币种"],
+        "required_tools": ["product_snapshot"],
+        "forbidden_tools": ["product_reviews", "rag_lookup"]
+      }]
+    },
+    {
+      "id": "unknown_stock_recommendation",
+      "category": "uncertainty",
+      "turns": [{
+        "message": "推荐这辆婴儿车，预算最多 89。",
+        "page_context": {"page_type": "product", "current_item_id": "item_baby_stroller"},
+        "response_type": "fallback",
+        "reason_code": "required_fact_unavailable",
+        "item_ids": [],
+        "answer_contains": ["库存", "重试"],
+        "required_tools": ["product_snapshot"],
+        "forbidden_tools": ["product_reviews", "rag_lookup"]
+      }]
+    },
+    {
+      "id": "retry_without_page",
+      "category": "multi_turn",
+      "search_item_ids": ["item_wireless_earbuds"],
+      "turns": [
+        {
+          "message": "找无线耳机，预算不超过 60 元。",
+          "page_context": {"page_type": "product", "current_item_id": "item_wireless_earbuds"},
+          "response_type": "fallback",
+          "reason_code": "required_fact_unavailable",
+          "item_ids": [],
+          "answer_contains": ["库存", "重试"],
+          "required_tools": ["product_snapshot"],
+          "forbidden_tools": ["product_reviews", "rag_lookup"]
+        },
+        {
+          "message": "重试，列出商品。",
+          "page_context": {"page_type": "none"},
+          "response_type": "fallback",
+          "reason_code": "required_fact_unavailable",
+          "item_ids": [],
+          "answer_contains": ["库存", "预算上限"],
+          "required_tools": ["product_search", "product_snapshot"],
+          "forbidden_tools": ["product_reviews", "rag_lookup"]
+        }
+      ]
+    },
+    {
+      "id": "review_nonempty_sample",
+      "category": "reviews",
+      "reviews": {
+        "item_baby_stroller": [
+          {"id": 1, "item_id": "item_baby_stroller", "rating": 5, "title": "便携性反馈", "content": "折叠方便，外出携带很轻便", "created_at": "2026-09-24T00:00:00+00:00", "updated_at": "2026-09-24T00:00:00+00:00"},
+          {"id": 2, "item_id": "item_baby_stroller", "rating": 5, "title": "便携性反馈", "content": "收车快捷，便携性很好", "created_at": "2026-09-24T00:00:00+00:00", "updated_at": "2026-09-24T00:00:00+00:00"},
+          {"id": 3, "item_id": "item_baby_stroller", "rating": 2, "title": "便携性反馈", "content": "折叠后仍然太重，不够便携", "created_at": "2026-09-24T00:00:00+00:00", "updated_at": "2026-09-24T00:00:00+00:00"},
+          {"id": 4, "item_id": "item_baby_stroller", "rating": 2, "title": "便携性反馈", "content": "上下楼携带费力，便携性较差", "created_at": "2026-09-24T00:00:00+00:00", "updated_at": "2026-09-24T00:00:00+00:00"}
+        ]
+      },
+      "turns": [{
+        "message": "总结这辆婴儿车评论中的便携性反馈。",
+        "page_context": {"page_type": "product", "current_item_id": "item_baby_stroller"},
+        "response_type": "answer",
+        "item_ids": [],
+        "answer_contains": ["4 条评论", "明显分歧"],
+        "required_tools": ["product_snapshot", "product_reviews"],
+        "forbidden_tools": ["rag_lookup"]
+      }]
+    },
+    {
+      "id": "recommendation_reason_followup",
+      "category": "multi_turn",
+      "turns": [
+        {
+          "message": "推荐这款电水壶，预算不超过 40 元。",
+          "page_context": {"page_type": "product", "current_item_id": "item_xiaomi_electric_kettle_2"},
+          "response_type": "recommendation",
+          "item_ids": ["item_xiaomi_electric_kettle_2"],
+          "answer_contains": ["34.99 CNY", "规格"],
+          "required_tools": ["product_snapshot"],
+          "forbidden_tools": ["product_reviews", "rag_lookup"]
+        },
+        {
+          "message": "为什么推荐它？",
+          "page_context": {"page_type": "product", "current_item_id": "item_xiaomi_electric_kettle_2"},
+          "response_type": "recommendation",
+          "item_ids": ["item_xiaomi_electric_kettle_2"],
+          "answer_contains": ["Xiaomi Electric Kettle 2", "34.99 CNY", "规格"],
+          "required_tools": ["product_snapshot"],
+          "forbidden_tools": ["product_reviews", "rag_lookup"]
+        }
+      ]
+    },
+    {
+      "id": "snapshot_service_failure",
+      "category": "tool_fault",
+      "failure_paths": ["/products/snapshots"],
+      "turns": [{
+        "message": "推荐这款电水壶，预算不超过 40 元。",
+        "page_context": {"page_type": "product", "current_item_id": "item_xiaomi_electric_kettle_2"},
+        "response_type": "fallback",
+        "item_ids": [],
+        "answer_contains": ["重试"],
+        "required_tools": ["product_snapshot"],
+        "forbidden_tools": ["product_reviews", "rag_lookup"]
+      }]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "files": {
+    "tests/acceptance/a2/test_a2_golden_set_contract.py": "9b0bc050b56294fab7fadeb22bbe6331d15175127decd49314b4faae3c56171f"
+  },
+  "generated_at": "2026-09-20T11:13:33Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "A2",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

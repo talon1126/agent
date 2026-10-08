@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-21T12:00:00Z",
+  "source_version": "mock-api-product-snapshot-v1:20260921T120000Z",
+  "freshness_rules": {
+    "catalog_seconds": 86400,
+    "price_seconds": 300,
+    "stock_seconds": 60,
+    "rating_seconds": 3600,
+    "delivery_seconds": 300
+  },
+  "request_item_ids": ["sku-b", "missing", "sku-a", "sku-a"],
+  "api_response": {
+    "ok": true,
+    "source_version": "mock-api-product-snapshot-v1:20260921T120000Z",
+    "captured_at": "2026-09-21T12:00:00Z",
+    "items": [
+      {
+        "item_id": "sku-a",
+        "status": "ok",
+        "facts": {
+          "name": "Alpha Phone",
+          "category": "electronics",
+          "brand": "Alpha",
+          "current_price": "4999.00",
+          "currency": "CNY",
+          "stock": 8,
+          "specifications": {"memory": "12GB", "storage": "256GB"},
+          "rating": "4.8",
+          "review_count": 128,
+          "delivery": {
+            "shipping_available": true,
+            "pickup_available": true,
+            "delivery_available": true
+          },
+          "observed_at": {
+            "catalog": "2026-09-21T11:59:00Z",
+            "price": "2026-09-21T11:59:00Z",
+            "stock": "2026-09-21T11:59:30Z",
+            "rating": "2026-09-21T11:30:00Z",
+            "delivery": "2026-09-21T11:59:00Z"
+          }
+        }
+      },
+      {
+        "item_id": "missing",
+        "status": "error",
+        "error": {"code": "item_not_found", "message": "Item not found."}
+      },
+      {
+        "item_id": "sku-b",
+        "status": "ok",
+        "facts": {
+          "name": "Beta Phone",
+          "category": "electronics",
+          "brand": "Beta",
+          "current_price": "3999.00",
+          "currency": "CNY",
+          "stock": 0,
+          "specifications": {"memory": "8GB", "storage": "128GB"},
+          "rating": null,
+          "review_count": null,
+          "delivery": {
+            "shipping_available": true,
+            "pickup_available": false,
+            "delivery_available": true
+          },
+          "observed_at": {
+            "catalog": "2026-09-21T11:50:00Z",
+            "price": "2026-09-21T11:50:00Z",
+            "stock": "2026-09-21T11:59:30Z",
+            "rating": null,
+            "delivery": "2026-09-21T11:50:00Z"
+          }
+        }
+      }
+    ]
+  }
+}

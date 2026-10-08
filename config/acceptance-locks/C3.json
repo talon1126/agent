@@ -1,0 +1,13 @@
+{
+  "baseline_commit": "fb5ad4ecc58ad2718bc42f532ca199cab4ded7a1",
+  "commit_mode": "single",
+  "files": {
+    "tests/acceptance/c3/feature_normalization_cases.json": "bd2d60481275de4b72c717af256b02d29a9c9e73587318a2091b934771857382",
+    "tests/acceptance/c3/test_c3_feature_normalizer_contract.py": "729af93767735d2198ff4f890269c5541ace5282109a3523fa5791a44f6089a9"
+  },
+  "generated_at": "2026-09-21T05:16:31Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "C3",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

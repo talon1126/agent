@@ -70,11 +70,15 @@ class RerankOutcome:
             to unavailable, failed, or invalid reranking.
         fallback_reason: Stable reason code such as ``reranker_unavailable``.
             ``None`` means reranking succeeded or the input was empty.
+        rerank_applied: Whether a provider actually produced scores in the
+            reranker score space. Skip-gate and fallback results keep RRF
+            scores and therefore must not enter Self-RAG score thresholds.
     """
 
     results: list[RetrievalResult]
     fallback_used: bool
     fallback_reason: str | None
+    rerank_applied: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +281,7 @@ class RerankController:
                 results=[],
                 fallback_used=False,
                 fallback_reason=None,
+                rerank_applied=False,
             )
 
         skip_decision = self._skip_gate.evaluate(fallback_candidates)
@@ -301,6 +306,7 @@ class RerankController:
                 results=results,
                 fallback_used=False,
                 fallback_reason=None,
+                rerank_applied=False,
             )
 
         if self._reranker is None:
@@ -366,6 +372,7 @@ class RerankController:
             results=results,
             fallback_used=False,
             fallback_reason=None,
+            rerank_applied=True,
         )
 
     @staticmethod
@@ -488,6 +495,7 @@ class RerankController:
             results=results,
             fallback_used=True,
             fallback_reason=fallback_reason,
+            rerank_applied=False,
         )
 
     @staticmethod
@@ -560,6 +568,6 @@ def _is_dual_route_hit(candidate: RetrievalResult) -> bool:
     if not isinstance(fusion, dict):
         return False
     sources = fusion.get("sources")
-    if isinstance(sources, (list, tuple, set, frozenset)):
+    if isinstance(sources, list | tuple | set | frozenset):
         return "dense" in sources and "sparse" in sources
     return fusion.get("dense_rank") is not None and fusion.get("sparse_rank") is not None

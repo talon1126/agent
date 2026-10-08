@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "name": "talonmart-goal-extraction-cases",
+    "version": "1.0.0",
+    "source_fixture": "fixtures/evals/shopping_agent_scenarios.json",
+    "reference_time": "2026-09-20T10:00:00+08:00"
+  },
+  "cases": [
+    {
+      "case_id": "extract_earbuds_budget_max",
+      "source_scenario_id": "shop_hard_earbuds_budget_60",
+      "source_turn": 1,
+      "text": "无线耳机预算不超过 60。",
+      "page_context": {"page_type": "search", "search_query": "无线耳机"},
+      "expected": [
+        {"action": "add", "kind": "hard", "field": "category", "value": "electronics"},
+        {"action": "add", "kind": "hard", "field": "budget_max", "value": "60"}
+      ]
+    },
+    {
+      "case_id": "extract_budget_correction",
+      "source_scenario_id": "shop_vague_stroller_budget_followup",
+      "source_turn": 3,
+      "text": "预算改成 100 以内。",
+      "page_context": {"page_type": "search", "search_query": "婴儿车"},
+      "expected": [
+        {"action": "replace", "kind": "hard", "field": "budget_max", "value": "100"}
+      ]
+    },
+    {
+      "case_id": "extract_brand_include",
+      "source_scenario_id": "shop_hard_xiaomi_air_fryer",
+      "source_turn": 1,
+      "text": "只看小米空气炸锅。",
+      "page_context": {"page_type": "search", "search_query": "空气炸锅"},
+      "expected": [
+        {"action": "add", "kind": "hard", "field": "category", "value": "electronics"},
+        {"action": "add", "kind": "hard", "field": "brand", "value": "Xiaomi"}
+      ]
+    },
+    {
+      "case_id": "extract_brand_exclusion",
+      "source_scenario_id": "shop_hard_exclude_xiaomi",
+      "source_turn": 1,
+      "text": "电子产品不要小米品牌。",
+      "page_context": {"page_type": "search", "search_query": "电子产品"},
+      "expected": [
+        {"action": "add", "kind": "hard", "field": "category", "value": "electronics"},
+        {"action": "add", "kind": "exclude", "field": "brand", "value": "Xiaomi"}
+      ]
+    },
+    {
+      "case_id": "extract_capacity_spec",
+      "source_scenario_id": "shop_hard_air_fryer_capacity",
+      "source_turn": 1,
+      "text": "空气炸锅容量必须至少 6.5L。",
+      "page_context": {"page_type": "product", "current_item_id": "item_xiaomi_air_fryer_6_5l"},
+      "expected": [
+        {"action": "add", "kind": "hard", "field": "category", "value": "electronics"},
+        {"action": "add", "kind": "hard", "field": "specification", "attribute": "capacity", "value": "至少 6.5L"}
+      ]
+    },
+    {
+      "case_id": "extract_delivery_deadline",
+      "source_scenario_id": "shop_hard_delivery_tomorrow",
+      "source_turn": 3,
+      "text": "是，不能晚于明天 18 点。",
+      "page_context": {"page_type": "product", "current_item_id": "item_smart_tv_43"},
+      "expected": [
+        {"action": "confirm", "kind": "hard", "field": "delivery_deadline", "value": "2026-09-21T18:00:00+08:00"}
+      ]
+    },
+    {
+      "case_id": "extract_quantity_and_budget",
+      "source_scenario_id": "shop_hard_pen_quantity_budget",
+      "source_turn": 3,
+      "text": "两盒，总价不能超过 30。",
+      "page_context": {"page_type": "cart"},
+      "expected": [
+        {"action": "add", "kind": "hard", "field": "quantity", "value": 2},
+        {"action": "add", "kind": "hard", "field": "budget_max", "value": "30"}
+      ]
+    },
+    {
+      "case_id": "extract_withdraw_brand_and_area",
+      "source_scenario_id": "shop_hard_withdraw_brand_preference",
+      "source_turn": 3,
+      "text": "撤销品牌偏好，只要适合 40 平方米即可。",
+      "page_context": {"page_type": "search", "search_query": "空气净化器"},
+      "expected": [
+        {"action": "remove", "field": "brand", "target_kinds": ["hard", "soft", "exclude"]},
+        {"action": "add", "kind": "hard", "field": "specification", "attribute": "room_area", "value": "至少 40 平方米"}
+      ]
+    },
+    {
+      "case_id": "extract_budget_replace",
+      "source_scenario_id": "shop_compare_stroller_budget_change",
+      "source_turn": 3,
+      "text": "预算改成 90，其他条件不变。",
+      "page_context": {"page_type": "search"},
+      "expected": [
+        {"action": "replace", "kind": "hard", "field": "budget_max", "value": "90"}
+      ]
+    },
+    {
+      "case_id": "extract_add_exclusion",
+      "source_scenario_id": "shop_none_add_xiaomi_exclusion",
+      "source_turn": 3,
+      "text": "再加一条：排除小米，其他条件不变。",
+      "page_context": {"page_type": "search"},
+      "expected": [
+        {"action": "add", "kind": "exclude", "field": "brand", "value": "Xiaomi"}
+      ]
+    },
+    {
+      "case_id": "extract_delivery_within_hour",
+      "source_scenario_id": "shop_none_delivery_one_hour",
+      "source_turn": 1,
+      "text": "这辆婴儿车必须一小时内送到。",
+      "page_context": {"page_type": "product", "current_item_id": "item_baby_stroller"},
+      "expected": [
+        {"action": "add", "kind": "hard", "field": "category", "value": "baby_kids"},
+        {"action": "add", "kind": "hard", "field": "delivery_deadline", "value": "2026-09-20T11:00:00+08:00"}
+      ]
+    },
+    {
+      "case_id": "extract_confirm_budget",
+      "source_scenario_id": "shop_failure_retry_keeps_constraints",
+      "source_turn": 3,
+      "text": "重试一次，预算上限仍然是 50。",
+      "page_context": {"page_type": "search"},
+      "expected": [
+        {"action": "confirm", "kind": "hard", "field": "budget_max", "value": "50"}
+      ]
+    }
+  ]
+}

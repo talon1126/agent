@@ -1,0 +1,123 @@
+{
+  "acceptance_lock_sha256": "fd202f58318017203513bdedb5039eda8b1e03348f2f36877f5cad0da6b48136",
+  "baseline_commit": "3ba1783f3204b13410604006927bd407076f4f83",
+  "change_commits": [],
+  "changed_files": [
+    "docs/shopping_goal_schema.md",
+    "services/ai-service/app/routers/AImodel/shopping_goal.py",
+    "services/ai-service/tests/test_shopping_goal.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "ee7f082477aa9f546b3d96c5bea7c7979062dbd1dd25c4dcd60a1a490dd384b9"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "672de0f931f6764280151094739a7dca0e04de1596395aa50013e08c3a9479d3"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "41c9fc51f54df417e86761a59122e8c6d88a1f503fd5ea63b79250e1cbec279e"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "3 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check 3ba1783f3204b13410604006927bd407076f4f83..511b7563179ea2449e9b01d0a85668f3e9461a28",
+            "duration_seconds": 0.063,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/shopping_goal.py services/ai-service/tests/test_shopping_goal.py",
+            "duration_seconds": 1.859,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/shopping_goal.py services/ai-service/tests/test_shopping_goal.py",
+            "duration_seconds": 0.5,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/b1/test_b1_shopping_goal_contract.py -q",
+            "duration_seconds": 1.297,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_shopping_goal.py -q",
+            "duration_seconds": 1.281,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-20T13:47:26Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "511b7563179ea2449e9b01d0a85668f3e9461a28",
+  "task_id": "B1",
+  "task_title": "定义购物目标模型"
+}

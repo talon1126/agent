@@ -1,0 +1,12 @@
+{
+  "baseline_commit": "6a65d9efd81ab3ddf4f52df40473fe2879a0d3d1",
+  "commit_mode": "single",
+  "files": {
+    "tests/acceptance/d3/test_d3_tool_policy_contract.py": "48617aefdacae3abde91a0df1e075a9ac66ffb7b408469a4a050192e175396b4"
+  },
+  "generated_at": "2026-09-21T10:22:17Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "D3",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

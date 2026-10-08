@@ -1,0 +1,50 @@
+{
+  "acceptance_files": [
+    "tests/acceptance/c3/feature_normalization_cases.json",
+    "tests/acceptance/c3/test_c3_feature_normalizer_contract.py"
+  ],
+  "acceptance_lock_sha256": "d574800b0f82a5635e4b9f893ee6fde2f718545a2c8b78ab6cc97aa14b5143ed",
+  "baseline_commit": "fb5ad4ecc58ad2718bc42f532ca199cab4ded7a1",
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/feature_normalizer.py",
+    "services/ai-service/app/routers/AImodel/feature_profiles.yaml",
+    "services/ai-service/tests/test_feature_normalizer.py",
+    "tests/acceptance/c3/feature_normalization_cases.json",
+    "tests/acceptance/c3/test_c3_feature_normalizer_contract.py"
+  ],
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_feature_normalizer.py -q",
+      "duration_seconds": 2.891,
+      "exit_code": 0,
+      "log": "01.log"
+    }
+  ],
+  "commit": "a3b91889f1a638ac148974ee1bedb6b606608681",
+  "evidence_files": [
+    {
+      "path": "commands/01.log",
+      "sha256": "1794ac2b58d29a76815200b75f018a09f57fd8fd362e141d84748be6e8b58612"
+    }
+  ],
+  "implementation_fingerprint": "837bc951b0b0c9eb25bae8265ca0e0112e13a89c02142993f6ba534542e21011",
+  "phase": "C",
+  "quality_gates_sha256": "161d4392600e37822b8aa77ffc74acb05de91c2413537f626450734c929087ca",
+  "quality_profile": null,
+  "quality_results": [],
+  "recorded_at": "2026-09-21T05:49:50Z",
+  "run_id": "20260921T054943Z-a3b91889f1-238d48",
+  "runner": {
+    "ci": false,
+    "independent": true,
+    "verifier_id": "c3-independent-reviewer"
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "C3",
+  "task_title": "建立品类特征归一化",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "verification_workspace": "git_archive",
+  "working_tree_dirty": true
+}

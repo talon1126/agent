@@ -1,0 +1,10 @@
+{
+  "files": {
+    "tests/acceptance/a5/test_a5_trace_observability_contract.py": "0bc65ba80e5228bf6903a0efa17a9f7cc7f4c1a2f9ad0e08617d61508842ac0c"
+  },
+  "generated_at": "2026-09-20T12:34:02Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "A5",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

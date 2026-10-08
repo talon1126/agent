@@ -1,0 +1,12 @@
+{
+  "baseline_commit": "4c3019bb7244546eb76d8df1ca0085bf7140851d",
+  "commit_mode": "single",
+  "files": {
+    "tests/acceptance/c5/test_c5_product_comparison_contract.py": "83439deffa866195409af6b037665a212fd625cfe8e0e81ea7563db8ce77f2fe"
+  },
+  "generated_at": "2026-09-21T08:00:59Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "C5",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

@@ -256,7 +256,7 @@ def discover_jd_product_urls(
     max_items: int,
     keyword: str | None = None,
     seed_url: str | None = None,
-    browser_channel: str = "msedge",
+    browser_channel: str = "chrome",
     browser_executable: str | Path | None = None,
     storage_state: str | Path | None = None,
     headless: bool = True,

@@ -1,0 +1,8 @@
+services:
+  backend:
+    environment:
+      KAYN_SDK_CONNECTOR_EXECUTION_TIMEOUT: PT5M
+      KAYN_SDK_CONNECTOR_HEARTBEAT_TIMEOUT: PT10M
+      KAYN_SDK_CONNECTOR_MAX_MESSAGE_BYTES: "16777216"
+      SPRING_APPLICATION_JSON: >-
+        {"server":{"servlet":{"context-parameters":{"org.apache.tomcat.websocket.textBufferSize":"16777216"}}}}

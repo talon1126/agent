@@ -1,0 +1,125 @@
+{
+  "acceptance_lock_sha256": "832ebc9ff2744d6f8cb51d334d9110b29e11a743d49d480952c4b3267857de47",
+  "baseline_commit": "738aea102e304f69c27db5144fc333a7289c541f",
+  "change_commits": [],
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/tool_executor.py",
+    "services/ai-service/app/routers/AImodel/tool_executor_policy.yaml",
+    "services/ai-service/tests/test_parallel_tool_executor.py",
+    "tests/acceptance/d4/test_d4_parallel_executor_contract.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "fb8bec9fc58f3d954b791ced932a7ded6b6f9cc0a34884363a5d688f90a75235"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "13b696493ef63b21c93fc88753619f7343c4417553630f34d75ff6bfd070c127"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "eee76f865de5a9f2456950f710ae5d5f9b5bd0ea02aa54f614c5eed6642a0bfd"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "518bd52a91ce0cfefa2f4173d13d6ca5291a3fc127bc123738c003349382f4bd"
+    }
+  ],
+  "implementation_fingerprint": "2f56e90ff262ca2c5e65ae5342859c87c7344ff5474e4e846aa373cf8ffe858a",
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "4 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check 738aea102e304f69c27db5144fc333a7289c541f..5e878fce105e18acc63900e4cae3cb29ca4c1e10",
+            "duration_seconds": 0.063,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/tool_executor.py services/ai-service/tests/test_parallel_tool_executor.py tests/acceptance/d4/test_d4_parallel_executor_contract.py",
+            "duration_seconds": 2.265,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/tool_executor.py services/ai-service/tests/test_parallel_tool_executor.py tests/acceptance/d4/test_d4_parallel_executor_contract.py",
+            "duration_seconds": 0.547,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/d4/test_d4_parallel_executor_contract.py -q",
+            "duration_seconds": 1.5,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_parallel_tool_executor.py services/ai-service/tests/test_aimodel_rag_tool.py -q",
+            "duration_seconds": 1.563,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-22T02:48:52Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "5e878fce105e18acc63900e4cae3cb29ca4c1e10",
+  "task_id": "D4",
+  "task_title": "实现有界并行执行"
+}

@@ -1,0 +1,51 @@
+{
+  "acceptance_files": [
+    "tests/acceptance/d3/test_d3_tool_policy_contract.py"
+  ],
+  "acceptance_lock_sha256": "2c25449c0cd003e6b55f885247017c0ebdc227f44887e39a7952a32adea41cd5",
+  "baseline_commit": "6a65d9efd81ab3ddf4f52df40473fe2879a0d3d1",
+  "changed_files": [
+    "docs/agent_tool_permission_matrix.md",
+    "services/ai-service/app/routers/AImodel/agent_trace.py",
+    "services/ai-service/app/routers/AImodel/tool_policy.py",
+    "services/ai-service/app/routers/AImodel/tools.py",
+    "services/ai-service/tests/test_aimodel_agent.py",
+    "services/ai-service/tests/test_tool_policy_gate.py",
+    "tests/acceptance/d3/test_d3_tool_policy_contract.py"
+  ],
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_tool_policy_gate.py services/ai-service/tests/test_aimodel_agent.py -q",
+      "duration_seconds": 3.438,
+      "exit_code": 0,
+      "log": "01.log"
+    }
+  ],
+  "commit": "0a8b68374ca1e49a05792a86e578318b7a90c30a",
+  "evidence_files": [
+    {
+      "path": "commands/01.log",
+      "sha256": "22257690ff57658e30f96db2f2873df2e154bebda44c92113c144f1921e5efe8"
+    }
+  ],
+  "implementation_fingerprint": "35e777af74ac19f8c3c60231e47b6d214a943d1c72dea4c0956ef0991ac9e317",
+  "phase": "D",
+  "quality_gates_sha256": "161d4392600e37822b8aa77ffc74acb05de91c2413537f626450734c929087ca",
+  "quality_profile": null,
+  "quality_results": [],
+  "recorded_at": "2026-09-21T10:25:47Z",
+  "run_id": "20260921T102538Z-0a8b68374c-7d9fbc",
+  "runner": {
+    "ci": false,
+    "independent": true,
+    "verifier_id": "d3-independent-reviewer-release"
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "D3",
+  "task_title": "实现步骤级工具授权",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "verification_workspace": "git_archive",
+  "working_tree_dirty": true
+}

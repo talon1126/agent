@@ -1,0 +1,48 @@
+{
+  "acceptance_files": [
+    "tests/acceptance/d5/test_d5_grounding_verifier_contract.py"
+  ],
+  "acceptance_lock_sha256": "8c0ad93fb063b4012b50b40afc94a7a885e27f90072635624e603474e2be3663",
+  "baseline_commit": "d86dfa7032c9bb2d6048a18ad8accf56e6584575",
+  "changed_files": [
+    "docs/agent_grounding_rules.md",
+    "services/ai-service/app/routers/AImodel/verifier.py",
+    "services/ai-service/tests/test_agent_verifier.py",
+    "tests/acceptance/d5/test_d5_grounding_verifier_contract.py"
+  ],
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_agent_verifier.py services/ai-service/tests/test_candidate_filter.py services/ai-service/tests/test_product_comparison.py -q",
+      "duration_seconds": 4.219,
+      "exit_code": 0,
+      "log": "01.log"
+    }
+  ],
+  "commit": "7c44dcdad52f94f29e4caf9f945b15648ee04673",
+  "evidence_files": [
+    {
+      "path": "commands/01.log",
+      "sha256": "4d2e8dad975eed1e78a88175fc87b213bba8b82aaa3aa67d4fd828a8f8962f0f"
+    }
+  ],
+  "implementation_fingerprint": "9f54d142e83a479a548bd483fbf898c57e1dc6470851ff857cde906374196a11",
+  "phase": "D",
+  "quality_gates_sha256": "161d4392600e37822b8aa77ffc74acb05de91c2413537f626450734c929087ca",
+  "quality_profile": null,
+  "quality_results": [],
+  "recorded_at": "2026-09-22T03:35:04Z",
+  "run_id": "20260922T033450Z-7c44dcdad5-bb1941",
+  "runner": {
+    "ci": false,
+    "independent": true,
+    "verifier_id": "d5-independent-reviewer"
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "D5",
+  "task_title": "实现事实校验与恢复策略",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "verification_workspace": "git_archive",
+  "working_tree_dirty": true
+}

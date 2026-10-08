@@ -1,0 +1,204 @@
+schema_version: v1
+
+unit_families:
+  digital_storage:
+    canonical_unit: GB
+    precision: 6
+    conversions:
+      GB: "1"
+      MB: "0.0009765625"
+      TB: "1024"
+  screen_length:
+    canonical_unit: in
+    precision: 4
+    conversions:
+      in: "1"
+      inch: "1"
+      inches: "1"
+      cm: "0.3937007874015748"
+  volume:
+    canonical_unit: ml
+    precision: 6
+    conversions:
+      ml: "1"
+      L: "1000"
+      litre: "1000"
+      liter: "1000"
+  duration_days:
+    canonical_unit: day
+    precision: 6
+    conversions:
+      day: "1"
+      days: "1"
+      天: "1"
+  item_count:
+    canonical_unit: count
+    precision: 0
+    conversions:
+      count: "1"
+      sheet: "1"
+      sheets: "1"
+      张: "1"
+  paper_density:
+    canonical_unit: gsm
+    precision: 4
+    conversions:
+      gsm: "1"
+      g/m2: "1"
+
+profiles:
+  fallback:
+    category_aliases: []
+    ranking_weights: {}
+    features:
+      color:
+        display_name: 颜色
+        data_type: text
+        aliases: [colour, 颜色]
+        missing_policy: ignore_score
+        hard_filter: false
+        ranking: false
+        display: true
+      material:
+        display_name: 材质
+        data_type: text
+        aliases: [材质]
+        missing_policy: ignore_score
+        hard_filter: false
+        ranking: false
+        display: true
+      model:
+        display_name: 型号
+        data_type: text
+        aliases: [model_number, 型号]
+        missing_policy: ignore_score
+        hard_filter: false
+        ranking: false
+        display: true
+
+  electronics:
+    category_aliases: [phone, 手机, 数码]
+    ranking_weights: {}
+    features:
+      memory_gb:
+        display_name: 运行内存
+        data_type: number
+        aliases: [memory, RAM, 内存, 运行内存]
+        unit_family: digital_storage
+        minimum: "0"
+        maximum: "2048"
+        larger_is_better: true
+        missing_policy: lower_confidence
+        hard_filter: true
+        ranking: true
+        display: true
+      storage_gb:
+        display_name: 存储容量
+        data_type: number
+        aliases: [storage, capacity, 存储, 存储容量]
+        unit_family: digital_storage
+        minimum: "0"
+        maximum: "16384"
+        larger_is_better: true
+        missing_policy: lower_confidence
+        hard_filter: true
+        ranking: true
+        display: true
+      screen_size_in:
+        display_name: 屏幕尺寸
+        data_type: number
+        aliases: [screen, screen_size, display_size, 屏幕尺寸]
+        unit_family: screen_length
+        minimum: "0"
+        maximum: "200"
+        larger_is_better: null
+        missing_policy: lower_confidence
+        hard_filter: false
+        ranking: true
+        display: true
+      wireless_charging:
+        display_name: 无线充电
+        data_type: boolean
+        aliases: [wireless_charge, 无线充电]
+        missing_policy: not_comparable
+        hard_filter: true
+        ranking: true
+        display: true
+
+  dairy:
+    category_aliases: [milk, 乳制品, 牛奶]
+    ranking_weights: {}
+    features:
+      volume_ml:
+        display_name: 净含量
+        data_type: number
+        aliases: [volume, net_volume, 净含量]
+        unit_family: volume
+        minimum: "0"
+        maximum: "100000"
+        larger_is_better: true
+        missing_policy: lower_confidence
+        hard_filter: false
+        ranking: true
+        display: true
+      shelf_life_days:
+        display_name: 保质期
+        data_type: number
+        aliases: [shelf_life, 保质期]
+        unit_family: duration_days
+        minimum: "0"
+        maximum: "3650"
+        larger_is_better: true
+        missing_policy: lower_confidence
+        hard_filter: false
+        ranking: true
+        display: true
+      lactose_free:
+        display_name: 无乳糖
+        data_type: boolean
+        aliases: [无乳糖]
+        missing_policy: not_comparable
+        hard_filter: true
+        ranking: true
+        display: true
+
+  office_supply:
+    category_aliases: [paper, 办公用品, 纸品]
+    ranking_weights: {}
+    features:
+      sheet_count:
+        display_name: 张数
+        data_type: number
+        aliases: [sheets, 张数]
+        unit_family: item_count
+        minimum: "0"
+        maximum: "100000"
+        larger_is_better: true
+        missing_policy: lower_confidence
+        hard_filter: false
+        ranking: true
+        display: true
+      paper_weight_gsm:
+        display_name: 克重
+        data_type: number
+        aliases: [paper_weight, 克重]
+        unit_family: paper_density
+        minimum: "20"
+        maximum: "1000"
+        larger_is_better: null
+        missing_policy: lower_confidence
+        hard_filter: false
+        ranking: true
+        display: true
+      color:
+        display_name: 颜色
+        data_type: enum
+        aliases: [paper_color, 颜色]
+        enum_values: [white, natural]
+        enum_aliases:
+          白色: white
+          本白: natural
+        missing_policy: ignore_score
+        hard_filter: false
+        ranking: false
+        display: true

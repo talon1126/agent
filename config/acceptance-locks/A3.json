@@ -1,0 +1,10 @@
+{
+  "files": {
+    "tests/acceptance/a3/test_a3_request_context_contract.py": "78789213c6ffe509133334998f433fdc54a0ecb9768500f905a7b9691944502a"
+  },
+  "generated_at": "2026-09-20T11:58:11Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "A3",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

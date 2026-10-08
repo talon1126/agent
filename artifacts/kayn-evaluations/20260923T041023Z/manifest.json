@@ -1,0 +1,104 @@
+{
+  "created_at": "2026-09-23T04:10:24.441956+00:00",
+  "deferred_scenarios": [
+    {
+      "reason": "mock-api has no deterministic tool-timeout injection",
+      "scenario_id": "shop_failure_catalog_timeout"
+    },
+    {
+      "reason": "mock-api has no deterministic tool-timeout injection",
+      "scenario_id": "shop_failure_reviews_timeout"
+    },
+    {
+      "reason": "mock-api has no deterministic tool-timeout injection",
+      "scenario_id": "shop_failure_delivery_timeout"
+    },
+    {
+      "reason": "mock-api has no deterministic tool-timeout injection",
+      "scenario_id": "shop_failure_detail_timeout"
+    },
+    {
+      "reason": "mock-api has no deterministic tool-timeout injection",
+      "scenario_id": "shop_failure_retry_keeps_constraints"
+    }
+  ],
+  "evaluated_files": [
+    "services/ai-service/app/kayn_target.py",
+    "services/ai-service/app/routers/AImodel/agent_runtime.py",
+    "services/ai-service/app/routers/AImodel/candidate_service.py",
+    "services/ai-service/app/routers/AImodel/evaluation.py",
+    "services/ai-service/app/routers/AImodel/intent_router.py",
+    "services/ai-service/app/routers/AImodel/intent_routes.yaml",
+    "services/ai-service/app/routers/AImodel/plan_models.py",
+    "services/ai-service/app/routers/AImodel/plan_policy.yaml",
+    "services/ai-service/app/routers/AImodel/planner.py",
+    "services/ai-service/app/routers/AImodel/tools.py",
+    "scripts/run_kayn_abcd_evaluation.py",
+    "config/kayn_evaluation_compose.override.yaml"
+  ],
+  "fixture": "fixtures/evals/shopping_agent_scenarios.json",
+  "fixture_sha256": "aa0f9a087d2783ad43361a0ba525a980410e319055d2c317e6fba0149e09a1ac",
+  "fixture_version": "1.0.0",
+  "generation_profile_id": "cefc0791-43d2-40ef-bf8d-8f5654eb36d2",
+  "git_commit": "3c975d603dd5cbbdaf2678342f847f2fde87527e",
+  "git_worktree_dirty": true,
+  "implementation_fingerprint": "c402d8cdc0d3ffe1175657bd8d61a85a251900b2e12c7708e2b4f580bb2aaf17",
+  "judge_profile_id": "27c7e174-a7ef-4246-9f77-231551c38217",
+  "metric_ids": {
+    "context_retention": "5174a598-2432-4ec4-8ca1-5436b513bbae",
+    "goal_achievement": "d4fc04eb-8bfb-46e8-abbf-438f1715ae93",
+    "role_adherence": "5c2a1a86-16d9-4165-96aa-7e48d0164800",
+    "talonmart_abcd_quality": "fa7cd62e-a9af-4d9a-852c-6848cadb359c",
+    "talonmart_contract_guard": "340d82e6-05e9-4891-84b9-51d278dc674b",
+    "turn_relevancy": "d7f93c5e-16fb-4150-a7dc-a73f5e5ae120"
+  },
+  "project_id": "689af816-0a08-4be6-b8ad-4c79d4d7a4c8",
+  "runs": {
+    "multi_turn": "28135727-2623-4984-bcb7-ea57bc55848d",
+    "single_turn": "b123419b-a12e-47d8-b0ac-5104d3341e71"
+  },
+  "schema_version": 2,
+  "target_id": "484b94a3-af74-439c-b4ee-37179fa1dd91",
+  "test_id_to_scenario": {
+    "00f54d1a-7ba5-4028-99cc-362f385cd34d": "shop_compare_xiaomi_kitchen",
+    "02c80fc1-b1a9-44cf-8420-d89f36b7723f": "shop_hard_exclude_xiaomi",
+    "048c3bd7-622c-4177-8be7-600e68f83406": "shop_compare_stroller_budget_change",
+    "18f1218b-44ab-43c9-b0f5-50a69a9d26ee": "shop_compare_earbuds_tv",
+    "20f46a61-4643-4c7a-892b-f8eca44de625": "shop_vague_breakfast_food",
+    "230aadea-260a-463c-9529-3680b78bd18f": "shop_review_stroller_summary",
+    "2a9d0093-f7ed-44fb-b9c2-8cf759b0d6b3": "shop_review_air_fryer_negative_followup",
+    "3209f280-d6db-4736-8977-790f7eb1e42c": "shop_none_electronics_under_5",
+    "3f741546-9f93-402e-b1d2-4ec1019f246a": "shop_none_unknown_earbud_brand",
+    "402e563f-d801-4671-b13c-abab82878b50": "shop_hard_xiaomi_air_fryer",
+    "475eaab2-1b7a-4851-adae-97bb6368734e": "shop_conflict_include_exclude_xiaomi",
+    "4bb93a1b-c381-44e1-962d-17ecb486f6d6": "shop_vague_office_restock",
+    "51d8a71b-a112-46b0-b57d-b29a5f08fee9": "shop_hard_delivery_tomorrow",
+    "5490578e-1517-4845-bae7-45182692fafd": "shop_vague_earbuds_use",
+    "566140e9-5877-4dd9-b937-01717fae3c68": "shop_compare_dairy",
+    "66761c3a-71db-49b9-aa8a-293f8afc6d33": "shop_none_tv_under_100",
+    "6c6520e8-9143-4fca-9e6d-5b2a776d8ac0": "shop_hard_withdraw_brand_preference",
+    "73d5cf54-a957-4c36-8fd6-356a78041a60": "shop_conflict_air_purifier_budget_reduction",
+    "77aef998-5b67-438b-b7e0-5547f9a4c4cd": "shop_compare_xiaomi_cleaning",
+    "995be021-f244-45d2-b3d9-cd1bd9c60535": "shop_conflict_delivery_and_choice",
+    "9e1eccb6-0982-47d7-a590-9c690e9bb299": "shop_hard_air_fryer_capacity",
+    "b2dee32e-a0d6-41c3-9022-13c248f7c46c": "shop_review_tv_summary",
+    "b6b0b629-be4c-4f6c-b52a-be18af260f6b": "shop_compare_pantry_items",
+    "b73f2421-927d-4956-a616-fc0c962d26d9": "shop_none_add_xiaomi_exclusion",
+    "b770a194-c805-4689-9380-ccb5d1d7fb30": "shop_conflict_tv_budget",
+    "bed0251c-17d3-4ef7-9b54-9c7197b99ce3": "shop_review_milk_low_rating",
+    "bf07e425-c966-4e14-8e20-1c7dc1950a48": "shop_vague_beverage_gift",
+    "c585637f-0e5f-427f-b0b3-49f427176caf": "shop_none_delivery_one_hour",
+    "c62136ea-0849-4523-bf89-72296562fd75": "shop_vague_stroller_budget_followup",
+    "c991eba2-fa20-41f6-af56-f501bdaa20e5": "shop_conflict_capacity_brand",
+    "c9a34ca5-ebf3-42d5-8013-0afcb06ee77a": "shop_hard_stroller_exact_boundary",
+    "da7c1c0d-a6cb-4b5f-966e-d67b5d171704": "shop_hard_earbuds_budget_60",
+    "e11a715f-f991-4242-bd36-aa3c0466d1fa": "shop_vague_air_quality_room_size",
+    "e5f6bf20-d9ca-4ba0-afab-a26a9001f8e6": "shop_hard_pen_quantity_budget",
+    "fcdd9cfb-ae1f-4dd6-a578-cc38f219eab9": "shop_review_earbuds_summary"
+  },
+  "test_sets": {
+    "multi_turn": "c012960f-dd41-4b43-b835-18a97e181de6",
+    "single_turn": "cde6e7df-444e-4829-bed4-80eca56aa9c0"
+  },
+  "workspace_id": "02c77290-4328-49e5-9f3b-3c3d22e57670"
+}

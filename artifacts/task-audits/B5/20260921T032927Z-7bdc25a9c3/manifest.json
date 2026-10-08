@@ -1,0 +1,124 @@
+{
+  "acceptance_lock_sha256": "db3d0c2fce58f668f4cdabf46adeea800606aa9064230358461f73b80601bf9f",
+  "baseline_commit": "cd1775ae5a45a1f904bff380dc7db396a528bce7",
+  "change_commits": [],
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/goal_repository.py",
+    "services/ai-service/app/routers/AImodel/memory.py",
+    "services/ai-service/tests/test_aimodel_memory.py",
+    "services/ai-service/tests/test_shopping_goal_repository.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "6a8f127f8b2214115c95a3cf336bf92393662553ef227f97e5f17f37a5589ace"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "2d4de81ba138d7e5c03ef0391f40488eac4ce0419a3d408fa653fe44eafe43b7"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "177f260a5645724013185e4b140c7045cc39e56c0c97b120f5cb23599f85f0de"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "1d3d90190b74412c65626928171bb1564da9fbdc841e130bbfe10036d7318082"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "4 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "2 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check cd1775ae5a45a1f904bff380dc7db396a528bce7..7bdc25a9c3ff9683d993fb2811c63b3b48214901",
+            "duration_seconds": 0.078,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/goal_repository.py services/ai-service/app/routers/AImodel/memory.py services/ai-service/tests/test_aimodel_memory.py services/ai-service/tests/test_shopping_goal_repository.py",
+            "duration_seconds": 1.953,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/goal_repository.py services/ai-service/app/routers/AImodel/memory.py services/ai-service/tests/test_aimodel_memory.py services/ai-service/tests/test_shopping_goal_repository.py",
+            "duration_seconds": 0.484,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/b5/test_b5_shopping_goal_repository_contract.py -q",
+            "duration_seconds": 1.344,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_shopping_goal_repository.py services/ai-service/tests/test_aimodel_memory.py -q",
+            "duration_seconds": 1.344,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-21T03:29:36Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "7bdc25a9c3ff9683d993fb2811c63b3b48214901",
+  "task_id": "B5",
+  "task_title": "持久化目标状态并隔离长期偏好"
+}

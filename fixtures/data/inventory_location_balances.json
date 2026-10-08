@@ -88,5 +88,45 @@
     "quantity_on_hand": 72,
     "reorder_threshold": 80,
     "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_sz_1",
+    "location_code": "A1",
+    "item_id": "item_xiaomi_air_fryer_6_5l",
+    "production_date": "2026-06-01",
+    "expiry_date": "2030-05-31",
+    "quantity_on_hand": 42,
+    "reorder_threshold": 12,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_sz_1",
+    "location_code": "A1",
+    "item_id": "item_xiaomi_robot_vacuum_x20_plus",
+    "production_date": "2026-06-01",
+    "expiry_date": "2030-05-31",
+    "quantity_on_hand": 18,
+    "reorder_threshold": 6,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_sz_1",
+    "location_code": "B1",
+    "item_id": "item_xiaomi_air_purifier_4",
+    "production_date": "2026-06-01",
+    "expiry_date": "2030-05-31",
+    "quantity_on_hand": 27,
+    "reorder_threshold": 8,
+    "storage_status": "available"
+  },
+  {
+    "warehouse_id": "wh_sz_1",
+    "location_code": "B1",
+    "item_id": "item_xiaomi_electric_kettle_2",
+    "production_date": "2026-06-01",
+    "expiry_date": "2030-05-31",
+    "quantity_on_hand": 56,
+    "reorder_threshold": 15,
+    "storage_status": "available"
   }
 ]

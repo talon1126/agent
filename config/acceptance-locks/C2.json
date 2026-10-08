@@ -1,0 +1,11 @@
+{
+  "files": {
+    "tests/acceptance/c2/candidate_filter_cases.json": "096088f0dfb60661e3c58d5841de02bfb52c44509ae563d35d8c5c5f499bb00e",
+    "tests/acceptance/c2/test_c2_candidate_filter_contract.py": "3fa507ea90eeb6b78dea56fc6b11919ec25aff9b6cd36df46beb25a75971f4fc"
+  },
+  "generated_at": "2026-09-21T04:50:33Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "C2",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

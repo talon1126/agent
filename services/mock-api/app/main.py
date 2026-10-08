@@ -8,13 +8,20 @@ from pydantic import BaseModel
 from app.store import FIXTURE_DIR, find_by_id
 from app.routers.cart import CART_ITEMS, router as cart_router
 from app.routers.category_rankings import router as category_rankings_router
-from app.routers.delivery_addresses import DEFAULT_DELIVERY_ADDRESSES, router as delivery_addresses_router
+from app.routers.delivery_addresses import (
+    DEFAULT_DELIVERY_ADDRESSES,
+    router as delivery_addresses_router,
+)
 from app.routers.delivery.router import router as delivery_router
-from app.routers.flash_sales import initialize_active_flash_sales, router as flash_sales_router
+from app.routers.flash_sales import (
+    initialize_active_flash_sales,
+    router as flash_sales_router,
+)
 from app.routers.delivery.state import DELIVERY_CASES
 from app.routers.procurement.router import router as procurement_router
 from app.routers.product_details import router as product_details_router
 from app.routers.product_reviews import router as product_reviews_router
+from app.routers.product_snapshots import router as product_snapshots_router
 from app.routers.procurement.state import PURCHASE_ORDERS, REPLENISHMENT_REQUESTS
 from app.routers.search import router as search_router
 from app.routers.warehouse.router import router as warehouse_router
@@ -36,6 +43,7 @@ app.include_router(delivery_addresses_router)
 app.include_router(flash_sales_router)
 app.include_router(product_details_router)
 app.include_router(product_reviews_router)
+app.include_router(product_snapshots_router)
 app.include_router(search_router)
 app.include_router(warehouse_router)
 
@@ -139,7 +147,10 @@ def policy_keywords(query: str) -> set[str]:
     keywords: set[str] = set()
     if any(token in lowered for token in ("退款", "refund", "退钱", "赔偿")):
         keywords.add("refund")
-    if any(token in lowered for token in ("物流", "配送", "延迟", "shipment", "delivery", "package")):
+    if any(
+        token in lowered
+        for token in ("物流", "配送", "延迟", "shipment", "delivery", "package")
+    ):
         keywords.add("logistics")
     if any(token in lowered for token in ("差评", "评论", "review", "rating")):
         keywords.add("review")
@@ -159,7 +170,15 @@ def score_clause(clause: dict[str, str], keywords: set[str]) -> int:
     ).lower()
     aliases = {
         "refund": ("refund", "退款", "退钱", "赔偿"),
-        "logistics": ("logistics", "shipment", "delivery", "物流", "配送", "包裹", "延迟"),
+        "logistics": (
+            "logistics",
+            "shipment",
+            "delivery",
+            "物流",
+            "配送",
+            "包裹",
+            "延迟",
+        ),
         "review": ("review", "rating", "评论", "差评"),
         "inventory": ("inventory", "stock", "库存", "补货"),
     }
@@ -214,8 +233,6 @@ def get_inventory(sku: str) -> dict:
     return inventory
 
 
-
-
 @app.post("/operations/summary/mock")
 def operations_summary_mock(payload: dict) -> dict:
     query = str(payload.get("query") or payload.get("text") or "").strip()
@@ -242,7 +259,11 @@ def operations_summary_mock(payload: dict) -> dict:
 
 @app.post("/policies/search")
 def search_policies(request: PolicySearchRequest) -> dict[str, Any]:
-    filename = "after_sales_policy.zh.md" if request.locale.startswith("zh") else "after_sales_policy.md"
+    filename = (
+        "after_sales_policy.zh.md"
+        if request.locale.startswith("zh")
+        else "after_sales_policy.md"
+    )
     policy_path = FIXTURE_DIR / "policies" / filename
     if not policy_path.exists():
         raise HTTPException(status_code=404, detail="policy document not found")

@@ -75,6 +75,14 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
         supplier_count = connection.execute(text("select count(*) from procurement_suppliers")).scalar_one()
         purchase_order_count = connection.execute(text("select count(*) from purchase_orders")).scalar_one()
         balance_count = connection.execute(text("select count(*) from inventory_location_balances")).scalar_one()
+        xiaomi_balances = connection.execute(
+            text(
+                "select item_id, quantity_on_hand, storage_status "
+                "from inventory_location_balances "
+                "where item_id like 'item_xiaomi_%' "
+                "order by item_id"
+            )
+        ).mappings().all()
         movement_count = connection.execute(text("select count(*) from inventory_movements")).scalar_one()
         order_count = connection.execute(text("select count(*) from orders")).scalar_one()
         order_item_count = connection.execute(text("select count(*) from order_items")).scalar_one()
@@ -101,7 +109,29 @@ def test_seed_warehouse_fixtures_populates_postgres_shape_tables(tmp_path: Path)
     assert delivery_provider_count == 3
     assert supplier_count == 7
     assert purchase_order_count == 0
-    assert balance_count == 9
+    assert balance_count == 13
+    assert [dict(row) for row in xiaomi_balances] == [
+        {
+            "item_id": "item_xiaomi_air_fryer_6_5l",
+            "quantity_on_hand": 42,
+            "storage_status": "available",
+        },
+        {
+            "item_id": "item_xiaomi_air_purifier_4",
+            "quantity_on_hand": 27,
+            "storage_status": "available",
+        },
+        {
+            "item_id": "item_xiaomi_electric_kettle_2",
+            "quantity_on_hand": 56,
+            "storage_status": "available",
+        },
+        {
+            "item_id": "item_xiaomi_robot_vacuum_x20_plus",
+            "quantity_on_hand": 18,
+            "storage_status": "available",
+        },
+    ]
     assert movement_count == 0
     assert order_count == 0
     assert order_item_count == 0

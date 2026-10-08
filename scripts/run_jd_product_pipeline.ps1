@@ -17,6 +17,11 @@ param(
     [ValidateRange(1, 100000)]
     [int]$MaxItems,
 
+    [switch]$DiscoveryOnly,
+
+    [ValidateSet("playwright", "yingdao")]
+    [string]$CollectorMode = "yingdao",
+
     [ValidateSet("command", "api")]
     [string]$YingdaoMode = "command",
 
@@ -24,8 +29,11 @@ param(
     [string]$YingdaoAppFile = $env:YINGDAO_APP_FILE,
     [string]$YingdaoAccountName = $env:YINGDAO_ACCOUNT_NAME,
     [string]$YingdaoRobotUuid = $env:YINGDAO_ROBOT_UUID,
-    [string]$BrowserChannel = "msedge",
+    [string]$BrowserChannel = "chrome",
     [string]$BrowserExecutable,
+    [string]$BrowserUserDataDir = $env:JD_PLAYWRIGHT_USER_DATA_DIR,
+    [ValidateRange(1000, 300000)]
+    [int]$NavigationTimeoutMs = 45000,
     [double]$YingdaoTimeout = 600,
     [switch]$Headful
 )
@@ -35,7 +43,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifestPath = Join-Path $OutputRoot "archive\jd_product\$BatchId\manifest.json"
 $inputCsvPath = Join-Path $OutputRoot "discovery\jd_product_urls_$BatchId.csv"
 $rawCsvPath = Join-Path $OutputRoot "inbox\jd_product_${BatchId}_raw.csv"
-$canResumeWithoutYingdao = (Test-Path -LiteralPath $manifestPath) -or (
+$canResumeWithoutCollector = (Test-Path -LiteralPath $manifestPath) -or (
     (Test-Path -LiteralPath $inputCsvPath) -and
     (Test-Path -LiteralPath $rawCsvPath)
 )
@@ -45,11 +53,12 @@ if ([string]::IsNullOrWhiteSpace($Keyword) -eq [string]::IsNullOrWhiteSpace($See
     exit 20
 }
 
-if ($YingdaoMode -eq "command") {
+if (-not $DiscoveryOnly -and -not $canResumeWithoutCollector -and
+    $CollectorMode -eq "yingdao" -and $YingdaoMode -eq "command") {
     if ([string]::IsNullOrWhiteSpace($YingdaoRunnerPath)) {
         $YingdaoRunnerPath = "D:\ShadowBot\ShadowBot.exe"
     }
-    if (-not $canResumeWithoutYingdao -and [string]::IsNullOrWhiteSpace($YingdaoAppFile)) {
+    if ([string]::IsNullOrWhiteSpace($YingdaoAppFile)) {
         [Console]::Error.WriteLine(
             "Command mode requires YingdaoAppFile or YINGDAO_APP_FILE."
         )
@@ -66,6 +75,8 @@ $arguments = @(
     "--max-pages", $MaxPages,
     "--max-items", $MaxItems,
     "--browser-channel", $BrowserChannel,
+    "--collector-mode", $CollectorMode,
+    "--navigation-timeout-ms", $NavigationTimeoutMs,
     "--yingdao-mode", $YingdaoMode,
     "--yingdao-timeout", $YingdaoTimeout
 )
@@ -79,10 +90,16 @@ else {
 if (-not [string]::IsNullOrWhiteSpace($BrowserExecutable)) {
     $arguments += @("--browser-executable", $BrowserExecutable)
 }
+if (-not [string]::IsNullOrWhiteSpace($BrowserUserDataDir)) {
+    $arguments += @("--browser-user-data-dir", $BrowserUserDataDir)
+}
 if ($Headful) {
     $arguments += "--headful"
 }
-if ($YingdaoMode -eq "command") {
+if ($DiscoveryOnly) {
+    $arguments += "--discovery-only"
+}
+if ($CollectorMode -eq "yingdao" -and $YingdaoMode -eq "command") {
     if (-not [string]::IsNullOrWhiteSpace($YingdaoRunnerPath)) {
         $arguments += @("--yingdao-runner-path", $YingdaoRunnerPath)
     }
@@ -90,7 +107,7 @@ if ($YingdaoMode -eq "command") {
         $arguments += @("--yingdao-app-file", $YingdaoAppFile)
     }
 }
-else {
+elseif ($CollectorMode -eq "yingdao") {
     $arguments += @(
         "--yingdao-account-name", $YingdaoAccountName,
         "--yingdao-robot-uuid", $YingdaoRobotUuid

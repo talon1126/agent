@@ -1,0 +1,137 @@
+{
+  "acceptance_lock_sha256": "58416f0786bc9192f1699a96a322551f49876b56c00369ea2225a1060b0cc381",
+  "baseline_commit": "be7cfbc2e333c9e81870a085306f09e6a445bbf7",
+  "change_commits": [],
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/product_models.py",
+    "services/ai-service/app/routers/AImodel/product_snapshot.py",
+    "services/ai-service/tests/test_product_snapshot.py",
+    "services/mock-api/app/main.py",
+    "services/mock-api/app/routers/product_snapshots.py",
+    "services/mock-api/tests/test_product_snapshots.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "3cf6c49a7e99b6e1aa60b3eb2b295b5fe359d70adfecbee8d9e048ad10945828"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "1421b8fd1ff00f6d384212ee91c4d8fe0c5285258fc585efe8e88f031cce343b"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "ef7d13d02214e98ca902b05257cdbe6a8e84f3b4714508efdc19766460b54209"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "4bc723534368cae7a98c3a48888f5bdd267d42c722661a186fe9dc9679cec951"
+    },
+    {
+      "path": "round-1/verification-02.log",
+      "sha256": "aa5e83c895e68f3ba22f54dc47c9bac39c5d4202de5981f7c560fbc32b52860c"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "6 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "2 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check be7cfbc2e333c9e81870a085306f09e6a445bbf7..9fef5eb70d0c744e43d2a3c31fd075bfd04aefc9",
+            "duration_seconds": 0.062,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/product_models.py services/ai-service/app/routers/AImodel/product_snapshot.py services/ai-service/tests/test_product_snapshot.py services/mock-api/app/main.py services/mock-api/app/routers/product_snapshots.py services/mock-api/tests/test_product_snapshots.py",
+            "duration_seconds": 1.688,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/product_models.py services/ai-service/app/routers/AImodel/product_snapshot.py services/ai-service/tests/test_product_snapshot.py services/mock-api/app/main.py services/mock-api/app/routers/product_snapshots.py services/mock-api/tests/test_product_snapshots.py",
+            "duration_seconds": 0.531,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/c1/test_c1_product_snapshot_contract.py -q",
+            "duration_seconds": 1.219,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_product_snapshot.py -q",
+            "duration_seconds": 1.203,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/mock-api pytest services/mock-api/tests -q",
+            "duration_seconds": 19.609,
+            "exit_code": 0,
+            "log": "verification-02.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-21T04:34:48Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "9fef5eb70d0c744e43d2a3c31fd075bfd04aefc9",
+  "task_id": "C1",
+  "task_title": "建立商品事实快照"
+}

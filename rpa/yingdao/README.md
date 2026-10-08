@@ -191,6 +191,49 @@ powershell -ExecutionPolicy Bypass -File scripts\run_jd_product_pipeline.ps1 `
 discovery CSV 或影刀原始 CSV 已存在时，相同 batch 可以从后续阶段继续；批次锁保证同一
 batch 不会并发启动两个影刀实例。全链路只生成文件，不新增数据库表，也不查询或修改 `items`。
 
+### J10 双采集器模式
+
+同一入口支持三种运行方式，默认 `CollectorMode` 为 `yingdao`，以兼容 J9：
+
+- `-DiscoveryOnly`：只生成 `input_index,product_url` CSV 和
+  `pipeline_result.json(status=discovery_complete)`，不创建详情采集器，也不运行 pandas。
+- `-CollectorMode playwright`：Playwright 串行打开 URL CSV 中的详情页，写出与影刀相同的
+  13 列 `jd_product` 原始 CSV，再直接进入 pandas 标准化。
+- `-CollectorMode yingdao`：继续使用 `.shr`、企业 OpenAPI 或现有手工文件交接流程。
+
+只生成京东商品 URL CSV：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_jd_product_pipeline.ps1 `
+  -SeedUrl "https://www.jd.com/hprm/9987a354086f281133b6.html" `
+  -BatchId jd_discovery_001 `
+  -OutputRoot D:\tmp\talonmart-jd-discovery `
+  -MaxPages 1 `
+  -MaxItems 5 `
+  -DiscoveryOnly
+```
+
+Playwright 全自动小批次：
+
+```powershell
+$env:JD_PLAYWRIGHT_USER_DATA_DIR = "D:\tmp\talonmart-jd-profile"
+powershell -ExecutionPolicy Bypass -File scripts\run_jd_product_pipeline.ps1 `
+  -SeedUrl "https://www.jd.com/hprm/9987a354086f281133b6.html" `
+  -BatchId jd_playwright_001 `
+  -OutputRoot D:\tmp\talonmart-jd-playwright `
+  -MaxPages 1 `
+  -MaxItems 5 `
+  -CollectorMode playwright `
+  -Headful
+```
+
+Playwright 默认使用本机 Chrome channel。`JD_PLAYWRIGHT_USER_DATA_DIR` 必须指向专用
+Profile，不能直接使用个人 Chrome/Edge 默认
+Profile。也可以仅设置仓库外的 `JD_PLAYWRIGHT_STORAGE_STATE`；两者不能同时设置。首次登录或
+会话失效时使用 `-Headful`，由用户手工登录。登录页、二维码、验证码或访问限制会停止批次并返回
+`manual_verification_required` 或 `access_restricted`，流程不输入账号密码，也不识别或绕过验证。
+Profile、storage state、Cookie 和凭据不得写入 discovery、raw、manifest、result 或 Git。
+
 手工影刀交接完成后的续跑命令不需要设置 `YINGDAO_APP_FILE`：
 
 ```powershell
@@ -200,6 +243,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_jd_product_pipeline.ps1 `
   -OutputRoot D:\tmp\talonmart-jd-pipeline `
   -MaxPages 1 `
   -MaxItems 20 `
+  -CollectorMode yingdao `
   -YingdaoMode command
 ```
 

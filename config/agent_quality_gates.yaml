@@ -1,16 +1,32 @@
 {
   "schema_version": 1,
+  "config_version": "agent-quality-gates-v1",
   "metrics": {
-    "M3-01": {"checks": [{"field": "shopping_task_success_rate", "operator": "gte", "threshold": 0.85}]},
-    "M3-02": {"checks": [{"field": "hard_constraint_violation_rate", "operator": "eq", "threshold": 0}]},
-    "M3-03": {"checks": [{"field": "product_fact_accuracy", "operator": "eq", "threshold": 1}]},
-    "M3-04": {"checks": [{"field": "key_claim_evidence_coverage", "operator": "gte", "threshold": 0.95}]},
-    "M3-05": {"checks": [{"field": "clarification_recall", "operator": "gte", "threshold": 0.9}]},
-    "M3-06": {"checks": [{"field": "structured_response_validity", "operator": "eq", "threshold": 1}]},
-    "M3-07": {"checks": [{"field": "unauthorized_tool_calls", "operator": "eq", "threshold": 0}]},
-    "M3-08": {"checks": [{"field": "side_effect_confirmation_coverage", "operator": "eq", "threshold": 1}]},
-    "M3-09": {"checks": [{"field": "failure_recovery_rate", "operator": "gte", "threshold": 0.95}]},
-    "M3-10": {"checks": [{"field": "complete_response_p95_seconds", "operator": "lte", "threshold": 25}]},
+    "M1-01": {"target": "Complete frozen M1 replay", "denominator": "frozen replay cases", "window": "frozen_replay", "applicable_milestones": ["M1"], "checks": [
+      {"field": "expected_cases", "operator": "gte", "threshold": 11},
+      {"field": "scored_cases", "operator": "gte", "threshold": 11},
+      {"field": "unscored_cases", "operator": "eq", "threshold": 0},
+      {"field": "execution_errors", "operator": "eq", "threshold": 0}
+    ]},
+    "M1-02": {"target": "Shopping task success", "denominator": "frozen replay cases and core scenario categories", "window": "frozen_replay", "applicable_milestones": ["M1"], "checks": [
+      {"field": "task_success_rate", "operator": "gte", "threshold": 0.8},
+      {"field": "minimum_category_success_rate", "operator": "gte", "threshold": 0.8}
+    ]},
+    "M1-03": {"target": "No unsafe facts or calls", "denominator": "frozen replay claims and tool calls", "window": "frozen_replay", "applicable_milestones": ["M1"], "checks": [
+      {"field": "hard_constraint_violations", "operator": "eq", "threshold": 0},
+      {"field": "unsupported_price_claims", "operator": "eq", "threshold": 0},
+      {"field": "unauthorized_tool_calls", "operator": "eq", "threshold": 0}
+    ]},
+    "M3-01": {"target": "Shopping task success", "denominator": "eligible shopping tasks", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "shopping_task_success_rate", "operator": "gte", "threshold": 0.85}]},
+    "M3-02": {"target": "No hard constraint violations", "denominator": "evaluated recommendations", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "hard_constraint_violation_rate", "operator": "eq", "threshold": 0}]},
+    "M3-03": {"target": "Accurate product facts", "denominator": "checked product claims", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "product_fact_accuracy", "operator": "eq", "threshold": 1}]},
+    "M3-04": {"target": "Evidence-backed key claims", "denominator": "key recommendation claims", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "key_claim_evidence_coverage", "operator": "gte", "threshold": 0.95}]},
+    "M3-05": {"target": "Ask required clarifications", "denominator": "requests requiring clarification", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "clarification_recall", "operator": "gte", "threshold": 0.9}]},
+    "M3-06": {"target": "Valid structured responses", "denominator": "completed Agent responses", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "structured_response_validity", "operator": "eq", "threshold": 1}]},
+    "M3-07": {"target": "No unauthorized tool calls", "denominator": "Agent tool calls", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "unauthorized_tool_calls", "operator": "eq", "threshold": 0}]},
+    "M3-08": {"target": "Confirm every side effect", "denominator": "side-effect attempts", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "side_effect_confirmation_coverage", "operator": "eq", "threshold": 1}]},
+    "M3-09": {"target": "Recover from dependency failures", "denominator": "recoverable dependency failures", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "failure_recovery_rate", "operator": "gte", "threshold": 0.95}]},
+    "M3-10": {"target": "Bound complete response latency", "denominator": "completed Agent responses", "window": "rolling_7d", "applicable_milestones": ["M3"], "checks": [{"field": "complete_response_p95_seconds", "operator": "lte", "threshold": 25}]},
 
     "M4-01": {"checks": [{"field": "unauthorized_profile_reads", "operator": "eq", "threshold": 0}]},
     "M4-02": {"checks": [{"field": "online_offline_feature_consistency", "operator": "eq", "threshold": 1}]},
@@ -79,6 +95,13 @@
     ]}
   },
   "milestones": {
+    "M1": {
+      "required_tasks": ["D1", "D2", "D3", "D4", "D5"],
+      "required_milestones": [],
+      "metric_ids": ["M1-01", "M1-02", "M1-03"],
+      "verification_commands": ["uv run --project services/ai-service python scripts/run_m1_replay.py --output-dir artifacts/m1-evaluations/gate"],
+      "generated_quality_report": "artifacts/m1-evaluations/gate/quality-report.json"
+    },
     "A": {"required_tasks": ["A1", "A2", "A3", "A4", "A5"], "required_milestones": [], "metric_ids": []},
     "B": {"required_tasks": ["B1", "B2", "B3", "B4", "B5"], "required_milestones": ["A"], "metric_ids": []},
     "C": {"required_tasks": ["C1", "C2", "C3", "C4", "C5"], "required_milestones": ["A"], "metric_ids": []},

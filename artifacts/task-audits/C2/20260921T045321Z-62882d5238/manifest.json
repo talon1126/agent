@@ -1,0 +1,126 @@
+{
+  "acceptance_lock_sha256": "7118b0fff0fa12c3b12eb6a81d75b204bbe1d37ef0e495cc7ae3ab3c66f29405",
+  "baseline_commit": "b7848af9280e963f142f3b0e1829f14a55dae4aa",
+  "change_commits": [],
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/candidate_service.py",
+    "services/ai-service/app/routers/AImodel/product_models.py",
+    "services/ai-service/app/routers/AImodel/product_snapshot.py",
+    "services/ai-service/tests/test_candidate_filter.py",
+    "services/mock-api/app/routers/product_snapshots.py",
+    "services/mock-api/tests/test_product_snapshots.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "1c631e1adbc71f5169251be8d326cc292e70e890adf263b44150bedd88901812"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "d2823ce2577488be34ca3fff3545124adf172784319f7ea2ef5885f099cdef7d"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "ef7d13d02214e98ca902b05257cdbe6a8e84f3b4714508efdc19766460b54209"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "7790208522929d9e553dde98474dc9eb75ab73cb25201482501665496ff537bb"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "6 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "2 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check b7848af9280e963f142f3b0e1829f14a55dae4aa..62882d5238118e601e3a85280bd0a4a5bfd75377",
+            "duration_seconds": 0.063,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check services/ai-service/app/routers/AImodel/candidate_service.py services/ai-service/app/routers/AImodel/product_models.py services/ai-service/app/routers/AImodel/product_snapshot.py services/ai-service/tests/test_candidate_filter.py services/mock-api/app/routers/product_snapshots.py services/mock-api/tests/test_product_snapshots.py",
+            "duration_seconds": 1.734,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check services/ai-service/app/routers/AImodel/candidate_service.py services/ai-service/app/routers/AImodel/product_models.py services/ai-service/app/routers/AImodel/product_snapshot.py services/ai-service/tests/test_candidate_filter.py services/mock-api/app/routers/product_snapshots.py services/mock-api/tests/test_product_snapshots.py",
+            "duration_seconds": 0.516,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/c2/test_c2_candidate_filter_contract.py -q",
+            "duration_seconds": 1.344,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_candidate_filter.py -q",
+            "duration_seconds": 1.25,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-21T04:53:30Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "62882d5238118e601e3a85280bd0a4a5bfd75377",
+  "task_id": "C2",
+  "task_title": "实现候选召回与硬过滤"
+}

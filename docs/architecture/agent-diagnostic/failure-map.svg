@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1260" viewBox="0 0 2400 1260" role="img" aria-labelledby="failure-map-title failure-map-desc">
+<title id="failure-map-title">测试为什么失败 · 三类原因分开看</title>
+<desc id="failure-map-desc">同一低分同时受 Agent 行为、业务事实及评测输入影响；各项需用 Trace 和复现实例分别核实。</desc>
+<style>text{font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",Arial,sans-serif}path{stroke-linecap:round;stroke-linejoin:round}</style>
+<defs>
+<marker id="failure-map-arrow-blue" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#315CDD"/></marker>
+<marker id="failure-map-arrow-teal" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#087F79"/></marker>
+<marker id="failure-map-arrow-orange" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#B76817"/></marker>
+<marker id="failure-map-arrow-purple" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#7452B7"/></marker>
+<marker id="failure-map-arrow-muted" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#52647B"/></marker>
+</defs>
+<rect x="0" y="0" width="2400" height="1260" rx="0" fill="#F6F8FC"/>
+<rect x="64" y="56" width="7" height="106" rx="3" fill="#315CDD"/>
+<text x="92" y="73" font-size="18" fill="#315CDD" font-weight="700" text-anchor="start">TALONMART AGENT / ARCHITECTURE ATLAS</text>
+<text x="92" y="127" font-size="39" fill="#16243B" font-weight="700" text-anchor="start" data-region="92,86,1960,60">测试为什么失败 · 三类原因分开看</text>
+<text x="92" y="168" font-size="21" fill="#52647B" font-weight="400" text-anchor="start">同一低分同时受 Agent 行为、业务事实及评测输入影响；各项需用 Trace 和复现实例分别核实。</text>
+<text x="2336" y="86" font-size="24" fill="#52647B" font-weight="400" text-anchor="end">02 / 03</text>
+<text x="2336" y="127" font-size="21" fill="#52647B" font-weight="400" text-anchor="end">2026-09-24</text>
+<rect x="64" y="220" width="720" height="620" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<rect x="64" y="244" width="5" height="43" rx="2" fill="#315CDD"/>
+<text x="92" y="268" font-size="28" fill="#16243B" font-weight="700" text-anchor="start" data-region="84,232,680,51">Agent 行为缺口</text>
+<text x="92" y="302" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="84,277,680,548">代码和工具 Trace 已观察到</text>
+<rect x="840" y="220" width="720" height="620" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<rect x="840" y="244" width="5" height="43" rx="2" fill="#B76817"/>
+<text x="868" y="268" font-size="28" fill="#16243B" font-weight="700" text-anchor="start" data-region="860,232,680,51">事实与恢复缺口</text>
+<text x="868" y="302" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="860,277,680,548">真实工具返回决定能否完成任务</text>
+<rect x="1616" y="220" width="720" height="620" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<rect x="1616" y="244" width="5" height="43" rx="2" fill="#7452B7"/>
+<text x="1644" y="268" font-size="28" fill="#16243B" font-weight="700" text-anchor="start" data-region="1636,232,680,51">Kayn 测试与判定</text>
+<text x="1644" y="302" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1636,277,680,548">影响分数解释，不替 Agent 开脱</text>
+<rect x="64" y="928" width="2272" height="220" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<rect x="64" y="952" width="5" height="43" rx="2" fill="#087F79"/>
+<text x="92" y="976" font-size="28" fill="#16243B" font-weight="700" text-anchor="start" data-region="84,940,2232,51">结果怎样读</text>
+<text x="92" y="1010" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="84,985,2232,148">2026-09-24 同一实现指纹的不同测试范围</text>
+<g data-node="route-gap">
+<rect x="92" y="344" width="664" height="190" rx="12" fill="#EEF3FF"/>
+<text x="112" y="378" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="104,352,640,174">多轮目标未贯穿路由</text>
+<text x="112" y="414" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="104,352,640,174">路由先判本轮短句，恢复规则覆盖有限</text>
+<text x="112" y="444" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="104,352,640,174">比较追问可能走错任务或多查评论</text>
+</g>
+<g data-node="answer-gap">
+<rect x="92" y="556" width="664" height="190" rx="12" fill="#EEF3FF"/>
+<text x="112" y="590" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="104,564,640,174">回答不守输出范围</text>
+<text x="112" y="626" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="104,564,640,174">比较模板固定加入价格、规格</text>
+<text x="112" y="656" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="104,564,640,174">有证据不等于符合“不要价格”</text>
+</g>
+<g data-node="fact-gap">
+<rect x="868" y="344" width="664" height="190" rx="12" fill="#FFF5E7"/>
+<text x="888" y="378" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="880,352,640,174">关键事实缺失</text>
+<text x="888" y="414" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="880,352,640,174">婴儿车等样例的库存为 unknown</text>
+<text x="888" y="444" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="880,352,640,174">无法核验可购买性时推荐被阻断</text>
+</g>
+<g data-node="recovery-gap">
+<rect x="868" y="556" width="664" height="190" rx="12" fill="#FFF5E7"/>
+<text x="888" y="590" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="880,564,640,174">重复兜底不产生进展</text>
+<text x="888" y="626" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="880,564,640,174">同一快照再次读取仍然缺事实</text>
+<text x="888" y="656" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="880,564,640,174">低评样本不足时多轮重复提示</text>
+</g>
+<g data-node="context-gap">
+<rect x="1644" y="344" width="664" height="190" rx="12" fill="#F3EFFB"/>
+<text x="1664" y="378" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1656,352,640,174">参考历史不等于实际历史</text>
+<text x="1664" y="414" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1656,352,640,174">reference_turns 给模拟器和评审</text>
+<text x="1664" y="444" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1656,352,640,174">Agent 只收到模拟器实际发出的轮次</text>
+</g>
+<g data-node="judge-gap">
+<rect x="1644" y="556" width="664" height="190" rx="12" fill="#F3EFFB"/>
+<text x="1664" y="590" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1656,564,640,174">判定存在空项与不一致</text>
+<text x="1664" y="626" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1656,564,640,174">12 个多轮中有 2 个未评分</text>
+<text x="1664" y="656" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1656,564,640,174">个别 Judge 描述与工具 Trace 矛盾</text>
+</g>
+<g data-node="single-score">
+<rect x="92" y="1033" width="680" height="88" rx="12" fill="#EAF7F4"/>
+<text x="112" y="1067" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="104,1041,656,72">A-D 单轮 21/23 通过</text>
+</g>
+<g data-node="multi-score">
+<rect x="860" y="1033" width="680" height="88" rx="12" fill="#FFF5E7"/>
+<text x="880" y="1067" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="872,1041,656,72">多轮首次 1/10；重跑 0/10</text>
+</g>
+<g data-node="m1-score">
+<rect x="1628" y="1033" width="680" height="88" rx="12" fill="#F3EFFB"/>
+<text x="1648" y="1067" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1640,1041,656,72">M1 固定回放 11/11</text>
+</g>
+<path d="M64 1186 L2336 1186" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="64" y="1222" font-size="19" fill="#52647B" font-weight="400" text-anchor="start">多轮分母为每次可评分的 10 例；另 2 例未评分。M1 固定回放通过不能替代 Kayn 开放式多轮通过。</text>
+</svg>

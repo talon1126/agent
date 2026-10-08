@@ -1,0 +1,49 @@
+{
+  "acceptance_files": [
+    "tests/acceptance/c4/test_c4_product_ranker_contract.py"
+  ],
+  "acceptance_lock_sha256": "424a37b9d51e0ca6cdccabe340eeedf77974a5b225219f0ce45a98d432141c2a",
+  "baseline_commit": "7a0f3213909a548909345ebc456b46778d0219b1",
+  "changed_files": [
+    "services/ai-service/app/routers/AImodel/feature_normalizer.py",
+    "services/ai-service/app/routers/AImodel/ranking.py",
+    "services/ai-service/app/routers/AImodel/ranking_policy.yaml",
+    "services/ai-service/tests/test_product_ranker.py",
+    "tests/acceptance/c4/test_c4_product_ranker_contract.py"
+  ],
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_product_ranker.py -q",
+      "duration_seconds": 2.985,
+      "exit_code": 0,
+      "log": "01.log"
+    }
+  ],
+  "commit": "7710c8b3b29ba79be4507146fd85d0ff2cccd3be",
+  "evidence_files": [
+    {
+      "path": "commands/01.log",
+      "sha256": "3b5cdafa40adc5d8340e51c3b08ed46a6d2be73c66bad1f35ac38f168f399b25"
+    }
+  ],
+  "implementation_fingerprint": "a9876c5cfcd16cac42a534bae85a093a92a43e52cf92056b464a235e0d94bc21",
+  "phase": "C",
+  "quality_gates_sha256": "161d4392600e37822b8aa77ffc74acb05de91c2413537f626450734c929087ca",
+  "quality_profile": null,
+  "quality_results": [],
+  "recorded_at": "2026-09-21T07:31:29Z",
+  "run_id": "20260921T073118Z-7710c8b3b2-609966",
+  "runner": {
+    "ci": false,
+    "independent": false,
+    "verifier_id": null
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "C4",
+  "task_title": "实现可解释排序与多样性",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "verification_workspace": "git_archive",
+  "working_tree_dirty": true
+}

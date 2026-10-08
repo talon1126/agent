@@ -21,6 +21,11 @@ from typing import Any, Protocol
 import yaml
 
 
+_DETERMINISTIC_PRODUCT_INTENTS = frozenset(
+    {"comparison", "fact_comparison", "review_summary"}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class AImodelIntentRule:
     """Represent one configured AImodel intent routing rule.
@@ -348,15 +353,6 @@ class AImodelIntentRouter:
             the route itself remains the compact execution result.
         """
 
-        if self._classifier_backend is not None:
-            try:
-                return self._classifier_backend.route_with_candidates(
-                    message,
-                    limit=limit,
-                )
-            except Exception:
-                pass
-
         normalized_message = _normalize_for_matching(message)
         matches = [
             match
@@ -373,6 +369,20 @@ class AImodelIntentRouter:
             rules=self._rules,
             limit=limit,
         )
+        if (
+            ranked_matches
+            and ranked_matches[0].rule.intent in _DETERMINISTIC_PRODUCT_INTENTS
+            and ranked_matches[0].score >= self._rule_threshold
+        ):
+            return self._route_from_match(ranked_matches[0], candidates), candidates
+        if self._classifier_backend is not None:
+            try:
+                return self._classifier_backend.route_with_candidates(
+                    message,
+                    limit=limit,
+                )
+            except Exception:
+                pass
         if not ranked_matches:
             return self._default_route("no_rule_matched"), []
         winner = ranked_matches[0]

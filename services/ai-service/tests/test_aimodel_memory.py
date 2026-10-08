@@ -1,6 +1,9 @@
 import sys
 import threading
 import types
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from app.routers.AImodel.agent_trace import (
     AgentTraceContext,
@@ -40,10 +43,9 @@ def test_aimodel_memory_schema_uses_integer_ids_without_physical_foreign_keys() 
     assert "query_trace_id TEXT NOT NULL" in schema_sql
     assert "REFERENCES message" not in schema_sql
     assert "REFERENCES rag_query_traces" not in schema_sql
-    assert (
-        "TRUNCATE TABLE message_query_trace, message, conversation, user_memory"
-        in normalized_schema
-    )
+    assert "TRUNCATE" not in normalized_schema.upper()
+    assert "CREATE TABLE IF NOT EXISTS shopping_goal_state" in schema_sql
+    assert "CREATE TABLE IF NOT EXISTS shopping_goal_event" in schema_sql
 
 
 def test_noop_aimodel_memory_store_generates_conversation_id_and_keeps_recent_messages() -> (
@@ -71,30 +73,61 @@ def test_noop_aimodel_memory_store_generates_conversation_id_and_keeps_recent_me
     ]
 
 
-def test_extract_user_memories_from_text_detects_price_and_brand_preferences() -> None:
+def test_extract_user_memories_keeps_explicit_brand_but_not_session_budget() -> None:
+    now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
     memories = extract_user_memories_from_text(
         "我喜欢小米，也比较看重高性价比，预算有限。",
         user_id=1,
+        now=now,
     )
 
-    assert (
+    assert memories == [
         AiModelUserMemory(
             memory_type="brand_preference",
             memory_value="小米",
-            evidence="用户表达了对小米的品牌偏好。",
+            evidence="我喜欢小米，也比较看重高性价比，预算有限。",
             confidence=0.8,
+            expires_at=now + timedelta(days=180),
         )
-        in memories
-    )
+    ]
     assert (
-        AiModelUserMemory(
-            memory_type="price_preference",
-            memory_value="高性价比",
-            evidence="用户表达了高性价比或预算敏感偏好。",
-            confidence=0.7,
+        extract_user_memories_from_text(
+            "这次只看华为，预算六千",
+            user_id=1,
+            now=now,
         )
-        in memories
+        == []
     )
+    for mixed_statement in (
+        "我不喜欢小米，但长期喜欢华为",
+        "这次不要小米，但我长期喜欢华为",
+        "今天不考虑苹果；平时一直喜欢华为",
+        "临时不买小米，而长期偏好华为",
+    ):
+        mixed = extract_user_memories_from_text(
+            mixed_statement,
+            user_id=1,
+            now=now,
+        )
+        assert [memory.memory_value for memory in mixed] == ["华为"]
+
+
+def test_noop_memory_rejects_conversation_owner_reassignment() -> None:
+    store = NoopAiModelMemoryStore()
+    conversation_id = store.ensure_conversation(
+        None,
+        user_id=1,
+        first_message="第一位用户",
+    )
+
+    with pytest.raises(PermissionError, match="conversation access denied"):
+        store.ensure_conversation(
+            conversation_id,
+            user_id=2,
+            first_message="尝试接管",
+        )
+
+    assert store.get_conversation_owner(conversation_id) == 1
 
 
 def test_noop_aimodel_memory_store_upserts_user_memory() -> None:
@@ -272,8 +305,9 @@ def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payl
     assert payload["allowed_tools"] == ["rag_tool"]
     assert payload["query_trace_ids"] == ["mcp-query-1"]
     assert "answer_summary" not in payload
-    intent_event = payload["events"][0]
-    assert intent_event["event_type"] == "intent"
+    intent_event = next(
+        event for event in payload["events"] if event["event_type"] == "goal"
+    )
     assert [
         candidate["intent"]
         for candidate in intent_event["summary_payload"]["top_candidates"]
@@ -290,12 +324,12 @@ def test_agent_trace_context_records_intent_allowed_tools_and_redacts_large_payl
         0.87,
         0.79,
     ]
-    assert payload["events"][2]["event_type"] == "tool_call"
-    assert (
-        payload["events"][2]["summary_payload"]["input_summary"]["query_chars"] == 1000
+    tool_event = next(
+        event for event in payload["events"] if event["event_type"] == "tool_call"
     )
-    assert "x" * 20 not in str(payload["events"][2]["summary_payload"])
-    assert "y" * 20 not in str(payload["events"][2]["summary_payload"])
+    assert tool_event["summary_payload"]["input_summary"]["query_chars"] == 1000
+    assert "x" * 20 not in str(tool_event["summary_payload"])
+    assert "y" * 20 not in str(tool_event["summary_payload"])
 
 
 def test_langchain_agent_trace_middleware_records_success_and_error_tool_calls() -> (

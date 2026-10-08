@@ -1,0 +1,53 @@
+{
+  "acceptance_files": [
+    "tests/acceptance/a3/test_a3_request_context_contract.py"
+  ],
+  "acceptance_lock_sha256": "317d4f2f5a33726e8202a45107148602282b1ccdd7f62fde595d66b90705c7d6",
+  "baseline_commit": "c55573aede741b41a76b999477149b4b4fdbc547",
+  "changed_files": [
+    "artifacts/task-audits/A3/20260920T120236Z-f09496190d/manifest.json",
+    "artifacts/task-audits/A3/20260920T120236Z-f09496190d/round-1/acceptance.log",
+    "artifacts/task-audits/A3/20260920T120236Z-f09496190d/round-1/diff-check.log",
+    "artifacts/task-audits/A3/20260920T120236Z-f09496190d/round-1/ruff-check.log",
+    "artifacts/task-audits/A3/20260920T120236Z-f09496190d/round-1/ruff-format.log",
+    "artifacts/task-audits/A3/20260920T120236Z-f09496190d/round-1/verification-01.log",
+    "fixtures/contracts/aimodel_chat_request.openapi.json",
+    "fixtures/contracts/aimodel_chat_request.schema.json",
+    "scripts/generate_aimodel_context_contract.py",
+    "services/ai-service/app/routers/AImodel/router.py",
+    "services/ai-service/app/routers/AImodel/schemas.py",
+    "services/ai-service/tests/test_aimodel_context.py"
+  ],
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_context.py services/ai-service/tests/test_api.py -q",
+      "duration_seconds": 1.969,
+      "exit_code": 0,
+      "log": "01.log"
+    }
+  ],
+  "commit": "f09496190df2ba164a83b0b47b2fc5065c425ae3",
+  "evidence_files": [
+    {
+      "path": "commands/01.log",
+      "sha256": "bc0a945be9b5469e91f1b0ff8517b527d1ee509a5630b4e763c24f4920fbdb10"
+    }
+  ],
+  "phase": "A",
+  "quality_gates_sha256": "fdd7ab15401e7107893bcf7147e20db2b29774cc116719ebf0976a6158943c46",
+  "quality_profile": null,
+  "quality_results": [],
+  "recorded_at": "2026-09-20T12:03:07Z",
+  "run_id": "20260920T120305Z-f09496190d-d14d46",
+  "runner": {
+    "ci": false,
+    "verifier_id": null
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "A3",
+  "task_title": "扩展请求上下文协议",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "working_tree_dirty": true
+}

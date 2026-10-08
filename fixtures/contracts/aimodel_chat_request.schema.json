@@ -1,0 +1,204 @@
+{
+  "$defs": {
+    "AiModelCandidateRef": {
+      "additionalProperties": false,
+      "properties": {
+        "item_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          ],
+          "title": "Item Id"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id"
+      ],
+      "title": "AiModelCandidateRef",
+      "type": "object"
+    },
+    "AiModelPageContext": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_refs": {
+          "items": {
+            "$ref": "#/$defs/AiModelCandidateRef"
+          },
+          "maxItems": 20,
+          "title": "Candidate Refs",
+          "type": "array"
+        },
+        "client_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Time"
+        },
+        "current_item_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Item Id"
+        },
+        "page_type": {
+          "default": "unknown",
+          "enum": [
+            "unknown",
+            "none",
+            "search",
+            "product",
+            "cart",
+            "other"
+          ],
+          "title": "Page Type",
+          "type": "string"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "search_query": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Search Query"
+        },
+        "source_event": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Event"
+        }
+      },
+      "title": "AiModelPageContext",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "conversation_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conversation Id"
+    },
+    "links": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Links",
+      "type": "array"
+    },
+    "message": {
+      "maxLength": 8000,
+      "minLength": 1,
+      "title": "Message",
+      "type": "string"
+    },
+    "page_context": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AiModelPageContext"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "request_version": {
+      "default": "v1",
+      "enum": [
+        "v1",
+        "v2"
+      ],
+      "title": "Request Version",
+      "type": "string"
+    },
+    "user_id": {
+      "exclusiveMinimum": 0,
+      "title": "User Id",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "user_id",
+    "message"
+  ],
+  "title": "AiModelChatRequest",
+  "type": "object",
+  "x-max-serialized-bytes": 16384
+}

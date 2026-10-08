@@ -1,0 +1,49 @@
+{
+  "excluded_cases": [
+    {
+      "id": "reject_usd_budget",
+      "reason": "case requires deterministic data or fault injection"
+    },
+    {
+      "id": "retry_without_page",
+      "reason": "simulator cannot pin per-turn page context"
+    },
+    {
+      "id": "review_nonempty_sample",
+      "reason": "case requires deterministic data or fault injection"
+    },
+    {
+      "id": "recommendation_reason_followup",
+      "reason": "simulator cannot pin per-turn page context"
+    },
+    {
+      "id": "snapshot_service_failure",
+      "reason": "case requires deterministic data or fault injection"
+    }
+  ],
+  "fixture_sha256": "c06b6b0b6e14cb2d809ac702dc142531ba186a5ed9a681e47ce5287fa102c933",
+  "implementation_fingerprint": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+  "project_id": "689af816-0a08-4be6-b8ad-4c79d4d7a4c8",
+  "purpose": "M1 exploratory Kayn evaluation; not release-gate evidence",
+  "run_id": "1435392f-5d32-42fb-86ce-21a4cf3f88b1",
+  "schema_version": 1,
+  "selected_case_ids": [
+    "m1_recommend_verified_kettle",
+    "m1_compare_without_page",
+    "m1_recommend_without_page",
+    "m1_list_verified_pen",
+    "m1_quantity_total_budget",
+    "m1_unknown_stock_recommendation"
+  ],
+  "target_id": "85f87f6f-d7fa-489d-b2a5-5b4298930846",
+  "target_runtime_fingerprint": "6c977220a26d92972b15271d0ab5fe7231c0fa64e72ac77d49019f74f72eeace",
+  "test_id_to_case": {
+    "25eea3a4-e859-4f92-988c-822aa166f3fb": "m1_quantity_total_budget",
+    "40081cd3-4950-4bbb-b6a3-e3e2f8fd09f3": "m1_unknown_stock_recommendation",
+    "69e1bca1-7eff-4121-904b-d82624ac11bd": "m1_list_verified_pen",
+    "76f47732-7ff6-4715-9892-5e16c9b0e27b": "m1_compare_without_page",
+    "d0287ebb-a3ce-4d57-ba47-2319e2d0cb5d": "m1_recommend_without_page",
+    "ec001e32-a4b1-47e3-8f1c-4f7592411a7b": "m1_recommend_verified_kettle"
+  },
+  "test_set_id": "2ffe8343-1e3c-4934-ad42-5f0bf51d9137"
+}

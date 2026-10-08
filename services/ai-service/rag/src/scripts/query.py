@@ -272,9 +272,10 @@ class QueryRuntime:
                 filters={"collection": processed.collection},
                 trace_context=trace_controller.context,
             )
-            rerank_applied = not no_rerank and self._rerank_controller is not None
+            rerank_requested = not no_rerank and self._rerank_controller is not None
+            rerank_applied = False
             rerank_fallback = False
-            if rerank_applied:
+            if rerank_requested:
                 outcome = self._rerank_controller.rerank_with_outcome(
                     processed.normalized_query,
                     hybrid.results,
@@ -283,6 +284,7 @@ class QueryRuntime:
                 )
                 final_results = outcome.results
                 rerank_fallback = outcome.fallback_used
+                rerank_applied = outcome.rerank_applied
             else:
                 final_results = [
                     candidate.model_copy(deep=True)

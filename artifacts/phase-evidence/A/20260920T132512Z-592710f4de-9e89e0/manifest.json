@@ -1,0 +1,163 @@
+{
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/a1/test_a1_baseline_contract.py -q",
+      "duration_seconds": 2.5,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "01-a1.log",
+      "task_id": "A1"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_aimodel_rag_tool.py services/ai-service/tests/test_aimodel_memory.py -q",
+      "duration_seconds": 1.906,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "02-a1.log",
+      "task_id": "A1"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/a2/test_a2_golden_set_contract.py -q",
+      "duration_seconds": 0.812,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "03-a2.log",
+      "task_id": "A2"
+    },
+    {
+      "command": "uv run --project services/ai-service python scripts/validate_shopping_agent_scenarios.py",
+      "duration_seconds": 0.797,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "04-a2.log",
+      "task_id": "A2"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_shopping_agent_scenarios.py -q",
+      "duration_seconds": 1.0,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "05-a2.log",
+      "task_id": "A2"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/a3/test_a3_request_context_contract.py -q",
+      "duration_seconds": 1.313,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "06-a3.log",
+      "task_id": "A3"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_context.py services/ai-service/tests/test_api.py -q",
+      "duration_seconds": 2.031,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "07-a3.log",
+      "task_id": "A3"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/a4/test_a4_structured_response_contract.py -q",
+      "duration_seconds": 1.266,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "08-a4.log",
+      "task_id": "A4"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_response_schema.py services/ai-service/tests/test_aimodel_agent.py services/ai-service/tests/test_aimodel_memory.py -q",
+      "duration_seconds": 1.359,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "09-a4.log",
+      "task_id": "A4"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/a5/test_a5_trace_observability_contract.py -q",
+      "duration_seconds": 1.25,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "10-a5.log",
+      "task_id": "A5"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_trace.py services/ai-service/tests/test_aimodel_agent.py -q",
+      "duration_seconds": 1.328,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "11-a5.log",
+      "task_id": "A5"
+    }
+  ],
+  "commit": "592710f4de1eb1b5935c453a68cf1a8e4d45f055",
+  "evidence_files": [
+    {
+      "path": "commands/01-a1.log",
+      "sha256": "218f1ed8f586d33cbb383f59495a2147d944cfa96f28c86479a22ae57196259b"
+    },
+    {
+      "path": "commands/02-a1.log",
+      "sha256": "9f953b5cdbac71f6fb08c436cf214c9e6a87dff51d3154c301d9749d0c7297f5"
+    },
+    {
+      "path": "commands/03-a2.log",
+      "sha256": "ad430bcd751b836a91fab4ff65c168e7e4f252c79243c40745308b866b554cb7"
+    },
+    {
+      "path": "commands/04-a2.log",
+      "sha256": "4c4d6bed2efc0c0b2deff18643c8d759c006cc9ce51ee2372eab3413d93b540f"
+    },
+    {
+      "path": "commands/05-a2.log",
+      "sha256": "d74767fb7957c031b7ca6168720084c0cf7d3e95c67561734fda7491aef7be1f"
+    },
+    {
+      "path": "commands/06-a3.log",
+      "sha256": "31eeeb3d2864b378453b630cae755224329b5d64636726bf4a792efd9a250d86"
+    },
+    {
+      "path": "commands/07-a3.log",
+      "sha256": "b2b5ddbbdefbd0c42329d2f2753931dc5820147ea1606ddb378105d51b1e74da"
+    },
+    {
+      "path": "commands/08-a4.log",
+      "sha256": "40cf3e96ffd64cebf3d4f98e6dc74a4722ad41ba7278ea95e26e8a085fc236fe"
+    },
+    {
+      "path": "commands/09-a4.log",
+      "sha256": "a43c6b1c33ac6c06a20137f8d9c0fbff5a05fa0effc3a524b42a4a9af0afb45f"
+    },
+    {
+      "path": "commands/10-a5.log",
+      "sha256": "15cf8dc66094a6b6dd021e65c23c24364e564496aa11875d75158a547a4abe52"
+    },
+    {
+      "path": "commands/11-a5.log",
+      "sha256": "8c531fea691e0b79d35e8588da9e2f3bc2f0ad49a13b2b39e10c027d6de0cacc"
+    }
+  ],
+  "milestone_evidence": {},
+  "milestone_id": "A",
+  "quality_gates_sha256": "161d4392600e37822b8aa77ffc74acb05de91c2413537f626450734c929087ca",
+  "quality_results": [],
+  "recorded_at": "2026-09-20T13:25:32Z",
+  "run_id": "20260920T132512Z-592710f4de-9e89e0",
+  "runner": {
+    "ci": false,
+    "independent": true,
+    "verifier_id": "codex-reviewer-stage-a"
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_evidence": {
+    "A1": "20260920T103902Z-bf2ad853e0-c58571",
+    "A2": "20260920T112214Z-3cb6eaa69c-bea511",
+    "A3": "20260920T120305Z-f09496190d-d14d46",
+    "A4": "20260920T122123Z-eb8da89b80-27e4a8",
+    "A5": "20260920T124924Z-f0b75b274b-acf93e"
+  },
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "verification_workspace": "git_archive",
+  "working_tree_dirty": true
+}

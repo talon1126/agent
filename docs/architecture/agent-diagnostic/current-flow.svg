@@ -1,0 +1,228 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="2710" viewBox="0 0 2400 2710" role="img" aria-labelledby="current-flow-title current-flow-desc">
+<title id="current-flow-title">一次购物问题 · 当前 Agent 如何处理</title>
+<desc id="current-flow-desc">沿编号向下看：每步说明输入、负责模块、实际动作、输出；分支栏指出本轮可见的风险。</desc>
+<style>text{font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",Arial,sans-serif}path{stroke-linecap:round;stroke-linejoin:round}</style>
+<defs>
+<marker id="current-flow-arrow-blue" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#315CDD"/></marker>
+<marker id="current-flow-arrow-teal" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#087F79"/></marker>
+<marker id="current-flow-arrow-orange" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#B76817"/></marker>
+<marker id="current-flow-arrow-purple" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#7452B7"/></marker>
+<marker id="current-flow-arrow-muted" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#52647B"/></marker>
+</defs>
+<rect x="0" y="0" width="2400" height="2710" rx="0" fill="#F6F8FC"/>
+<rect x="64" y="56" width="7" height="106" rx="3" fill="#315CDD"/>
+<text x="92" y="73" font-size="18" fill="#315CDD" font-weight="700" text-anchor="start">TALONMART AGENT / ARCHITECTURE ATLAS</text>
+<text x="92" y="127" font-size="39" fill="#16243B" font-weight="700" text-anchor="start" data-region="92,86,1960,60">一次购物问题 · 当前 Agent 如何处理</text>
+<text x="92" y="168" font-size="21" fill="#52647B" font-weight="400" text-anchor="start">沿编号向下看：每步说明输入、负责模块、实际动作、输出；分支栏指出本轮可见的风险。</text>
+<text x="2336" y="86" font-size="24" fill="#52647B" font-weight="400" text-anchor="end">01 / 03</text>
+<text x="2336" y="127" font-size="21" fill="#52647B" font-weight="400" text-anchor="end">2026-09-24</text>
+<rect x="64" y="220" width="2272" height="105" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="92" y="258" font-size="22" fill="#315CDD" font-weight="600" text-anchor="start">贯穿测试题</text>
+<text x="92" y="303" font-size="27" fill="#16243B" font-weight="600" text-anchor="start">用户：只比较燕麦和橄榄油的包装材质与容量单位，不涉及价格。</text>
+<path d="M100 449 L100 686" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#current-flow-arrow-blue)"/>
+<g id="current-flow-request" data-step="1">
+<rect x="66" y="373" width="68" height="68" rx="22" fill="#315CDD"/>
+<text x="100" y="418" font-size="30" fill="white" font-weight="700" text-anchor="middle">01</text>
+<rect x="160" y="367" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="409" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">接收请求并关联会话</text>
+<text x="2308" y="407" font-size="20" fill="#315CDD" font-weight="400" text-anchor="end">service.py / stream_chat_events</text>
+<rect x="188" y="431" width="380" height="134" rx="12" fill="#EEF3FF"/>
+<text x="208" y="465" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,439,356,118">输入</text>
+<text x="208" y="501" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,439,356,118">本轮文字、用户与会话 ID</text>
+<text x="208" y="531" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,439,356,118">页面引用 / page_context</text>
+<path d="M572 498 L602 498" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#current-flow-arrow-blue)"/>
+<rect x="608.0" y="431" width="564.0" height="134" rx="12" fill="#EEF3FF"/>
+<text x="628.0" y="465" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,439,540.0,118">建立会话</text>
+<text x="628.0" y="501" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,439,540.0,118">校验配置并取得会话</text>
+<text x="628.0" y="531" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,439,540.0,118">写入本轮用户消息</text>
+<path d="M1175 498 L1191 498" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#current-flow-arrow-blue)"/>
+<rect x="1196.0" y="431" width="564.0" height="134" rx="12" fill="#EEF3FF"/>
+<text x="1216.0" y="465" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,439,540.0,118">准备追踪</text>
+<text x="1216.0" y="501" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,439,540.0,118">创建 Agent Trace</text>
+<text x="1216.0" y="531" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,439,540.0,118">发出正在理解的 SSE 状态</text>
+<path d="M1763 498 L1819 498" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#current-flow-arrow-blue)"/>
+<rect x="1824" y="431" width="484" height="134" rx="12" fill="#EEF3FF"/>
+<text x="1844" y="465" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,439,460,118">输出</text>
+<text x="1844" y="501" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,439,460,118">会话 ID 与本轮请求</text>
+<text x="1844" y="531" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,439,460,118">可关联的执行追踪</text>
+<path d="M188 585 L2308 585" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="617" font-size="20" fill="#315CDD" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="617" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">会话写入失败 → 错误事件；页面引用只能作为本轮显式上下文。</text>
+</g>
+<path d="M100 770 L100 1007" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#current-flow-arrow-purple)"/>
+<g id="current-flow-goal" data-step="2">
+<rect x="66" y="694" width="68" height="68" rx="22" fill="#7452B7"/>
+<text x="100" y="739" font-size="30" fill="white" font-weight="700" text-anchor="middle">02</text>
+<rect x="160" y="688" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="730" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">抽取并保存购物目标</text>
+<text x="2308" y="728" font-size="20" fill="#7452B7" font-weight="400" text-anchor="end">ShoppingGoalOrchestrator</text>
+<rect x="188" y="752" width="380" height="134" rx="12" fill="#F3EFFB"/>
+<text x="208" y="786" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,760,356,118">输入</text>
+<text x="208" y="822" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,760,356,118">本轮表达与页面上下文</text>
+<text x="208" y="852" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,760,356,118">已有 ShoppingGoal（若有）</text>
+<path d="M572 819 L602 819" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#current-flow-arrow-purple)"/>
+<rect x="608.0" y="752" width="564.0" height="134" rx="12" fill="#F3EFFB"/>
+<text x="628.0" y="786" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,760,540.0,118">抽取变化</text>
+<text x="628.0" y="822" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,760,540.0,118">识别品类、预算、排除项</text>
+<text x="628.0" y="852" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,760,540.0,118">合并到已有目标并留版本</text>
+<path d="M1175 819 L1191 819" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#current-flow-arrow-purple)"/>
+<rect x="1196.0" y="752" width="564.0" height="134" rx="12" fill="#F3EFFB"/>
+<text x="1216.0" y="786" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,760,540.0,118">判断澄清</text>
+<text x="1216.0" y="822" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,760,540.0,118">缺项或冲突时可提前提问</text>
+<text x="1216.0" y="852" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,760,540.0,118">否则把目标交给运行时</text>
+<path d="M1763 819 L1819 819" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#current-flow-arrow-purple)"/>
+<rect x="1824" y="752" width="484" height="134" rx="12" fill="#F3EFFB"/>
+<text x="1844" y="786" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,760,460,118">输出</text>
+<text x="1844" y="822" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,760,460,118">持久化的购物目标</text>
+<text x="1844" y="852" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,760,460,118">或提前返回澄清问题</text>
+<path d="M188 906 L2308 906" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="938" font-size="20" fill="#7452B7" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="938" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">已观察：目标保存了，但下游意图仍先从本轮短句重判；只说“再加一条”时可能断开原任务。</text>
+</g>
+<path d="M100 1091 L100 1328" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#current-flow-arrow-blue)"/>
+<g id="current-flow-route" data-step="3">
+<rect x="66" y="1015" width="68" height="68" rx="22" fill="#315CDD"/>
+<text x="100" y="1060" font-size="30" fill="white" font-weight="700" text-anchor="middle">03</text>
+<rect x="160" y="1009" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="1051" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">按意图选择计划与工具</text>
+<text x="2308" y="1049" font-size="20" fill="#315CDD" font-weight="400" text-anchor="end">ShoppingAgentRuntime + Planner</text>
+<rect x="188" y="1073" width="380" height="134" rx="12" fill="#EEF3FF"/>
+<text x="208" y="1107" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,1081,356,118">输入</text>
+<text x="208" y="1143" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1081,356,118">本轮文字、购物目标</text>
+<text x="208" y="1173" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1081,356,118">页面上下文与候选商品</text>
+<path d="M572 1140 L602 1140" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#current-flow-arrow-blue)"/>
+<rect x="608.0" y="1073" width="564.0" height="134" rx="12" fill="#EEF3FF"/>
+<text x="628.0" y="1107" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,1081,540.0,118">选择意图</text>
+<text x="628.0" y="1143" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1081,540.0,118">route_with_candidates 先看本轮</text>
+<text x="628.0" y="1173" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1081,540.0,118">部分回退路由再参考目标</text>
+<path d="M1175 1140 L1191 1140" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#current-flow-arrow-blue)"/>
+<rect x="1196.0" y="1073" width="564.0" height="134" rx="12" fill="#EEF3FF"/>
+<text x="1216.0" y="1107" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,1081,540.0,118">生成执行计划</text>
+<text x="1216.0" y="1143" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1081,540.0,118">选择推荐 / 比较 / 评论等任务</text>
+<text x="1216.0" y="1173" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1081,540.0,118">设步骤依赖与工具授权</text>
+<path d="M1763 1140 L1819 1140" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#current-flow-arrow-blue)"/>
+<rect x="1824" y="1073" width="484" height="134" rx="12" fill="#EEF3FF"/>
+<text x="1844" y="1107" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,1081,460,118">输出</text>
+<text x="1844" y="1143" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1081,460,118">任务类型与 AgentPlan</text>
+<text x="1844" y="1173" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1081,460,118">允许调用的工具集合</text>
+<path d="M188 1227 L2308 1227" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="1259" font-size="20" fill="#315CDD" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="1259" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">已观察：“只比较数据，不需要推荐”的追问仍调用 product_reviews；工具选择超出用户所问。</text>
+</g>
+<path d="M100 1412 L100 1649" fill="none" stroke="#B76817" stroke-width="2.8" marker-end="url(#current-flow-arrow-orange)"/>
+<g id="current-flow-tools" data-step="4">
+<rect x="66" y="1336" width="68" height="68" rx="22" fill="#B76817"/>
+<text x="100" y="1381" font-size="30" fill="white" font-weight="700" text-anchor="middle">04</text>
+<rect x="160" y="1330" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="1372" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">执行工具并取得候选事实</text>
+<text x="2308" y="1370" font-size="20" fill="#B76817" font-weight="400" text-anchor="end">PlanExecutor / tools / mock-api / RAG</text>
+<rect x="188" y="1394" width="380" height="134" rx="12" fill="#FFF5E7"/>
+<text x="208" y="1428" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,1402,356,118">输入</text>
+<text x="208" y="1464" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1402,356,118">计划与工具参数</text>
+<text x="208" y="1494" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1402,356,118">商品 ID、搜索词、页面引用</text>
+<path d="M572 1461 L602 1461" fill="none" stroke="#B76817" stroke-width="2.8" marker-end="url(#current-flow-arrow-orange)"/>
+<rect x="608.0" y="1394" width="564.0" height="134" rx="12" fill="#FFF5E7"/>
+<text x="628.0" y="1428" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,1402,540.0,118">查商品</text>
+<text x="628.0" y="1464" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1402,540.0,118">product_search 找候选</text>
+<text x="628.0" y="1494" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1402,540.0,118">product_snapshot 核实事实</text>
+<path d="M1175 1461 L1191 1461" fill="none" stroke="#B76817" stroke-width="2.8" marker-end="url(#current-flow-arrow-orange)"/>
+<rect x="1196.0" y="1394" width="564.0" height="134" rx="12" fill="#FFF5E7"/>
+<text x="1216.0" y="1428" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,1402,540.0,118">按计划补证</text>
+<text x="1216.0" y="1464" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1402,540.0,118">必要时查评论或 RAG</text>
+<text x="1216.0" y="1494" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1402,540.0,118">记录调用、耗时与结果</text>
+<path d="M1763 1461 L1819 1461" fill="none" stroke="#B76817" stroke-width="2.8" marker-end="url(#current-flow-arrow-orange)"/>
+<rect x="1824" y="1394" width="484" height="134" rx="12" fill="#FFF5E7"/>
+<text x="1844" y="1428" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,1402,460,118">输出</text>
+<text x="1844" y="1464" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1402,460,118">候选集、事实快照</text>
+<text x="1844" y="1494" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1402,460,118">评论 / 知识证据及工具 Trace</text>
+<path d="M188 1548 L2308 1548" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="1580" font-size="20" fill="#B76817" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="1580" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">已观察：部分商品库存为 unknown；重复读取仍无新证据时，当前链路可能只让用户继续“重试”。</text>
+</g>
+<path d="M100 1733 L100 1970" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#current-flow-arrow-teal)"/>
+<g id="current-flow-decide" data-step="5">
+<rect x="66" y="1657" width="68" height="68" rx="22" fill="#087F79"/>
+<text x="100" y="1702" font-size="30" fill="white" font-weight="700" text-anchor="middle">05</text>
+<rect x="160" y="1651" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="1693" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">过滤、排序、比较并起草回答</text>
+<text x="2308" y="1691" font-size="20" fill="#087F79" font-weight="400" text-anchor="end">CandidatePolicy / Comparator / Composer</text>
+<rect x="188" y="1715" width="380" height="134" rx="12" fill="#EAF7F4"/>
+<text x="208" y="1749" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,1723,356,118">输入</text>
+<text x="208" y="1785" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1723,356,118">目标约束与候选集</text>
+<text x="208" y="1815" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1723,356,118">价格、规格、库存等事实</text>
+<path d="M572 1782 L602 1782" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#current-flow-arrow-teal)"/>
+<rect x="608.0" y="1715" width="564.0" height="134" rx="12" fill="#EAF7F4"/>
+<text x="628.0" y="1749" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,1723,540.0,118">确定性决策</text>
+<text x="628.0" y="1785" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1723,540.0,118">硬过滤并排序候选</text>
+<text x="628.0" y="1815" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1723,540.0,118">形成比较矩阵或评论摘要</text>
+<path d="M1175 1782 L1191 1782" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#current-flow-arrow-teal)"/>
+<rect x="1196.0" y="1715" width="564.0" height="134" rx="12" fill="#EAF7F4"/>
+<text x="1216.0" y="1749" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,1723,540.0,118">组织回答</text>
+<text x="1216.0" y="1785" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1723,540.0,118">比较回答固定读价格与规格</text>
+<text x="1216.0" y="1815" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1723,540.0,118">已知价格还会追加低价结论</text>
+<path d="M1763 1782 L1819 1782" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#current-flow-arrow-teal)"/>
+<rect x="1824" y="1715" width="484" height="134" rx="12" fill="#EAF7F4"/>
+<text x="1844" y="1749" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,1723,460,118">输出</text>
+<text x="1844" y="1785" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1723,460,118">带商品事实的回答草稿</text>
+<text x="1844" y="1815" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1723,460,118">推荐 / 比较 / 降级结果</text>
+<path d="M188 1869 L2308 1869" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="1901" font-size="20" fill="#087F79" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="1901" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">已观察：即使用户明确“不涉及价格”，比较草稿仍可能包含价格；库存未知时推荐可能停在兜底。</text>
+</g>
+<path d="M100 2054 L100 2291" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#current-flow-arrow-teal)"/>
+<g id="current-flow-verify" data-step="6">
+<rect x="66" y="1978" width="68" height="68" rx="22" fill="#087F79"/>
+<text x="100" y="2023" font-size="30" fill="white" font-weight="700" text-anchor="middle">06</text>
+<rect x="160" y="1972" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="2014" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">核对证据并形成终态</text>
+<text x="2308" y="2012" font-size="20" fill="#087F79" font-weight="400" text-anchor="end">GroundingVerifier</text>
+<rect x="188" y="2036" width="380" height="134" rx="12" fill="#EAF7F4"/>
+<text x="208" y="2070" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,2044,356,118">输入</text>
+<text x="208" y="2106" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,2044,356,118">回答草稿及其 claim</text>
+<text x="208" y="2136" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,2044,356,118">快照、候选、排序与证据</text>
+<path d="M572 2103 L602 2103" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#current-flow-arrow-teal)"/>
+<rect x="608.0" y="2036" width="1152.0" height="134" rx="12" fill="#EAF7F4"/>
+<text x="628.0" y="2070" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,2044,1128.0,118">校验与修复</text>
+<text x="628.0" y="2106" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,2044,1128.0,118">核对商品、数值和证据绑定</text>
+<text x="628.0" y="2136" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,2044,1128.0,118">失败时尝试有界修复</text>
+<path d="M1763 2103 L1819 2103" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#current-flow-arrow-teal)"/>
+<rect x="1824" y="2036" width="484" height="134" rx="12" fill="#EAF7F4"/>
+<text x="1844" y="2070" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,2044,460,118">输出</text>
+<text x="1844" y="2106" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,2044,460,118">核验后的结构化 payload</text>
+<text x="1844" y="2136" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,2044,460,118">或 fallback / clarification</text>
+<path d="M188 2190 L2308 2190" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="2222" font-size="20" fill="#087F79" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="2222" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">当前校验聚焦事实有无依据；有证据的“未请求价格”仍可能穿过，说明约束没有贯穿到最终输出。</text>
+</g>
+<g id="current-flow-deliver" data-step="7">
+<rect x="66" y="2299" width="68" height="68" rx="22" fill="#7452B7"/>
+<text x="100" y="2344" font-size="30" fill="white" font-weight="700" text-anchor="middle">07</text>
+<rect x="160" y="2293" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="2335" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">流式返回并持久化结果</text>
+<text x="2308" y="2333" font-size="20" fill="#7452B7" font-weight="400" text-anchor="end">service.py / SSE + MemoryStore</text>
+<rect x="188" y="2357" width="380" height="134" rx="12" fill="#F3EFFB"/>
+<text x="208" y="2391" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,2365,356,118">输入</text>
+<text x="208" y="2427" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,2365,356,118">结构化终态 payload</text>
+<text x="208" y="2457" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,2365,356,118">工具与证据追踪</text>
+<path d="M572 2424 L602 2424" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#current-flow-arrow-purple)"/>
+<rect x="608.0" y="2357" width="564.0" height="134" rx="12" fill="#F3EFFB"/>
+<text x="628.0" y="2391" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,2365,540.0,118">交付给用户</text>
+<text x="628.0" y="2427" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,2365,540.0,118">发送 status / delta / done</text>
+<text x="628.0" y="2457" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,2365,540.0,118">前端读取回答和商品引用</text>
+<path d="M1175 2424 L1191 2424" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#current-flow-arrow-purple)"/>
+<rect x="1196.0" y="2357" width="564.0" height="134" rx="12" fill="#F3EFFB"/>
+<text x="1216.0" y="2391" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,2365,540.0,118">留下续问状态</text>
+<text x="1216.0" y="2427" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,2365,540.0,118">写入助手消息与结构化响应</text>
+<text x="1216.0" y="2457" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,2365,540.0,118">关联 Agent Trace 和 query trace</text>
+<path d="M1763 2424 L1819 2424" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#current-flow-arrow-purple)"/>
+<rect x="1824" y="2357" width="484" height="134" rx="12" fill="#F3EFFB"/>
+<text x="1844" y="2391" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,2365,460,118">输出</text>
+<text x="1844" y="2427" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,2365,460,118">用户看到的推荐 / 比较 / 兜底</text>
+<text x="1844" y="2457" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,2365,460,118">下一轮可恢复的会话记录</text>
+<path d="M188 2511 L2308 2511" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="2543" font-size="20" fill="#7452B7" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="2543" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">上一轮输出若只有固定兜底、缺少可执行的新路径，多轮测试会反复得到相同答复。</text>
+</g>
+<path d="M64 2636 L2336 2636" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="64" y="2672" font-size="19" fill="#52647B" font-weight="400" text-anchor="start">实线箭头为逻辑主链。分支栏的“已观察”基于代码与 Kayn 样例，不代表每轮都会触发。</text>
+</svg>

@@ -18,7 +18,7 @@
 | 阶段 G | AImodel | 完成前端 AI 聊天、商品工具、会话记忆、AImodel Intent Router、受控联网搜索和 RAG MCP 集成 | [✔] |
 | 阶段 H | 飞书应用与协作后台 | 完成 feishu-adapter、多维表格 read model、主动通知和飞书应用搭建 | [~] |
 | 阶段 I | Quality And Delivery | 完成全量质量门禁、演示脚本和部署检查 | [~] |
-| 阶段 J | RPA Data Operations | 建立通用影刀网页导出 CSV 与 pandas processor 能力，并完成京东 URL 发现、影刀采集和 pandas 处理的自动流水线 | [✔] |
+| 阶段 J | RPA Data Operations | 建立通用网页数据文件流水线，并完成京东影刀采集与 Playwright 全自动采集双模式 | [~] |
 
 ### 6.2 交付里程碑
 
@@ -33,7 +33,7 @@
 | 阶段 G | AImodel 持续增强 | 流式聊天、工具调用、会话记忆、AImodel Intent Router、受控联网搜索、RAG MCP | `uv run --project services/ai-service pytest services\ai-service\tests -q` | 飞书应用与协作后台 | 2026-06-29 |
 | 阶段 H | 飞书协作后台可演进 | 飞书机器人、表格同步、主动通知、运营驾驶舱首页、业务操作页、订单明细、商品、秒杀 read model 分页同步 | `uv run --project services/feishu-adapter pytest services\feishu-adapter\tests -q` | Quality And Delivery |  |
 | 阶段 I | 质量门禁持续完善 | 全量验证、演示检查、部署说明 | 全量测试矩阵 | RPA Data Operations |  |
-| 阶段 J | 京东商品文件流水线已完成并可扩展 | URL 发现、影刀采集、pandas 标准化、失败 CSV、manifest、pipeline result 和断点续跑 | `uv run --project services/data-ops pytest services\data-ops\tests -q` | 数据入库与商品关联另行设计 | 2026-07-19 |
+| 阶段 J | 京东影刀流水线已完成，Playwright 全自动模式待实现 | URL 发现、影刀采集、pandas 标准化、失败 CSV、manifest、pipeline result 和断点续跑 | `uv run --project services/data-ops pytest services\data-ops\tests -q` | J10 DiscoveryOnly 与 Playwright 详情采集 |  |
 
 ### 6.3 任务跟踪表
 
@@ -161,6 +161,7 @@
 | J7 | 打通京东商品端到端文件链路 | [✔] | 2026-07-19 | jd_product 原始 CSV 到标准化结果 |
 | J8 | 实现扩展指南与阶段质量门禁 | [✔] | 2026-07-19 | 新站点模板、自动测试、影刀人工验收 |
 | J9 | 实现京东商品 URL 发现与自动采集处理流水线 | [✔] | 2026-07-19 | 真实影刀批次 5/5 标准化、pipeline result 退出码 0，并支持无 runner 的 pandas 续跑 |
+| J10 | 实现 DiscoveryOnly 与 Playwright 全自动京东商品采集 | [ ] |  | 双采集器模式、授权会话、13 列原始 CSV、pandas 全链路 |
 
 ### 6.4 总体进度表
 
@@ -175,8 +176,8 @@
 | 阶段 G | 11 | 11 | 100% |
 | 阶段 H | 13 | 11 | 85% |
 | 阶段 I | 7 | 2 | 29% |
-| 阶段 J | 9 | 9 | 100% |
-| **总计** | **75** | **68** | **91%** |
+| 阶段 J | 10 | 9 | 90% |
+| **总计** | **76** | **68** | **89%** |
 
 ### 6.5 阶段实施明细
 
@@ -2232,3 +2233,91 @@
 - 全链路只生成和处理文件，不新增数据表，不查询或修改 `items`，不调用 mock-api、Operations Workflow 或飞书接口。
 
 测试方法：`uv run --project services/data-ops pytest services\data-ops\tests\test_jd_product_url_discovery.py services\data-ops\tests\test_jd_product_pipeline.py -q`，其中 URL discovery 测试以 `max_pages=1`、受控 `max_items` 访问真实京东并断言发现结果；`uv run --project services/data-ops pytest services\data-ops\tests -q`；使用已登录影刀、同一受控京东入口人工执行 `scripts\run_jd_product_pipeline.ps1`，核对 URL CSV、影刀原始 CSV、标准/失败 CSV、manifest、pipeline_result.json 和进程退出码
+
+##### J10：实现 DiscoveryOnly 与 Playwright 全自动京东商品采集
+
+目标：在现有 J9 文件契约和 pandas processor 之上增加纯 URL 发现模式与 Playwright 详情采集器，使京东小批次可以通过一条 PowerShell 命令完成 URL 发现、详情采集、原始 CSV 导出、pandas 标准化和结果汇总；保留影刀采集器作为登录、扫码和人工验证场景的兼容实现。
+
+修改文件：
+
+- `.gitignore`
+- `DEV_SPEC.md`
+- `rpa/yingdao/README.md`
+- `services/data-ops/src/data_ops/collectors/__init__.py`
+- `services/data-ops/src/data_ops/collectors/base.py`
+- `services/data-ops/src/data_ops/collectors/jd_product_playwright.py`
+- `services/data-ops/src/data_ops/orchestration/jd_product_pipeline.py`
+- `services/data-ops/tests/test_jd_product_playwright.py`
+- `services/data-ops/tests/test_jd_product_pipeline.py`
+- `scripts/run_jd_product_pipeline.ps1`
+- `tests/test_current_docs.py`
+
+实现类/函数：
+
+- `CollectorMode`：定义 `playwright` 与 `yingdao` 两种详情采集模式；默认值必须在 CLI 和 PowerShell 中一致，模式选择不得改变原始 CSV 契约。
+- `ProductDetailCollector`：定义 `collect(request) -> CaptureResult` 接口，输入批次 ID、URL CSV 和原始 CSV 目标路径，输出采集状态、计数和稳定错误码。
+- `PlaywrightJdProductCollector`：读取 `input_index,product_url`，默认串行访问详情页，提取 SKU、标题、展示价格、店铺、主图和空的 `capture_region`，并为每个输入 URL 输出且只输出一行。
+- `JdSelectorSet`：集中保存标题、价格、店铺和主图的候选选择器及字段级 fallback；禁止使用完整绝对 XPath，禁止把京东选择器写入通用 collector 或 pipeline。
+- `load_jd_browser_context`：优先使用调用者配置的专用 user data directory 或 storage state 创建授权浏览器上下文；会话文件只允许位于仓库外或 Git 忽略目录。
+- `classify_jd_page_state`：识别正常、字段缺失、导航失败、加载超时、登录或验证码、访问限制状态，并映射到现有 `crawl_status/error_code`。
+- `run_jd_product_pipeline`：增加 `discovery_only` 与 `collector_mode` 参数；DiscoveryOnly 在 URL CSV 和结果 JSON 发布后结束，Playwright 模式不构造 Yingdao runner，Yingdao 模式保持 J9 行为。
+- `write_pipeline_result`：DiscoveryOnly 使用 `status=discovery_complete,exit_code=0`，只记录发现计数和 URL CSV；完整模式继续记录 discovered、captured、normalized、failed 和全部产物路径。
+- `Invoke-JdProductPipeline`：PowerShell 增加 `-DiscoveryOnly` 和 `-CollectorMode playwright|yingdao`，并只校验当前模式实际需要的参数。
+
+运行契约：
+
+```text
+DiscoveryOnly
+  京东关键词/搜索或分类入口
+    -> Playwright URL discovery
+    -> input_index,product_url CSV
+    -> pipeline_result.json(status=discovery_complete, exit_code=0)
+
+CollectorMode=playwright
+  URL CSV
+    -> PlaywrightJdProductCollector
+    -> 13 列 jd_product 原始 CSV
+    -> JdProductProcessor
+    -> normalized/failed CSV + manifest + pipeline_result.json
+
+CollectorMode=yingdao
+  URL CSV
+    -> 现有 Yingdao runner 或手工影刀文件交接
+    -> 同一 13 列 jd_product 原始 CSV
+    -> 同一 JdProductProcessor 与批次产物
+```
+
+登录与安全约束：
+
+- Playwright 默认使用 Chrome channel 和专用浏览器 Profile，不直接复用正在运行的个人 Chrome/Edge 默认 Profile；Profile 路径通过 `JD_PLAYWRIGHT_USER_DATA_DIR` 或等价命令参数配置。
+- `JD_PLAYWRIGHT_STORAGE_STATE` 继续作为可选授权状态输入。Profile、storage state、Cookie、账号、密码和验证码内容不得提交 Git，不得复制到 discovery、raw、manifest 或 pipeline result。
+- 首次登录或会话失效时允许以 headful 模式打开浏览器，由用户手工完成登录；自动流程不输入密码、不识别或绕过验证码。
+- 登录页、二维码页、验证码页和访问限制页必须停止当前批次并返回 `manual_verification_required` 或 `access_restricted`，不得把异常页面内容当作商品字段。
+
+验收标准：
+
+- `-DiscoveryOnly` 只生成规范 URL CSV 和 `pipeline_result.json`，不创建 collector、不要求影刀或登录状态、不执行 pandas，退出码为 0。
+- `-CollectorMode playwright` 从真实京东分类入口开始，通过一条 PowerShell 命令生成 URL CSV、13 列原始 CSV、标准 CSV、失败 CSV、manifest 和 pipeline result，全程不要求用户启动影刀。
+- Playwright 原始 CSV 的列顺序、状态语义、文件命名和一行输入对应一行输出约束与影刀完全一致，现有 `JdProductProcessor` 不增加采集器条件分支。
+- 真实京东小批次使用 `max_pages=1`、`max_items<=5`，至少产生一行字段完整的标准化商品；标题、展示价格、店铺和主图均来自当前可见详情页。
+- 第一版默认串行采集，不提供高并发参数；翻页数、商品数、页面超时和批次超时均有明确上限。
+- 页面字段缺失时输出 `partial/field_missing`；导航、超时、登录、验证码和访问限制使用现有稳定错误码，失败行不得静默丢弃。
+- 已存在 URL CSV 时跳过 discovery；已存在原始 CSV 或 manifest 时按 J9 规则续跑；同一 batch 仍由文件锁禁止并发。
+- `CollectorMode=yingdao` 的现有测试、手工交接与无 runner 的 pandas 续跑不得回归。
+- 全链路不新增数据库表，不读取或修改 `items`，不调用 mock-api、Operations Workflow 或飞书接口。
+
+测试方法：
+
+- `uv run --project services/data-ops pytest services\data-ops\tests\test_jd_product_playwright.py services\data-ops\tests\test_jd_product_pipeline.py -q`
+- `uv run --project services/data-ops pytest services\data-ops\tests -q`
+- `uv run --project services/data-ops ruff check services\data-ops\src services\data-ops\tests`
+- DiscoveryOnly 自动测试断言只存在 URL CSV 和 discovery result，不构造任何 collector。
+- Playwright 详情采集必须包含一个受控的真实京东 smoke test；该测试不得静默跳过或降级为 HTML fixture。合成 HTML 仅用于稳定覆盖字段缺失、登录页和访问限制等错误分支。
+- 使用同一批次分别执行 `CollectorMode=playwright` 与 `CollectorMode=yingdao` 契约测试，断言两种 raw CSV 都能被现有 processor 接受且产物计数可对账。
+
+范围外事项：
+
+- J10 不实现淘宝或其他网站 collector；后续网站通过新增独立 collector 和 processor 接入。
+- J10 不删除影刀应用、影刀文档或 Yingdao runner。
+- J10 不实现验证码识别、访问限制绕过、代理池、账号池或高并发爬取。
+- J10 不实现商品分类 profile、标题关键词过滤、数据入库、`items` 关联或下游展示。

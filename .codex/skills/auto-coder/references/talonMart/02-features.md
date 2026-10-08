@@ -29,11 +29,14 @@ AImodel 负责用户购物咨询、商品对比和工具编排，商品事实由
 
 ### 2.7 影刀 RPA 与 pandas 文件流水线
 
-阶段 J 建立两块相互独立、通过 CSV 契约协作的通用能力，并以京东商品自动采集流水线完成首个自动编排实例：
+阶段 J 建立三块相互独立、通过 CSV 契约协作的通用能力，并以京东商品采集流水线完成首个实现：
 
 1. **影刀网页导出 CSV**：通用模板负责读取输入清单、打开已授权页面、等待页面就绪、调用站点适配子流程、记录成功或失败行并导出原始 CSV。新增目标网站或页面时只增加站点实现，不复制批次循环、错误记录和 CSV 导出骨架。
-2. **pandas 数据处理**：通用核心负责 CSV/XLSX 读取、编码统一、dataset contract 校验、processor 路由、行级错误、标准化输出、批次清单、归档和失败重放。新增数据类型时注册新的 dataset processor，不修改通用读取和批次核心。
+2. **Playwright 浏览器采集**：URL discovery 负责从搜索或分类入口生成商品 URL CSV；详情采集器按相同输入清单访问详情页并输出与影刀一致的原始 CSV。`DiscoveryOnly`、Playwright 全自动和影刀采集共用批次与文件契约。
+3. **pandas 数据处理**：通用核心负责 CSV/XLSX 读取、编码统一、dataset contract 校验、processor 路由、行级错误、标准化输出、批次清单、归档和失败重放。新增数据类型时注册新的 dataset processor，不修改通用读取和批次核心。
 
 首个完整实现使用 `dataset_type=jd_product`。京东 URL 发现脚本从关键词或已授权的搜索/分类入口发现商品详情 URL，按 SKU 规范化、去重并生成输入清单；自动编排器把输入清单交给影刀京东商品实现，采集当前页面可见的 SKU、标题、展示价格、店铺、主图和采集状态并导出原始 CSV，再调用对应 pandas processor 输出标准化 CSV、失败 CSV、批次清单和统一流水线结果。
+
+J10 在不删除影刀能力的前提下增加 `DiscoveryOnly` 和 `CollectorMode=playwright|yingdao`。Playwright 模式从 URL 发现到详情采集和 pandas 处理全程自动执行；影刀模式继续作为登录、扫码和人工验证场景的兼容采集器。两种采集器必须输出同一份 `jd_product` 原始 CSV 契约。
 
 阶段 J 只交付通用文件能力和京东商品自动文件流水线：**不新增数据库表，不修改 `items` 表结构或数据，不直接写入 PostgreSQL，不改造 mock-api、Operations Workflow 或飞书 read model**。数据入库、商品关联和下游展示方案由阶段 J 完成后另行设计。

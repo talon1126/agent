@@ -50,22 +50,53 @@ routers:
               all: []
               regex:
                 - ".*参数.*怎么看.*"
+          fact_comparison:
+            action: product_api
+            collection: null
+            priority: 125
+            confidence: 0.94
+            rag_enabled: false
+            match:
+              any: []
+              all: []
+              regex:
+                - ".*(?:\u5bf9\u6bd4|\u6bd4\u8f83|\u533a\u522b|\u5dee\u5f02|\u5dee\u522b|vs).*(?:\u4ef7\u683c|\u89c4\u683c|\u53c2\u6570|\u7528\u9014|\u529f\u80fd).*"
+                - ".*(?:\u4ef7\u683c|\u89c4\u683c|\u53c2\u6570|\u7528\u9014|\u529f\u80fd).*(?:\u5bf9\u6bd4|\u6bd4\u8f83|\u533a\u522b|\u5dee\u5f02|\u5dee\u522b|vs).*"
           comparison:
             action: rag
             collection: shopping_guides
-            priority: 60
-            confidence: 0.80
+            priority: 110
+            confidence: 0.90
             match:
               any:
                 - 对比
                 - 区别
                 - 差异
+                - 差别
                 - 哪个更好
                 - vs
                 - 比较
               all: []
               regex:
                 - ".*和.*区别.*"
+                - ".*和.*差别.*"
+          review_summary:
+            action: product_api
+            collection: null
+            priority: 115
+            confidence: 0.92
+            rag_enabled: false
+            match:
+              any:
+                - 评价
+                - 评论
+                - 口碑
+                - 差评
+                - 好评
+                - 负面反馈
+              all: []
+              regex:
+                - ".*(评价|评论).*(反映|集中|总结|怎么样).*"
           price_promotion:
             action: product_api
             collection: null

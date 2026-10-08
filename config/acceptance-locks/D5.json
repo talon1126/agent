@@ -1,0 +1,12 @@
+{
+  "baseline_commit": "d86dfa7032c9bb2d6048a18ad8accf56e6584575",
+  "commit_mode": "single",
+  "files": {
+    "tests/acceptance/d5/test_d5_grounding_verifier_contract.py": "a19d814c0da7941883eedcad9a0d24025662b920156d1ff47ab0ebc126364fc1"
+  },
+  "generated_at": "2026-09-22T03:07:14Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "D5",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

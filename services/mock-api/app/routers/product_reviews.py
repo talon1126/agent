@@ -3,7 +3,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.routers.warehouse.state import get_warehouse_repository
 
@@ -17,8 +17,26 @@ class ItemReviewCreate(BaseModel):
     content: str
 
 
+class ItemReviewBatchRequest(BaseModel):
+    item_ids: list[str] = Field(min_length=1, max_length=5)
+    limit: int = Field(default=100, ge=1, le=100)
+
+    @field_validator("item_ids")
+    @classmethod
+    def validate_item_ids(cls, value: list[str]) -> list[str]:
+        normalized = [item_id.strip() for item_id in value]
+        if any(not item_id for item_id in normalized):
+            raise ValueError("item IDs cannot be empty")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("item IDs must be unique")
+        return normalized
+
+
 def error_response(status_code: int, error: str, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"ok": False, "error": error, "message": message})
+    return JSONResponse(
+        status_code=status_code,
+        content={"ok": False, "error": error, "message": message},
+    )
 
 
 def validate_review_payload(payload: ItemReviewCreate) -> str | None:
@@ -48,6 +66,57 @@ def item_review_response(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@router.post("/items/reviews/batch", response_model=None)
+def batch_item_reviews(payload: ItemReviewBatchRequest):
+    """Return one ordered, source-versioned review read for Agent comparison."""
+
+    repository = get_warehouse_repository()
+    if not repository:
+        return error_response(
+            503,
+            "item_review_backend_unavailable",
+            "Postgres backend is required.",
+        )
+
+    captured_at = datetime.now(UTC).isoformat()
+    items: list[dict[str, Any]] = []
+    for item_id in payload.item_ids:
+        if not repository.get_item_detail(item_id):
+            items.append(
+                {
+                    "item_id": item_id,
+                    "status": "error",
+                    "error": {
+                        "code": "item_not_found",
+                        "message": "Item not found.",
+                    },
+                }
+            )
+            continue
+        reviews = [
+            item_review_response(row)
+            for row in repository.list_item_reviews(
+                item_id,
+                limit=payload.limit,
+                offset=0,
+            )
+        ]
+        items.append(
+            {
+                "item_id": item_id,
+                "status": "ok",
+                "summary": repository.item_review_summary(item_id),
+                "reviews": reviews,
+            }
+        )
+    return {
+        "ok": True,
+        "source_version": "mock-api-item-reviews-v1",
+        "captured_at": captured_at,
+        "items": items,
+    }
+
+
 @router.get("/items/{item_id}/reviews", response_model=None)
 def list_item_reviews(
     item_id: str,
@@ -56,11 +125,16 @@ def list_item_reviews(
 ):
     repository = get_warehouse_repository()
     if not repository:
-        return error_response(503, "item_review_backend_unavailable", "Postgres backend is required.")
+        return error_response(
+            503, "item_review_backend_unavailable", "Postgres backend is required."
+        )
     if not repository.get_item_detail(item_id):
         return error_response(404, "item_not_found", "Item not found.")
 
-    reviews = [item_review_response(row) for row in repository.list_item_reviews(item_id, limit=limit, offset=offset)]
+    reviews = [
+        item_review_response(row)
+        for row in repository.list_item_reviews(item_id, limit=limit, offset=offset)
+    ]
     return {
         "ok": True,
         "item_id": item_id,
@@ -74,7 +148,9 @@ def list_item_reviews(
 def create_item_review(item_id: str, payload: ItemReviewCreate):
     repository = get_warehouse_repository()
     if not repository:
-        return error_response(503, "item_review_backend_unavailable", "Postgres backend is required.")
+        return error_response(
+            503, "item_review_backend_unavailable", "Postgres backend is required."
+        )
     if not repository.get_item_detail(item_id):
         return error_response(404, "item_not_found", "Item not found.")
 

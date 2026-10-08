@@ -1,0 +1,136 @@
+{
+  "generated_at": "2026-09-23T19:33:34+08:00",
+  "scope": "Documentation and image rendering only; no product task acceptance or release certification.",
+  "source_basis": "01: current system; 02: complete target Agent-RAG architecture; 03: ten-step decision flow with knowledge, action and learning support paths.",
+  "git_head": "3c975d603dd5cbbdaf2678342f847f2fde87527e",
+  "sources": [
+    {
+      "path": "DEV_SPEC.md",
+      "sha256": "e4c62ae625f473c017d23dae992f68ad8eb64338a3143a030008a8d5ac247250"
+    },
+    {
+      "path": "README.md",
+      "sha256": "34cadcdf3b8594e18b30eec6170d289e8c44baa3361102b92086a0be9341981c"
+    },
+    {
+      "path": "AGENT_TASKBOOK.md",
+      "sha256": "7100fc81bc2676c1a83534f4d90d72f1bfc914ed60c47c03df210a90d1b62de0"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "c4975e8b7630f2db88e3dabf2233f7b82e4a9818861e1fb05ce6d002d587e3d3"
+    },
+    {
+      "path": "docker-compose.yml",
+      "sha256": "7a92e60cdff363981e17bc695226eac1ad63dcf2c4b9b08d80eb25ebe4f8557c"
+    },
+    {
+      "path": "apps/talonmart-web/vite.config.ts",
+      "sha256": "cad3aa848f0c96d9e285cccb02b579a2460b900e7f9e64f40fa673ebdb16de9b"
+    },
+    {
+      "path": "services/ai-service/app/routers/AImodel/service.py",
+      "sha256": "4ecc512e576f82f1955470901591746d7166c3d8b7f31faf51e553029a1f4e3c"
+    },
+    {
+      "path": "services/ai-service/app/routers/AImodel/agent_runtime.py",
+      "sha256": "ea5046ab911690ef948f7182085783080bd93588f5eb82184e7d370cc4eddd24"
+    },
+    {
+      "path": "services/ai-service/rag/config/settings.example.yaml",
+      "sha256": "006418b593123073333fc1f06f3d81d867dc16154e2810dc2c1979f1851ce813"
+    },
+    {
+      "path": "services/postgres/Dockerfile",
+      "sha256": "f8376f7cd5e2b6d5c69d9a358fc9e38091dc1c75a319ea1af2ccb23a2fcc9ee4"
+    },
+    {
+      "path": "services/data-ops/src/data_ops/collectors/jd_product_playwright.py",
+      "sha256": "b816f28f6bcd825f8a03e20ec672674e9fe529d8220f8c98d5a1b271f1afe6db"
+    }
+  ],
+  "public_references": [
+    {
+      "url": "https://developer.jdcloud.com/article/4187",
+      "published": "2025-01-15",
+      "use": "Jingyan proactive dialogue, product comparison, review summary and knowledge retrieval."
+    },
+    {
+      "url": "https://www.infoq.cn/article/g0s20b379qecxzu8ll4g",
+      "published": "2024-07-31",
+      "use": "Direct interview: intent and product understanding, context, retrieval and information freshness."
+    }
+  ],
+  "browser_checks": {
+    "diagrams": [
+      {
+        "view": "panel-overview",
+        "textCount": 114,
+        "overlaps": [],
+        "forbiddenLabels": [],
+        "outOfBounds": []
+      },
+      {
+        "view": "panel-decision",
+        "textCount": 162,
+        "overlaps": [],
+        "forbiddenLabels": [],
+        "outOfBounds": []
+      },
+      {
+        "view": "panel-flow",
+        "textCount": 312,
+        "overlaps": [],
+        "forbiddenLabels": [],
+        "outOfBounds": []
+      }
+    ],
+    "zoomTest": "150%",
+    "mobile": {
+      "width": 390,
+      "contentWidth": 390,
+      "visiblePanels": 1
+    },
+    "flowMobile": {
+      "width": 390,
+      "contentWidth": 390,
+      "visiblePanels": 1,
+      "stepCount": 10,
+      "navigationVisible": true
+    },
+    "stepNavigation": {
+      "top": 168.15737915039062,
+      "expectedTop": 168,
+      "navigationBottom": 149,
+      "hash": "#agent-flow",
+      "download": "03-agent-flow-breakdown.png"
+    },
+    "deepLink": "true",
+    "forbiddenPageText": false
+  },
+  "raster_export": "Browser SVG to Canvas at 2x; system CJK font; 4800 px width.",
+  "artifacts": [
+    {
+      "file": "01-system-overview.png",
+      "width": 4800,
+      "height": 4320,
+      "bytes": 2304552,
+      "sha256": "d67b25deb0d539ab1f45be27bb38517972b107597469ac62b1b20d47e6ded689"
+    },
+    {
+      "file": "02-agent-rag-flow.png",
+      "width": 4800,
+      "height": 6440,
+      "bytes": 3813772,
+      "sha256": "4e02a3aaaf348362fd3c44c9f047312792e39c8e922331c1f2705d30138e609e"
+    },
+    {
+      "file": "03-agent-flow-breakdown.png",
+      "width": 4800,
+      "height": 9580,
+      "bytes": 5285686,
+      "sha256": "386db86f7e4befbb6c7becc1b68e1e4d7fdcdfe7950bc03e18d312b27a740fd9"
+    }
+  ],
+  "visual_review": "Overview, complete target architecture, ten-step breakdown and responsive page inspected; final images rendered from SVG."
+}

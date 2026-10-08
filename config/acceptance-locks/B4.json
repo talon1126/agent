@@ -1,0 +1,11 @@
+{
+  "files": {
+    "fixtures/evals/clarification_policy_cases.json": "d65b1ddf3ae0a0fee0daed68afdd11d15a5fb4a4c750c8f0bf3560103da503f3",
+    "tests/acceptance/b4/test_b4_clarification_policy_contract.py": "ffec5a8cf28f424597ba1f44ee555339242a839c4e9082df0604911210572e66"
+  },
+  "generated_at": "2026-09-21T02:15:13Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "B4",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

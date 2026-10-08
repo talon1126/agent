@@ -694,6 +694,7 @@ def test_rerank_controller_skips_provider_for_high_confidence_fusion_candidates(
     assert [result.chunk_id for result in outcome.results] == ["chunk-a", "chunk-b"]
     assert outcome.fallback_used is False
     assert outcome.fallback_reason is None
+    assert outcome.rerank_applied is False
     assert reranker.call_count == 0
     assert trace.record_stage.call_args.kwargs["status"] == "skipped"
     details = trace.record_stage.call_args.kwargs["details"]
@@ -721,6 +722,7 @@ def test_rerank_controller_calls_provider_when_skip_gate_is_not_confident() -> N
     assert [result.chunk_id for result in outcome.results] == ["chunk-c", "chunk-b"]
     assert outcome.fallback_used is False
     assert outcome.fallback_reason is None
+    assert outcome.rerank_applied is True
 
 
 def test_rerank_controller_returns_provider_order_and_records_success() -> None:

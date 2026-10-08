@@ -1,0 +1,12 @@
+{
+  "files": {
+    "fixtures/evals/shopping_goal_repository_cases.json": "4c6f3279e450e2eaa8e6f4dd29078e0a9581abf619cf90481788ec3cc8706b01",
+    "tests/acceptance/b5/test_b5_goal_orchestrator_contract.py": "85d8abc74456d6725e0fab08dc16d0b4ff0a2d5a672ae551db7a6c65caf1abc5",
+    "tests/acceptance/b5/test_b5_shopping_goal_repository_contract.py": "fec1ec4b69a36b9e2d5771c7a0ba457f58e15387a06c892c1cb1e5658a4a4332"
+  },
+  "generated_at": "2026-09-21T03:51:57Z",
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_id": "B5",
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492"
+}

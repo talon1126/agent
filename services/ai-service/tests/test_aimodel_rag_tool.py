@@ -1,9 +1,10 @@
-import json
-from typing import Any
+import asyncio
 import importlib
+import json
 import sys
 import threading
 import types
+from typing import Any
 
 import pytest
 
@@ -270,6 +271,42 @@ def test_persistent_mcp_rag_client_reuses_session_until_close(tmp_path) -> None:
     ]
 
 
+def test_persistent_mcp_rag_client_bounds_and_cancels_a_stalled_call(tmp_path) -> None:
+    cancelled = threading.Event()
+
+    async def stalled_call(_: dict[str, Any]) -> dict[str, Any]:
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    client = PersistentMcpRagKnowledgeClient(
+        cwd=tmp_path,
+        call_timeout_seconds=0.05,
+        session_factory=lambda: stalled_call,
+    )
+
+    with pytest.raises(TimeoutError, match="RAG MCP query timed out"):
+        client.query_knowledge_hub(
+            query="办公室耗材怎么选",
+            collection="shopping_guides",
+            top_k=5,
+            no_rerank=False,
+            include_image_base64=False,
+        )
+
+    assert cancelled.wait(timeout=1)
+    client.close()
+
+
+def test_persistent_mcp_rag_client_rejects_non_positive_call_timeout(
+    tmp_path,
+) -> None:
+    with pytest.raises(ValueError, match="call_timeout_seconds must be positive"):
+        PersistentMcpRagKnowledgeClient(cwd=tmp_path, call_timeout_seconds=0)
+
+
 def test_fastapi_shutdown_closes_persistent_rag_client(monkeypatch) -> None:
     """Ensure ai-service shutdown releases the long-lived RAG MCP client."""
 
@@ -283,6 +320,28 @@ def test_fastapi_shutdown_closes_persistent_rag_client(monkeypatch) -> None:
     aimodel_app_main.close_aimodel_rag_client()
 
     assert calls == ["closed"]
+
+
+def test_persistent_mcp_rag_client_prewarms_without_running_a_query(tmp_path) -> None:
+    starts: list[str] = []
+    calls: list[dict[str, Any]] = []
+
+    async def fake_call_tool(payload: dict[str, Any]) -> dict[str, Any]:
+        calls.append(payload)
+        return {"ok": True, "trace_id": "warm-query", "content": "ok"}
+
+    client = PersistentMcpRagKnowledgeClient(
+        cwd=tmp_path,
+        session_factory=lambda: fake_call_tool,
+        on_session_start=lambda: starts.append("start"),
+    )
+
+    client.prewarm()
+    client.prewarm()
+
+    assert starts == ["start"]
+    assert calls == []
+    client.close()
 
 
 def test_close_rag_knowledge_client_does_not_create_unused_client(monkeypatch) -> None:
@@ -497,7 +556,9 @@ def test_lora_sequence_classifier_normalizes_shipping_policy_to_rag(tmp_path) ->
                     }
                 },
                 "label2id": {"support.aftersales.shipping_policy.product_api.none": 0},
-                "id2label": {"0": "support.aftersales.shipping_policy.product_api.none"},
+                "id2label": {
+                    "0": "support.aftersales.shipping_policy.product_api.none"
+                },
             },
             ensure_ascii=False,
         ),
@@ -524,6 +585,7 @@ def test_lora_sequence_classifier_normalizes_shipping_policy_to_rag(tmp_path) ->
     assert candidate["collection"] == "policies"
     assert candidate["collections"] == ["policies"]
 
+
 def test_aimodel_intent_router_routes_presale_explanations_to_shopping_guides() -> None:
     """Broad why/can phrasing should not force buying advice into FAQ."""
 
@@ -547,6 +609,34 @@ def test_aimodel_intent_router_routes_presale_explanations_to_shopping_guides() 
         assert route.collections[0] == "shopping_guides"
         assert route.intent == "buying_recommendation"
         assert route.matched_rule == "support_presale_buying_recommendation"
+
+
+def test_comparison_with_price_terms_uses_fact_only_comparison_route() -> None:
+    router = AImodelIntentRouter(
+        rules=load_aimodel_intent_routes(
+            "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+        ),
+        default_collection="shopping_guides",
+    )
+
+    route = router.route("纯牛奶和原味酸奶的规格、价格有什么差别？")
+
+    assert route.action == "product_api"
+    assert route.intent == "fact_comparison"
+
+
+def test_product_review_question_routes_to_product_api() -> None:
+    router = AImodelIntentRouter(
+        rules=load_aimodel_intent_routes(
+            "services/ai-service/app/routers/AImodel/intent_routes.yaml"
+        ),
+        default_collection="shopping_guides",
+    )
+
+    route = router.route("这台电视的评价集中反映什么？")
+
+    assert route.action == "product_api"
+    assert route.intent == "review_summary"
 
 
 def test_aimodel_intent_router_exposes_top_three_candidate_scores() -> None:

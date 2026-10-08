@@ -1,0 +1,177 @@
+{
+  "commands": [
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/c1/test_c1_product_snapshot_contract.py -q",
+      "duration_seconds": 3.093,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "01-c1.log",
+      "task_id": "C1"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_product_snapshot.py -q",
+      "duration_seconds": 1.719,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "02-c1.log",
+      "task_id": "C1"
+    },
+    {
+      "command": "uv run --project services/mock-api pytest services/mock-api/tests -q",
+      "duration_seconds": 18.641,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "03-c1.log",
+      "task_id": "C1"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/c2/test_c2_candidate_filter_contract.py -q",
+      "duration_seconds": 1.406,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "04-c2.log",
+      "task_id": "C2"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_candidate_filter.py -q",
+      "duration_seconds": 1.375,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "05-c2.log",
+      "task_id": "C2"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/c3/test_c3_feature_normalizer_contract.py -q",
+      "duration_seconds": 1.469,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "06-c3.log",
+      "task_id": "C3"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_feature_normalizer.py -q",
+      "duration_seconds": 1.656,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "07-c3.log",
+      "task_id": "C3"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/c4/test_c4_product_ranker_contract.py -q",
+      "duration_seconds": 2.016,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "08-c4.log",
+      "task_id": "C4"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_product_ranker.py -q",
+      "duration_seconds": 1.828,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "09-c4.log",
+      "task_id": "C4"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest tests/acceptance/c5/test_c5_product_comparison_contract.py -q",
+      "duration_seconds": 1.687,
+      "exit_code": 0,
+      "kind": "frozen_acceptance",
+      "log": "10-c5.log",
+      "task_id": "C5"
+    },
+    {
+      "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_product_comparison.py -q",
+      "duration_seconds": 1.719,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "11-c5.log",
+      "task_id": "C5"
+    },
+    {
+      "command": "uv run --project services/mock-api pytest services/mock-api/tests/test_api.py -q",
+      "duration_seconds": 5.484,
+      "exit_code": 0,
+      "kind": "task_verification",
+      "log": "12-c5.log",
+      "task_id": "C5"
+    }
+  ],
+  "commit": "da6a92262e895b3c77319cc43c99afb98945b34c",
+  "evidence_files": [
+    {
+      "path": "commands/01-c1.log",
+      "sha256": "d767ed1ef168e3c25901add5a4af3d06d57150fc35998847fd19a7a54012002c"
+    },
+    {
+      "path": "commands/02-c1.log",
+      "sha256": "0f18846f02505ee432787dbe3891961c1d8a1fbe2c82d1b7deb7e21dde073c5c"
+    },
+    {
+      "path": "commands/03-c1.log",
+      "sha256": "e0374de9d1a83970a40b1e4dc4b5cee9795c3a7bcae92ae0236b45af57614713"
+    },
+    {
+      "path": "commands/04-c2.log",
+      "sha256": "2b5d35d642196938973ebcf5838a5350b8173414dc9e9038a2de94198da6e315"
+    },
+    {
+      "path": "commands/05-c2.log",
+      "sha256": "3f31d87e5bc99b169b9e1fe2dedf7cc6c7e957fd7736292c52b1b0a06cb3fcd0"
+    },
+    {
+      "path": "commands/06-c3.log",
+      "sha256": "793172cea1a3c0ec9a4a66e92a7dcf526149750b8b093a927afc5027b01537bc"
+    },
+    {
+      "path": "commands/07-c3.log",
+      "sha256": "8b058f6253219b25661b1196be4763babab3a3532c8375f3859a7e15eaf04012"
+    },
+    {
+      "path": "commands/08-c4.log",
+      "sha256": "e2afdbcf0e48c1af58c466c4805ea621d42a798723eae15ac9792d5a3af02eba"
+    },
+    {
+      "path": "commands/09-c4.log",
+      "sha256": "fcf4c30e0a254eb17e1fbecdbcf83f72195feea64ef96f542a175c15f6a053d4"
+    },
+    {
+      "path": "commands/10-c5.log",
+      "sha256": "358d5b23fc11791060432f7e434ab88910f73bee5ed8acbed48ef377323c7b05"
+    },
+    {
+      "path": "commands/11-c5.log",
+      "sha256": "862177e2b57958ee3c35a3c06a6b84a1f90090093eee24ddb6ceddddf560ff73"
+    },
+    {
+      "path": "commands/12-c5.log",
+      "sha256": "93bf35ac7037e4bf73f45b61b71c0496f269683c9438a1cb8e7a85704ec5b962"
+    }
+  ],
+  "milestone_evidence": {
+    "A": "20260920T132512Z-592710f4de-9e89e0"
+  },
+  "milestone_id": "C",
+  "quality_gates_sha256": "161d4392600e37822b8aa77ffc74acb05de91c2413537f626450734c929087ca",
+  "quality_results": [],
+  "recorded_at": "2026-09-21T08:10:19Z",
+  "run_id": "20260921T080927Z-da6a92262e-1b864f",
+  "runner": {
+    "ci": false,
+    "independent": true,
+    "verifier_id": "c5-independent-reviewer"
+  },
+  "schema_version": 1,
+  "task_config_sha256": "d9e45fd1032572378bbe4c574a0f4761ddc95a6168e20e61c91ec10445f43181",
+  "task_evidence": {
+    "C1": "20260921T043625Z-9fef5eb70d-51780b",
+    "C2": "20260921T045454Z-62882d5238-9028a6",
+    "C3": "20260921T054943Z-a3b91889f1-238d48",
+    "C4": "20260921T073344Z-7710c8b3b2-eed060",
+    "C5": "20260921T080659Z-18c9917ef7-c352bb"
+  },
+  "taskbook_sha256": "19129f9a8fecbaaecfd7cc88914919ec5c00a8b2466b74fa1d3120a4a3a7e492",
+  "verification_result": "passed",
+  "verification_workspace": "git_archive",
+  "working_tree_dirty": true
+}

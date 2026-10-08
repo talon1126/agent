@@ -1,0 +1,125 @@
+{
+  "acceptance_lock_sha256": "317d4f2f5a33726e8202a45107148602282b1ccdd7f62fde595d66b90705c7d6",
+  "baseline_commit": "c55573aede741b41a76b999477149b4b4fdbc547",
+  "changed_files": [
+    "fixtures/contracts/aimodel_chat_request.openapi.json",
+    "fixtures/contracts/aimodel_chat_request.schema.json",
+    "scripts/generate_aimodel_context_contract.py",
+    "services/ai-service/app/routers/AImodel/router.py",
+    "services/ai-service/app/routers/AImodel/schemas.py",
+    "services/ai-service/tests/test_aimodel_context.py"
+  ],
+  "evidence_files": [
+    {
+      "path": "round-1/acceptance.log",
+      "sha256": "c90cb3f48aa829af2b6e2b9b780f4f3a7b257c8d68724f21373e43c9cf5f4d28"
+    },
+    {
+      "path": "round-1/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "round-1/ruff-check.log",
+      "sha256": "8d355f8594eefb4fa5c7521373e81ae5cbb0929f36210d36e00336a8eec2cff5"
+    },
+    {
+      "path": "round-1/ruff-format.log",
+      "sha256": "177f260a5645724013185e4b140c7045cc39e56c0c97b120f5cb23599f85f0de"
+    },
+    {
+      "path": "round-1/verification-01.log",
+      "sha256": "49aa2d56939dab2a677a4614057db7a392b6623b30aaffff91b1c66270677727"
+    }
+  ],
+  "layers": [
+    {
+      "layer_1": {
+        "checks": [
+          {
+            "detail": "6 changed files",
+            "findings": [],
+            "name": "task_scope",
+            "passed": true
+          },
+          {
+            "detail": "1 frozen files",
+            "findings": [],
+            "name": "frozen_acceptance",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "syntax_and_json",
+            "passed": true
+          },
+          {
+            "detail": null,
+            "findings": [],
+            "name": "added_secret_scan",
+            "passed": true
+          },
+          {
+            "command": "git diff --check c55573aede741b41a76b999477149b4b4fdbc547..f09496190df2ba164a83b0b47b2fc5065c425ae3",
+            "duration_seconds": 0.062,
+            "exit_code": 0,
+            "log": "diff-check.log",
+            "name": "diff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff check scripts/generate_aimodel_context_contract.py services/ai-service/app/routers/AImodel/router.py services/ai-service/app/routers/AImodel/schemas.py services/ai-service/tests/test_aimodel_context.py",
+            "duration_seconds": 1.688,
+            "exit_code": 0,
+            "log": "ruff-check.log",
+            "name": "ruff_check",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service ruff format --check scripts/generate_aimodel_context_contract.py services/ai-service/app/routers/AImodel/router.py services/ai-service/app/routers/AImodel/schemas.py services/ai-service/tests/test_aimodel_context.py",
+            "duration_seconds": 0.484,
+            "exit_code": 0,
+            "log": "ruff-format.log",
+            "name": "ruff_format",
+            "passed": true
+          }
+        ],
+        "name": "static_and_security",
+        "passed": true
+      },
+      "layer_2": {
+        "commands": [
+          {
+            "command": "uv run --project services/ai-service pytest tests/acceptance/a3/test_a3_request_context_contract.py -q",
+            "duration_seconds": 1.219,
+            "exit_code": 0,
+            "log": "acceptance.log",
+            "passed": true
+          },
+          {
+            "command": "uv run --project services/ai-service pytest services/ai-service/tests/test_aimodel_context.py services/ai-service/tests/test_api.py -q",
+            "duration_seconds": 1.969,
+            "exit_code": 0,
+            "log": "verification-01.log",
+            "passed": true
+          }
+        ],
+        "name": "acceptance_and_regression",
+        "passed": true
+      },
+      "passed": true,
+      "round": 1,
+      "safe_repairs": []
+    }
+  ],
+  "max_rounds": 2,
+  "recorded_at": "2026-09-20T12:02:46Z",
+  "result": "passed",
+  "rounds_executed": 1,
+  "safe_repair_hashes": {},
+  "safe_repairs": [],
+  "schema_version": 1,
+  "target_commit": "f09496190df2ba164a83b0b47b2fc5065c425ae3",
+  "task_id": "A3",
+  "task_title": "扩展请求上下文协议"
+}

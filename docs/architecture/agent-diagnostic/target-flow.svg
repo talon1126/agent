@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="2068" viewBox="0 0 2400 2068" role="img" aria-labelledby="target-flow-title target-flow-desc">
+<title id="target-flow-title">同一道题 · 理想 Agent 应如何完成</title>
+<desc id="target-flow-desc">目标行为与验收口径；这张图是待实现的改进方向，并非当前系统已全部做到。</desc>
+<style>text{font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",Arial,sans-serif}path{stroke-linecap:round;stroke-linejoin:round}</style>
+<defs>
+<marker id="target-flow-arrow-blue" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#315CDD"/></marker>
+<marker id="target-flow-arrow-teal" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#087F79"/></marker>
+<marker id="target-flow-arrow-orange" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#B76817"/></marker>
+<marker id="target-flow-arrow-purple" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#7452B7"/></marker>
+<marker id="target-flow-arrow-muted" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L10 6 L1 11Z" fill="#52647B"/></marker>
+</defs>
+<rect x="0" y="0" width="2400" height="2068" rx="0" fill="#F6F8FC"/>
+<rect x="64" y="56" width="7" height="106" rx="3" fill="#315CDD"/>
+<text x="92" y="73" font-size="18" fill="#315CDD" font-weight="700" text-anchor="start">TALONMART AGENT / ARCHITECTURE ATLAS</text>
+<text x="92" y="127" font-size="39" fill="#16243B" font-weight="700" text-anchor="start" data-region="92,86,1960,60">同一道题 · 理想 Agent 应如何完成</text>
+<text x="92" y="168" font-size="21" fill="#52647B" font-weight="400" text-anchor="start">目标行为与验收口径；这张图是待实现的改进方向，并非当前系统已全部做到。</text>
+<text x="2336" y="86" font-size="24" fill="#52647B" font-weight="400" text-anchor="end">03 / 03</text>
+<text x="2336" y="127" font-size="21" fill="#52647B" font-weight="400" text-anchor="end">2026-09-24</text>
+<rect x="64" y="220" width="2272" height="105" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="92" y="258" font-size="22" fill="#315CDD" font-weight="600" text-anchor="start">多轮示例</text>
+<text x="92" y="303" font-size="27" fill="#16243B" font-weight="600" text-anchor="start">上一轮：预算 100 元、排除小米，关注两款候选商品。本轮：只比较它们的包装材质与容量单位，不涉及价格。</text>
+<path d="M100 449 L100 686" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#target-flow-arrow-purple)"/>
+<g id="target-flow-merge" data-step="1">
+<rect x="66" y="373" width="68" height="68" rx="22" fill="#7452B7"/>
+<text x="100" y="418" font-size="30" fill="white" font-weight="700" text-anchor="middle">01</text>
+<rect x="160" y="367" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="409" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">先合并多轮目标，再解释本轮任务</text>
+<text x="2308" y="407" font-size="20" fill="#7452B7" font-weight="400" text-anchor="end">Goal Manager → Intent Router（目标）</text>
+<rect x="188" y="431" width="380" height="134" rx="12" fill="#F3EFFB"/>
+<text x="208" y="465" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,439,356,118">输入</text>
+<text x="208" y="501" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,439,356,118">本轮“只比较”请求</text>
+<text x="208" y="531" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,439,356,118">历史预算 / 排除项 / 两款候选</text>
+<path d="M572 498 L602 498" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#target-flow-arrow-purple)"/>
+<rect x="608.0" y="431" width="564.0" height="134" rx="12" fill="#F3EFFB"/>
+<text x="628.0" y="465" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,439,540.0,118">明确继承关系</text>
+<text x="628.0" y="501" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,439,540.0,118">保留未撤销的硬约束</text>
+<text x="628.0" y="531" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,439,540.0,118">识别本轮仅修改输出范围</text>
+<path d="M1175 498 L1191 498" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#target-flow-arrow-purple)"/>
+<rect x="1196.0" y="431" width="564.0" height="134" rx="12" fill="#F3EFFB"/>
+<text x="1216.0" y="465" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,439,540.0,118">确定比较意图</text>
+<text x="1216.0" y="501" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,439,540.0,118">锁定两款候选和所问维度</text>
+<text x="1216.0" y="531" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,439,540.0,118">不把短句当成全新任务</text>
+<path d="M1763 498 L1819 498" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#target-flow-arrow-purple)"/>
+<rect x="1824" y="431" width="484" height="134" rx="12" fill="#F3EFFB"/>
+<text x="1844" y="465" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,439,460,118">输出</text>
+<text x="1844" y="501" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,439,460,118">完整 ShoppingGoal</text>
+<text x="1844" y="531" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,439,460,118">本轮比较任务与禁用输出项</text>
+<path d="M188 585 L2308 585" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="617" font-size="20" fill="#7452B7" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="617" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">若实际会话里没有上一轮和候选 ID → 明确澄清；评测也必须真实发送这些前置轮次。</text>
+</g>
+<path d="M100 770 L100 1007" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#target-flow-arrow-blue)"/>
+<g id="target-flow-plan" data-step="2">
+<rect x="66" y="694" width="68" height="68" rx="22" fill="#315CDD"/>
+<text x="100" y="739" font-size="30" fill="white" font-weight="700" text-anchor="middle">02</text>
+<rect x="160" y="688" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="730" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">按请求维度规划必要查询</text>
+<text x="2308" y="728" font-size="20" fill="#315CDD" font-weight="400" text-anchor="end">Planner / Step Policy Gate（目标）</text>
+<rect x="188" y="752" width="380" height="134" rx="12" fill="#EEF3FF"/>
+<text x="208" y="786" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,760,356,118">输入</text>
+<text x="208" y="822" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,760,356,118">比较对象：两款候选</text>
+<text x="208" y="852" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,760,356,118">允许：材质、容量、单位</text>
+<path d="M572 819 L602 819" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#target-flow-arrow-blue)"/>
+<rect x="608.0" y="752" width="564.0" height="134" rx="12" fill="#EEF3FF"/>
+<text x="628.0" y="786" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,760,540.0,118">选择最小工具集</text>
+<text x="628.0" y="822" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,760,540.0,118">核实候选与相关商品事实</text>
+<text x="628.0" y="852" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,760,540.0,118">无需评论就不调用评论工具</text>
+<path d="M1175 819 L1191 819" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#target-flow-arrow-blue)"/>
+<rect x="1196.0" y="752" width="564.0" height="134" rx="12" fill="#EEF3FF"/>
+<text x="1216.0" y="786" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,760,540.0,118">区分内部与展示</text>
+<text x="1216.0" y="822" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,760,540.0,118">预算可用于内部约束复核</text>
+<text x="1216.0" y="852" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,760,540.0,118">价格字段不得进入用户答案</text>
+<path d="M1763 819 L1819 819" fill="none" stroke="#315CDD" stroke-width="2.8" marker-end="url(#target-flow-arrow-blue)"/>
+<rect x="1824" y="752" width="484" height="134" rx="12" fill="#EEF3FF"/>
+<text x="1844" y="786" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,760,460,118">输出</text>
+<text x="1844" y="822" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,760,460,118">带字段白名单的计划</text>
+<text x="1844" y="852" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,760,460,118">必要工具与调用理由</text>
+<path d="M188 906 L2308 906" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="938" font-size="20" fill="#315CDD" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="938" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">比较维度不明确 → 问一个澄清问题；禁止用无关工具填充计划。</text>
+</g>
+<path d="M100 1091 L100 1328" fill="none" stroke="#B76817" stroke-width="2.8" marker-end="url(#target-flow-arrow-orange)"/>
+<g id="target-flow-facts" data-step="3">
+<rect x="66" y="1015" width="68" height="68" rx="22" fill="#B76817"/>
+<text x="100" y="1060" font-size="30" fill="white" font-weight="700" text-anchor="middle">03</text>
+<rect x="160" y="1009" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="1051" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">读取两款商品的对应事实</text>
+<text x="2308" y="1049" font-size="20" fill="#B76817" font-weight="400" text-anchor="end">Product Snapshot / Comparator（目标）</text>
+<rect x="188" y="1073" width="380" height="134" rx="12" fill="#FFF5E7"/>
+<text x="208" y="1107" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,1081,356,118">输入</text>
+<text x="208" y="1143" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1081,356,118">两款商品 ID</text>
+<text x="208" y="1173" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1081,356,118">包装材质、容量及原始单位</text>
+<path d="M572 1140 L602 1140" fill="none" stroke="#B76817" stroke-width="2.8" marker-end="url(#target-flow-arrow-orange)"/>
+<rect x="608.0" y="1073" width="564.0" height="134" rx="12" fill="#FFF5E7"/>
+<text x="628.0" y="1107" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,1081,540.0,118">形成对齐矩阵</text>
+<text x="628.0" y="1143" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1081,540.0,118">每件商品逐项保留来源与时效</text>
+<text x="628.0" y="1173" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1081,540.0,118">仅在可换算时统一单位</text>
+<path d="M1175 1140 L1191 1140" fill="none" stroke="#B76817" stroke-width="2.8" marker-end="url(#target-flow-arrow-orange)"/>
+<rect x="1196.0" y="1073" width="564.0" height="134" rx="12" fill="#FFF5E7"/>
+<text x="1216.0" y="1107" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,1081,540.0,118">标注缺口</text>
+<text x="1216.0" y="1143" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1081,540.0,118">未知材质或容量明确标记</text>
+<text x="1216.0" y="1173" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1081,540.0,118">不拿规格摘要冒充指定字段</text>
+<path d="M1763 1140 L1819 1140" fill="none" stroke="#B76817" stroke-width="2.8" marker-end="url(#target-flow-arrow-orange)"/>
+<rect x="1824" y="1073" width="484" height="134" rx="12" fill="#FFF5E7"/>
+<text x="1844" y="1107" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,1081,460,118">输出</text>
+<text x="1844" y="1143" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1081,460,118">两行指定维度比较</text>
+<text x="1844" y="1173" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1081,460,118">来源、单位及未知字段</text>
+<path d="M188 1227 L2308 1227" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="1259" font-size="20" fill="#B76817" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="1259" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">原始数据没有包装材质 → 说“未查到”，不推测；两种容量单位不可直接比大小时只并列展示。</text>
+</g>
+<path d="M100 1412 L100 1649" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#target-flow-arrow-teal)"/>
+<g id="target-flow-guard" data-step="4">
+<rect x="66" y="1336" width="68" height="68" rx="22" fill="#087F79"/>
+<text x="100" y="1381" font-size="30" fill="white" font-weight="700" text-anchor="middle">04</text>
+<rect x="160" y="1330" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="1372" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">同时核对事实和用户约束</text>
+<text x="2308" y="1370" font-size="20" fill="#087F79" font-weight="400" text-anchor="end">Grounding + Constraint Verifier（目标）</text>
+<rect x="188" y="1394" width="380" height="134" rx="12" fill="#EAF7F4"/>
+<text x="208" y="1428" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,1402,356,118">输入</text>
+<text x="208" y="1464" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1402,356,118">指定维度的比较草稿</text>
+<text x="208" y="1494" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1402,356,118">事实证据与禁用输出项</text>
+<path d="M572 1461 L602 1461" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#target-flow-arrow-teal)"/>
+<rect x="608.0" y="1394" width="564.0" height="134" rx="12" fill="#EAF7F4"/>
+<text x="628.0" y="1428" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,1402,540.0,118">逐项复核</text>
+<text x="628.0" y="1464" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1402,540.0,118">数值、商品 ID 与证据一致</text>
+<text x="628.0" y="1494" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1402,540.0,118">阻断价格、无关评论及额外结论</text>
+<path d="M1175 1461 L1191 1461" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#target-flow-arrow-teal)"/>
+<rect x="1196.0" y="1394" width="564.0" height="134" rx="12" fill="#EAF7F4"/>
+<text x="1216.0" y="1428" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,1402,540.0,118">检查多轮约束</text>
+<text x="1216.0" y="1464" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1402,540.0,118">不遗漏预算和排除品牌</text>
+<text x="1216.0" y="1494" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1402,540.0,118">但不把内部约束硬塞进答案</text>
+<path d="M1763 1461 L1819 1461" fill="none" stroke="#087F79" stroke-width="2.8" marker-end="url(#target-flow-arrow-teal)"/>
+<rect x="1824" y="1394" width="484" height="134" rx="12" fill="#EAF7F4"/>
+<text x="1844" y="1428" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,1402,460,118">输出</text>
+<text x="1844" y="1464" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1402,460,118">只含指定维度的核验结果</text>
+<text x="1844" y="1494" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1402,460,118">或明确的事实缺口</text>
+<path d="M188 1548 L2308 1548" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="1580" font-size="20" fill="#087F79" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="1580" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">不合规则有界修复并复核；仍缺证据就说明无法比较哪一项。</text>
+</g>
+<g id="target-flow-respond" data-step="5">
+<rect x="66" y="1657" width="68" height="68" rx="22" fill="#7452B7"/>
+<text x="100" y="1702" font-size="30" fill="white" font-weight="700" text-anchor="middle">05</text>
+<rect x="160" y="1651" width="2176" height="285" rx="16" fill="white" stroke="#DDE5F0" stroke-width="1.5"/>
+<text x="188" y="1693" font-size="27" fill="#16243B" font-weight="700" text-anchor="start">给出可用结论并记录下一轮状态</text>
+<text x="2308" y="1691" font-size="20" fill="#7452B7" font-weight="400" text-anchor="end">Response Composer / SSE（目标）</text>
+<rect x="188" y="1715" width="380" height="134" rx="12" fill="#F3EFFB"/>
+<text x="208" y="1749" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="200,1723,356,118">输入</text>
+<text x="208" y="1785" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1723,356,118">通过双重校验的比较</text>
+<text x="208" y="1815" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="200,1723,356,118">会话目标与事实快照 ID</text>
+<path d="M572 1782 L602 1782" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#target-flow-arrow-purple)"/>
+<rect x="608.0" y="1715" width="564.0" height="134" rx="12" fill="#F3EFFB"/>
+<text x="628.0" y="1749" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="620.0,1723,540.0,118">输出表格</text>
+<text x="628.0" y="1785" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1723,540.0,118">商品 × 材质 × 容量 / 单位</text>
+<text x="628.0" y="1815" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="620.0,1723,540.0,118">每个缺失项附简短说明</text>
+<path d="M1175 1782 L1191 1782" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#target-flow-arrow-purple)"/>
+<rect x="1196.0" y="1715" width="564.0" height="134" rx="12" fill="#F3EFFB"/>
+<text x="1216.0" y="1749" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1208.0,1723,540.0,118">保留可续接状态</text>
+<text x="1216.0" y="1785" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1723,540.0,118">返回结构化结果与来源</text>
+<text x="1216.0" y="1815" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1208.0,1723,540.0,118">持久化目标、引用和 Trace</text>
+<path d="M1763 1782 L1819 1782" fill="none" stroke="#7452B7" stroke-width="2.8" marker-end="url(#target-flow-arrow-purple)"/>
+<rect x="1824" y="1715" width="484" height="134" rx="12" fill="#F3EFFB"/>
+<text x="1844" y="1749" font-size="23" fill="#16243B" font-weight="600" text-anchor="start" data-region="1836,1723,460,118">输出</text>
+<text x="1844" y="1785" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1723,460,118">不含价格的两商品比较</text>
+<text x="1844" y="1815" font-size="20" fill="#52647B" font-weight="400" text-anchor="start" data-region="1836,1723,460,118">有证据、有缺口、可继续追问</text>
+<path d="M188 1869 L2308 1869" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="188" y="1901" font-size="20" fill="#7452B7" font-weight="600" text-anchor="start">分支处理</text>
+<text x="320" y="1901" font-size="20" fill="#52647B" font-weight="400" text-anchor="start">若库存等事实一直 unknown，不无限要求“重试”；说明阻碍和能继续完成的比较部分。</text>
+</g>
+<path d="M64 1994 L2336 1994" fill="none" stroke="#52647B" stroke-width="1"/>
+<text x="64" y="2030" font-size="19" fill="#52647B" font-weight="400" text-anchor="start">理想输出：只答被要求的维度，保存多轮硬约束，工具调用有必要性，事实缺失时仍给出可用部分。</text>
+</svg>
